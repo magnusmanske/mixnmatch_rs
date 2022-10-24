@@ -1,55 +1,43 @@
-#[macro_use]
 extern crate serde_json;
 
 use std::env;
 use std::fs::File;
 use serde_json::Value;
 use mysql_async::prelude::*;
-use mysql_async::Pool;
+use mysql_async::from_row;
+pub mod app_state;
+
+/*
+ssh magnus@tools-login.wmflabs.org -L 3309:wikidatawiki.web.db.svc.eqiad.wmflabs:3306 -N &
+ssh magnus@tools-login.wmflabs.org -L 3308:tools-db:3306 -N &
+*/
 
 type GenericError = Box<dyn std::error::Error + Send + Sync>;
 
-pub struct AppState {
-    wikidata_pool: mysql_async::Pool,
-    mnm_pool: mysql_async::Pool
-}
-
-impl AppState {
-    pub async fn new_from_config(config: &Value) -> Self {
-        let ret = Self {
-            wikidata_pool: mysql_async::Pool::new(config["db_wikidata"].as_str().unwrap()),
-            mnm_pool: mysql_async::Pool::new(config["db_mnm"].as_str().unwrap())
-        };
-        ret
-    }
-
-    pub async fn disconnect(&self) -> Result<(),GenericError> {
-        //self.wikidata_pool.disconnect().await?;
-        //self.mnm_pool.disconnect().await?;
-        Ok(())
-    }
-}
 
 #[tokio::main]
 async fn main() -> Result<(),GenericError> {
-    let basedir = env::current_dir()
-        .expect("Can't get CWD")
-        .to_str()
-        .expect("Can't convert CWD to_str")
-        .to_string();
-    let path = basedir.to_owned() + "/config.json";
-    let file = File::open(&path).unwrap_or_else(|_| panic!("Can not open config file at {}", &path));
+    let mut path = env::current_dir().expect("Can't get CWD");
+    path.push("config.json");
+    let file = File::open(&path).expect(format!("Can not open config file at {:?}", &path).as_str());
     let config: Value =
         serde_json::from_reader(file).expect("Can not parse JSON from config file");
 
-    let app = AppState::new_from_config(&config).await;
-    let conn = app.wikidata_pool.get_conn().await?;
+    let app = app_state::AppState::new_from_config(&config).await;
 
-    let result = "SELECT customer_id, amount, account_name FROM payment"
-    .with(()).await?;
-    println!("{}",&result);
+
+    let mut conn = app.wd_pool.get_conn().await?;
+
+    let rows = conn.exec_iter(r"SELECT page_title,page_namespace from page LIMIT 1",())
+        .await?
+        .map_and_drop(from_row::<(String,i32)>)
+        .await?;
+    println!("{:?}",&rows);
 
     drop(conn);
-    app.disconnect().await?;
+
+
+    app.wd_pool.disconnect().await?;
+    app.mnm_pool.disconnect().await?;
     Ok(())
 }
