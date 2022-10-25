@@ -1,7 +1,9 @@
+use std::env;
+use std::fs::File;
+use serde_json::Value;
 //use mysql_async::prelude::*;
 use mysql_async::{PoolOpts, PoolConstraints, Opts, OptsBuilder, Conn};
 use core::time::Duration;
-use serde_json::Value;
 
 pub type GenericError = Box<dyn std::error::Error + Send + Sync>;
 
@@ -12,7 +14,15 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub async fn new_from_config(config: &Value) -> Self {
+    pub async fn from_config_file(filename: &str) -> Result<Self,GenericError> {
+        let mut path = env::current_dir().expect("Can't get CWD");
+        path.push(filename);
+        let file = File::open(&path)?;
+        let config: Value = serde_json::from_reader(file)?;
+        Ok(Self::from_config(&config).await)
+    }
+
+    pub async fn from_config(config: &Value) -> Self {
         let pool_opts = PoolOpts::default()
             .with_constraints(PoolConstraints::new(0, 3).unwrap())
             .with_inactive_connection_ttl(Duration::from_secs(60));
