@@ -1,12 +1,14 @@
 //use mysql_async::prelude::*;
-use mysql_async::{PoolOpts, PoolConstraints, Opts, OptsBuilder};
+use mysql_async::{PoolOpts, PoolConstraints, Opts, OptsBuilder, Conn};
 use core::time::Duration;
 use serde_json::Value;
 
+pub type GenericError = Box<dyn std::error::Error + Send + Sync>;
+
 #[derive(Debug, Clone)]
 pub struct AppState {
-    pub wd_pool: mysql_async::Pool,
-    pub mnm_pool: mysql_async::Pool
+    wd_pool: mysql_async::Pool,
+    mnm_pool: mysql_async::Pool
 }
 
 impl AppState {
@@ -25,4 +27,15 @@ impl AppState {
         ret
     }
 
+    pub async fn get_mnm_conn(&self) -> Result<Conn, mysql_async::Error> {
+        self.mnm_pool.get_conn().await
+    }
+
+    pub async fn get_wd_conn(&self) -> Result<Conn, mysql_async::Error> {
+        self.wd_pool.get_conn().await
+    }
+
 }
+
+unsafe impl Send for AppState {}
+unsafe impl Sync for AppState {}

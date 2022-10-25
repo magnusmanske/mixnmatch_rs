@@ -1262,6 +1262,7 @@ dependencies = [
  "md5",
  "mysql_async",
  "regex",
+ "reqwest",
  "roxmltree",
  "serde_json",
  "tokio",
