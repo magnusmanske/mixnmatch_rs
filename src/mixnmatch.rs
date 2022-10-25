@@ -98,11 +98,13 @@ impl MixNMatch {
         }
     }
 
+    /// Sets the match for an entry ID, by calling set_entry_object_match.
     pub async fn set_entry_match(&self, entry_id: usize, q: &str, user_id: usize) -> Result<bool,GenericError> {
         let entry = self.get_entry_by_id(entry_id).await?;
         self.set_entry_object_match(&entry,q,user_id).await
     }
 
+    /// Sets the match for an entry object.
     pub async fn set_entry_object_match(&self, entry: &Entry, q: &str, user_id: usize) -> Result<bool,GenericError> {
         let entry_id = entry.id;
         let q_numeric = self.item2numeric(q).ok_or(format!("'{}' is not a valid item",&q))?;
@@ -135,6 +137,18 @@ impl MixNMatch {
         Ok(true)
     }
 
+    pub async fn set_multi_match(&self, entry_id: usize, items: &Vec<String>) -> Result<(),GenericError> {
+        let qs_numeric: Vec<String> = items.iter().filter_map(|q|self.item2numeric(q)).map(|q|q.to_string()).collect();
+        if qs_numeric.len()<1 || qs_numeric.len()>10 {
+            return self.remove_multi_match(entry_id).await;
+        }
+        let candidates = qs_numeric.join(",");
+        let candidate_count = qs_numeric.len();
+        let sql = r"REPLACE INTO `multi_match` (entry_id,catalog,candidates,candidate_count) VALUES (:entry_id,(SELECT catalog FROM entry WHERE id=:entry_id),:candidates,:candidates_count)";
+        self.app.get_mnm_conn().await?.exec_drop(sql,params! {entry_id,candidates,candidate_count}).await?;
+        Ok(())
+    }
+
     /// Computes the column of the overview table that is affected, given a user ID and item ID
     pub fn get_overview_column_name_for_user_and_q(&self, user_id: &Option<usize>, q: &Option<isize> ) -> &str {
         match (user_id,q) {
@@ -147,6 +161,7 @@ impl MixNMatch {
         }
     }
 
+    /// Updates the overview table for a catalog, given the old Entry object, and the user ID and new item.
     pub async fn update_overview_table(&self, old_entry: &Entry, user_id: Option<usize>, q: Option<isize>) -> Result<(),GenericError> {
         let add_column = self.get_overview_column_name_for_user_and_q(&user_id,&q);
         let reduce_column = self.get_overview_column_name_for_user_and_q(&old_entry.user,&old_entry.q);
@@ -156,6 +171,7 @@ impl MixNMatch {
         Ok(())
     }
 
+    /// Returns an Entry object for a given entry ID.
     pub async fn get_entry_by_id(&self, entry_id: usize) -> Result<Entry,GenericError> {
         let rows: Vec<Entry> = self.app.get_mnm_conn().await?
             .exec_iter(r"SELECT id,catalog,ext_id,ext_url,ext_name,ext_desc,q,user,timetamp,random,type_name FROM `entry` WHERE `id`=:entry_id",params! {entry_id}).await?
@@ -164,7 +180,7 @@ impl MixNMatch {
         Ok(ret.clone())
     }
 
-
+    /// Updates the entry matching status in multiple tables.
     pub async fn set_match_status(&self, entry_id: usize, status: &str, is_matched: bool) -> Result<(),GenericError>{
         let is_matched = if is_matched { 1 } else { 0 } ;
         let timestamp = Self::get_timestamp();
@@ -176,6 +192,7 @@ impl MixNMatch {
         Ok(())
     }
 
+    /// Adds the item into a quere for reference fixer. Possibly deprecated.
     pub async fn queue_reference_fixer(&self, q_numeric: isize) -> Result<(),GenericError>{
         self.app.get_mnm_conn().await?
             .exec_drop(r"INSERT INTO `reference_fixer` (`q`,`done`) VALUES (:q_numeric,0) ON DUPLICATE KEY UPDATE `done`=0",params! {q_numeric}).await?;
@@ -291,12 +308,30 @@ impl MixNMatch {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
+    use std::sync::Arc;
+    use static_init::dynamic;
+
+    const TEST_CATALOG_ID: usize = 5526 ;
+    const TEST_ENTRY_ID: usize = 143962196 ;
+
+    #[dynamic(drop)]
+    static mut MNM_CACHE: Vec<Arc<MixNMatch>> = vec![]; // TODO Option?
+
+    async fn get_mnm() -> Arc<MixNMatch> {
+        if MNM_CACHE.read().is_empty() {
+            let app = AppState::from_config_file("config.json").await.unwrap();
+            let mnm = MixNMatch::new(app.clone());
+            let mut lock = MNM_CACHE.write();
+            lock.push(Arc::new(mnm));
+        }
+        MNM_CACHE.read()[0].clone()
+    }
 
     #[tokio::test]
     async fn test_remove_meta_items() {
-        let app = AppState::from_config_file("config.json").await.unwrap();
-        let mnm = MixNMatch::new(app.clone());
+        let mnm = get_mnm().await;
         let mut items: Vec<String> = ["Q1","Q3522","Q2"].iter().map(|s|s.to_string()).collect() ;
         mnm.remove_meta_items(&mut items).await.unwrap();
         assert_eq!(items,["Q1","Q2"]);
@@ -304,8 +339,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_overview_column_name_for_user_and_q() {
-        let app = AppState::from_config_file("config.json").await.unwrap();
-        let mnm = MixNMatch::new(app.clone());
+        let mnm = get_mnm().await;
         assert_eq!(mnm.get_overview_column_name_for_user_and_q(&Some(0),&None),"autoq");
         assert_eq!(mnm.get_overview_column_name_for_user_and_q(&Some(2),&Some(1)),"manual");
         assert_eq!(mnm.get_overview_column_name_for_user_and_q(&Some(2),&Some(0)),"na");

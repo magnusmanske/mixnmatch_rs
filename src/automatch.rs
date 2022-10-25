@@ -43,7 +43,7 @@ impl AutoMatch {
                 if items.len()==1 { // Single match
                     self.mnm.set_entry_match(entry_id,&items[0],USER_AUTO).await?;
                 } else { // Multi-match
-
+                    self.mnm.set_multi_match(entry_id, &items).await?;
                 }
                 //println!("#{}: {} / {:?}",&entry_id,&label,&items);
             }
