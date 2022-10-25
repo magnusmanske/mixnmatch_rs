@@ -137,18 +137,38 @@ impl MixNMatch {
         Ok(true)
     }
 
+    pub async fn get_multi_match(&self, entry_id: usize) ->  Result<Vec<String>,GenericError> {
+        let rows: Vec<String> = self.app.get_mnm_conn().await?
+            .exec_iter(r"SELECT candidates FROM multi_match WHERE entry_id=:entry_id",params! {entry_id}).await?
+            .map_and_drop(from_row::<String>).await?;
+        if rows.len()!=1 {
+            Ok(vec![])
+        } else {
+            let ret = rows.get(0).ok_or("get_multi_match err1")?.split(",").map(|s|format!("Q{}",s)).collect();
+            Ok(ret)
+        }
+    }
+
     pub async fn set_multi_match(&self, entry_id: usize, items: &Vec<String>) -> Result<(),GenericError> {
         let qs_numeric: Vec<String> = items.iter().filter_map(|q|self.item2numeric(q)).map(|q|q.to_string()).collect();
         if qs_numeric.len()<1 || qs_numeric.len()>10 {
             return self.remove_multi_match(entry_id).await;
         }
         let candidates = qs_numeric.join(",");
-        let candidate_count = qs_numeric.len();
+        let candidates_count = qs_numeric.len();
         let sql = r"REPLACE INTO `multi_match` (entry_id,catalog,candidates,candidate_count) VALUES (:entry_id,(SELECT catalog FROM entry WHERE id=:entry_id),:candidates,:candidates_count)";
-        self.app.get_mnm_conn().await?.exec_drop(sql,params! {entry_id,candidates,candidate_count}).await?;
+        self.app.get_mnm_conn().await?.exec_drop(sql,params! {entry_id,candidates,candidates_count}).await?;
         Ok(())
     }
 
+    /// Removes multi-matches for an entry, eg when the entry has been fully matched.
+    pub async fn remove_multi_match(&self, entry_id: usize) -> Result<(),GenericError>{
+        self.app.get_mnm_conn().await?
+            .exec_drop(r"DELETE FROM multi_match WHERE entry_id=:entry_id",params! {entry_id}).await?;
+        Ok(())
+    }
+
+    
     /// Computes the column of the overview table that is affected, given a user ID and item ID
     pub fn get_overview_column_name_for_user_and_q(&self, user_id: &Option<usize>, q: &Option<isize> ) -> &str {
         match (user_id,q) {
@@ -196,13 +216,6 @@ impl MixNMatch {
     pub async fn queue_reference_fixer(&self, q_numeric: isize) -> Result<(),GenericError>{
         self.app.get_mnm_conn().await?
             .exec_drop(r"INSERT INTO `reference_fixer` (`q`,`done`) VALUES (:q_numeric,0) ON DUPLICATE KEY UPDATE `done`=0",params! {q_numeric}).await?;
-        Ok(())
-    }
-
-    /// Removes multi-matches for an entry, eg when the entry has been fully matched.
-    pub async fn remove_multi_match(&self, entry_id: usize) -> Result<(),GenericError>{
-        self.app.get_mnm_conn().await?
-            .exec_drop(r"DELETE FROM multi_match WHERE entry_id=:entry_id",params! {entry_id}).await?;
         Ok(())
     }
 
@@ -335,6 +348,19 @@ mod tests {
         let mut items: Vec<String> = ["Q1","Q3522","Q2"].iter().map(|s|s.to_string()).collect() ;
         mnm.remove_meta_items(&mut items).await.unwrap();
         assert_eq!(items,["Q1","Q2"]);
+    }
+
+    #[tokio::test]
+    async fn test_multimatch() {
+        let mnm = get_mnm().await;
+        let items: Vec<String> = ["Q1","Q23456","Q7"].iter().map(|s|s.to_string()).collect();
+        mnm.set_multi_match(TEST_ENTRY_ID, &items).await.unwrap();
+        let result = mnm.get_multi_match(TEST_ENTRY_ID).await.unwrap();
+        assert_eq!(result,items);
+        mnm.remove_multi_match(TEST_ENTRY_ID).await.unwrap();
+        let result = mnm.get_multi_match(TEST_ENTRY_ID).await.unwrap();
+        let empty: Vec<String> = vec![];
+        assert_eq!(result,empty);
     }
 
     #[tokio::test]
