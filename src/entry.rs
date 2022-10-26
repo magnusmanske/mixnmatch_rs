@@ -63,9 +63,14 @@ impl Entry {
 
     /// Returns an Entry object for a given entry ID.
     pub async fn from_id(entry_id: usize, mnm: &MixNMatch) -> Result<Entry,GenericError> {
-        let mut rows: Vec<Entry> = mnm.app.get_mnm_conn().await?
-            .exec_iter(r"SELECT id,catalog,ext_id,ext_url,ext_name,ext_desc,q,user,timestamp,random,`type` FROM `entry` WHERE `id`=:entry_id",params! {entry_id}).await?
+        let sql = r"SELECT id,catalog,ext_id,ext_url,ext_name,ext_desc,q,user,timestamp,random,`type` FROM `entry` WHERE `id`=:entry_id";
+        println!("A");
+        let mut conn = mnm.app.get_mnm_conn().await? ;
+        println!("B");
+        let mut rows: Vec<Entry> = conn
+            .exec_iter(sql,params! {entry_id}).await?
             .map_and_drop(|row| Self::from_row(&row)).await?;
+        println!("C");
         // `id` is a unique index, so there can be only zero or one row in rows.
         let mut ret = rows.pop().ok_or(format!("No entry #{}",entry_id))?.to_owned() ;
         ret.set_mnm(mnm);
@@ -147,7 +152,6 @@ impl Entry {
         conn.exec_drop(r"UPDATE person_dates SET is_matched=:is_matched WHERE entry_id=:entry_id",params! {is_matched,entry_id}).await?;
         conn.exec_drop(r"UPDATE auxiliary SET entry_is_matched=:is_matched WHERE entry_id=:entry_id",params! {is_matched,entry_id}).await?;
         conn.exec_drop(r"UPDATE statement_text SET entry_is_matched=:is_matched WHERE entry_id=:entry_id",params! {is_matched,entry_id}).await?;
-        drop(conn);
         Ok(())
     }
 
