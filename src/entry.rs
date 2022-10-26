@@ -37,6 +37,7 @@ impl Entry {
         }
     }
 
+    /// Helper function for from_row().
     fn value2opt_string(value: mysql_async::Value) -> Result<Option<String>,GenericError> {
         match value {
             Value::Bytes(s) => Ok(Some(std::str::from_utf8(&s)?.to_owned())),
@@ -44,6 +45,7 @@ impl Entry {
         }
     }
 
+    /// Helper function for from_row().
     fn value2opt_isize(value: mysql_async::Value) -> Result<Option<isize>,GenericError> {
         match value {
             Value::Int(i) => Ok(Some(i.try_into()?)),
@@ -51,6 +53,7 @@ impl Entry {
         }
     }
 
+    /// Helper function for from_row().
     fn value2opt_usize(value: mysql_async::Value) -> Result<Option<usize>,GenericError> {
         match value {
             Value::Int(i) => Ok(Some(i.try_into()?)),
@@ -69,16 +72,18 @@ impl Entry {
         Ok(ret)
     }
 
+    /// Sets the MixNMatch object. Automatically done when created via from_id().
     pub fn set_mnm(&mut self, mnm: &MixNMatch) {
         self.mnm = Some(mnm.clone());
     }
 
+    /// Returns the MixNMatch object reference.
     pub fn mnm(&self) -> Result<&MixNMatch,GenericError> {
         let mnm = self.mnm.as_ref().ok_or("Entry: No mnm set")?;
         Ok(mnm)
     }
 
-    /// Sets the match for an entry object.
+    // Sets a match for the entry, and marks the entry as matched in other tables.
     pub async fn set_match(&mut self, q: &str, user_id: usize) -> Result<bool,GenericError> {
         let entry_id = self.id;
         let mnm = self.mnm()?;
@@ -94,9 +99,9 @@ impl Entry {
         let preserve = (Some(user_id.clone()),Some(timestamp.clone()),Some(q_numeric.clone()));
         let mut conn = mnm.app.get_mnm_conn().await? ;
         conn.exec_drop(sql, params! {q_numeric,user_id,timestamp,entry_id}).await?;
-        let has_anything_changed = conn.affected_rows()>0 ;
+        let nothing_changed = conn.affected_rows()==0 ;
         drop(conn);
-        if !has_anything_changed { // Nothing changed
+        if nothing_changed {
             return Ok(false)
         }
 
@@ -118,6 +123,7 @@ impl Entry {
         Ok(true)
     }
 
+    // Removes the current match from the entry, and marks the entry as unmatched in other tables.
     pub async fn unmatch(&mut self)  -> Result<(),GenericError>{
         let entry_id = self.id;
         let mnm = self.mnm()?;
@@ -251,14 +257,23 @@ mod tests {
 
     #[tokio::test]
     async fn test_multimatch() {
+        println!("0");
         let mnm = get_mnm().await;
-        let entry= Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        println!("1");
+        let mut entry= Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        println!("2");
+        entry.unmatch().await.unwrap();
+        println!("3");
         let items: Vec<String> = ["Q1","Q23456","Q7"].iter().map(|s|s.to_string()).collect();
         entry.set_multi_match(&items).await.unwrap();
+        println!("4");
         let result = entry.get_multi_match().await.unwrap();
+        println!("5");
         assert_eq!(result,items);
         entry.remove_multi_match().await.unwrap();
+        println!("6");
         let result = entry.get_multi_match().await.unwrap();
+        println!("7");
         let empty: Vec<String> = vec![];
         assert_eq!(result,empty);
     }

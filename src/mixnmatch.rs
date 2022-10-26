@@ -8,11 +8,19 @@ use mysql_async::from_row;
 use crate::app_state::*;
 use crate::entry::*;
 
+pub const Q_NA: isize = 0;
+pub const Q_NOWD: isize = -1;
 pub const USER_AUTO: usize = 0;
 pub const USER_DATE_MATCH: usize = 3;
 pub const USER_AUX_MATCH: usize = 4;
 pub const WIKIDATA_API_URL: &'static str = "https://www.wikidata.org/w/api.php";
-pub const META_ITEMS: &'static [&'static str] = &["Q4167410","Q11266439","Q4167836","Q13406463","Q22808320"] ;
+pub const META_ITEMS: &'static [&'static str] = &[
+    "Q4167410", // Wikimedia disambiguation page
+    "Q11266439", // Wikimedia template
+    "Q4167836", // Wikimedia category
+    "Q13406463", // Wikimedia list article
+    "Q22808320" // Wikimedia human name disambiguation page
+    ] ;
 
 #[derive(Debug, Clone)]
 pub struct MatchState {
@@ -155,7 +163,10 @@ impl MixNMatch {
     /// "Scholarly article" items are excluded from results, unless specifically asked for with Q13442814
     /// Common "meta items" such as disambiguation items are excluded as well
     pub async fn wd_search_with_type(&self, name: &str, type_q: &str) -> Result<Vec<String>,GenericError> {
-        if type_q=="" {
+        if name.is_empty() {
+            return Ok(vec![]) ;
+        }
+        if type_q.is_empty() {
             return self.wd_search(&name).await ;
         }
         let mut query = format!("{} haswbstatement:P31={}",name,type_q);
@@ -164,12 +175,14 @@ impl MixNMatch {
         }
         let meta_items:Vec<String> = META_ITEMS.iter().map(|q|format!(" -haswbstatement:P31={}",q)).collect() ;
         query += &meta_items.join("");
-        println!("{}",query);
         self.wd_search(&query).await
     }
 
     /// Performs a Wikidata API search for the query string.
     pub async fn wd_search(&self, query: &str) -> Result<Vec<String>,GenericError> {    
+        if query.is_empty() {
+            return Ok(vec![]) ;
+        }
         let query = encode(&query);
         let url = format!("{}?action=query&list=search&format=json&srsearch={}",WIKIDATA_API_URL,query);
         let body = reqwest::get(url).await?.text().await?;
