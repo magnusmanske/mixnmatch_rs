@@ -1,5 +1,5 @@
 use mysql_async::prelude::*;
-use mysql_async::{Row,from_row};
+use mysql_async::{Row,from_row,Value};
 use crate::mixnmatch::*;
 use crate::app_state::*;
 
@@ -28,12 +28,33 @@ impl Entry {
             ext_url: row.get(3).unwrap(),
             ext_name: row.get(4).unwrap(),
             ext_desc: row.get(5).unwrap(),
-            q: row.get(6).unwrap(),
-            user: row.get(7).unwrap(),
-            timestamp: row.get(7).unwrap(),
+            q: Self::value2opt_isize(row.get(6).unwrap()).unwrap(),
+            user: Self::value2opt_usize(row.get(7).unwrap()).unwrap(),
+            timestamp: Self::value2opt_string(row.get(8).unwrap()).unwrap(),
             random: row.get(9).unwrap(),
-            type_name: row.get(10).unwrap(),
+            type_name: Self::value2opt_string(row.get(10).unwrap()).unwrap(),
             mnm: None
+        }
+    }
+
+    fn value2opt_string(value: mysql_async::Value) -> Result<Option<String>,GenericError> {
+        match value {
+            Value::Bytes(s) => Ok(Some(std::str::from_utf8(&s)?.to_owned())),
+            _ => Ok(None)
+        }
+    }
+
+    fn value2opt_isize(value: mysql_async::Value) -> Result<Option<isize>,GenericError> {
+        match value {
+            Value::Int(i) => Ok(Some(i.try_into()?)),
+            _ => Ok(None)
+        }
+    }
+
+    fn value2opt_usize(value: mysql_async::Value) -> Result<Option<usize>,GenericError> {
+        match value {
+            Value::Int(i) => Ok(Some(i.try_into()?)),
+            _ => Ok(None)
         }
     }
 
@@ -42,9 +63,14 @@ impl Entry {
         let mut rows: Vec<Entry> = mnm.app.get_mnm_conn().await?
             .exec_iter(r"SELECT id,catalog,ext_id,ext_url,ext_name,ext_desc,q,user,timestamp,random,`type` FROM `entry` WHERE `id`=:entry_id",params! {entry_id}).await?
             .map_and_drop(|row| Self::from_row(&row)).await?;
+        // `id` is a unique index, so there can be only zero or one row in rows.
         let mut ret = rows.pop().ok_or(format!("No entry #{}",entry_id))?.to_owned() ;
-        ret.mnm = Some(mnm.clone());
-        Ok(ret.clone())
+        ret.set_mnm(mnm);
+        Ok(ret)
+    }
+
+    pub fn set_mnm(&mut self, mnm: &MixNMatch) {
+        self.mnm = Some(mnm.clone());
     }
 
     pub fn mnm(&self) -> Result<&MixNMatch,GenericError> {
@@ -58,7 +84,7 @@ impl Entry {
         let mnm = self.mnm()?;
         let q_numeric = mnm.item2numeric(q).ok_or(format!("'{}' is not a valid item",&q))?;
         let timestamp = MixNMatch::get_timestamp();
-        let mut sql = format!("UPDATE `entry` SET `q`=:q_numeric,`user`=:user_id,`timestamp`=:timestamp WHERE `id`=:entry_id");
+        let mut sql = format!("UPDATE `entry` SET `q`=:q_numeric,`user`=:user_id,`timestamp`=:timestamp WHERE `id`=:entry_id AND (`q` IS NULL OR `q`!=:q_numeric)");
         if user_id==USER_AUTO {
             if mnm.avoid_auto_match(entry_id,Some(q_numeric)).await? {
                 return Ok(false) // Nothing wrong but shouldn't be matched
@@ -67,11 +93,12 @@ impl Entry {
         }
         let preserve = (Some(user_id.clone()),Some(timestamp.clone()),Some(q_numeric.clone()));
         let mut conn = mnm.app.get_mnm_conn().await? ;
-        conn.exec_drop(sql, params! {q_numeric,user_id,timestamp}).await?;
-        if conn.affected_rows()==0 { // Nothing changed
+        conn.exec_drop(sql, params! {q_numeric,user_id,timestamp,entry_id}).await?;
+        let has_anything_changed = conn.affected_rows()>0 ;
+        drop(conn);
+        if !has_anything_changed { // Nothing changed
             return Ok(false)
         }
-        drop(conn);
 
         mnm.update_overview_table(&self, Some(user_id), Some(q_numeric)).await?;
 
@@ -91,6 +118,18 @@ impl Entry {
         Ok(true)
     }
 
+    pub async fn unmatch(&mut self)  -> Result<(),GenericError>{
+        let entry_id = self.id;
+        let mnm = self.mnm()?;
+        mnm.app.get_mnm_conn().await?
+        .exec_drop(r"UPDATE `entry` SET `q`=NULL,`user`=NULL,`timestamp`=NULL WHERE `id`=:entry_id",params! {entry_id}).await?;
+        self.set_match_status("UNKNOWN",false).await?;
+        self.user = None;
+        self.timestamp = None;
+        self.q = None;
+        Ok(())
+    }
+
     /// Updates the entry matching status in multiple tables.
     pub async fn set_match_status(&self, status: &str, is_matched: bool) -> Result<(),GenericError>{
         let mnm = self.mnm()?;
@@ -102,6 +141,7 @@ impl Entry {
         conn.exec_drop(r"UPDATE person_dates SET is_matched=:is_matched WHERE entry_id=:entry_id",params! {is_matched,entry_id}).await?;
         conn.exec_drop(r"UPDATE auxiliary SET entry_is_matched=:is_matched WHERE entry_id=:entry_id",params! {is_matched,entry_id}).await?;
         conn.exec_drop(r"UPDATE statement_text SET entry_is_matched=:is_matched WHERE entry_id=:entry_id",params! {is_matched,entry_id}).await?;
+        drop(conn);
         Ok(())
     }
 
@@ -153,22 +193,60 @@ impl Entry {
 mod tests {
 
     use super::*;
-    use std::sync::Arc;
     use static_init::dynamic;
 
     const _TEST_CATALOG_ID: usize = 5526 ;
     const TEST_ENTRY_ID: usize = 143962196 ;
 
     #[dynamic(drop)]
-    static mut MNM_CACHE: Option<Arc<MixNMatch>> = None;
+    static mut MNM_CACHE: Option<MixNMatch> = None;
 
-    async fn get_mnm() -> Arc<MixNMatch> {
+    async fn get_mnm() -> MixNMatch {
         if MNM_CACHE.read().is_none() {
             let app = AppState::from_config_file("config.json").await.unwrap();
             let mnm = MixNMatch::new(app.clone());
-            (*MNM_CACHE.write()) = Some(Arc::new(mnm));
+            (*MNM_CACHE.write()) = Some(mnm);
         }
-        MNM_CACHE.read().as_ref().map(|s| s.clone()).unwrap()
+        MNM_CACHE.read().as_ref().map(|s| s.clone()).unwrap().clone()
+    }
+
+    #[tokio::test]
+    async fn test_match() {
+        let mnm = get_mnm().await;
+
+        // Clear
+        Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap().unmatch().await.unwrap();
+
+        // Check if clear
+        let mut entry= Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        assert!(entry.q.is_none());
+        assert!(entry.user.is_none());
+        assert!(entry.timestamp.is_none());
+
+        // Set and check in-memory changes
+        entry.set_match("Q1",4).await.unwrap();
+        assert_eq!(entry.q,Some(1));
+        assert_eq!(entry.user,Some(4));
+        assert!(!entry.timestamp.is_none());
+
+        // Check in-database changes
+        let mut entry= Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        assert_eq!(entry.q,Some(1));
+        assert_eq!(entry.user,Some(4));
+        assert!(!entry.timestamp.is_none());
+
+        // Clear and check in-memory changes
+        entry.unmatch().await.unwrap();
+        assert!(entry.q.is_none());
+        assert!(entry.user.is_none());
+        assert!(entry.timestamp.is_none());
+
+        // Check in-database changes
+        let entry= Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        assert!(entry.q.is_none());
+        assert!(entry.user.is_none());
+        assert!(entry.timestamp.is_none());
+
     }
 
     #[tokio::test]

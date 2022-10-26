@@ -204,22 +204,21 @@ impl MixNMatch {
 mod tests {
 
     use super::*;
-    use std::sync::Arc;
     use static_init::dynamic;
 
     const _TEST_CATALOG_ID: usize = 5526 ;
     const _TEST_ENTRY_ID: usize = 143962196 ;
 
     #[dynamic(drop)]
-    static mut MNM_CACHE: Option<Arc<MixNMatch>> = None;
+    static mut MNM_CACHE: Option<MixNMatch> = None;
 
-    async fn get_mnm() -> Arc<MixNMatch> {
+    async fn get_mnm() -> MixNMatch {
         if MNM_CACHE.read().is_none() {
             let app = AppState::from_config_file("config.json").await.unwrap();
             let mnm = MixNMatch::new(app.clone());
-            (*MNM_CACHE.write()) = Some(Arc::new(mnm));
+            (*MNM_CACHE.write()) = Some(mnm);
         }
-        MNM_CACHE.read().as_ref().map(|s| s.clone()).unwrap()
+        MNM_CACHE.read().as_ref().map(|s| s.clone()).unwrap().clone()
     }
 
     #[tokio::test]

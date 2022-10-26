@@ -7,6 +7,10 @@ use core::time::Duration;
 
 pub type GenericError = Box<dyn std::error::Error + Send + Sync>;
 
+pub const DB_POOL_MIN: usize = 0;
+pub const DB_POOL_MAX: usize = 3;
+pub const DB_POOL_KEEP_SEC: u64 = 120;
+
 #[derive(Debug, Clone)]
 pub struct AppState {
     wd_pool: mysql_async::Pool,
@@ -24,8 +28,8 @@ impl AppState {
 
     pub async fn from_config(config: &Value) -> Self {
         let pool_opts = PoolOpts::default()
-            .with_constraints(PoolConstraints::new(0, 3).unwrap())
-            .with_inactive_connection_ttl(Duration::from_secs(60));
+            .with_constraints(PoolConstraints::new(DB_POOL_MIN, DB_POOL_MAX).unwrap())
+            .with_inactive_connection_ttl(Duration::from_secs(DB_POOL_KEEP_SEC));
         let wd_url = config["db_wd"].as_str().expect("No db_wd in config") ;
         let wd_opts = Opts::from_url(wd_url).expect(format!("Can not build options from db_wd URL {}",wd_url).as_str());
         let mnm_url = config["db_mnm"].as_str().expect("No db_mnm in config") ;
