@@ -2,6 +2,7 @@ use mysql_async::prelude::*;
 use mysql_async::from_row;
 use crate::app_state::*;
 use crate::mixnmatch::*;
+use crate::entry::*;
 
 #[derive(Debug, Clone)]
 pub struct AutoMatch {
@@ -40,10 +41,11 @@ impl AutoMatch {
                 if items.is_empty() {
                     continue ;
                 }
+                let mut entry= Entry::from_id(entry_id, &self.mnm).await.unwrap();
                 if items.len()==1 { // Single match
-                    self.mnm.set_entry_match(entry_id,&items[0],USER_AUTO).await?;
+                    entry.set_match(&items[0],USER_AUTO).await?;
                 } else { // Multi-match
-                    self.mnm.set_multi_match(entry_id, &items).await?;
+                    entry.set_multi_match(&items).await?;
                 }
                 //println!("#{}: {} / {:?}",&entry_id,&label,&items);
             }

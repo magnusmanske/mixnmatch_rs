@@ -3,6 +3,7 @@ extern crate serde_json;
 pub mod app_state;
 pub mod mixnmatch;
 pub mod automatch ;
+pub mod entry ;
 
 /*
 ssh magnus@tools-login.wmflabs.org -L 3309:wikidatawiki.web.db.svc.eqiad.wmflabs:3306 -N &
