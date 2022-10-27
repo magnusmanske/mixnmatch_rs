@@ -102,10 +102,10 @@ impl MixNMatch {
         }
     }
 
-    /// Sets the match for an entry ID, by calling set_entry_object_match.
-    pub async fn set_entry_match(&self, entry_id: usize, q: &str, user_id: usize) -> Result<bool,GenericError> {
-        Entry::from_id(entry_id, &self).await?.set_match(q,user_id).await
-    }
+    // Sets the match for an entry ID, by calling set_entry_object_match.
+    //pub async fn set_entry_match(&self, entry_id: usize, q: &str, user_id: usize) -> Result<bool,GenericError> {
+    //    Entry::from_id(entry_id, &self).await?.set_match(q,user_id).await
+    //}
     
     /// Computes the column of the overview table that is affected, given a user ID and item ID
     pub fn get_overview_column_name_for_user_and_q(&self, user_id: &Option<usize>, q: &Option<isize> ) -> &str {

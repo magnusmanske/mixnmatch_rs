@@ -6,6 +6,7 @@ pub mod job ;
 
 use std::{thread, time};
 use crate::job::*;
+use crate::automatch::*;
 
 /*
 ssh magnus@tools-login.wmflabs.org -L 3309:wikidatawiki.web.db.svc.eqiad.wmflabs:3306 -N &
@@ -17,12 +18,12 @@ jsub -mem 1g -cwd -N rustbot ./run.sh
 cargo test  -- --test-threads=1 --nocapture
 */
 
-
 #[tokio::main]
 async fn main() -> Result<(),app_state::GenericError> {
     let app = app_state::AppState::from_config_file("config.json")?;
     let mnm = mixnmatch::MixNMatch::new(app.clone());
-    let valid_actions = vec!("automatch_by_search");
+
+    let valid_actions = vec!("automatch_by_search","automatch_from_other_catalogs");
     Job::new(&mnm).reset_running_jobs(&Some(valid_actions.clone())).await?; // Reset jobs
     println!("Old {:?} jobs reset, starting bot",&valid_actions);
     loop {

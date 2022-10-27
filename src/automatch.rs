@@ -70,6 +70,36 @@ impl AutoMatch {
         Ok(())
     }
 
+    pub async fn automatch_from_other_catalogs(&self, catalog_id: usize) -> Result<(),GenericError> {
+        // TODO batch this?
+        let sql = "SELECT ext_name,`type`,q FROM entry 
+            WHERE ext_name IN (SELECT DISTINCT ext_name FROM entry WHERE catalog=:catalog_id AND q IS NULL)
+            AND q IS NOT NULL AND q > 0 AND user IS NOT NULL AND user>0
+            AND catalog IN (SELECT id from catalog WHERE active=1)
+            GROUP BY ext_name,type HAVING count(DISTINCT q)=1";
+        let mut conn = self.mnm.app.get_mnm_conn().await?;
+        let results = conn
+            .exec_iter(sql.clone(),params! {catalog_id}).await?
+            .map_and_drop(from_row::<(String,String,Option<usize>)>).await?;
+        for result in &results {
+            let ext_name = &result.0;
+            let type_name = &result.1;
+            let q_numeric = result.2.unwrap() as isize; // Safe unwrap
+            let sql = "SELECT DISTINCT `id` FROM `entry` WHERE `catalog`=:catalog_id AND `ext_name`=:ext_name AND `type`=:type_name AND `q` IS NULL";
+            let entry_ids = conn
+                .exec_iter(sql.clone(),params! {catalog_id,ext_name,type_name}).await?
+                .map_and_drop(from_row::<usize>).await?;
+            if entry_ids.len()==1{
+                let q=format!("Q{}",q_numeric);
+                match Entry::from_id(entry_ids[0], &self.mnm).await?.set_match(&q,USER_AUTO).await {
+                    Ok(_) => {}
+                    _ => {} // Ignore error
+                }
+            }
+        }
+        Ok(())
+    }
+
 }
 
 
