@@ -6,16 +6,14 @@ pub mod job ;
 
 use std::{thread, time};
 use crate::job::*;
-use crate::automatch::*;
 
 /*
 ssh magnus@tools-login.wmflabs.org -L 3309:wikidatawiki.web.db.svc.eqiad.wmflabs:3306 -N &
 ssh magnus@tools-login.wmflabs.org -L 3308:tools-db:3306 -N &
+cargo test  -- --test-threads=1 --nocapture
 
 toolforge-jobs run --image tf-bullseye-std --mem 200Mi --continuous --command '/data/project/mix-n-match/mixnmatch_rs/run.sh' rustbot
 jsub -mem 1g -cwd -N rustbot ./run.sh
-
-cargo test  -- --test-threads=1 --nocapture
 */
 
 #[tokio::main]

@@ -7,32 +7,10 @@ use mysql_async::prelude::*;
 use mysql_async::from_row;
 use crate::app_state::*;
 use crate::entry::*;
-//use static_init::dynamic;
-//use std::sync::Arc;
 
-//#[dynamic(drop)]
-//static mut MNM_TEST_CACHE: Option<Arc<MixNMatch>> = None;
-
+/// Global function for tests.
 pub fn get_test_mnm() -> MixNMatch {
     MixNMatch::new(AppState::from_config_file("config.json").unwrap())
-/*
-    let x = MNM_TEST_CACHE.read();
-    match x.as_ref() {
-        Some(mnm) => {
-            println!("CLONING");
-            mnm.clone()
-        }
-        None => {
-            let app = AppState::from_config_file("config.json").unwrap();
-            let mnm = MixNMatch::new(app);
-            let mnm = Arc::new(mnm);
-            drop(x);
-            (*MNM_TEST_CACHE.write()) = Some(mnm.clone());
-            println!("INITIALIZED");
-            mnm.clone()
-        }
-    }
-     */
 }
 
 
