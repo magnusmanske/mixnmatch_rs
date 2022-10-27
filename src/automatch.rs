@@ -17,7 +17,10 @@ impl AutoMatch {
     }
 
     pub async fn automatch_by_search(&self, catalog_id: usize) -> Result<(),GenericError> {
-        let sql = format!("SELECT `id`,`ext_name`,`type`,IFNULL((SELECT group_concat(DISTINCT `label` SEPARATOR '|') FROM aliases WHERE entry_id=entry.id),'') AS `aliases` FROM `entry` WHERE `catalog`=:catalog_id {} ORDER BY `id` LIMIT :batch_size OFFSET :offset",MatchState::not_fully_matched().get_sql());
+        let sql = format!("SELECT `id`,`ext_name`,`type`,
+            IFNULL((SELECT group_concat(DISTINCT `label` SEPARATOR '|') FROM aliases WHERE entry_id=entry.id),'') AS `aliases` 
+            FROM `entry` WHERE `catalog`=:catalog_id {} 
+            ORDER BY `id` LIMIT :batch_size OFFSET :offset",MatchState::not_fully_matched().get_sql());
         let mut offset = 0 ;
         let batch_size = 5000 ;
         loop {
@@ -71,31 +74,39 @@ impl AutoMatch {
     }
 
     pub async fn automatch_from_other_catalogs(&self, catalog_id: usize) -> Result<(),GenericError> {
-        // TODO batch this?
         let sql = "SELECT ext_name,`type`,q FROM entry 
             WHERE ext_name IN (SELECT DISTINCT ext_name FROM entry WHERE catalog=:catalog_id AND q IS NULL)
             AND q IS NOT NULL AND q > 0 AND user IS NOT NULL AND user>0
             AND catalog IN (SELECT id from catalog WHERE active=1)
-            GROUP BY ext_name,type HAVING count(DISTINCT q)=1";
+            GROUP BY ext_name,type HAVING count(DISTINCT q)=1
+            LIMIT :batch_size OFFSET :offset";
         let mut conn = self.mnm.app.get_mnm_conn().await?;
-        let results = conn
-            .exec_iter(sql.clone(),params! {catalog_id}).await?
-            .map_and_drop(from_row::<(String,String,Option<usize>)>).await?;
-        for result in &results {
-            let ext_name = &result.0;
-            let type_name = &result.1;
-            let q_numeric = result.2.unwrap() as isize; // Safe unwrap
-            let sql = "SELECT DISTINCT `id` FROM `entry` WHERE `catalog`=:catalog_id AND `ext_name`=:ext_name AND `type`=:type_name AND `q` IS NULL";
-            let entry_ids = conn
-                .exec_iter(sql.clone(),params! {catalog_id,ext_name,type_name}).await?
-                .map_and_drop(from_row::<usize>).await?;
-            if entry_ids.len()==1{
-                let q=format!("Q{}",q_numeric);
-                match Entry::from_id(entry_ids[0], &self.mnm).await?.set_match(&q,USER_AUTO).await {
-                    Ok(_) => {}
-                    _ => {} // Ignore error
+        let mut offset = 0 ;
+        let batch_size = 5000 ;
+        loop {
+            let results = conn
+                .exec_iter(sql.clone(),params! {catalog_id,batch_size,offset}).await?
+                .map_and_drop(from_row::<(String,String,Option<usize>)>).await?;
+            for result in &results {
+                let ext_name = &result.0;
+                let type_name = &result.1;
+                let q_numeric = result.2.unwrap() as isize; // Safe unwrap
+                let sql = "SELECT DISTINCT `id` FROM `entry` WHERE `catalog`=:catalog_id AND `ext_name`=:ext_name AND `type`=:type_name AND `q` IS NULL";
+                let entry_ids = conn
+                    .exec_iter(sql.clone(),params! {catalog_id,ext_name,type_name}).await?
+                    .map_and_drop(from_row::<usize>).await?;
+                if entry_ids.len()==1{
+                    let q=format!("Q{}",q_numeric);
+                    match Entry::from_id(entry_ids[0], &self.mnm).await?.set_match(&q,USER_AUTO).await {
+                        Ok(_) => {}
+                        _ => {} // Ignore error
+                    }
                 }
             }
+            if results.len()<batch_size {
+                break;
+            }
+            offset += results.len()
         }
         Ok(())
     }

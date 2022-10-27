@@ -19,3 +19,12 @@ futures = "*"
 mysql_async = "^0.30.0"
 md5 = "*"
 reqwest = "*"
+
+[profile.release]
+lto = 'thin'
+panic = 'abort'
+codegen-units = 1
+
+[profile.bench]
+lto = 'thin'
+codegen-units = 1
