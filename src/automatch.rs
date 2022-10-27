@@ -77,26 +77,13 @@ impl AutoMatch {
 mod tests {
 
     use super::*;
-    use static_init::dynamic;
 
     const TEST_CATALOG_ID: usize = 5526 ;
     const TEST_ENTRY_ID: usize = 143962196 ;
 
-    #[dynamic(drop)]
-    static mut MNM_CACHE: Option<MixNMatch> = None;
-
-    async fn get_mnm() -> MixNMatch {
-        if MNM_CACHE.read().is_none() {
-            let app = AppState::from_config_file("config.json").await.unwrap();
-            let mnm = MixNMatch::new(app.clone());
-            (*MNM_CACHE.write()) = Some(mnm);
-        }
-        MNM_CACHE.read().as_ref().map(|s| s.clone()).unwrap().clone()
-    }
-
     #[tokio::test]
     async fn test_automatch_by_search() {
-        let mnm = get_mnm().await;
+        let mnm = get_test_mnm();
 
         // Clear
         Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap().unmatch().await.unwrap();

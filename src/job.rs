@@ -257,26 +257,13 @@ impl Job {
 mod tests {
 
     use super::*;
-    use static_init::dynamic;
 
     const _TEST_CATALOG_ID: usize = 5526 ;
     const _TEST_ENTRY_ID: usize = 143962196 ;
 
-    #[dynamic(drop)]
-    static mut MNM_CACHE: Option<MixNMatch> = None;
-
-    async fn get_mnm() -> MixNMatch {
-        if MNM_CACHE.read().is_none() {
-            let app = AppState::from_config_file("config.json").await.unwrap();
-            let mnm = MixNMatch::new(app.clone());
-            (*MNM_CACHE.write()) = Some(mnm);
-        }
-        MNM_CACHE.read().as_ref().map(|s| s.clone()).unwrap().clone()
-    }
-    
     #[tokio::test]
     async fn test_get_next_ts() {
-        let mnm = get_mnm().await;
+        let mnm = get_test_mnm();
         let mut job = Job::new(&mnm);
         job.data = Some(JobRow::new("test_action",0));
         job.data.as_mut().unwrap().last_ts = "20221027000000".to_string();
@@ -287,10 +274,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_job_find() {
-        let mnm = get_mnm().await;
+        let mnm = get_test_mnm();
         let mut job = Job::new(&mnm);
         // THIS IS NOT A GOOD TEST
         let _success = job.set_next(&Some(vec!("automatch_by_search"))).await.unwrap();
-        println!("{:?}", &job);
+        //println!("{:?}", &job);
     }
 }

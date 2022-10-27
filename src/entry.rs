@@ -200,26 +200,13 @@ impl Entry {
 mod tests {
 
     use super::*;
-    use static_init::dynamic;
 
     const _TEST_CATALOG_ID: usize = 5526 ;
     const TEST_ENTRY_ID: usize = 143962196 ;
 
-    #[dynamic(drop)]
-    static mut MNM_CACHE: Option<MixNMatch> = None;
-
-    async fn get_mnm() -> MixNMatch {
-        if MNM_CACHE.read().is_none() {
-            let app = AppState::from_config_file("config.json").await.unwrap();
-            let mnm = MixNMatch::new(app.clone());
-            (*MNM_CACHE.write()) = Some(mnm);
-        }
-        MNM_CACHE.read().as_ref().map(|s| s.clone()).unwrap().clone()
-    }
-
     #[tokio::test]
     async fn test_match() {
-        let mnm = get_mnm().await;
+        let mnm = get_test_mnm();
 
         // Clear
         Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap().unmatch().await.unwrap();
@@ -258,32 +245,22 @@ mod tests {
 
     #[tokio::test]
     async fn test_utf8() {
-        println!("0");
-        let mnm = get_mnm().await;
-        println!("1");
+        let mnm = get_test_mnm();
         let entry= Entry::from_id(102826400, &mnm).await.unwrap();
         assert_eq!("이희정",&entry.ext_name);
     }
 
     #[tokio::test]
     async fn test_multimatch() {
-        println!("0");
-        let mnm = get_mnm().await;
-        println!("1");
+        let mnm = get_test_mnm();
         let mut entry= Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
-        println!("2");
         entry.unmatch().await.unwrap();
-        println!("3");
         let items: Vec<String> = ["Q1","Q23456","Q7"].iter().map(|s|s.to_string()).collect();
         entry.set_multi_match(&items).await.unwrap();
-        println!("4");
         let result = entry.get_multi_match().await.unwrap();
-        println!("5");
         assert_eq!(result,items);
         entry.remove_multi_match().await.unwrap();
-        println!("6");
         let result = entry.get_multi_match().await.unwrap();
-        println!("7");
         let empty: Vec<String> = vec![];
         assert_eq!(result,empty);
     }

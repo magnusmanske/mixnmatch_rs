@@ -17,15 +17,15 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub async fn from_config_file(filename: &str) -> Result<Self,GenericError> {
+    pub fn from_config_file(filename: &str) -> Result<Self,GenericError> {
         let mut path = env::current_dir().expect("Can't get CWD");
         path.push(filename);
         let file = File::open(&path)?;
         let config: Value = serde_json::from_reader(file)?;
-        Ok(Self::from_config(&config).await)
+        Ok(Self::from_config(&config))
     }
 
-    pub async fn from_config(config: &Value) -> Self {
+    pub fn from_config(config: &Value) -> Self {
         let pool_opts = PoolOpts::default()
             .with_constraints(PoolConstraints::new(DB_POOL_MIN, DB_POOL_MAX).unwrap())
             .with_inactive_connection_ttl(Duration::from_secs(DB_POOL_KEEP_SEC));

@@ -7,6 +7,34 @@ use mysql_async::prelude::*;
 use mysql_async::from_row;
 use crate::app_state::*;
 use crate::entry::*;
+//use static_init::dynamic;
+//use std::sync::Arc;
+
+//#[dynamic(drop)]
+//static mut MNM_TEST_CACHE: Option<Arc<MixNMatch>> = None;
+
+pub fn get_test_mnm() -> MixNMatch {
+    MixNMatch::new(AppState::from_config_file("config.json").unwrap())
+/*
+    let x = MNM_TEST_CACHE.read();
+    match x.as_ref() {
+        Some(mnm) => {
+            println!("CLONING");
+            mnm.clone()
+        }
+        None => {
+            let app = AppState::from_config_file("config.json").unwrap();
+            let mnm = MixNMatch::new(app);
+            let mnm = Arc::new(mnm);
+            drop(x);
+            (*MNM_TEST_CACHE.write()) = Some(mnm.clone());
+            println!("INITIALIZED");
+            mnm.clone()
+        }
+    }
+     */
+}
+
 
 pub const Q_NA: isize = 0;
 pub const Q_NOWD: isize = -1;
@@ -221,26 +249,13 @@ impl MixNMatch {
 mod tests {
 
     use super::*;
-    use static_init::dynamic;
 
     const _TEST_CATALOG_ID: usize = 5526 ;
     const _TEST_ENTRY_ID: usize = 143962196 ;
 
-    #[dynamic(drop)]
-    static mut MNM_CACHE: Option<MixNMatch> = None;
-
-    async fn get_mnm() -> MixNMatch {
-        if MNM_CACHE.read().is_none() {
-            let app = AppState::from_config_file("config.json").await.unwrap();
-            let mnm = MixNMatch::new(app.clone());
-            (*MNM_CACHE.write()) = Some(mnm);
-        }
-        MNM_CACHE.read().as_ref().map(|s| s.clone()).unwrap().clone()
-    }
-
     #[tokio::test]
     async fn test_remove_meta_items() {
-        let mnm = get_mnm().await;
+        let mnm = get_test_mnm();
         let mut items: Vec<String> = ["Q1","Q3522","Q2"].iter().map(|s|s.to_string()).collect() ;
         mnm.remove_meta_items(&mut items).await.unwrap();
         assert_eq!(items,["Q1","Q2"]);
@@ -248,7 +263,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_overview_column_name_for_user_and_q() {
-        let mnm = get_mnm().await;
+        let mnm = get_test_mnm();
         assert_eq!(mnm.get_overview_column_name_for_user_and_q(&Some(0),&None),"autoq");
         assert_eq!(mnm.get_overview_column_name_for_user_and_q(&Some(2),&Some(1)),"manual");
         assert_eq!(mnm.get_overview_column_name_for_user_and_q(&Some(2),&Some(0)),"na");

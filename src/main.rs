@@ -13,12 +13,14 @@ ssh magnus@tools-login.wmflabs.org -L 3308:tools-db:3306 -N &
 
 toolforge-jobs run --image tf-bullseye-std --mem 200Mi --continuous --command '/data/project/mix-n-match/mixnmatch_rs/run.sh' rustbot
 jsub -mem 1g -cwd -N rustbot ./run.sh
+
+cargo test  -- --test-threads=1 --nocapture
 */
 
 
 #[tokio::main]
 async fn main() -> Result<(),app_state::GenericError> {
-    let app = app_state::AppState::from_config_file("config.json").await?;
+    let app = app_state::AppState::from_config_file("config.json")?;
     let mnm = mixnmatch::MixNMatch::new(app.clone());
     let valid_actions = vec!("automatch_by_search");
     Job::new(&mnm).reset_running_jobs(&Some(valid_actions.clone())).await?; // Reset jobs
