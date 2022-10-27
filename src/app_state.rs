@@ -1,7 +1,6 @@
 use std::env;
 use std::fs::File;
 use serde_json::Value;
-//use mysql_async::prelude::*;
 use mysql_async::{PoolOpts, PoolConstraints, Opts, OptsBuilder, Conn};
 use core::time::Duration;
 
@@ -47,6 +46,12 @@ impl AppState {
 
     pub async fn get_wd_conn(&self) -> Result<Conn, mysql_async::Error> {
         self.wd_pool.get_conn().await
+    }
+
+    pub async fn disconnect(&self) -> Result<(),GenericError> {
+        //self.wd_pool.disconnect().await?;
+        //self.mnm_pool.disconnect().await?;
+        Ok(())
     }
 
 }
