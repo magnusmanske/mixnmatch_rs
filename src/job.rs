@@ -2,6 +2,32 @@ use mysql_async::prelude::*;
 use mysql_async::from_row;
 use crate::app_state::*;
 use crate::mixnmatch::*;
+use crate::automatch::*;
+use std::error::Error;
+use std::fmt;
+
+
+pub const STATUS_TODO: &'static str = "TODO";
+pub const STATUS_DONE: &'static str = "DONE";
+pub const STATUS_FAILED: &'static str = "FAILED";
+pub const STATUS_RUNNING: &'static str = "RUNNING";
+pub const STATUS_HIGH_PRIORITY: &'static str = "HIGH_PRIORITY";
+pub const STATUS_LOW_PRIORITY: &'static str = "LOW_PRIORITY";
+
+
+#[derive(Debug)]
+enum JobError {
+    S(String)
+}
+
+impl Error for JobError {}
+
+impl fmt::Display for JobError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self) // user-facing output
+    }
+}
+
 
 #[derive(Debug, Clone)]
 pub struct JobRow {
@@ -69,6 +95,29 @@ impl Job {
         Ok(true)
     }
 
+    pub async fn run(&mut self) -> Result<(),GenericError> {
+        self.set_status(STATUS_RUNNING).await?;
+        match self.run_this_job().await {
+            Ok(_) => {
+                self.update_next_ts().await?;
+                self.set_status(STATUS_DONE).await
+            }
+            _ => {
+                self.update_next_ts().await?;
+                self.set_status(STATUS_FAILED).await
+            }
+        }
+    }
+
+    pub async fn set_status(&mut self, status: &str) -> Result<(),GenericError> {
+        let job_id = self.data.as_ref().ok_or("!")?.id;
+        let timestamp = MixNMatch::get_timestamp();
+        let sql = "UPDATE `jobs` SET `status`=:status,`last_ts`=:timestamp WHERE `id`=:job_id";
+        self.mnm.app.get_mnm_conn().await?.exec_drop(sql, params! {job_id,timestamp,status}).await?;
+        self.data.as_mut().ok_or("!")?.status = status.to_string();
+        Ok(())
+    }
+
     pub async fn get_next_job_id(&self, actions: &Option<Vec<&str>>) -> Option<usize> {
         if let Some(job_id) = self.get_next_high_priority_job(actions).await {
             return Some(job_id) ;
@@ -88,36 +137,62 @@ impl Job {
         None
     }
 
+    pub async fn reset_running_jobs(&self, actions: &Option<Vec<&str>>) -> Result<(),GenericError> {
+        let conditions = self.get_action_conditions(actions) ;
+        let sql = format!("UPDATE `jobs` SET `status`='{}' WHERE `status`='{}' {}",STATUS_TODO,STATUS_RUNNING,&conditions) ;
+        self.mnm.app.get_mnm_conn().await?.exec_drop(sql, ()).await?;
+        Ok(())
+    }
+
     // PRIVATE METHODS
+
+    async fn run_this_job(&mut self) -> Result<(),GenericError> {
+        let data = self.data.as_ref().ok_or("Job::run: No job data set")?.clone();
+        println!("STARTING {:?}", &data);
+        match data.action.as_str() {
+            "automatch_by_search" => {
+                let am = AutoMatch::new(&self.mnm);
+                am.automatch_by_search(data.catalog).await
+            },
+            other => {
+                return Err(Box::new(JobError::S(format!("Job::run: Unknown action '{}'",other))))
+            }
+        }
+    }
+
+    async fn update_next_ts(&mut self) -> Result<(),GenericError> {
+        // TODO
+        Ok(())
+    }
 
     async fn get_next_high_priority_job(&self, actions: &Option<Vec<&str>>) -> Option<usize> {
         let conditions = self.get_action_conditions(actions) ;
-        let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='HIGH_PRIORITY' AND `depends_on` IS NULL {}",&conditions) ;
+        let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NULL {}",STATUS_HIGH_PRIORITY,&conditions) ;
         self.get_next_job_generic(&sql).await
     }
     
     async fn get_next_low_priority_job(&self, actions: &Option<Vec<&str>>) -> Option<usize> {
         let conditions = self.get_action_conditions(actions) ;
-        let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='LOW_PRIORITY' AND `depends_on` IS NULL {}",&conditions) ;
+        let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NULL {}",STATUS_LOW_PRIORITY,&conditions) ;
         self.get_next_job_generic(&sql).await
     }
     
     async fn get_next_dependent_job(&self, actions: &Option<Vec<&str>>) -> Option<usize> {
         let conditions = self.get_action_conditions(actions) ;
-        let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='TODO' AND `depends_on` IS NOT NULL AND `depends_on` IN (SELECT `id` FROM `jobs` WHERE `status`='DONE') {}",&conditions) ;
+        let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NOT NULL AND `depends_on` IN (SELECT `id` FROM `jobs` WHERE `status`='{}') {}",STATUS_TODO,&conditions,STATUS_DONE) ;
         self.get_next_job_generic(&sql).await
     }
     
     async fn get_next_initial_job(&self, actions: &Option<Vec<&str>>) -> Option<usize> {
         let conditions = self.get_action_conditions(actions) ;
-        let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='TODO' AND `depends_on` IS NULL {}",&conditions) ;
+        let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NULL {}",STATUS_TODO,&conditions) ;
         self.get_next_job_generic(&sql).await
     }
     
     async fn get_next_scheduled_job(&self, actions: &Option<Vec<&str>>) -> Option<usize> {
         let conditions = self.get_action_conditions(actions) ;
         let timestamp =  MixNMatch::get_timestamp();
-        let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='DONE' AND `next_ts`!='' AND `next_ts`<='{}' {} ORDER BY `next_ts` LIMIT 1",&timestamp,&conditions) ;
+        let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `next_ts`!='' AND `next_ts`<='{}' {} ORDER BY `next_ts` LIMIT 1",STATUS_DONE,&timestamp,&conditions) ;
         self.get_next_job_generic(&sql).await
     }
     
@@ -171,6 +246,7 @@ mod tests {
     async fn test_job_find() {
         let mnm = get_mnm().await;
         let mut job = Job::new(&mnm);
+        // THIS IS NOT A GOOD TEST
         let _success = job.set_next(&Some(vec!("automatch_by_search"))).await.unwrap();
         println!("{:?}", &job);
     }

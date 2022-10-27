@@ -64,13 +64,10 @@ impl Entry {
     /// Returns an Entry object for a given entry ID.
     pub async fn from_id(entry_id: usize, mnm: &MixNMatch) -> Result<Entry,GenericError> {
         let sql = r"SELECT id,catalog,ext_id,ext_url,ext_name,ext_desc,q,user,timestamp,random,`type` FROM `entry` WHERE `id`=:entry_id";
-        println!("A");
         let mut conn = mnm.app.get_mnm_conn().await? ;
-        println!("B");
         let mut rows: Vec<Entry> = conn
             .exec_iter(sql,params! {entry_id}).await?
             .map_and_drop(|row| Self::from_row(&row)).await?;
-        println!("C");
         // `id` is a unique index, so there can be only zero or one row in rows.
         let mut ret = rows.pop().ok_or(format!("No entry #{}",entry_id))?.to_owned() ;
         ret.set_mnm(mnm);
@@ -257,6 +254,15 @@ mod tests {
         assert!(entry.user.is_none());
         assert!(entry.timestamp.is_none());
 
+    }
+
+    #[tokio::test]
+    async fn test_utf8() {
+        println!("0");
+        let mnm = get_mnm().await;
+        println!("1");
+        let entry= Entry::from_id(102826400, &mnm).await.unwrap();
+        assert_eq!("이희정",&entry.ext_name);
     }
 
     #[tokio::test]
