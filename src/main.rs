@@ -10,6 +10,8 @@ use crate::job::*;
 /*
 ssh magnus@tools-login.wmflabs.org -L 3309:wikidatawiki.web.db.svc.eqiad.wmflabs:3306 -N &
 ssh magnus@tools-login.wmflabs.org -L 3308:tools-db:3306 -N &
+
+toolforge-jobs run --image tf-bullseye-std --mem 200Mi --continuous --command '/data/project/mix-n-match/mixnmatch_rs/run.sh' rustbot
 */
 
 
@@ -19,15 +21,26 @@ async fn main() -> Result<(),app_state::GenericError> {
     let mnm = mixnmatch::MixNMatch::new(app.clone());
     let valid_actions = vec!("automatch_by_search");
     Job::new(&mnm).reset_running_jobs(&Some(valid_actions.clone())).await?; // Reset jobs
+    println!("Old {:?} jobs reset, starting bot",&valid_actions);
     loop {
         let mut job = Job::new(&mnm);
         match job.set_next(&Some(valid_actions.clone())).await {
             Ok(true) => {
-                tokio::spawn(async move {
-                    job.run().await.unwrap();
-                })
-                //.await.unwrap() // TESTING
-                ;
+                match job.set_status(STATUS_RUNNING).await {
+                    Ok(_) => {
+                        tokio::spawn(async move {
+                            match job.run().await {
+                                Ok(_) => {},
+                                _ => {}
+                            }
+                        })
+                        //.await.unwrap() // TESTING
+                        ;
+                    }
+                    _ => {
+                        println!("Could not set status for job");
+                    }
+                }
             }
             Ok(false) => {
                 thread::sleep(time::Duration::from_secs(5));

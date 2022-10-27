@@ -96,7 +96,6 @@ impl Job {
     }
 
     pub async fn run(&mut self) -> Result<(),GenericError> {
-        self.set_status(STATUS_RUNNING).await?;
         match self.run_this_job().await {
             Ok(_) => {
                 self.update_next_ts().await?;
