@@ -1,10 +1,11 @@
 use mysql_async::prelude::*;
 use mysql_async::from_row;
+use chrono::Duration;
+use std::error::Error;
+use std::fmt;
 use crate::app_state::*;
 use crate::mixnmatch::*;
 use crate::automatch::*;
-use std::error::Error;
-use std::fmt;
 
 
 pub const STATUS_TODO: &'static str = "TODO";
@@ -60,7 +61,24 @@ impl JobRow {
                 user_id: x.10
             }
         }
-}
+
+        pub fn new(action: &str, catalog_id: usize) -> JobRow {
+            Self {
+                id: 0,
+                action: action.to_string(),
+                catalog: catalog_id,
+                json: None,
+                depends_on: None,
+                status: STATUS_TODO.to_string(),
+                last_ts: MixNMatch::get_timestamp(),
+                note: None,
+                repeat_after_sec: None,
+                next_ts: "".to_string(),
+                user_id: 0
+            }
+        }
+    
+    }
 
 #[derive(Debug, Clone)]
 pub struct Job {
@@ -98,14 +116,13 @@ impl Job {
     pub async fn run(&mut self) -> Result<(),GenericError> {
         match self.run_this_job().await {
             Ok(_) => {
-                self.update_next_ts().await?;
-                self.set_status(STATUS_DONE).await
+                self.set_status(STATUS_DONE).await?;
             }
             _ => {
-                self.update_next_ts().await?;
-                self.set_status(STATUS_FAILED).await
+                self.set_status(STATUS_FAILED).await?;
             }
         }
+        self.update_next_ts().await
     }
 
     pub async fn set_status(&mut self, status: &str) -> Result<(),GenericError> {
@@ -146,7 +163,7 @@ impl Job {
     // PRIVATE METHODS
 
     async fn run_this_job(&mut self) -> Result<(),GenericError> {
-        let data = self.data.as_ref().ok_or("Job::run: No job data set")?.clone();
+        let data = self.data.as_ref().ok_or("Job::run_this_job: No job data set")?.clone();
         println!("STARTING {:?}", &data);
         match data.action.as_str() {
             "automatch_by_search" => {
@@ -154,13 +171,29 @@ impl Job {
                 am.automatch_by_search(data.catalog).await
             },
             other => {
-                return Err(Box::new(JobError::S(format!("Job::run: Unknown action '{}'",other))))
+                return Err(Box::new(JobError::S(format!("Job::run_this_job: Unknown action '{}'",other))))
             }
         }
     }
 
+    fn get_next_ts(&mut self) -> Result<String,GenericError> {
+        let data = self.data.as_ref().ok_or("Job::get_next_ts: No job data set")?;
+        let seconds = match data.repeat_after_sec {
+            Some(sec) => sec as i64,
+            None => return Err(Box::new(JobError::S(format!("Job::get_next_ts"))))
+        };
+        let utc = MixNMatch::parse_timestamp(&data.last_ts).ok_or("Can't parse timestamp in last_ts")?
+            .checked_add_signed(Duration::seconds(seconds)).unwrap(); // TODO fix unwrap
+        let next_ts = utc.format("%Y%m%d%H%M%S").to_string();
+        Ok(next_ts)
+    }
+
     async fn update_next_ts(&mut self) -> Result<(),GenericError> {
-        // TODO
+        let next_ts = self.get_next_ts()?;
+
+        let job_id = self.data.as_ref().ok_or("Job::update_next_ts: No job data set")?.id;
+        self.data.as_mut().ok_or("!")?.next_ts = next_ts.to_string();
+        self.mnm.app.get_mnm_conn().await?.exec_drop("UPDATE `jobs` SET `next_ts`=:next_ts WHERE `id`=:job_id", params! {job_id,next_ts}).await?;
         Ok(())
     }
 
@@ -239,6 +272,17 @@ mod tests {
             (*MNM_CACHE.write()) = Some(mnm);
         }
         MNM_CACHE.read().as_ref().map(|s| s.clone()).unwrap().clone()
+    }
+    
+    #[tokio::test]
+    async fn test_get_next_ts() {
+        let mnm = get_mnm().await;
+        let mut job = Job::new(&mnm);
+        job.data = Some(JobRow::new("test_action",0));
+        job.data.as_mut().unwrap().last_ts = "20221027000000".to_string();
+        job.data.as_mut().unwrap().repeat_after_sec = Some(61);
+        let next_ts = job.get_next_ts().unwrap();
+        assert_eq!(next_ts,"20221027000101");
     }
 
     #[tokio::test]

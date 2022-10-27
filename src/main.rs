@@ -12,6 +12,7 @@ ssh magnus@tools-login.wmflabs.org -L 3309:wikidatawiki.web.db.svc.eqiad.wmflabs
 ssh magnus@tools-login.wmflabs.org -L 3308:tools-db:3306 -N &
 
 toolforge-jobs run --image tf-bullseye-std --mem 200Mi --continuous --command '/data/project/mix-n-match/mixnmatch_rs/run.sh' rustbot
+jsub -mem 1g -cwd -N rustbot ./run.sh
 */
 
 

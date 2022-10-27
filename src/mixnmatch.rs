@@ -1,7 +1,7 @@
 use regex::Regex;
 use reqwest;
 use urlencoding::encode;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Utc, NaiveDateTime};
 use serde_json::Value;
 use mysql_async::prelude::*;
 use mysql_async::from_row;
@@ -135,6 +135,10 @@ impl MixNMatch {
         return ts ;
     }
 
+    pub fn parse_timestamp(ts: &str) -> Option<DateTime<Utc>> {
+        Some(NaiveDateTime::parse_from_str(ts,"%Y%m%d%H%M%S").ok()?.and_local_timezone(Utc).unwrap()) // This unwrap() is OK!
+    }
+
     /// Checks if the log already has a removed match for this entry.
     /// If a q_numeric item is given, and a specific one is in the log entry, it will only trigger on this combination.
     pub async fn avoid_auto_match(&self, entry_id: usize, q_numeric: Option<isize>) -> Result<bool,GenericError> {
@@ -260,4 +264,13 @@ mod tests {
         assert_eq!(ts.len(),14);
         assert_eq!(ts.chars().next(),Some('2'));
     }
+
+    #[test]
+    fn test_parse_timestamp() {
+        let ts = "20221027123456";
+        let dt = MixNMatch::parse_timestamp(ts).unwrap();
+        let ts2 = dt.format("%Y%m%d%H%M%S").to_string();
+        assert_eq!(ts,ts2)
+    }
+    
 }
