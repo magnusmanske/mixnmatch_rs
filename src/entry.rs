@@ -192,6 +192,20 @@ impl Entry {
         Ok(())
     }
 
+    pub fn is_unmatched(&self) -> bool {
+        self.q.is_none()
+    }
+
+    pub fn is_partially_matched(&self) -> bool {
+        self.user==Some(0)
+    }
+
+    pub fn is_fully_matched(&self) -> bool {
+        match self.user {
+            Some(user_id) => user_id>0,
+            None => false
+        }
+    }
 
 }
 

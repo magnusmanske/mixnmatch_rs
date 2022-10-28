@@ -111,6 +111,13 @@ impl AutoMatch {
         Ok(())
     }
 
+    pub async fn purge_automatches(&self, catalog_id: usize) -> Result<(),GenericError> {
+        let mut conn = self.mnm.app.get_mnm_conn().await?;
+        conn.exec_drop("UPDATE entry SET q=NULL,user=NULL,`timestamp`=NULL WHERE catalog=:catalog_id AND user=0", params! {catalog_id}).await?;
+        conn.exec_drop("DELETE FROM multi_match WHERE catalog=:catalog_id", params! {catalog_id}).await?;
+        Ok(())
+    }
+
 }
 
 
@@ -141,6 +148,40 @@ mod tests {
         
         // Clear
         entry.unmatch().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_purge_automatches() {
+        let _test_lock = TEST_MUTEX.lock();
+        let mnm = get_test_mnm();
+
+        // Set a full match
+        let mut entry= Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        entry.unmatch().await.unwrap();
+        entry.set_match("Q1",4).await.unwrap();
+        assert!(entry.is_fully_matched());
+
+        // Purge catalog
+        let am = AutoMatch::new(&mnm);
+        am.purge_automatches(TEST_CATALOG_ID).await.unwrap();
+
+        // Check that the entry is still fully matched
+        let entry= Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        assert!(entry.is_fully_matched());
+
+        // Set an automatch
+        let mut entry= Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        entry.unmatch().await.unwrap();
+        entry.set_match("Q1",0).await.unwrap();
+        assert!(entry.is_partially_matched());
+
+        // Purge catalog
+        let am = AutoMatch::new(&mnm);
+        am.purge_automatches(TEST_CATALOG_ID).await.unwrap();
+
+        // Check that the entry is now unmatched
+        let entry= Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        assert!(entry.is_unmatched());
     }
 
 }

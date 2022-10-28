@@ -24,7 +24,12 @@ async fn main() -> Result<(),app_state::GenericError> {
     let app = app_state::AppState::from_config_file("config.json")?;
     let mnm = mixnmatch::MixNMatch::new(app.clone());
 
-    let valid_actions = vec!("automatch_by_search","automatch_from_other_catalogs");
+    let valid_actions = vec!(
+        "automatch_by_search",
+        "automatch_from_other_catalogs",
+        "taxon_matcher",
+        "purge_automatches"
+    );
     Job::new(&mnm).reset_running_jobs(&Some(valid_actions.clone())).await?; // Reset jobs
     println!("Old {:?} jobs reset, starting bot",&valid_actions);
     loop {
