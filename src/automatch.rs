@@ -1,8 +1,15 @@
+use regex::Regex;
+use chrono::prelude::*;
+use lazy_static::lazy_static;
 use mysql_async::prelude::*;
 use mysql_async::from_row;
 use crate::app_state::*;
 use crate::mixnmatch::*;
 use crate::entry::*;
+
+lazy_static!{
+    static ref RE_YEAR : Regex = Regex::new(r"(\d{3,4})").unwrap();
+}
 
 #[derive(Debug, Clone)]
 pub struct AutoMatch {
@@ -118,6 +125,101 @@ impl AutoMatch {
         Ok(())
     }
 
+    pub async fn match_person_by_dates(&self, catalog_id: usize) -> Result<(),GenericError> {
+        let mw_api = self.mnm.get_mw_api().await.unwrap();
+        let sql = "SELECT entry_id,ext_name,born,died 
+            FROM (`entry` join `person_dates`)
+            WHERE `person_dates`.`entry_id` = `entry`.`id`
+            AND `catalog`=:catalog_id AND (q IS NULL or user=0) AND born!='' AND died!='' 
+            LIMIT :batch_size OFFSET :offset";
+        let mut offset = 0 ;
+        let batch_size = 5000 ;
+        loop {
+            let results = self.mnm.app.get_mnm_conn().await?
+                .exec_iter(sql.clone(),params! {catalog_id,batch_size,offset}).await?
+                .map_and_drop(from_row::<(usize,String,String,String)>).await?;
+            for result in &results {
+                let entry_id = result.0;
+                let ext_name = &result.1;
+                let birth_year = match Self::extract_sane_year_from_date(&result.2) {
+                    Some(year) => year,
+                    None => continue
+                };
+                let death_year = match Self::extract_sane_year_from_date(&result.3) {
+                    Some(year) => year,
+                    None => continue
+                };
+                let candidate_items = match self.search_person(ext_name).await {
+                    Ok(c) => c,
+                    _ => continue // Ignore error
+                };
+                if candidate_items.is_empty() {
+                    continue // No candidate items
+                }
+                let candidate_items = match self.subset_items_by_birth_death_year(&candidate_items,birth_year,death_year,&mw_api).await {
+                    Ok(ci) => ci,
+                    _ => continue // Ignore error
+                };
+                match candidate_items.len() {
+                    0 => {} // No results
+                    1 => {
+                        let q=&candidate_items[0];
+                        match Entry::from_id(entry_id, &self.mnm).await?.set_match(&q,USER_DATE_MATCH).await {
+                            Ok(_) => {}
+                            _ => {} // Ignore error
+                        }    
+                    }
+                    _x => {
+                        // TODO addIssue ( $o->entry_id , 'WD_DUPLICATE' , $items ) ;
+                    }
+                }
+            }
+            if results.len()<batch_size {
+                break;
+            }
+            offset += results.len()
+        }
+        Ok(())
+    }
+
+    async fn search_person(&self, name: &str) -> Result<Vec<String>,GenericError> {
+        let name = MixNMatch::sanitize_person_name(&name);
+        let name = MixNMatch::simplify_person_name(&name);
+        self.mnm.wd_search_with_type(&name,"Q5").await
+    }
+
+    async fn subset_items_by_birth_death_year(&self, items: &Vec<String>, birth_year: i32, death_year: i32, mw_api: &mediawiki::api::Api) -> Result<Vec<String>,GenericError> {
+        if items.len()>100 { // TODO chunks but that's a nightly feature
+            return Ok(vec![]) ;
+        }
+        let item_str = items.join(" wd:");
+        let sparql = "SELECT DISTINCT ?q { VALUES ?q { wd:".to_string() +
+            item_str.as_str() + 
+            " } " +
+            format!(". ?q wdt:P569 ?born ; wdt:P570 ?died. FILTER ( year(?born)={}).FILTER ( year(?died)={} )",birth_year,death_year).as_str() +
+            "}";
+        let results = match mw_api.sparql_query(&sparql).await {
+            Ok(result) => result,
+            _ => return Ok(vec![]) // Ignore error
+        } ;
+        let items = mw_api.entities_from_sparql_result(&results,"q");
+        Ok(items)
+    }
+
+
+    fn extract_sane_year_from_date(date: &str) -> Option<i32> {
+        let captures = RE_YEAR.captures(date)?;
+        if captures.len()!=2 {
+            return None;
+        }
+        let year = captures.get(1)?.as_str().parse::<i32>().ok()?;
+        if year<0 || year>Utc::now().year() {
+            None
+        } else {
+            Some(year)
+        }
+    }
+
 }
 
 
@@ -128,6 +230,25 @@ mod tests {
 
     const TEST_CATALOG_ID: usize = 5526 ;
     const TEST_ENTRY_ID: usize = 143962196 ;
+    const TEST_ENTRY_ID2: usize = 144000954 ;
+
+    #[tokio::test]
+    async fn test_match_person_by_dates() {
+        let _test_lock = TEST_MUTEX.lock();
+        let mnm = get_test_mnm();
+        
+        // Clear
+        Entry::from_id(TEST_ENTRY_ID2, &mnm).await.unwrap().unmatch().await.unwrap();
+
+        // Match by date
+        let am = AutoMatch::new(&mnm);
+        am.match_person_by_dates(TEST_CATALOG_ID).await.unwrap();
+
+        // Check if set
+        let entry = Entry::from_id(TEST_ENTRY_ID2, &mnm).await.unwrap();
+        assert!(entry.is_fully_matched());
+        assert_eq!(1035,entry.q.unwrap());
+    }
 
     #[tokio::test]
     async fn test_automatch_by_search() {

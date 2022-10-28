@@ -20,6 +20,26 @@ lazy_static! {
 }
 
 
+lazy_static! {
+    static ref SANITIZE_PERSON_NAME_RES : Vec<Regex> = vec![
+        Regex::new(r"^(Sir|Mme|Dr|Mother|Father)\.{0,1} ").unwrap(),
+        Regex::new(r"\b[A-Z]\. /").unwrap(),
+        Regex::new(r" (\&) ").unwrap(),
+        Regex::new(r"\(.+?\)").unwrap(),
+        Regex::new(r"\s+").unwrap(),
+    ];
+    static ref SIMPLIFY_PERSON_NAME_RES : Vec<Regex> = vec![
+        Regex::new(r"\s*\(.*?\)\s*").unwrap(),
+        Regex::new(r"[, ]+(Jr\.{0,1}|Sr\.{0,1}|PhD\.{0,1}|MD|M\.D\.)$").unwrap(),
+        Regex::new(r"^(Sir|Baron|Baronesse{0,1}|Graf|Gräfin|Prince|Princess|Dr\.|Prof\.|Rev\.)\s+").unwrap(),
+        Regex::new(r"^(Sir|Baron|Baronesse{0,1}|Graf|Gräfin|Prince|Princess|Dr\.|Prof\.|Rev\.)\s+").unwrap(),
+        Regex::new(r"^(Sir|Baron|Baronesse{0,1}|Graf|Gräfin|Prince|Princess|Dr\.|Prof\.|Rev\.)\s+").unwrap(),
+        Regex::new(r"\s*(Ritter|Freiherr)\s+").unwrap(),
+        Regex::new(r"\s+").unwrap(),
+    ];
+    static ref SIMPLIFY_PERSON_NAME_TWO_RE : Regex = Regex::new(r"^(\S+) .*?(\S+)$").unwrap();
+}
+
 pub const Q_NA: isize = 0;
 pub const Q_NOWD: isize = -1;
 pub const USER_AUTO: usize = 0;
@@ -77,20 +97,20 @@ impl MatchState {
 
 #[derive(Debug, Clone)]
 pub struct MixNMatch {
-    pub app: AppState,
+    pub app: AppState
 }
 
 impl MixNMatch {
     pub fn new(app: AppState) -> Self {
         Self {
-            app,
+            app
         }
     }
 
-    // Sets the match for an entry ID, by calling set_entry_object_match.
-    //pub async fn set_entry_match(&self, entry_id: usize, q: &str, user_id: usize) -> Result<bool,GenericError> {
-    //    Entry::from_id(entry_id, &self).await?.set_match(q,user_id).await
-    //}
+    pub async fn get_mw_api(&self) -> Result<mediawiki::api::Api,mediawiki::media_wiki_error::MediaWikiError> {
+        // TODO cache in Option<Arc<>> ?
+        mediawiki::api::Api::new(WIKIDATA_API_URL).await
+    }
     
     /// Computes the column of the overview table that is affected, given a user ID and item ID
     pub fn get_overview_column_name_for_user_and_q(&self, user_id: &Option<usize>, q: &Option<isize> ) -> &str {
@@ -197,6 +217,7 @@ impl MixNMatch {
 
     /// Performs a Wikidata API search for the query string.
     pub async fn wd_search(&self, query: &str) -> Result<Vec<String>,GenericError> {    
+        // TODO via mw_api?
         if query.is_empty() {
             return Ok(vec![]) ;
         }
@@ -235,6 +256,23 @@ impl MixNMatch {
         Ok(())
     }
 
+    pub fn sanitize_person_name(name: &str) -> String {
+        let mut name = name.to_string();
+        for re in SANITIZE_PERSON_NAME_RES.iter() {
+            name = re.replace_all(&name," ").to_string();
+        }
+        name.trim().to_string()
+    }
+
+    pub fn simplify_person_name(name: &str) -> String {
+        let mut name = name.to_string();
+        for re in SIMPLIFY_PERSON_NAME_RES.iter() {
+            name = re.replace_all(&name," ").to_string();
+        }
+        name = SIMPLIFY_PERSON_NAME_TWO_RE.replace_all(&name,"$1 $2").to_string();
+        name.trim().to_string()
+    }
+
 }
 
 #[cfg(test)]
@@ -244,6 +282,9 @@ mod tests {
 
     const _TEST_CATALOG_ID: usize = 5526 ;
     const _TEST_ENTRY_ID: usize = 143962196 ;
+
+    // TODO sanitize_person_name
+    // TODO simplify_person_name
 
     #[tokio::test]
     async fn test_remove_meta_items() {

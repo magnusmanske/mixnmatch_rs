@@ -28,7 +28,8 @@ async fn main() -> Result<(),app_state::GenericError> {
         "automatch_by_search",
         "automatch_from_other_catalogs",
         "taxon_matcher",
-        "purge_automatches"
+        "purge_automatches",
+        "match_person_dates"
     );
     Job::new(&mnm).reset_running_jobs(&Some(valid_actions.clone())).await?; // Reset jobs
     println!("Old {:?} jobs reset, starting bot",&valid_actions);

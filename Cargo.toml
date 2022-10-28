@@ -13,6 +13,7 @@ config = "^0.10"
 serde_json = "^1"
 urlencoding = "^1"
 roxmltree = "*"
+mediawiki = "*"
 wikibase = { git = "https://gitlab.com/tobias47n9e/wikibase_rs" }
 tokio = { version = "^1", features = ["full","rt-multi-thread"] }
 futures = "*"

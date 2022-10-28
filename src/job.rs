@@ -181,6 +181,10 @@ impl Job {
                 let am = AutoMatch::new(&self.mnm);
                 am.purge_automatches(data.catalog).await
             },
+            "match_person_dates" => {
+                let am = AutoMatch::new(&self.mnm);
+                am.match_person_by_dates(data.catalog).await
+            },
             "taxon_matcher" => {
                 let tm = TaxonMatcher::new(&self.mnm);
                 tm.match_taxa(data.catalog).await
