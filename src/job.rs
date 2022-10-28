@@ -6,6 +6,7 @@ use std::fmt;
 use crate::app_state::*;
 use crate::mixnmatch::*;
 use crate::automatch::*;
+use crate::taxon_matcher::*;
 
 
 pub const STATUS_TODO: &'static str = "TODO";
@@ -117,9 +118,11 @@ impl Job {
         match self.run_this_job().await {
             Ok(_) => {
                 self.set_status(STATUS_DONE).await?;
+                println!("Job {}:{} completed.",self.data.as_ref().unwrap().catalog,self.data.as_ref().unwrap().action);
             }
             _ => {
                 self.set_status(STATUS_FAILED).await?;
+                println!("Job {}:{} FAILED.",self.data.as_ref().unwrap().catalog,self.data.as_ref().unwrap().action);
             }
         }
         self.update_next_ts().await
@@ -174,6 +177,11 @@ impl Job {
                 let am = AutoMatch::new(&self.mnm);
                 am.automatch_from_other_catalogs(data.catalog).await
             },
+            "taxon_matcher" => {
+                let tm = TaxonMatcher::new(&self.mnm);
+                tm.match_taxa(data.catalog).await
+            },
+            
             other => {
                 return Err(Box::new(JobError::S(format!("Job::run_this_job: Unknown action '{}'",other))))
             }

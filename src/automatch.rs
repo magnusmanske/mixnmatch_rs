@@ -124,6 +124,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_automatch_by_search() {
+        let _test_lock = TEST_MUTEX.lock();
         let mnm = get_test_mnm();
 
         // Clear

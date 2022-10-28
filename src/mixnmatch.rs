@@ -1,3 +1,5 @@
+use std::sync::Mutex;
+use lazy_static::lazy_static;
 use regex::Regex;
 use reqwest;
 use urlencoding::encode;
@@ -11,6 +13,10 @@ use crate::entry::*;
 /// Global function for tests.
 pub fn get_test_mnm() -> MixNMatch {
     MixNMatch::new(AppState::from_config_file("config.json").unwrap())
+}
+
+lazy_static! {
+    pub static ref TEST_MUTEX: Mutex<bool> = Mutex::new(true); // To lock the test entry in the database
 }
 
 
@@ -27,6 +33,7 @@ pub const META_ITEMS: &'static [&'static str] = &[
     "Q13406463", // Wikimedia list article
     "Q22808320" // Wikimedia human name disambiguation page
     ] ;
+pub const WIKIDATA_USER_AGENT: &'static str = "MixNMmatch_RS/1.0";
 
 #[derive(Debug, Clone)]
 pub struct MatchState {
@@ -101,9 +108,9 @@ impl MixNMatch {
     pub async fn update_overview_table(&self, old_entry: &Entry, user_id: Option<usize>, q: Option<isize>) -> Result<(),GenericError> {
         let add_column = self.get_overview_column_name_for_user_and_q(&user_id,&q);
         let reduce_column = self.get_overview_column_name_for_user_and_q(&old_entry.user,&old_entry.q);
-        let catalog = old_entry.catalog ;
-        let sql = format!("UPDATE overview SET {}={}+1,{}={}-1 WHERE catalog=:catalog",&add_column,&add_column,&reduce_column,&reduce_column) ;
-        self.app.get_mnm_conn().await?.exec_drop(sql,params! {catalog}).await?;
+        let catalog_id = old_entry.catalog ;
+        let sql = format!("UPDATE overview SET {}={}+1,{}={}-1 WHERE catalog=:catalog_id",&add_column,&add_column,&reduce_column,&reduce_column) ;
+        self.app.get_mnm_conn().await?.exec_drop(sql,params! {catalog_id}).await?;
         Ok(())
     }
 
@@ -195,8 +202,15 @@ impl MixNMatch {
         }
         let query = encode(&query);
         let url = format!("{}?action=query&list=search&format=json&srsearch={}",WIKIDATA_API_URL,query);
-        let body = reqwest::get(url).await?.text().await?;
-        let v: Value = serde_json::from_str(&body)?;
+        let client = reqwest::Client::builder()
+            .user_agent(WIKIDATA_USER_AGENT)
+            .build()?;
+        let v = client.get(url)
+            //.header(reqwest::header::USER_AGENT,WIKIDATA_USER_AGENT)
+            .send()
+            .await?
+            .json::<Value>()
+            .await?;
         let v = v.as_object().ok_or("bad result")?;
         let v = v.get("query").ok_or("no key 'query'")?;
         let v = v.as_object().ok_or("not an object")?;

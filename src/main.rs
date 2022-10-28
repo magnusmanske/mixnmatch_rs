@@ -1,9 +1,11 @@
 pub mod app_state;
 pub mod mixnmatch;
 pub mod automatch ;
+pub mod taxon_matcher ;
 pub mod entry ;
 pub mod job ;
 
+pub use lazy_static::*;
 use std::{thread, time};
 use crate::job::*;
 
@@ -12,6 +14,7 @@ ssh magnus@tools-login.wmflabs.org -L 3309:wikidatawiki.web.db.svc.eqiad.wmflabs
 ssh magnus@tools-login.wmflabs.org -L 3308:tools-db:3306 -N &
 cargo test  -- --test-threads=1 --nocapture
 
+time jsub -N build -mem 2G -sync y -cwd cargo build --release
 toolforge-jobs run --image tf-bullseye-std --mem 200Mi --continuous --command '/data/project/mix-n-match/mixnmatch_rs/run.sh' rustbot
 jsub -mem 200m -cwd -N rustbot ./run.sh
 */

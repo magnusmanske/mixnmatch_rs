@@ -206,6 +206,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_match() {
+        let _test_lock = TEST_MUTEX.lock();
         let mnm = get_test_mnm();
 
         // Clear
@@ -252,6 +253,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_multimatch() {
+        let _test_lock = TEST_MUTEX.lock();
         let mnm = get_test_mnm();
         let mut entry= Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
         entry.unmatch().await.unwrap();
