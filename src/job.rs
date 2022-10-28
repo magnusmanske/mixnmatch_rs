@@ -170,6 +170,10 @@ impl Job {
                 let am = AutoMatch::new(&self.mnm);
                 am.automatch_by_search(data.catalog).await
             },
+            "automatch_from_other_catalogs" => {
+                let am = AutoMatch::new(&self.mnm);
+                am.automatch_from_other_catalogs(data.catalog).await
+            },
             other => {
                 return Err(Box::new(JobError::S(format!("Job::run_this_job: Unknown action '{}'",other))))
             }
@@ -211,7 +215,7 @@ impl Job {
     
     async fn get_next_dependent_job(&self, actions: &Option<Vec<&str>>) -> Option<usize> {
         let conditions = self.get_action_conditions(actions) ;
-        let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NOT NULL AND `depends_on` IN (SELECT `id` FROM `jobs` WHERE `status`='{}') {}",STATUS_TODO,&conditions,STATUS_DONE) ;
+        let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NOT NULL AND `depends_on` IN (SELECT `id` FROM `jobs` WHERE `status`='{}') {}",STATUS_TODO,STATUS_DONE,&conditions) ;
         self.get_next_job_generic(&sql).await
     }
     

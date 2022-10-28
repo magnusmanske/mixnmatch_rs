@@ -13,7 +13,7 @@ ssh magnus@tools-login.wmflabs.org -L 3308:tools-db:3306 -N &
 cargo test  -- --test-threads=1 --nocapture
 
 toolforge-jobs run --image tf-bullseye-std --mem 200Mi --continuous --command '/data/project/mix-n-match/mixnmatch_rs/run.sh' rustbot
-jsub -mem 1g -cwd -N rustbot ./run.sh
+jsub -mem 200m -cwd -N rustbot ./run.sh
 */
 
 #[tokio::main]
