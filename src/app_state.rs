@@ -17,6 +17,7 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// Creatre an AppState object from a config JSION file
     pub fn from_config_file(filename: &str) -> Result<Self,GenericError> {
         let mut path = env::current_dir().expect("Can't get CWD");
         path.push(filename);
@@ -25,30 +26,41 @@ impl AppState {
         Ok(Self::from_config(&config))
     }
 
+    /// Creatre an AppState object from a config JSON object
     pub fn from_config(config: &Value) -> Self {
-        let pool_opts = PoolOpts::default()
-            .with_constraints(PoolConstraints::new(DB_POOL_MIN, DB_POOL_MAX).unwrap())
-            .with_inactive_connection_ttl(Duration::from_secs(DB_POOL_KEEP_SEC));
-        let wd_url = config["db_wd"].as_str().expect("No db_wd in config") ;
-        let wd_opts = Opts::from_url(wd_url).expect(format!("Can not build options from db_wd URL {}",wd_url).as_str());
-        let mnm_url = config["db_mnm"].as_str().expect("No db_mnm in config") ;
-        let mnm_opts = Opts::from_url(mnm_url).expect(format!("Can not build options from db_mnm URL {}",mnm_url).as_str());
         let ret = Self {
-            wd_pool: mysql_async::Pool::new(OptsBuilder::from_opts(wd_opts).pool_opts(pool_opts.clone())),
-            mnm_pool: mysql_async::Pool::new(OptsBuilder::from_opts(mnm_opts).pool_opts(pool_opts.clone()))
+            wd_pool: Self::create_pool(&config["wikidata"]),
+            mnm_pool: Self::create_pool(&config["mixnmatch"]),
         };
         ret
     }
 
+    /// Helper function to create a DB pool from a JSON config object
+    fn create_pool(config: &Value) -> mysql_async::Pool {
+        let min_connections = config["min_connections"].as_u64().expect("No min_connections value") as usize;
+        let max_connections = config["max_connections"].as_u64().expect("No max_connections value") as usize;
+        let keep_sec = config["keep_sec"].as_u64().expect("No keep_sec value");
+        let url = config["url"].as_str().expect("No url value");
+        let pool_opts = PoolOpts::default()
+            .with_constraints(PoolConstraints::new(min_connections, max_connections).unwrap())
+            .with_inactive_connection_ttl(Duration::from_secs(keep_sec));
+        let wd_url = url;
+        let wd_opts = Opts::from_url(wd_url).expect(format!("Can not build options from db_wd URL {}",wd_url).as_str());
+        mysql_async::Pool::new(OptsBuilder::from_opts(wd_opts).pool_opts(pool_opts.clone()))
+    }
+
+    /// Returns a connection to the Mix'n'Match tool database
     pub async fn get_mnm_conn(&self) -> Result<Conn, mysql_async::Error> {
         self.mnm_pool.get_conn().await
     }
 
+    /// Returns a connection to the Wikidata DB replica
     pub async fn get_wd_conn(&self) -> Result<Conn, mysql_async::Error> {
         self.wd_pool.get_conn().await
     }
 
-    pub async fn disconnect(&self) -> Result<(),GenericError> {
+    pub async fn disconnect(&mut self) -> Result<(),GenericError> {
+        // TODO
         //self.wd_pool.disconnect().await?;
         //self.mnm_pool.disconnect().await?;
         Ok(())
