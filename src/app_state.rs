@@ -59,10 +59,9 @@ impl AppState {
         self.wd_pool.get_conn().await
     }
 
-    pub async fn disconnect(&mut self) -> Result<(),GenericError> {
-        // TODO
-        //self.wd_pool.disconnect().await?;
-        //self.mnm_pool.disconnect().await?;
+    pub async fn disconnect(&self) -> Result<(),GenericError> {
+        self.wd_pool.clone().disconnect().await?;
+        self.mnm_pool.clone().disconnect().await?;
         Ok(())
     }
 

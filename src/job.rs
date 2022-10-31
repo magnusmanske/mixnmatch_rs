@@ -205,6 +205,7 @@ impl Job {
         None
     }
 
+    /// Resets all RUNNING jobs of certain types to TODO. Used when bot restarts.
     pub async fn reset_running_jobs(&self, actions: &Option<Vec<&str>>) -> Result<(),GenericError> {
         let conditions = self.get_action_conditions(actions) ;
         let sql = format!("UPDATE `jobs` SET `status`='{}' WHERE `status`='{}' {}",STATUS_TODO,STATUS_RUNNING,&conditions) ;

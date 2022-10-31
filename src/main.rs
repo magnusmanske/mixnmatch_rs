@@ -16,7 +16,7 @@ cargo test  -- --test-threads=1 --nocapture
 
 time jsub -N build -mem 2G -sync y -cwd cargo build --release
 toolforge-jobs run --image tf-bullseye-std --mem 200Mi --command '/data/project/mix-n-match/mixnmatch_rs/run.sh' rustbot
-jsub -mem 200m -cwd -N rustbot ./run.sh
+#jsub -mem 200m -cwd -N rustbot ./run.sh
 */
 
 #[tokio::main]

@@ -108,7 +108,6 @@ impl MixNMatch {
     }
 
     pub async fn get_mw_api(&self) -> Result<mediawiki::api::Api,mediawiki::media_wiki_error::MediaWikiError> {
-        // TODO cache in Option<Arc<>> ?
         mediawiki::api::Api::new(WIKIDATA_API_URL).await
     }
     
