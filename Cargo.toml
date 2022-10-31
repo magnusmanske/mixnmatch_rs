@@ -20,6 +20,7 @@ futures = "*"
 mysql_async = "^0.30.0"
 md5 = "*"
 reqwest = "*"
+async-trait = "*"
 
 [profile.release]
 lto = 'thin'

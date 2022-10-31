@@ -6,6 +6,7 @@ use mysql_async::from_row;
 use crate::app_state::*;
 use crate::mixnmatch::*;
 use crate::entry::*;
+use crate::job::*;
 
 lazy_static!{
     static ref RE_YEAR : Regex = Regex::new(r"(\d{3,4})").unwrap();
@@ -13,13 +14,24 @@ lazy_static!{
 
 #[derive(Debug, Clone)]
 pub struct AutoMatch {
-    mnm: MixNMatch
+    mnm: MixNMatch,
+    job: Option<Job>
+}
+
+impl Jobbable for AutoMatch {
+    fn set_current_job(&mut self, job: &Job) {
+        self.job = Some(job.clone());
+    }
+    fn get_current_job(&self) -> Option<&Job> {
+        self.job.as_ref()
+    }
 }
 
 impl AutoMatch {
     pub fn new(mnm: &MixNMatch) -> Self {
         Self {
-            mnm: mnm.clone()
+            mnm: mnm.clone(),
+            job: None
         }
     }
 
@@ -28,7 +40,7 @@ impl AutoMatch {
             IFNULL((SELECT group_concat(DISTINCT `label` SEPARATOR '|') FROM aliases WHERE entry_id=entry.id),'') AS `aliases` 
             FROM `entry` WHERE `catalog`=:catalog_id {} 
             ORDER BY `id` LIMIT :batch_size OFFSET :offset",MatchState::not_fully_matched().get_sql());
-        let mut offset = 0 ;
+        let mut offset = self.get_last_job_offset() ;
         let batch_size = 5000 ;
         loop {
             let results = self.mnm.app.get_mnm_conn().await?
@@ -74,9 +86,10 @@ impl AutoMatch {
             if results.len()<batch_size {
                 break;
             }
+            let _ = self.remember_offset(offset).await;
             offset += results.len()
         }
-
+        let _ = self.clear_offset().await;
         Ok(())
     }
 
@@ -88,7 +101,7 @@ impl AutoMatch {
             GROUP BY ext_name,type HAVING count(DISTINCT q)=1
             LIMIT :batch_size OFFSET :offset";
         let mut conn = self.mnm.app.get_mnm_conn().await?;
-        let mut offset = 0 ;
+        let mut offset = self.get_last_job_offset() ;
         let batch_size = 5000 ;
         loop {
             let results = conn
@@ -113,8 +126,10 @@ impl AutoMatch {
             if results.len()<batch_size {
                 break;
             }
+            let _ = self.remember_offset(offset).await;
             offset += results.len()
         }
+        let _ = self.clear_offset().await;
         Ok(())
     }
 
@@ -132,7 +147,7 @@ impl AutoMatch {
             WHERE `person_dates`.`entry_id` = `entry`.`id`
             AND `catalog`=:catalog_id AND (q IS NULL or user=0) AND born!='' AND died!='' 
             LIMIT :batch_size OFFSET :offset";
-        let mut offset = 0 ;
+        let mut offset = self.get_last_job_offset() ;
         let batch_size = 5000 ;
         loop {
             let results = self.mnm.app.get_mnm_conn().await?
@@ -177,8 +192,10 @@ impl AutoMatch {
             if results.len()<batch_size {
                 break;
             }
+            let _ = self.remember_offset(offset).await;
             offset += results.len()
         }
+        let _ = self.clear_offset().await;
         Ok(())
     }
 

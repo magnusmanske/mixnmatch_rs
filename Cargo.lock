@@ -1255,6 +1255,7 @@ dependencies = [
 name = "mixnmatch"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "chrono",
  "config 0.10.1",
  "futures",

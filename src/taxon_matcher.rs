@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use crate::app_state::*;
 use crate::mixnmatch::*;
 use crate::entry::*;
+use crate::job::*;
 
 lazy_static! {
     static ref TAXON_RANKS: HashMap<&'static str, &'static str> = {
@@ -26,16 +27,26 @@ lazy_static! {
     static ref RE_CATALOG_169 : Regex = RegexBuilder::new(r"^.*\[([a-z ]+).*$").case_insensitive(true).build().unwrap();
 }
 
+impl Jobbable for TaxonMatcher {
+    fn set_current_job(&mut self, job: &Job) {
+        self.job = Some(job.clone());
+    }
+    fn get_current_job(&self) -> Option<&Job> {
+        self.job.as_ref()
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct TaxonMatcher {
-    mnm: MixNMatch
+    mnm: MixNMatch,
+    job: Option<Job>
 }
 
 impl TaxonMatcher {
     pub fn new(mnm: &MixNMatch) -> Self {
         Self {
-            mnm: mnm.clone()
+            mnm: mnm.clone(),
+            job: None
         }
     }
 
@@ -58,46 +69,48 @@ impl TaxonMatcher {
         let sql = format!(r"SELECT `id`,`{}` AS taxon_name,`type` FROM `entry`
             WHERE `catalog` IN (:catalog_id) AND (`q` IS NULL OR `user`=0) AND `type` IN ('{}')
             LIMIT :batch_size OFFSET :offset",taxon_name_column,ranks.join("','"));
-            let mut offset = 0 ;
-            let batch_size = 5000 ;
-            loop {
-                let results = self.mnm.app.get_mnm_conn().await?
-                    .exec_iter(sql.clone(),params! {catalog_id,batch_size,offset}).await?
-                    .map_and_drop(from_row::<(usize,String,String)>).await?;
-                for result in &results {
-                    let entry_id = result.0 ;
-                    let taxon_name = match self.rewrite_taxon_name(catalog_id,&result.1) {
-                        Some(s) => s,
-                        None => continue
-                    };
-                    let type_name = &result.2 ;
-                    let rank = match TAXON_RANKS.get(type_name.as_str()) {
-                        Some(rank) => format!(" haswbstatement:P105={}",rank),
-                        None => "".to_string()
-                    };
-                    let query = format!("haswbstatement:P31=Q16521 haswbstatement:\"P225={}|P1420={}\" {}",&taxon_name,&taxon_name,&rank);
-                    let items = match self.mnm.wd_search(&query).await {
-                        Ok(v) => v,
-                        _ => continue // Ignore error
-                    };
-                    match items.len() {
-                        0 => {} // No matches
-                        1 => {
-                            let q = &items[0];
-                            match Entry::from_id(entry_id, &self.mnm).await?.set_match(q,USER_AUX_MATCH).await {
-                                Ok(_) => {}
-                                _ => {} // Ignore error
-                            }        
-                        }
-                        _ => {} // TODO log multiple potential matches
+        let mut offset = self.get_last_job_offset() ;
+        let batch_size = 5000 ;
+        loop {
+            let results = self.mnm.app.get_mnm_conn().await?
+                .exec_iter(sql.clone(),params! {catalog_id,batch_size,offset}).await?
+                .map_and_drop(from_row::<(usize,String,String)>).await?;
+            for result in &results {
+                let entry_id = result.0 ;
+                let taxon_name = match self.rewrite_taxon_name(catalog_id,&result.1) {
+                    Some(s) => s,
+                    None => continue
+                };
+                let type_name = &result.2 ;
+                let rank = match TAXON_RANKS.get(type_name.as_str()) {
+                    Some(rank) => format!(" haswbstatement:P105={}",rank),
+                    None => "".to_string()
+                };
+                let query = format!("haswbstatement:P31=Q16521 haswbstatement:\"P225={}|P1420={}\" {}",&taxon_name,&taxon_name,&rank);
+                let items = match self.mnm.wd_search(&query).await {
+                    Ok(v) => v,
+                    _ => continue // Ignore error
+                };
+                match items.len() {
+                    0 => {} // No matches
+                    1 => {
+                        let q = &items[0];
+                        match Entry::from_id(entry_id, &self.mnm).await?.set_match(q,USER_AUX_MATCH).await {
+                            Ok(_) => {}
+                            _ => {} // Ignore error
+                        }        
                     }
+                    _ => {} // TODO log multiple potential matches
                 }
-                if results.len()<batch_size {
-                    break;
-                }
-                offset += results.len()
             }
-        
+            if results.len()<batch_size {
+                break;
+            }
+            let _ = self.remember_offset(offset).await;
+            offset += results.len()
+        }
+        let _ = self.clear_offset().await;
+    
         // Update catalog as "done at least once" if necessary
         let sql = "UPDATE `catalog` SET `taxon_run`=1 WHERE `id`=:catalog_id AND `taxon_run`=0" ;
         self.mnm.app.get_mnm_conn().await?.exec_drop(sql,params! {catalog_id}).await?;

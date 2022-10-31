@@ -1,8 +1,11 @@
+use std::sync::{Arc, Mutex};
+use serde_json::json;
 use mysql_async::prelude::*;
 use mysql_async::from_row;
 use chrono::Duration;
 use std::error::Error;
 use std::fmt;
+use async_trait::async_trait;
 use crate::app_state::*;
 use crate::mixnmatch::*;
 use crate::automatch::*;
@@ -16,10 +19,55 @@ pub const STATUS_RUNNING: &'static str = "RUNNING";
 pub const STATUS_HIGH_PRIORITY: &'static str = "HIGH_PRIORITY";
 pub const STATUS_LOW_PRIORITY: &'static str = "LOW_PRIORITY";
 
+#[async_trait]
+pub trait Jobbable {
+    fn set_current_job(&mut self, job: &Job) ;
+    fn get_current_job(&self) -> Option<&Job> ;
+
+    fn get_last_job_offset(&self) -> usize {
+        let job = match self.get_current_job() {
+            Some(job) => job,
+            None => return 0
+        };
+        let json = match job.get_json_value() {
+            Some(json) => json,
+            None => return 0
+        };
+        match json.as_object() {
+            Some(o) => {
+                match o.get("offset") {
+                    Some(offset) => offset.as_u64().unwrap_or(0) as usize,
+                    None => 0
+                }
+            }
+            None => 0
+        }
+    }
+
+    async fn remember_offset(&self, offset: usize) -> Result<(),GenericError> {
+        let job = match self.get_current_job() {
+            Some(job) => job,
+            None => return Ok(())
+        };
+        job.set_json(Some(json!({"offset":offset}))).await?;
+        Ok(())
+    }
+
+    async fn clear_offset(&self) -> Result<(),GenericError> {
+        let job = match self.get_current_job() {
+            Some(job) => job,
+            None => return Ok(())
+        };
+        job.set_json(None).await?;
+        Ok(())
+    }
+}
 
 #[derive(Debug)]
 enum JobError {
-    S(String)
+    S(String),
+    DataNotSet,
+    PoisonedJobRowMutex
 }
 
 impl Error for JobError {}
@@ -83,15 +131,15 @@ impl JobRow {
 
 #[derive(Debug, Clone)]
 pub struct Job {
-    pub data: Option<JobRow>,
-    pub mnm: MixNMatch
+    pub data: Option<Arc<Mutex<JobRow>>>,
+    pub mnm: Arc<MixNMatch>
 }
 
 impl Job {
     pub fn new(mnm: &MixNMatch) -> Self {
         Self {
             data: None,
-            mnm: mnm.clone()
+            mnm: Arc::new(mnm.clone())
         }
     }
 
@@ -110,30 +158,31 @@ impl Job {
             .map_and_drop(from_row::<(usize,String,usize,Option<String>,Option<usize>,String,String,Option<String>,Option<usize>,String,usize)>).await?
             .pop().ok_or(format!("No job with ID {}", job_id))?;
         let result = JobRow::from_row(row);
-        self.data = Some(result);
+        self.data = Some(Arc::new(Mutex::new(result)));
         Ok(true)
     }
-
     pub async fn run(&mut self) -> Result<(),GenericError> {
+        let catalog_id = self.get_catalog()?;
+        let action = self.get_action()?;
         match self.run_this_job().await {
             Ok(_) => {
                 self.set_status(STATUS_DONE).await?;
-                println!("Job {}:{} completed.",self.data.as_ref().unwrap().catalog,self.data.as_ref().unwrap().action);
+                println!("Job {}:{} completed.",catalog_id,action);
             }
             _ => {
                 self.set_status(STATUS_FAILED).await?;
-                println!("Job {}:{} FAILED.",self.data.as_ref().unwrap().catalog,self.data.as_ref().unwrap().action);
+                println!("Job {}:{} FAILED.",catalog_id,action);
             }
         }
         self.update_next_ts().await
     }
 
     pub async fn set_status(&mut self, status: &str) -> Result<(),GenericError> {
-        let job_id = self.data.as_ref().ok_or("!")?.id;
+        let job_id = self.get_id()?;
         let timestamp = MixNMatch::get_timestamp();
         let sql = "UPDATE `jobs` SET `status`=:status,`last_ts`=:timestamp WHERE `id`=:job_id";
         self.mnm.app.get_mnm_conn().await?.exec_drop(sql, params! {job_id,timestamp,status}).await?;
-        self.data.as_mut().ok_or("!")?.status = status.to_string();
+        self.put_status(status)?;
         Ok(())
     }
 
@@ -163,31 +212,61 @@ impl Job {
         Ok(())
     }
 
+    /// Returns the current `json` as an Option<serde_json::Value>
+    pub fn get_json_value(&self) ->  Option<serde_json::Value> {
+        serde_json::from_str(self.get_json().ok()?.as_ref()?).ok()
+    }
+
+    /// Sets the value for `json` locally and in database, from a serde_json::Value
+    pub async fn set_json(&self, json: Option<serde_json::Value> ) ->  Result<(),GenericError> {
+        let job_id = self.get_id()?;
+        match json {
+            Some(json) => {
+                let json_string = json.to_string();
+                self.put_json(Some(json_string.clone()))?;
+                let sql = "UPDATE `jobs` SET `json`=:json_string WHERE `id`=:job_id";
+                self.mnm.app.get_mnm_conn().await?.exec_drop(sql, params!{job_id, json_string}).await?;
+            }
+            None => {
+                self.put_json(None)?;
+                let sql = "UPDATE `jobs` SET `json`=NULL WHERE `id`=:job_id";
+                self.mnm.app.get_mnm_conn().await?.exec_drop(sql, params!{job_id}).await?;
+            }
+        }
+        Ok(())
+    }
+
     // PRIVATE METHODS
 
     async fn run_this_job(&mut self) -> Result<(),GenericError> {
-        let data = self.data.as_ref().ok_or("Job::run_this_job: No job data set")?.clone();
-        println!("STARTING {:?}", &data);
-        match data.action.as_str() {
+        let json = self.get_json();
+        println!("STARTING {:?} with option {:?}", &self.data()?,&json);
+        let catalog_id = self.get_catalog()?;
+        match self.get_action()?.as_str() {
             "automatch_by_search" => {
-                let am = AutoMatch::new(&self.mnm);
-                am.automatch_by_search(data.catalog).await
+                let mut am = AutoMatch::new(&self.mnm);
+                am.set_current_job(self);
+                am.automatch_by_search(catalog_id).await
             },
             "automatch_from_other_catalogs" => {
-                let am = AutoMatch::new(&self.mnm);
-                am.automatch_from_other_catalogs(data.catalog).await
+                let mut am = AutoMatch::new(&self.mnm);
+                am.set_current_job(self);
+                am.automatch_from_other_catalogs(catalog_id).await
             },
             "purge_automatches" => {
-                let am = AutoMatch::new(&self.mnm);
-                am.purge_automatches(data.catalog).await
+                let mut am = AutoMatch::new(&self.mnm);
+                am.set_current_job(self);
+                am.purge_automatches(catalog_id).await
             },
             "match_person_dates" => {
-                let am = AutoMatch::new(&self.mnm);
-                am.match_person_by_dates(data.catalog).await
+                let mut am = AutoMatch::new(&self.mnm);
+                am.set_current_job(self);
+                am.match_person_by_dates(catalog_id).await
             },
             "taxon_matcher" => {
-                let tm = TaxonMatcher::new(&self.mnm);
-                tm.match_taxa(data.catalog).await
+                let mut tm = TaxonMatcher::new(&self.mnm);
+                tm.set_current_job(self);
+                tm.match_taxa(catalog_id).await
             },
             
             other => {
@@ -196,13 +275,42 @@ impl Job {
         }
     }
 
+
+    fn data(&self) -> Result<JobRow,JobError> {
+        Ok(self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().map_err(|_|JobError::PoisonedJobRowMutex)?.clone())
+    }
+    fn get_id(&self) -> Result<usize,JobError> {
+        Ok(self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().map_err(|_|JobError::PoisonedJobRowMutex)?.id)
+    }
+    fn get_action(&self) -> Result<String,JobError> {
+        Ok(self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().map_err(|_|JobError::PoisonedJobRowMutex)?.action.clone())
+    }
+    fn get_catalog(&self) -> Result<usize,JobError> {
+        Ok(self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().map_err(|_|JobError::PoisonedJobRowMutex)?.catalog)
+    }
+    fn get_json(&self) -> Result<Option<String>,JobError> {
+        Ok(self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().map_err(|_|JobError::PoisonedJobRowMutex)?.json.clone())
+    }
+
+    fn put_status(&self, status: &str) -> Result<(),JobError> {
+        (*self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().map_err(|_|JobError::PoisonedJobRowMutex)?).status = status.to_string();
+        Ok(())
+    }
+    fn put_json(&self, json: Option<String>) -> Result<(),JobError> {
+        (*self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().map_err(|_|JobError::PoisonedJobRowMutex)?).json = json;
+        Ok(())
+    }
+    fn put_next_ts(&self, next_ts: &str) -> Result<(),JobError> {
+        (*self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().map_err(|_|JobError::PoisonedJobRowMutex)?).next_ts = next_ts.to_string();
+        Ok(())
+    }
+
     fn get_next_ts(&mut self) -> Result<String,GenericError> {
-        let data = self.data.as_ref().ok_or("Job::get_next_ts: No job data set")?;
-        let seconds = match data.repeat_after_sec {
+        let seconds = match self.data()?.repeat_after_sec {
             Some(sec) => sec as i64,
             None => return Err(Box::new(JobError::S(format!("Job::get_next_ts"))))
         };
-        let utc = MixNMatch::parse_timestamp(&data.last_ts).ok_or("Can't parse timestamp in last_ts")?
+        let utc = MixNMatch::parse_timestamp(&self.data()?.last_ts.clone()).ok_or("Can't parse timestamp in last_ts")?
             .checked_add_signed(Duration::seconds(seconds)).unwrap(); // TODO fix unwrap
         let next_ts = utc.format("%Y%m%d%H%M%S").to_string();
         Ok(next_ts)
@@ -211,8 +319,8 @@ impl Job {
     async fn update_next_ts(&mut self) -> Result<(),GenericError> {
         let next_ts = self.get_next_ts()?;
 
-        let job_id = self.data.as_ref().ok_or("Job::update_next_ts: No job data set")?.id;
-        self.data.as_mut().ok_or("!")?.next_ts = next_ts.to_string();
+        let job_id = self.get_id()?;
+        self.put_next_ts(&next_ts)?;
         self.mnm.app.get_mnm_conn().await?.exec_drop("UPDATE `jobs` SET `next_ts`=:next_ts WHERE `id`=:job_id", params! {job_id,next_ts}).await?;
         Ok(())
     }
@@ -285,13 +393,14 @@ mod tests {
     async fn test_get_next_ts() {
         let mnm = get_test_mnm();
         let mut job = Job::new(&mnm);
-        job.data = Some(JobRow::new("test_action",0));
-        job.data.as_mut().unwrap().last_ts = "20221027000000".to_string();
-        job.data.as_mut().unwrap().repeat_after_sec = Some(61);
+        let mut job_row = JobRow::new("test_action",0);
+        job_row.last_ts = "20221027000000".to_string();
+        job_row.repeat_after_sec = Some(61);
+        job.data = Some(Arc::new(Mutex::new(job_row)));
         let next_ts = job.get_next_ts().unwrap();
         assert_eq!(next_ts,"20221027000101");
     }
-
+ 
     #[tokio::test]
     async fn test_job_find() {
         let mnm = get_test_mnm();
