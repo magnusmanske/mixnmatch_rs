@@ -2,6 +2,7 @@ pub mod app_state;
 pub mod mixnmatch;
 pub mod automatch ;
 pub mod taxon_matcher ;
+pub mod update_catalog ;
 pub mod entry ;
 pub mod job ;
 

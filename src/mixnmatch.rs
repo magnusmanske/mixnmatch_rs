@@ -272,6 +272,10 @@ impl MixNMatch {
         name.trim().to_string()
     }
 
+    pub fn import_file_path(&self) -> String {
+        self.app.import_file_path.to_owned()
+    }
+
 }
 
 #[cfg(test)]

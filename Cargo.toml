@@ -21,6 +21,8 @@ mysql_async = "^0.30.0"
 md5 = "*"
 reqwest = "*"
 async-trait = "*"
+csv = "*"
+uuid = { version="*", features=["v4"] }
 
 [profile.release]
 lto = 'thin'
