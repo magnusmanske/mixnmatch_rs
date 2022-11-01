@@ -84,15 +84,54 @@ enum DataSourceLocation {
 
 struct DataSource {
     json: serde_json::Value,
-    tmp_file: Option<OsString>
+    columns: Vec<String>,
+    just_add: bool,
+    min_cols: u64,
+    num_header_rows: u64,
+    skip_first_rows: u64,
+    patterns: serde_json::Map<String,serde_json::Value>,
+    tmp_file: Option<OsString>,
+    colmap: HashMap<String,usize>
 }
 
 impl DataSource {
-    fn new(json: &serde_json::Value) -> Self {
-        Self {
+    fn new(json: &serde_json::Value) -> Result<Self,GenericError> {
+        let columns: Vec<String> = match json.get("columns") {
+            Some(c) => c.as_array().unwrap_or(&vec!()).to_owned(),
+            None => vec!()
+        }.iter().filter_map(|v|v.as_str()).map(|s|s.to_string()).collect();
+        let patterns = json
+            .get("patterns")
+            .map(|v|v.clone())
+            .unwrap_or_else(|| json!({}))
+            .as_object()
+            .map(|v|v.clone())
+            .unwrap_or(serde_json::Map::new());
+        let colmap : HashMap<String,usize> = columns.iter().enumerate().filter_map(|(num,col)|{
+            let col = col.trim();
+            if col.is_empty() {
+                None
+            } else {
+                Some((col.to_string(),num))
+            }
+        }).collect();
+
+        // Paranoia
+        let _ = colmap.get("id").ok_or(Box::new(UpdateCatalogError::MissingColumn));
+        let _ = colmap.get("name").ok_or(Box::new(UpdateCatalogError::MissingColumn));
+
+        let min_cols = json.get("min_cols").map(|v|v.as_u64().unwrap_or(columns.len() as u64)).unwrap_or_else(||columns.len() as u64);
+        Ok(Self {
             json: json.clone(),
+            columns,
+            just_add: json.get("just_add").map(|v|v.as_bool().unwrap_or(false)).unwrap_or(false),
+            min_cols: min_cols,
+            num_header_rows: json.get("num_header_rows").map(|v|v.as_u64().unwrap_or(0)).unwrap_or(0),
+            skip_first_rows: json.get("skip_first_rows").unwrap_or(&json!{0}).as_u64().unwrap_or(0),
+            patterns,
+            colmap,
             tmp_file: None
-        }
+        })
     }
 
     async fn fetch_url(&self, url: &String, file_name: &Path) -> Result<(),GenericError> {
@@ -199,50 +238,28 @@ impl UpdateCatalog {
     pub async fn update_from_tabbed_file(&self, catalog_id: usize) -> Result<(),GenericError> {
         let update_info = self.get_update_info(catalog_id).await?;
         let json = update_info.json()?;
-        let columns: Vec<String> = match json.get("columns") {
-            Some(c) => c.as_array().unwrap_or(&vec!()).to_owned(),
-            None => vec!()
-        }.iter().filter_map(|v|v.as_str()).map(|s|s.to_string()).collect();
-        let just_add: bool = json.get("just_add").map(|v|v.as_bool().unwrap_or(false)).unwrap_or(false);
+        let mut datasource = DataSource::new(&json)?;
+        
         let entries_already_in_catalog = self.number_of_entries_in_catalog(catalog_id).await?;
-        let just_add = entries_already_in_catalog==0 || just_add ;
-        let num_header_rows: u64 = json.get("num_header_rows").map(|v|v.as_u64().unwrap_or(0)).unwrap_or(0);
-        let min_cols: u64 = match json.get("min_cols") {
-            Some(v) => {
-                v.as_u64().unwrap_or(columns.len() as u64)
-            }
-            None => columns.len() as u64
-        };
-        let patterns = json.get("patterns").map(|v|v.clone()).unwrap_or_else(|| json!({}));
-        let patterns = patterns.as_object().map(|v|v.clone()).unwrap_or(serde_json::Map::new());
-        let colmap : HashMap<String,usize> = columns.iter().enumerate().filter_map(|(num,col)|{
-            let col = col.trim();
-            if col.is_empty() {
-                None
-            } else {
-                Some((col.to_string(),num))
-            }
-        }).collect();
-
-        println!("min_cols {}",min_cols);
-        println!("num_header_rows {}",num_header_rows);
-        println!("columns\n{:?}",&columns);
-        println!("colmap\n{:?}",&colmap);
-        println!("patterns\n{:?}",&patterns);
-
-        // Paranoia
-        let _ = colmap.get("id").ok_or(Box::new(UpdateCatalogError::MissingColumn));
-        let _ = colmap.get("name").ok_or(Box::new(UpdateCatalogError::MissingColumn));
+/*
+        println!("min_cols {}",datasource.min_cols);
+        println!("num_header_rows {}",datasource.num_header_rows);
+        println!("skip_first_rows {}",datasource.skip_first_rows);
+        println!("columns\n{:?}",&datasource.columns);
+        println!("colmap\n{:?}",&datasource.colmap);
+        println!("patterns\n{:?}",&datasource.patterns);
+*/
 
         let mut line_counter = LineCounter::new() ;
-        let mut skip_first = num_header_rows;
-        println!("A");
-        let mut datasource = DataSource::new(&json);
-        println!("B");
+        let mut rows_to_skip = datasource.num_header_rows + datasource.skip_first_rows;
+        let just_add = entries_already_in_catalog==0 || datasource.just_add ;
         let mut reader = datasource.get_reader(&self.mnm).await?;
-        println!("C");
 
         while let Some(result) = reader.records().next() {
+            if rows_to_skip>0 {
+                rows_to_skip = rows_to_skip-1 ;
+                //continue;
+            }
             println!("{:?}",&result);
         }
 
@@ -292,11 +309,11 @@ mod tests {
         let mnm = get_test_mnm();
 
         let url = "http://www.example.org".to_string();
-        let ds = DataSource::new(&json!({"source_url":&url}));
+        let ds = DataSource::new(&json!({"source_url":&url})).unwrap();
         assert_eq!(ds.get_source_location(&mnm).unwrap(),DataSourceLocation::Url(url));
 
         let uuid = "4b115b29-2ad9-4f43-90ed-7023b51a6337";
-        let ds = DataSource::new(&json!({"file_uuid":&uuid}));
+        let ds = DataSource::new(&json!({"file_uuid":&uuid})).unwrap();
         assert_eq!(ds.get_source_location(&mnm).unwrap(),DataSourceLocation::FilePath(format!("{}/{}",mnm.import_file_path(),uuid)));
     }
 
