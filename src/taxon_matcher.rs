@@ -106,8 +106,8 @@ impl TaxonMatcher {
             if results.len()<batch_size {
                 break;
             }
+            offset += results.len();
             let _ = self.remember_offset(offset).await;
-            offset += results.len()
         }
         let _ = self.clear_offset().await;
     

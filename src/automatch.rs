@@ -88,8 +88,8 @@ impl AutoMatch {
             if results.len()<batch_size {
                 break;
             }
+            offset += results.len();
             let _ = self.remember_offset(offset).await;
-            offset += results.len()
         }
         let _ = self.clear_offset().await;
         Ok(())
@@ -163,8 +163,8 @@ impl AutoMatch {
             if results_in_original_catalog.len()<batch_size {
                 break;
             }
-            offset += results_in_original_catalog.len();
             let _ = self.remember_offset(offset).await;
+            offset += results_in_original_catalog.len();
         }
         let _ = self.clear_offset().await;
         Ok(())
