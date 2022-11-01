@@ -49,6 +49,7 @@ pub trait Jobbable {
             Some(job) => job,
             None => return Ok(())
         };
+        println!("REMEMBERING OFFSET {}",offset);
         job.set_json(Some(json!({"offset":offset}))).await?;
         Ok(())
     }
@@ -221,6 +222,7 @@ impl Job {
     /// Sets the value for `json` locally and in database, from a serde_json::Value
     pub async fn set_json(&self, json: Option<serde_json::Value> ) ->  Result<(),GenericError> {
         let job_id = self.get_id()?;
+        println!("SETTING JSON {:?}",json);
         match json {
             Some(json) => {
                 let json_string = json.to_string();

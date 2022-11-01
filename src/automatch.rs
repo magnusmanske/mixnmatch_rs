@@ -1,8 +1,10 @@
+use std::collections::HashMap;
 use regex::Regex;
 use chrono::prelude::*;
 use lazy_static::lazy_static;
 use mysql_async::prelude::*;
 use mysql_async::from_row;
+use mysql_async::Params;
 use crate::app_state::*;
 use crate::mixnmatch::*;
 use crate::entry::*;
@@ -94,40 +96,75 @@ impl AutoMatch {
     }
 
     pub async fn automatch_from_other_catalogs(&self, catalog_id: usize) -> Result<(),GenericError> {
-        let sql = "SELECT ext_name,`type`,q FROM entry 
-            WHERE ext_name IN (SELECT DISTINCT ext_name FROM entry WHERE catalog=:catalog_id AND q IS NULL)
+        let sql1 = "SELECT `id`,`ext_name`,`type` FROM entry WHERE catalog=:catalog_id AND q IS NULL LIMIT :batch_size OFFSET :offset" ;
+        let mut offset = self.get_last_job_offset() ;
+        let batch_size = 500 ;
+        loop {
+            #[derive(Debug, PartialEq, Eq, Clone)]
+            struct ResultInOriginalCatalog {
+                entry_id: usize,
+                ext_name: String,
+                type_name: String
+            }
+            let results_in_original_catalog: Vec<ResultInOriginalCatalog> = sql1.with(params! {catalog_id,batch_size,offset})
+                .map(self.mnm.app.get_mnm_conn().await?, |(entry_id, ext_name, type_name)|ResultInOriginalCatalog{entry_id, ext_name, type_name})
+                .await?;
+            if results_in_original_catalog.is_empty() {
+                break;
+            }
+            let ext_names: Vec<mysql_async::Value> = results_in_original_catalog
+                .iter()
+                .map(|r| {
+                    mysql_async::Value::Bytes(r.ext_name.as_bytes().to_vec())
+                })
+                .collect();
+            
+            let mut name_type2id: HashMap<(String,String),Vec<usize>> = HashMap::new();
+            results_in_original_catalog.iter().for_each(|r|{
+                name_type2id
+                    .entry((r.ext_name.to_owned(),r.type_name.to_owned()))
+                    .and_modify(|v|v.push(r.entry_id))
+                    .or_insert(vec![r.entry_id]);
+            });
+            
+            #[derive(Debug, PartialEq, Eq, Clone)]
+            struct ResultInOtherCatalog {
+                entry_id: usize,
+                ext_name: String,
+                type_name: String,
+                q: Option<isize>
+            }
+
+            let params = Params::Positional(ext_names);
+            let mut placeholders: Vec<String> = Vec::new();
+            placeholders.resize(results_in_original_catalog.len(),"?".to_string());
+            let sql2 = "SELECT `id`,`ext_name`,`type`,q FROM entry 
+            WHERE ext_name IN (".to_string()+&placeholders.join(",")+")
             AND q IS NOT NULL AND q > 0 AND user IS NOT NULL AND user>0
             AND catalog IN (SELECT id from catalog WHERE active=1)
-            GROUP BY ext_name,type HAVING count(DISTINCT q)=1
-            LIMIT :batch_size OFFSET :offset";
-        let mut conn = self.mnm.app.get_mnm_conn().await?;
-        let mut offset = self.get_last_job_offset() ;
-        let batch_size = 5000 ;
-        loop {
-            let results = conn
-                .exec_iter(sql.clone(),params! {catalog_id,batch_size,offset}).await?
-                .map_and_drop(from_row::<(String,String,Option<usize>)>).await?;
-            for result in &results {
-                let ext_name = &result.0;
-                let type_name = &result.1;
-                let q_numeric = result.2.unwrap() as isize; // Safe unwrap
-                let sql = "SELECT DISTINCT `id` FROM `entry` WHERE `catalog`=:catalog_id AND `ext_name`=:ext_name AND `type`=:type_name AND `q` IS NULL";
-                let entry_ids = conn
-                    .exec_iter(sql.clone(),params! {catalog_id,ext_name,type_name}).await?
-                    .map_and_drop(from_row::<usize>).await?;
-                if entry_ids.len()==1{
-                    let q=format!("Q{}",q_numeric);
-                    match Entry::from_id(entry_ids[0], &self.mnm).await?.set_match(&q,USER_AUTO).await {
-                        Ok(_) => {}
-                        _ => {} // Ignore error
+            GROUP BY ext_name,type HAVING count(DISTINCT q)=1";
+            let results_in_other_catalogs: Vec<ResultInOtherCatalog> = sql2.with(params)
+                .map(self.mnm.app.get_mnm_conn().await?, |(entry_id, ext_name, type_name, q)|ResultInOtherCatalog{entry_id, ext_name, type_name, q})
+                .await?;
+            for r in &results_in_other_catalogs {
+                let q = match r.q {
+                    Some(q) => format!("Q{}",q),
+                    None => continue
+                };
+                let key = (r.ext_name.to_owned(),r.type_name.to_owned());
+                if let Some(v) = name_type2id.get(&key) {
+                    for entry_id in v {
+                        if let Ok(mut entry) = Entry::from_id(*entry_id, &self.mnm).await {
+                            let _ = entry.set_match(&q,USER_AUTO).await;
+                        };
                     }
                 }
             }
-            if results.len()<batch_size {
+            if results_in_original_catalog.len()<batch_size {
                 break;
             }
+            offset += results_in_original_catalog.len();
             let _ = self.remember_offset(offset).await;
-            offset += results.len()
         }
         let _ = self.clear_offset().await;
         Ok(())
@@ -179,10 +216,7 @@ impl AutoMatch {
                     0 => {} // No results
                     1 => {
                         let q=&candidate_items[0];
-                        match Entry::from_id(entry_id, &self.mnm).await?.set_match(&q,USER_DATE_MATCH).await {
-                            Ok(_) => {}
-                            _ => {} // Ignore error
-                        }    
+                        let _ = Entry::from_id(entry_id, &self.mnm).await?.set_match(&q,USER_DATE_MATCH).await;
                     }
                     _x => {
                         // TODO addIssue ( $o->entry_id , 'WD_DUPLICATE' , $items ) ;
