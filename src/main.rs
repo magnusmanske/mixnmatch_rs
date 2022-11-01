@@ -41,21 +41,7 @@ async fn main() -> Result<(),app_state::GenericError> {
         let mut job = Job::new(&mnm);
         match job.set_next(&Some(valid_actions.clone())).await {
             Ok(true) => {
-                match job.set_status(STATUS_RUNNING).await {
-                    Ok(_) => {
-                        tokio::spawn(async move {
-                            match job.run().await {
-                                Ok(_) => {},
-                                _ => {}
-                            }
-                        })
-                        //.await.unwrap() // TESTING
-                        ;
-                    }
-                    _ => {
-                        println!("Could not set status for job");
-                    }
-                }
+                tokio::spawn(async move { let _ = job.run().await; });
             }
             Ok(false) => {
                 thread::sleep(time::Duration::from_secs(5));
