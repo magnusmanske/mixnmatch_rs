@@ -74,6 +74,19 @@ impl Entry {
         Ok(ret)
     }
 
+    /// Returns an Entry object for a given external ID in a catalog.
+    pub async fn from_ext_id(catalog_id: usize, ext_id: &str, mnm: &MixNMatch) -> Result<Entry,GenericError> {
+        let sql = r"SELECT id,catalog,ext_id,ext_url,ext_name,ext_desc,q,user,timestamp,random,`type` FROM `entry` WHERE `catalog`=:catalog_id AND `ext_id`=:ext_id";
+        let mut conn = mnm.app.get_mnm_conn().await? ;
+        let mut rows: Vec<Entry> = conn
+            .exec_iter(sql,params! {catalog_id,ext_id}).await?
+            .map_and_drop(|row| Self::from_row(&row)).await?;
+        // `catalog`/`ext_id` comprises a unique index, so there can be only zero or one row in rows.
+        let mut ret = rows.pop().ok_or(format!("No entry '{}' in catalog #{}",ext_id,catalog_id))?.to_owned() ;
+        ret.set_mnm(mnm);
+        Ok(ret)
+    }
+    
     /// Sets the MixNMatch object. Automatically done when created via from_id().
     pub fn set_mnm(&mut self, mnm: &MixNMatch) {
         self.mnm = Some(mnm.clone());

@@ -12,6 +12,7 @@ use serde_json::json;
 use mysql_async::prelude::*;
 use crate::app_state::*;
 use crate::mixnmatch::*;
+use crate::entry::*;
 use crate::job::*;
 
 #[derive(Debug)]
@@ -19,7 +20,8 @@ enum UpdateCatalogError {
     NoUpdateInfoForCatalog,
     MissingColumn,
     MissingDataSourceLocation,
-    MissingDataSourceType
+    MissingDataSourceType,
+    NotEnoughColumns(usize)
 }
 
 impl Error for UpdateCatalogError {}
@@ -83,19 +85,22 @@ enum DataSourceLocation {
 }
 
 struct DataSource {
+    catalog_id: usize,
     json: serde_json::Value,
     columns: Vec<String>,
     just_add: bool,
-    min_cols: u64,
+    min_cols: usize,
     num_header_rows: u64,
     skip_first_rows: u64,
+    ext_id_column: usize,
     patterns: serde_json::Map<String,serde_json::Value>,
     tmp_file: Option<OsString>,
-    colmap: HashMap<String,usize>
+    colmap: HashMap<String,usize>,
+    line_counter: LineCounter
 }
 
 impl DataSource {
-    fn new(json: &serde_json::Value) -> Result<Self,GenericError> {
+    fn new(catalog_id: usize, json: &serde_json::Value) -> Result<Self,GenericError> {
         let columns: Vec<String> = match json.get("columns") {
             Some(c) => c.as_array().unwrap_or(&vec!()).to_owned(),
             None => vec!()
@@ -117,19 +122,22 @@ impl DataSource {
         }).collect();
 
         // Paranoia
-        let _ = colmap.get("id").ok_or(Box::new(UpdateCatalogError::MissingColumn));
-        let _ = colmap.get("name").ok_or(Box::new(UpdateCatalogError::MissingColumn));
+        let ext_id_column = *colmap.get("id").ok_or(Box::new(UpdateCatalogError::MissingColumn))?;
+        let _ = colmap.get("name").ok_or(Box::new(UpdateCatalogError::MissingColumn))?;
 
         let min_cols = json.get("min_cols").map(|v|v.as_u64().unwrap_or(columns.len() as u64)).unwrap_or_else(||columns.len() as u64);
         Ok(Self {
+            catalog_id,
             json: json.clone(),
             columns,
             just_add: json.get("just_add").map(|v|v.as_bool().unwrap_or(false)).unwrap_or(false),
-            min_cols: min_cols,
+            min_cols: min_cols as usize,
             num_header_rows: json.get("num_header_rows").map(|v|v.as_u64().unwrap_or(0)).unwrap_or(0),
             skip_first_rows: json.get("skip_first_rows").unwrap_or(&json!{0}).as_u64().unwrap_or(0),
+            ext_id_column,
             patterns,
             colmap,
+            line_counter: LineCounter::new(),
             tmp_file: None
         })
     }
@@ -151,7 +159,7 @@ impl DataSource {
 
     async fn get_reader(&mut self, mnm: &MixNMatch) -> Result<csv::Reader<File>,GenericError> {
         let mut builder = csv::ReaderBuilder::new();
-        let builder = builder.flexible(true);
+        let builder = builder.flexible(true).has_headers(false);
         let builder = match self.get_source_type(mnm).await? {
             DataSourceType::CSV => builder.delimiter(b','),
             DataSourceType::TSV => builder.delimiter(b'\t'),
@@ -238,29 +246,31 @@ impl UpdateCatalog {
     pub async fn update_from_tabbed_file(&self, catalog_id: usize) -> Result<(),GenericError> {
         let update_info = self.get_update_info(catalog_id).await?;
         let json = update_info.json()?;
-        let mut datasource = DataSource::new(&json)?;
-        
+        let mut datasource = DataSource::new(catalog_id, &json)?;
+        // TODO job/offset
         let entries_already_in_catalog = self.number_of_entries_in_catalog(catalog_id).await?;
-/*
-        println!("min_cols {}",datasource.min_cols);
-        println!("num_header_rows {}",datasource.num_header_rows);
-        println!("skip_first_rows {}",datasource.skip_first_rows);
-        println!("columns\n{:?}",&datasource.columns);
-        println!("colmap\n{:?}",&datasource.colmap);
-        println!("patterns\n{:?}",&datasource.patterns);
-*/
 
-        let mut line_counter = LineCounter::new() ;
         let mut rows_to_skip = datasource.num_header_rows + datasource.skip_first_rows;
-        let just_add = entries_already_in_catalog==0 || datasource.just_add ;
+        datasource.just_add = entries_already_in_catalog==0 || datasource.just_add ;
         let mut reader = datasource.get_reader(&self.mnm).await?;
 
         while let Some(result) = reader.records().next() {
+            let result = result?; // TODO parsingerror
+            if result.is_empty() { // Skip blank lines
+                continue ;
+            }
+            datasource.line_counter.all += 1;
+            // TODO? read_max_rows
             if rows_to_skip>0 {
                 rows_to_skip = rows_to_skip-1 ;
-                //continue;
+                continue;
             }
             println!("{:?}",&result);
+            if result.len() < datasource.min_cols {
+                // TODO? ignore_errors
+                return Err(Box::new(UpdateCatalogError::NotEnoughColumns(datasource.line_counter.all)))
+            }
+            self.process_row(&result,&mut datasource).await?;
         }
 
         datasource.clear_tmp_file();
@@ -270,6 +280,15 @@ impl UpdateCatalog {
 		$this->mnm->queue_job($this->catalog_id(),'automatch_by_search');
 		if ( $this->has_born_died ) $this->mnm->queue_job($this->catalog_id(),'match_person_dates');
  */
+        Ok(())
+    }
+
+    async fn process_row(&self, result: &csv::StringRecord, datasource: &mut DataSource) -> Result<(),GenericError> {
+        let ext_id = result.get(datasource.ext_id_column).unwrap();
+        let mut add_new_entry = datasource.just_add;
+        if !add_new_entry {
+            add_new_entry = Entry::from_ext_id(datasource.catalog_id,ext_id, &self.mnm).await.is_ok();
+        }
         Ok(())
     }
 
@@ -309,11 +328,11 @@ mod tests {
         let mnm = get_test_mnm();
 
         let url = "http://www.example.org".to_string();
-        let ds = DataSource::new(&json!({"source_url":&url})).unwrap();
+        let ds = DataSource::new(TEST_CATALOG_ID, &json!({"source_url":&url})).unwrap();
         assert_eq!(ds.get_source_location(&mnm).unwrap(),DataSourceLocation::Url(url));
 
         let uuid = "4b115b29-2ad9-4f43-90ed-7023b51a6337";
-        let ds = DataSource::new(&json!({"file_uuid":&uuid})).unwrap();
+        let ds = DataSource::new(TEST_CATALOG_ID, &json!({"file_uuid":&uuid})).unwrap();
         assert_eq!(ds.get_source_location(&mnm).unwrap(),DataSourceLocation::FilePath(format!("{}/{}",mnm.import_file_path(),uuid)));
     }
 
