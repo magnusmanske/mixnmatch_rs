@@ -138,8 +138,8 @@ impl ExtendedEntry {
                 "desc" => { ret.entry.ext_desc = cell.to_owned() }
                 "url" => { ret.entry.ext_url = cell.to_owned() }
                 "type" => { ret.entry.type_name = Self::parse_type(cell) }
-                "born" => { ret.entry.type_name = Self::parse_date(cell) }
-                "died" => { ret.entry.type_name = Self::parse_date(cell) }
+                "born" => { ret.entry.born = Self::parse_date(cell) }
+                "died" => { ret.entry.died = Self::parse_date(cell) }
                 other => { return Err(Box::new(UpdateCatalogError::UnknownColumnLabel(format!("Don't understand label '{}'",other)))); }
             }
         }
