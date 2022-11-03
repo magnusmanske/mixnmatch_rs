@@ -18,6 +18,7 @@ use crate::entry::*;
 use crate::job::*;
 
 lazy_static!{
+    static ref RE_PATTERN_WRAP_REMOVAL : Regex = Regex::new(r"^\|(.+)\|$").unwrap();
     static ref RE_TYPE : Regex = Regex::new(r"^(Q\d+)$").unwrap();
     static ref RE_DATE : Regex = Regex::new(r"^(\d{3,}|\d{3,4}-\d{2}|\d{3,4}-\d{2}-\d{2})$").unwrap();
     static ref RE_PROPERTY : Regex = Regex::new(r"^P(\d+)$").unwrap();
@@ -35,8 +36,6 @@ enum UpdateCatalogError {
     MissingDataSourceType,
     NotEnoughColumns(usize),
     UnknownColumnLabel(String),
-    RegexpCaptureError,
-    BadCoordinates,
     BadPattern
 }
 
@@ -102,8 +101,8 @@ enum DataSourceLocation {
 
 #[derive(Debug, Clone)]
 struct CoordinateLocation {
-    lat: f64,
-    lon: f64
+    pub lat: f64,
+    pub lon: f64
 }
 
 #[derive(Debug, Clone)]
@@ -144,6 +143,7 @@ impl ExtendedEntry {
                 None => continue
             } ;
             if let Some(new_cell) = Self::get_capture(&pattern.pattern, cell) {
+                println!("Pattern found {}: {}",&pattern.use_column_label, &new_cell);
                 ret.process_cell(&pattern.use_column_label, &new_cell)?;
             }
         }
@@ -200,30 +200,30 @@ impl ExtendedEntry {
         };
 
         // Convert from POINT
-        let captures = RE_POINT.captures(cell).ok_or(UpdateCatalogError::RegexpCaptureError)?;
-        let value= match captures.len() {
-            3 => {
-                match (captures.get(1),captures.get(2)) {
-                    (Some(lon),Some(lat)) => format!("{},{}",lat.as_str(),lon.as_str()),
-                    _ => cell.to_string()
-                }
+        let value = match RE_POINT.captures(cell) {
+            Some(captures) => {
+                let lon = captures.get(1).unwrap();
+                let lat = captures.get(2).unwrap();
+                format!("{},{}",lat.as_str(),lon.as_str())
             }
-            _ => cell.to_string()
+            None => cell.to_string()
         };
 
         // Do location if necessary
-        // TODO get all location properties, not only P625 hardcoded
+        // TODO for all location properties, not only P625 hardcoded
         if property_num == 625 {
-            let captures = RE_LAT_LON.captures(&value).ok_or(UpdateCatalogError::RegexpCaptureError)?;
-            if captures.len() == 3 {
-                match (captures.get(1),captures.get(2)) {
-                    (Some(lat),Some(lon)) => {
-                        let lat = lat.as_str().to_string().parse::<f64>()?;
-                        let lon = lon.as_str().to_string().parse::<f64>()?;
-                        self.location = Some(CoordinateLocation{lat,lon});
-                    },
-                    _ => return Err(Box::new(UpdateCatalogError::BadCoordinates))
+            match RE_LAT_LON.captures(&value) {
+                Some(captures) => {
+                    match (captures.get(1),captures.get(2)) {
+                        (Some(lat),Some(lon)) => {
+                            let lat = lat.as_str().to_string().parse::<f64>()?;
+                            let lon = lon.as_str().to_string().parse::<f64>()?;
+                            self.location = Some(CoordinateLocation{lat,lon});
+                        },
+                        _ => {}
+                    }
                 }
+                None => {}
             }
         } else {
             self.aux.insert(property_num,value);
@@ -250,6 +250,10 @@ impl Pattern {
             Some(col) => col.as_str().ok_or(UpdateCatalogError::BadPattern)?,
             None => return Err(Box::new(UpdateCatalogError::BadPattern))
         };
+        let pattern = match RE_PATTERN_WRAP_REMOVAL.captures(pattern).unwrap().get(1).map(|s|s.as_str()) {
+            Some(s) => s,
+            None => pattern
+        } ;
         Ok(Self {
             use_column_label: use_column_label.to_string(),
             column_number:  match data.get("col") {
