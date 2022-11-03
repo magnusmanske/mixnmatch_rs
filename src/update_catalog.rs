@@ -19,7 +19,7 @@ use crate::job::*;
 
 lazy_static!{
     static ref RE_TYPE : Regex = Regex::new(r"^(Q\d+)$").unwrap();
-    static ref RE_DATE : Regex = Regex::new(r"^(\d{2,}|\d{3,4}-\d{2}|\d{3,4}-\d{2}-\d{2})$").unwrap();
+    static ref RE_DATE : Regex = Regex::new(r"^(\d{3,}|\d{3,4}-\d{2}|\d{3,4}-\d{2}-\d{2})$").unwrap();
     static ref RE_PROPERTY : Regex = Regex::new(r"^P(\d+)$").unwrap();
     static ref RE_ALIAS : Regex = Regex::new(r"^A([a-z]+)$").unwrap();
     static ref RE_DESCRIPTION : Regex = Regex::new(r"^D([a-z]+)$").unwrap();
@@ -138,8 +138,8 @@ impl ExtendedEntry {
                 "desc" => { ret.entry.ext_desc = cell.to_owned() }
                 "url" => { ret.entry.ext_url = cell.to_owned() }
                 "type" => { ret.entry.type_name = Self::parse_type(cell) }
-                "born" => { ret.entry.born = Self::parse_date(cell) }
-                "died" => { ret.entry.died = Self::parse_date(cell) }
+                "born" => { ret.born = Self::parse_date(cell) }
+                "died" => { ret.died = Self::parse_date(cell) }
                 other => { return Err(Box::new(UpdateCatalogError::UnknownColumnLabel(format!("Don't understand label '{}'",other)))); }
             }
         }
@@ -534,12 +534,14 @@ mod tests {
         assert_eq!(ExtendedEntry::parse_type("Q12345"),Some("Q12345".to_string()));
         assert_eq!(ExtendedEntry::parse_type("12345"),None);
         assert_eq!(ExtendedEntry::parse_type("foobar"),None);
+        assert_eq!(ExtendedEntry::parse_type(""),None);
 
         assert_eq!(ExtendedEntry::parse_date("2022-11-03"),Some("2022-11-03".to_string()));
         assert_eq!(ExtendedEntry::parse_date("2022-11"),Some("2022-11".to_string()));
         assert_eq!(ExtendedEntry::parse_date("2022"),Some("2022".to_string()));
         assert_eq!(ExtendedEntry::parse_date("2"),None);
         assert_eq!(ExtendedEntry::parse_date("foobar"),None);
+        assert_eq!(ExtendedEntry::parse_date(""),None);
     }
     
 
