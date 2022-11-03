@@ -36,7 +36,8 @@ enum UpdateCatalogError {
     NotEnoughColumns(usize),
     UnknownColumnLabel(String),
     RegexpCaptureError,
-    BadCoordinates
+    BadCoordinates,
+    BadPattern
 }
 
 impl Error for UpdateCatalogError {}
@@ -100,6 +101,12 @@ enum DataSourceLocation {
 }
 
 #[derive(Debug, Clone)]
+struct CoordinateLocation {
+    lat: f64,
+    lon: f64
+}
+
+#[derive(Debug, Clone)]
 struct ExtendedEntry{
     pub entry: Entry,
     pub aux: HashMap<usize,String>,
@@ -107,7 +114,7 @@ struct ExtendedEntry{
     pub died: Option<String>,
     pub aliases: HashMap<String,String>,
     pub descriptions: HashMap<String,String>,
-    pub location: Option<(f64,f64)> // lat,lon
+    pub location: Option<CoordinateLocation>
 }
 
 impl ExtendedEntry {
@@ -123,28 +130,41 @@ impl ExtendedEntry {
             location: None
         };
 
-        for (label,col_num) in datasource.colmap.iter() {
+        for (label,col_num) in &datasource.colmap {
             let cell = match row.get(*col_num) {
                 Some(cell) => cell,
                 None => continue
             } ;
-            if ret.parse_alias(&label,cell) || ret.parse_description(&label,cell) || ret.parse_property(&label,cell)? {
-                continue;
-            }
+            ret.process_cell(label, cell)?;
+        }
 
-            match label.as_str() {
-                "id" => { /* Already have that in entry */ }
-                "name" => { ret.entry.ext_name = cell.to_owned() }
-                "desc" => { ret.entry.ext_desc = cell.to_owned() }
-                "url" => { ret.entry.ext_url = cell.to_owned() }
-                "type" => { ret.entry.type_name = Self::parse_type(cell) }
-                "born" => { ret.born = Self::parse_date(cell) }
-                "died" => { ret.died = Self::parse_date(cell) }
-                other => { return Err(Box::new(UpdateCatalogError::UnknownColumnLabel(format!("Don't understand label '{}'",other)))); }
+        for pattern in &datasource.patterns {
+            let cell = match row.get(pattern.column_number) {
+                Some(cell) => cell,
+                None => continue
+            } ;
+            if let Some(new_cell) = Self::get_capture(&pattern.pattern, cell) {
+                ret.process_cell(&pattern.use_column_label, &new_cell)?;
             }
         }
 
         Ok(ret)
+    }
+
+    fn process_cell(&mut self, label: &str, cell: &str) -> Result<(),GenericError> {
+        if !self.parse_alias(&label,cell) && !self.parse_description(&label,cell) && !self.parse_property(&label,cell)? {
+            match label {
+                "id" => { /* Already have that in entry */ }
+                "name" => { self.entry.ext_name = cell.to_owned() }
+                "desc" => { self.entry.ext_desc = cell.to_owned() }
+                "url" => { self.entry.ext_url = cell.to_owned() }
+                "type" => { self.entry.type_name = Self::parse_type(cell) }
+                "born" => { self.born = Self::parse_date(cell) }
+                "died" => { self.died = Self::parse_date(cell) }
+                other => { return Err(Box::new(UpdateCatalogError::UnknownColumnLabel(format!("Don't understand label '{}'",other)))); }
+            }
+        }
+        Ok(())
     }
 
     fn parse_type(type_name: &str) -> Option<String> {
@@ -200,7 +220,7 @@ impl ExtendedEntry {
                     (Some(lat),Some(lon)) => {
                         let lat = lat.as_str().to_string().parse::<f64>()?;
                         let lon = lon.as_str().to_string().parse::<f64>()?;
-                        self.location = Some((lat,lon));
+                        self.location = Some(CoordinateLocation{lat,lon});
                     },
                     _ => return Err(Box::new(UpdateCatalogError::BadCoordinates))
                 }
@@ -217,6 +237,31 @@ impl ExtendedEntry {
     }
 }
 
+#[derive(Debug, Clone)]
+struct Pattern {
+    use_column_label: String,
+    column_number: usize,
+    pattern: Regex
+}
+
+impl Pattern {
+    fn from_json(use_column_label: &str, data: &serde_json::Value) -> Result<Self,GenericError> {
+        let pattern = match data.get("pattern") {
+            Some(col) => col.as_str().ok_or(UpdateCatalogError::BadPattern)?,
+            None => return Err(Box::new(UpdateCatalogError::BadPattern))
+        };
+        Ok(Self {
+            use_column_label: use_column_label.to_string(),
+            column_number:  match data.get("col") {
+                Some(col) => col.as_u64().ok_or(UpdateCatalogError::BadPattern)? as usize,
+                None => return Err(Box::new(UpdateCatalogError::BadPattern))
+            },
+            pattern:  Regex::new(pattern)?
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
 struct DataSource {
     catalog_id: usize,
     json: serde_json::Value,
@@ -226,7 +271,7 @@ struct DataSource {
     num_header_rows: u64,
     skip_first_rows: u64,
     ext_id_column: usize,
-    patterns: serde_json::Map<String,serde_json::Value>,
+    patterns: Vec<Pattern>,
     tmp_file: Option<OsString>,
     colmap: HashMap<String,usize>,
     line_counter: LineCounter
@@ -238,6 +283,7 @@ impl DataSource {
             Some(c) => c.as_array().unwrap_or(&vec!()).to_owned(),
             None => vec!()
         }.iter().filter_map(|v|v.as_str()).map(|s|s.to_string()).collect();
+
         let patterns = json
             .get("patterns")
             .map(|v|v.clone())
@@ -245,6 +291,11 @@ impl DataSource {
             .as_object()
             .map(|v|v.clone())
             .unwrap_or(serde_json::Map::new());
+        let patterns = patterns
+            .iter()
+            .filter_map(|(k,v)| Pattern::from_json(k, v).ok() )
+            .collect();
+
         let colmap : HashMap<String,usize> = columns.iter().enumerate().filter_map(|(num,col)|{
             let col = col.trim();
             if col.is_empty() {
@@ -444,7 +495,7 @@ impl UpdateCatalog {
     async fn process_row(&self, row: &csv::StringRecord, datasource: &mut DataSource) -> Result<(),GenericError> {
         let ext_id = row.get(datasource.ext_id_column).unwrap();
         match  Entry::from_ext_id(datasource.catalog_id,ext_id, &self.mnm).await {
-            Ok(entry) => {
+            Ok(_entry) => {
                 if !datasource.just_add {
                     // TODO modify entry
                     let extended_entry = ExtendedEntry::from_row(row, datasource);
