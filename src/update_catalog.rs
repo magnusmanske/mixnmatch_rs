@@ -1,3 +1,5 @@
+use lazy_static::lazy_static;
+use regex::Regex;
 use std::path::Path;
 use std::ffi::OsString;
 use std::env::temp_dir;
@@ -5,7 +7,7 @@ use uuid::Uuid;
 use std::fs;
 use std::fs::File;
 use std::io::Cursor;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
 use serde_json::json;
@@ -15,13 +17,26 @@ use crate::mixnmatch::*;
 use crate::entry::*;
 use crate::job::*;
 
+lazy_static!{
+    static ref RE_TYPE : Regex = Regex::new(r"^(Q\d+)$").unwrap();
+    static ref RE_DATE : Regex = Regex::new(r"^(\d{2,}|\d{3,4}-\d{2}|\d{3,4}-\d{2}-\d{2})$").unwrap();
+    static ref RE_PROPERTY : Regex = Regex::new(r"^P(\d+)$").unwrap();
+    static ref RE_ALIAS : Regex = Regex::new(r"^A([a-z]+)$").unwrap();
+    static ref RE_DESCRIPTION : Regex = Regex::new(r"^D([a-z]+)$").unwrap();
+    static ref RE_POINT : Regex = Regex::new(r"^\s*POINT\s*\(\s*(\S+?)[, ](\S+?)\s*\)\s*$").unwrap();
+    static ref RE_LAT_LON : Regex = Regex::new(r"^(\S+)/(\S+)$").unwrap();
+}
+
 #[derive(Debug)]
 enum UpdateCatalogError {
     NoUpdateInfoForCatalog,
     MissingColumn,
     MissingDataSourceLocation,
     MissingDataSourceType,
-    NotEnoughColumns(usize)
+    NotEnoughColumns(usize),
+    UnknownColumnLabel(String),
+    RegexpCaptureError,
+    BadCoordinates
 }
 
 impl Error for UpdateCatalogError {}
@@ -84,10 +99,128 @@ enum DataSourceLocation {
     FilePath(String)
 }
 
+#[derive(Debug, Clone)]
+struct ExtendedEntry{
+    pub entry: Entry,
+    pub aux: HashMap<usize,String>,
+    pub born: Option<String>,
+    pub died: Option<String>,
+    pub aliases: HashMap<String,String>,
+    pub descriptions: HashMap<String,String>,
+    pub location: Option<(f64,f64)> // lat,lon
+}
+
+impl ExtendedEntry {
+    pub fn from_row(row: &csv::StringRecord, datasource: &mut DataSource) -> Result<Self,GenericError> {
+        let ext_id = row.get(datasource.ext_id_column).ok_or(format!("No external ID for entry"))?;
+        let mut ret = Self {
+            entry:  Entry::from_catalog_and_ext_id(datasource.catalog_id, &ext_id),
+            aux: HashMap::new(),
+            born: None,
+            died: None,
+            aliases: HashMap::new(),
+            descriptions: HashMap::new(),
+            location: None
+        };
+
+        for (label,col_num) in datasource.colmap.iter() {
+            let cell = match row.get(*col_num) {
+                Some(cell) => cell,
+                None => continue
+            } ;
+            if ret.parse_alias(&label,cell) || ret.parse_description(&label,cell) || ret.parse_property(&label,cell)? {
+                continue;
+            }
+
+            match label.as_str() {
+                "id" => { /* Already have that in entry */ }
+                "name" => { ret.entry.ext_name = cell.to_owned() }
+                "desc" => { ret.entry.ext_desc = cell.to_owned() }
+                "url" => { ret.entry.ext_url = cell.to_owned() }
+                "type" => { ret.entry.type_name = Self::parse_type(cell) }
+                "born" => { ret.entry.type_name = Self::parse_date(cell) }
+                "died" => { ret.entry.type_name = Self::parse_date(cell) }
+                other => { return Err(Box::new(UpdateCatalogError::UnknownColumnLabel(format!("Don't understand label '{}'",other)))); }
+            }
+        }
+
+        Ok(ret)
+    }
+
+    fn parse_type(type_name: &str) -> Option<String> {
+        Self::get_capture(&RE_TYPE, type_name)
+    }
+
+    fn parse_date(date: &str) -> Option<String> {
+        Self::get_capture(&RE_DATE, date)
+    }
+
+    fn parse_alias(&mut self, label: &str, cell: &str) -> bool {
+        if let Some(s) = Self::get_capture(&RE_ALIAS, label) {
+            self.aliases.insert(s, cell.to_string());
+            true
+        } else {
+            false
+        }
+    }
+
+    fn parse_description(&mut self, label: &str, cell: &str) -> bool {
+        if let Some(s) = Self::get_capture(&RE_DESCRIPTION, label) {
+            self.descriptions.insert(s, cell.to_string());
+            true
+        } else {
+            false
+        }
+    }
+
+    fn parse_property(&mut self, label: &str, cell: &str) -> Result<bool,GenericError> {
+        let property_num = match Self::get_capture(&RE_PROPERTY, label) {
+            Some(s) => s.parse::<usize>()?,
+            None => return Ok(false)
+        };
+
+        // Convert from POINT
+        let captures = RE_POINT.captures(cell).ok_or(UpdateCatalogError::RegexpCaptureError)?;
+        let value= match captures.len() {
+            3 => {
+                match (captures.get(1),captures.get(2)) {
+                    (Some(lon),Some(lat)) => format!("{},{}",lat.as_str(),lon.as_str()),
+                    _ => cell.to_string()
+                }
+            }
+            _ => cell.to_string()
+        };
+
+        // Do location if necessary
+        // TODO get all location properties, not only P625 hardcoded
+        if property_num == 625 {
+            let captures = RE_LAT_LON.captures(&value).ok_or(UpdateCatalogError::RegexpCaptureError)?;
+            if captures.len() == 3 {
+                match (captures.get(1),captures.get(2)) {
+                    (Some(lat),Some(lon)) => {
+                        let lat = lat.as_str().to_string().parse::<f64>()?;
+                        let lon = lon.as_str().to_string().parse::<f64>()?;
+                        self.location = Some((lat,lon));
+                    },
+                    _ => return Err(Box::new(UpdateCatalogError::BadCoordinates))
+                }
+            }
+        } else {
+            self.aux.insert(property_num,value);
+        }
+
+        Ok(true)
+    }
+
+    fn get_capture(regexp: &Regex, text: &str) -> Option<String> {
+        regexp.captures(text)?.get(1).map(|s|s.as_str().to_string())
+    }
+}
+
 struct DataSource {
     catalog_id: usize,
     json: serde_json::Value,
-    columns: Vec<String>,
+    _columns: Vec<String>,
     just_add: bool,
     min_cols: usize,
     num_header_rows: u64,
@@ -129,7 +262,7 @@ impl DataSource {
         Ok(Self {
             catalog_id,
             json: json.clone(),
-            columns,
+            _columns: columns,
             just_add: json.get("just_add").map(|v|v.as_bool().unwrap_or(false)).unwrap_or(false),
             min_cols: min_cols as usize,
             num_header_rows: json.get("num_header_rows").map(|v|v.as_u64().unwrap_or(0)).unwrap_or(0),
@@ -247,13 +380,14 @@ impl UpdateCatalog {
         let update_info = self.get_update_info(catalog_id).await?;
         let json = update_info.json()?;
         let mut datasource = DataSource::new(catalog_id, &json)?;
-        // TODO job/offset
+        let batch_size = 5000;
         let entries_already_in_catalog = self.number_of_entries_in_catalog(catalog_id).await?;
 
-        let mut rows_to_skip = datasource.num_header_rows + datasource.skip_first_rows;
+        let mut rows_to_skip = datasource.num_header_rows + datasource.skip_first_rows;// TODO +  self.get_last_job_offset() ;
         datasource.just_add = entries_already_in_catalog==0 || datasource.just_add ;
         let mut reader = datasource.get_reader(&self.mnm).await?;
 
+        let mut row_cache = vec![];
         while let Some(result) = reader.records().next() {
             let result = result?; // TODO parsingerror
             if result.is_empty() { // Skip blank lines
@@ -265,15 +399,20 @@ impl UpdateCatalog {
                 rows_to_skip = rows_to_skip-1 ;
                 continue;
             }
-            println!("{:?}",&result);
             if result.len() < datasource.min_cols {
                 // TODO? ignore_errors
                 return Err(Box::new(UpdateCatalogError::NotEnoughColumns(datasource.line_counter.all)))
             }
-            self.process_row(&result,&mut datasource).await?;
+            row_cache.push(result);
+            if row_cache.len()>= batch_size {
+                self.process_rows(&mut row_cache, &mut datasource).await?;
+                // let _ = self.remember_offset(offset).await; // TODO
+            }
         }
+        self.process_rows(&mut row_cache, &mut datasource).await?;
 
         datasource.clear_tmp_file();
+        let _ = self.clear_offset().await;
 
 /*
 		$this->mnm->queue_job($this->catalog_id(),'microsync');
@@ -283,13 +422,56 @@ impl UpdateCatalog {
         Ok(())
     }
 
-    async fn process_row(&self, result: &csv::StringRecord, datasource: &mut DataSource) -> Result<(),GenericError> {
-        let ext_id = result.get(datasource.ext_id_column).unwrap();
-        let mut add_new_entry = datasource.just_add;
-        if !add_new_entry {
-            add_new_entry = Entry::from_ext_id(datasource.catalog_id,ext_id, &self.mnm).await.is_ok();
+    async fn process_rows(&self, rows: &mut Vec<csv::StringRecord>, datasource: &mut DataSource) -> Result<(),GenericError> {
+        let mut existing_ext_ids = HashSet::new();
+        if datasource.just_add {
+            let ext_ids: Vec<String> = rows.iter().filter_map(|row|row.get(datasource.ext_id_column)).map(|s|s.to_string()).collect();
+            existing_ext_ids = self.get_existing_ext_ids(datasource.catalog_id, &ext_ids).await?;
+        }
+        println!("Existing: {} {:?}",datasource.just_add,&existing_ext_ids);
+        for row in rows.iter() {
+            let ext_id = row.get(datasource.ext_id_column).unwrap();
+            if existing_ext_ids.contains(ext_id) {
+                println!("Entry with external ID {} already exists, skipping",&ext_id);
+            } else {
+                self.process_row(&row,datasource).await?;
+            }
+        }
+        rows.clear();
+        Ok(())
+    }
+    
+    async fn process_row(&self, row: &csv::StringRecord, datasource: &mut DataSource) -> Result<(),GenericError> {
+        let ext_id = row.get(datasource.ext_id_column).unwrap();
+        match  Entry::from_ext_id(datasource.catalog_id,ext_id, &self.mnm).await {
+            Ok(entry) => {
+                if !datasource.just_add {
+                    // TODO modify entry
+                    let extended_entry = ExtendedEntry::from_row(row, datasource);
+                    println!("Modifying {:?}",&extended_entry);
+                    }
+            }
+            _ => {
+                let extended_entry = ExtendedEntry::from_row(row, datasource);
+                println!("Creating {:?}",&extended_entry);
+            }
         }
         Ok(())
+    }
+
+    async fn get_existing_ext_ids(&self, catalog_id: usize, ext_ids: &Vec<String>) -> Result<HashSet<String>,GenericError> {
+        let mut ret = HashSet::new();
+        if ext_ids.is_empty() {
+            return Ok(ret);
+        }
+        let mut placeholders: Vec<String> = Vec::new();
+        placeholders.resize(ext_ids.len(),"?".to_string());
+        let sql = format!("SELECT `ext_id` FROM entry WHERE `ext_id` IN ({}) AND `catalog`={}",&placeholders.join(","),catalog_id);
+        let existing_ext_ids: Vec<String> = sql.with(ext_ids.clone())
+        .map(self.mnm.app.get_mnm_conn().await?, |ext_id|ext_id)
+        .await?;
+        existing_ext_ids.iter().for_each(|ext_id|{ret.insert(ext_id.to_owned());});
+        Ok(ret)
     }
 
     async fn get_update_info(&self, catalog_id: usize) -> Result<UpdateInfo,GenericError> {
@@ -346,6 +528,20 @@ mod tests {
         assert_eq!(info.user_id,5271664);
         assert_eq!(type_name,"Q5");
     }
+
+    #[test]
+    fn test_extended_entry() {
+        assert_eq!(ExtendedEntry::parse_type("Q12345"),Some("Q12345".to_string()));
+        assert_eq!(ExtendedEntry::parse_type("12345"),None);
+        assert_eq!(ExtendedEntry::parse_type("foobar"),None);
+
+        assert_eq!(ExtendedEntry::parse_date("2022-11-03"),Some("2022-11-03".to_string()));
+        assert_eq!(ExtendedEntry::parse_date("2022-11"),Some("2022-11".to_string()));
+        assert_eq!(ExtendedEntry::parse_date("2022"),Some("2022".to_string()));
+        assert_eq!(ExtendedEntry::parse_date("2"),None);
+        assert_eq!(ExtendedEntry::parse_date("foobar"),None);
+    }
+    
 
     #[tokio::test]
     async fn test_update_from_tabbed_file() {

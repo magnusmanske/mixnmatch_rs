@@ -1304,6 +1304,7 @@ dependencies = [
  "md5",
  "mediawiki",
  "mysql_async",
+ "rand 0.6.5",
  "regex",
  "reqwest",
  "roxmltree",

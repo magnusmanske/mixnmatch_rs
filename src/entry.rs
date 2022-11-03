@@ -1,7 +1,11 @@
+use rand::prelude::*;
 use mysql_async::prelude::*;
 use mysql_async::{Row,from_row,Value};
 use crate::mixnmatch::*;
 use crate::app_state::*;
+
+pub const ENTRY_NEW_ID: usize = 0;
+
 
 #[derive(Debug, Clone)]
 pub struct Entry {
@@ -20,6 +24,24 @@ pub struct Entry {
 }
 
 impl Entry {
+
+    pub fn from_catalog_and_ext_id(catalog_id: usize, ext_id: &str) -> Self {
+        Self {
+            id: ENTRY_NEW_ID,
+            catalog: catalog_id,
+            ext_id: ext_id.to_string(),
+            ext_url: "".to_string(),
+            ext_name: "".to_string(),
+            ext_desc: "".to_string(),
+            q: None,
+            user: None,
+            timestamp: None,
+            random: rand::thread_rng().gen(),
+            type_name: None,
+            mnm: None
+        }   
+    }
+
     pub fn from_row(row: &Row) -> Self {
         Entry {
             id: row.get(0).unwrap(),

@@ -22,6 +22,7 @@ md5 = "*"
 reqwest = "*"
 async-trait = "*"
 csv = "*"
+rand = "*"
 uuid = { version="*", features=["v4"] }
 
 [profile.release]
