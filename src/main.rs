@@ -59,6 +59,7 @@ async fn main() -> Result<(),app_state::GenericError> {
         let mut job = Job::new(&mnm);
         match job.set_next(&Some(valid_actions.clone())).await {
             Ok(true) => {
+                let _ = job.set_status(STATUS_RUNNING).await;
                 let concurrent = concurrent.clone();
                 tokio::spawn(async move {
                     *concurrent.lock().unwrap() += 1;

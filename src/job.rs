@@ -165,7 +165,6 @@ impl Job {
         Ok(true)
     }
     pub async fn run(&mut self) -> Result<(),GenericError> {
-        self.set_status(STATUS_RUNNING).await?;
         let catalog_id = self.get_catalog()?;
         let action = self.get_action()?;
         match self.run_this_job().await {
