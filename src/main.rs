@@ -6,9 +6,12 @@ pub mod update_catalog ;
 pub mod entry ;
 pub mod job ;
 
+use std::sync::{Arc, Mutex};
 pub use lazy_static::*;
 use std::{thread, time};
 use crate::job::*;
+
+const MAX_CONCURRENT_JOBS: usize = 10 ; // Runs fine with >40 in <500MB but might stress the APIs. Use usize::MAX otherwise
 
 /*
 ssh magnus@tools-login.wmflabs.org -L 3309:wikidatawiki.web.db.svc.eqiad.wmflabs:3306 -N &
@@ -21,6 +24,10 @@ git pull
 toolforge-jobs run --image tf-golang111 --mem 500Mi --command '/data/project/mix-n-match/mixnmatch_rs/run.sh' rustbot
 #jsub -mem 500m -cwd -N rustbot ./run.sh
 */
+
+fn hold_on() {
+    thread::sleep(time::Duration::from_secs(5));
+}
 
 #[tokio::main]
 async fn main() -> Result<(),app_state::GenericError> {
@@ -35,22 +42,35 @@ async fn main() -> Result<(),app_state::GenericError> {
         "match_person_dates",
         "update_from_tabbed_file"
     );
-    Job::new(&mnm).reset_running_jobs(&Some(valid_actions.clone())).await?; // Reset running jobs
-    Job::new(&mnm).reset_failed_jobs(&Some(valid_actions.clone())).await?;  // Reset failed jobs
+
+    let concurrent:Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
+
+    // Reset old running&failed jobs
+    Job::new(&mnm).reset_running_jobs(&Some(valid_actions.clone())).await?;
+    Job::new(&mnm).reset_failed_jobs(&Some(valid_actions.clone())).await?;
     println!("Old {:?} jobs reset, starting bot",&valid_actions);
 
     loop {
+        if *concurrent.lock().unwrap()>=MAX_CONCURRENT_JOBS {
+            hold_on();
+            continue;
+        }
         let mut job = Job::new(&mnm);
         match job.set_next(&Some(valid_actions.clone())).await {
             Ok(true) => {
-                tokio::spawn(async move { let _ = job.run().await; });
+                let concurrent = concurrent.clone();
+                tokio::spawn(async move {
+                    *concurrent.lock().unwrap() += 1;
+                    let _ = job.run().await;
+                    *concurrent.lock().unwrap() += 1;
+                });
             }
             Ok(false) => {
-                thread::sleep(time::Duration::from_secs(5));
+                hold_on();
             }
             _ => {
                 println!("MAIN LOOP: Something went wrong");
-                thread::sleep(time::Duration::from_secs(5));
+                hold_on();
             }
         }
     }

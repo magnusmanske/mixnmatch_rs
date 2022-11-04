@@ -725,7 +725,7 @@ mod tests {
         uc.update_from_tabbed_file(TEST_CATALOG_ID).await.unwrap();
 
         // Get new entry
-        let entry = Entry::from_ext_id(TEST_CATALOG_ID,"n2014191777",&mnm).await.unwrap();
+        let mut entry = Entry::from_ext_id(TEST_CATALOG_ID,"n2014191777",&mnm).await.unwrap();
 
         // Check base values
         assert_eq!(entry.ext_name,"Hauk Aabel");
@@ -744,6 +744,6 @@ mod tests {
         assert_eq!(died.unwrap(),"1961");
 
         // Cleanup
-        if let Ok(mut entry) = Entry::from_ext_id(TEST_CATALOG_ID,"n2014191777",&mnm).await { entry.delete().await.unwrap(); }
+        entry.delete().await.unwrap();
     }
 }
