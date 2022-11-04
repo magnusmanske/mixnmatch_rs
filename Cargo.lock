@@ -474,9 +474,9 @@ dependencies = [
 
 [[package]]
 name = "curl-sys"
-version = "0.4.58+curl-7.86.0"
+version = "0.4.59+curl-7.86.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "430e2ecf0c5f4445334472cf8f9611a6eea404b4135ca5500f38a97a128c913e"
+checksum = "6cfce34829f448b08f55b7db6d0009e23e2e86a34e8c2b366269bf5799b4a407"
 dependencies = [
  "cc",
  "libc",
@@ -623,9 +623,9 @@ dependencies = [
 
 [[package]]
 name = "frunk"
-version = "0.4.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0cd67cf7d54b7e72d0ea76f3985c3747d74aee43e0218ad993b7903ba7a5395e"
+checksum = "a89c703bf50009f383a0873845357cc400a95fc535f836feddfe015d7df6e1e0"
 dependencies = [
  "frunk_core",
  "frunk_derives",
@@ -634,15 +634,15 @@ dependencies = [
 
 [[package]]
 name = "frunk_core"
-version = "0.4.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1246cf43ec80bf8b2505b5c360b8fb999c97dabd17dbb604d85558d5cbc25482"
+checksum = "2a446d01a558301dca28ef43222864a9fa2bd9a2e71370f769d5d5d5ec9f3537"
 
 [[package]]
 name = "frunk_derives"
-version = "0.4.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3dbc4f084ec5a3f031d24ccedeb87ab2c3189a2f33b8d070889073837d5ea09e"
+checksum = "b83164912bb4c97cfe0772913c7af7387ee2e00cb6d4636fb65a35b3d0c8f173"
 dependencies = [
  "frunk_proc_macro_helpers",
  "quote",
@@ -651,9 +651,9 @@ dependencies = [
 
 [[package]]
 name = "frunk_proc_macro_helpers"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "99f11257f106c6753f5ffcb8e601fb39c390a088017aaa55b70c526bff15f63e"
+checksum = "015425591bbeb0f5b8a75593340f1789af428e9f887a4f1e36c0c471f067ef50"
 dependencies = [
  "frunk_core",
  "proc-macro2",
@@ -663,9 +663,9 @@ dependencies = [
 
 [[package]]
 name = "frunk_proc_macros"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a078bd8459eccbb85e0b007b8f756585762a72a9efc53f359b371c3b6351dbcc"
+checksum = "ea01524f285deab48affffb342b97f186e657b119c3f1821ac531780e0fbfae0"
 dependencies = [
  "frunk_core",
  "frunk_proc_macros_impl",
@@ -674,9 +674,9 @@ dependencies = [
 
 [[package]]
 name = "frunk_proc_macros_impl"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6ffba99f0fa4f57e42f57388fbb9a0ca863bc2b4261f3c5570fed579d5df6c32"
+checksum = "0a802d974cc18ee7fe1a7868fc9ce31086294fd96ba62f8da64ecb44e92a2653"
 dependencies = [
  "frunk_core",
  "frunk_proc_macro_helpers",
@@ -1304,7 +1304,7 @@ dependencies = [
  "md5",
  "mediawiki",
  "mysql_async",
- "rand 0.6.5",
+ "rand 0.8.5",
  "regex",
  "reqwest",
  "roxmltree",
@@ -1395,9 +1395,9 @@ dependencies = [
 
 [[package]]
 name = "native-tls"
-version = "0.2.10"
+version = "0.2.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fd7e2f3618557f980e0b17e8856252eee3c97fa12c54dff0ca290fb6266ca4a9"
+checksum = "07226173c32f2926027b63cce4bcd8076c3552846cbe7925f3aaffeac0a3b92e"
 dependencies = [
  "lazy_static",
  "libc",
@@ -1473,9 +1473,9 @@ dependencies = [
 
 [[package]]
 name = "num_cpus"
-version = "1.13.1"
+version = "1.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "19e64526ebdee182341572e50e9ad03965aa510cd94427a4549448f285e957a1"
+checksum = "f6058e64324c71e02bc2b150e4f3bc8286db6c83092132ffa3f6b1eab0f9def5"
 dependencies = [
  "hermit-abi",
  "libc",

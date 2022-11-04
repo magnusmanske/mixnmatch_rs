@@ -10,6 +10,7 @@ use crate::app_state::*;
 use crate::mixnmatch::*;
 use crate::automatch::*;
 use crate::taxon_matcher::*;
+use crate::update_catalog::*;
 
 
 pub const STATUS_TODO: &'static str = "TODO";
@@ -272,7 +273,12 @@ impl Job {
                 tm.set_current_job(self);
                 tm.match_taxa(catalog_id).await
             },
-            
+            "update_from_tabbed_file" => {
+                let mut uc = UpdateCatalog::new(&self.mnm);
+                uc.set_current_job(self);
+                uc.update_from_tabbed_file(catalog_id).await
+            },
+
             other => {
                 return Err(Box::new(JobError::S(format!("Job::run_this_job: Unknown action '{}'",other))))
             }

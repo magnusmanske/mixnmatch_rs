@@ -159,6 +159,9 @@ impl ExtendedEntry {
     pub async fn update_existing(&mut self, entry: &mut Entry, mnm: &MixNMatch) -> Result<(),GenericError> {
         entry.set_mnm(mnm);
 
+        // TODO use update_existing_description
+        // TODO use update_all_descriptions
+
         // We add, we do not remove from the existing data!
         if !self.entry.ext_name.is_empty() {
             entry.set_ext_name(&self.entry.ext_name).await?;
@@ -230,6 +233,9 @@ impl ExtendedEntry {
         self.entry.set_mnm(mnm);
         self.entry.insert_as_new().await?;
 
+        // TODO use update_existing_description
+        // TODO use update_all_descriptions
+    
         if !self.born.is_none() || !self.died.is_none() {
             self.entry.set_person_dates(&self.born,&self.died).await?;
         }
@@ -380,6 +386,8 @@ struct DataSource {
     colmap: HashMap<String,usize>,
     default_type: Option<String>,
     url_pattern: Option<String>,
+    update_existing_description: Option<bool>,
+    update_all_descriptions: Option<bool>,
     line_counter: LineCounter
 }
 
@@ -429,6 +437,8 @@ impl DataSource {
             colmap,
             default_type: json.get("default_type").map(|v|v.as_str().map(|s|s.to_string())).unwrap_or(None),
             url_pattern: json.get("url_pattern").map(|v|v.as_str().map(|s|s.to_string())).unwrap_or(None),
+            update_existing_description: json.get("update_existing_description").map(|v|v.as_bool()).unwrap_or(None),
+            update_all_descriptions: json.get("update_all_descriptions").map(|v|v.as_bool()).unwrap_or(None),
             line_counter: LineCounter::new(),
             tmp_file: None
         })
