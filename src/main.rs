@@ -63,7 +63,7 @@ async fn main() -> Result<(),app_state::GenericError> {
                 tokio::spawn(async move {
                     *concurrent.lock().unwrap() += 1;
                     let _ = job.run().await;
-                    *concurrent.lock().unwrap() += 1;
+                    *concurrent.lock().unwrap() -= 1;
                 });
             }
             Ok(false) => {
