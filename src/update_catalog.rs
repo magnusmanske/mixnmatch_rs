@@ -682,7 +682,7 @@ mod tests {
         let info = uc.get_update_info(TEST_CATALOG_ID).await.unwrap();
         let json = info.json().unwrap();
         let type_name = json.get("default_type").unwrap().as_str().unwrap();
-        assert_eq!(info.user_id,5271664);
+        assert_eq!(info.user_id,2);
         assert_eq!(type_name,"Q5");
     }
 
