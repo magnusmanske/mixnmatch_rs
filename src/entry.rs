@@ -41,6 +41,7 @@ impl AuxiliaryRow {
 enum EntryError {
     TryingToUpdateNewEntry,
     TryingToInsertExistingEntry,
+    EntryInsertFailed
 }
 
 impl Error for EntryError {}
@@ -69,7 +70,7 @@ pub struct Entry {
 
 impl Entry {
 
-    pub fn from_catalog_and_ext_id(catalog_id: usize, ext_id: &str) -> Self {
+    pub fn new_from_catalog_and_ext_id(catalog_id: usize, ext_id: &str) -> Self {
         Self {
             id: ENTRY_NEW_ID,
             catalog: catalog_id,
@@ -84,68 +85,6 @@ impl Entry {
             type_name: None,
             mnm: None
         }   
-    }
-
-    pub fn from_row(row: &Row) -> Self {
-        Entry {
-            id: row.get(0).unwrap(),
-            catalog: row.get(1).unwrap(),
-            ext_id: row.get(2).unwrap(),
-            ext_url: row.get(3).unwrap(),
-            ext_name: row.get(4).unwrap(),
-            ext_desc: row.get(5).unwrap(),
-            q: Self::value2opt_isize(row.get(6).unwrap()).unwrap(),
-            user: Self::value2opt_usize(row.get(7).unwrap()).unwrap(),
-            timestamp: Self::value2opt_string(row.get(8).unwrap()).unwrap(),
-            random: row.get(9).unwrap(),
-            type_name: Self::value2opt_string(row.get(10).unwrap()).unwrap(),
-            mnm: None
-        }
-    }
-
-    pub async fn insert_as_new(&mut self) -> Result<(),GenericError> {
-        if self.id!=ENTRY_NEW_ID {
-            return Err(Box::new(EntryError::TryingToInsertExistingEntry));
-        }
-        let sql = "INSERT IGNORE INTO `entry` (`catalog`,`ext_id`,`ext_url`,`ext_name`,`ext_desc`,`q`,`user`,`timestamp`,`random`,`type`) VALUES (:catalog,:ext_id,:ext_url,:ext_name,:ext_desc,:q,:user,:timestamp,:random,:type_name)";
-        let params = params! {
-            "catalog" => self.catalog,
-            "ext_id" => self.ext_id.to_owned(),
-            "ext_url" => self.ext_url.to_owned(),
-            "ext_name" => self.ext_name.to_owned(),
-            "ext_desc" => self.ext_desc.to_owned(),
-            "q" => self.q,
-            "user" => self.user,
-            "timestamp" => self.timestamp.to_owned(),
-            "random" => self.random,
-            "type_name" => self.type_name.to_owned(),
-        };
-        self.mnm()?.app.get_mnm_conn().await?.exec_drop(sql, params).await?;
-        Ok(())
-    }
-
-    /// Helper function for from_row().
-    fn value2opt_string(value: mysql_async::Value) -> Result<Option<String>,GenericError> {
-        match value {
-            Value::Bytes(s) => Ok(Some(std::str::from_utf8(&s)?.to_owned())),
-            _ => Ok(None)
-        }
-    }
-
-    /// Helper function for from_row().
-    fn value2opt_isize(value: mysql_async::Value) -> Result<Option<isize>,GenericError> {
-        match value {
-            Value::Int(i) => Ok(Some(i.try_into()?)),
-            _ => Ok(None)
-        }
-    }
-
-    /// Helper function for from_row().
-    fn value2opt_usize(value: mysql_async::Value) -> Result<Option<usize>,GenericError> {
-        match value {
-            Value::Int(i) => Ok(Some(i.try_into()?)),
-            _ => Ok(None)
-        }
     }
 
     /// Returns an Entry object for a given entry ID.
@@ -174,6 +113,87 @@ impl Entry {
         Ok(ret)
     }
     
+    pub fn from_row(row: &Row) -> Self {
+        Entry {
+            id: row.get(0).unwrap(),
+            catalog: row.get(1).unwrap(),
+            ext_id: row.get(2).unwrap(),
+            ext_url: row.get(3).unwrap(),
+            ext_name: row.get(4).unwrap(),
+            ext_desc: row.get(5).unwrap(),
+            q: Self::value2opt_isize(row.get(6).unwrap()).unwrap(),
+            user: Self::value2opt_usize(row.get(7).unwrap()).unwrap(),
+            timestamp: Self::value2opt_string(row.get(8).unwrap()).unwrap(),
+            random: row.get(9).unwrap(),
+            type_name: Self::value2opt_string(row.get(10).unwrap()).unwrap(),
+            mnm: None
+        }
+    }
+
+    /// Inserts the current entry into the database. id must be ENTRY_NEW_ID.
+    pub async fn insert_as_new(&mut self) -> Result<(),GenericError> {
+        if self.id!=ENTRY_NEW_ID {
+            return Err(Box::new(EntryError::TryingToInsertExistingEntry));
+        }
+        let sql = "INSERT IGNORE INTO `entry` (`catalog`,`ext_id`,`ext_url`,`ext_name`,`ext_desc`,`q`,`user`,`timestamp`,`random`,`type`) VALUES (:catalog,:ext_id,:ext_url,:ext_name,:ext_desc,:q,:user,:timestamp,:random,:type_name)";
+        let params = params! {
+            "catalog" => self.catalog,
+            "ext_id" => self.ext_id.to_owned(),
+            "ext_url" => self.ext_url.to_owned(),
+            "ext_name" => self.ext_name.to_owned(),
+            "ext_desc" => self.ext_desc.to_owned(),
+            "q" => self.q,
+            "user" => self.user,
+            "timestamp" => self.timestamp.to_owned(),
+            "random" => self.random,
+            "type_name" => self.type_name.to_owned(),
+        };
+        let mut conn = self.mnm()?.app.get_mnm_conn().await?;
+        conn.exec_drop(sql, params).await?;
+        self.id = conn.last_insert_id().ok_or(EntryError::EntryInsertFailed)? as usize;
+        Ok(())
+    }
+
+    /// Deletes the entry and all of its associated data in the database. Resets the local ID to 0
+    pub async fn delete(&mut self) -> Result<(),GenericError> {
+        self.check_valid_id()?;
+        let entry_id = self.id;
+        let mut conn = self.mnm()?.app.get_mnm_conn().await?;
+        for table in TABLES_WITH_ENTRY_ID_FIELDS {
+            let sql = format!("DELETE FROM `{}` WHERE `entry_id`=:entry_id",table);
+            conn.exec_drop(sql, params! {entry_id}).await?;
+        }
+        let sql = "DELETE FROM `entry` WHERE `id`=:entry_id";
+        conn.exec_drop(sql, params! {entry_id}).await?;
+        // TODO overview table?
+        self.id = ENTRY_NEW_ID;
+        Ok(())
+    }
+
+    /// Helper function for from_row().
+    fn value2opt_string(value: mysql_async::Value) -> Result<Option<String>,GenericError> {
+        match value {
+            Value::Bytes(s) => Ok(Some(std::str::from_utf8(&s)?.to_owned())),
+            _ => Ok(None)
+        }
+    }
+
+    /// Helper function for from_row().
+    fn value2opt_isize(value: mysql_async::Value) -> Result<Option<isize>,GenericError> {
+        match value {
+            Value::Int(i) => Ok(Some(i.try_into()?)),
+            _ => Ok(None)
+        }
+    }
+
+    /// Helper function for from_row().
+    fn value2opt_usize(value: mysql_async::Value) -> Result<Option<usize>,GenericError> {
+        match value {
+            Value::Int(i) => Ok(Some(i.try_into()?)),
+            _ => Ok(None)
+        }
+    }
+
     /// Sets the MixNMatch object. Automatically done when created via from_id().
     pub fn set_mnm(&mut self, mnm: &MixNMatch) {
         self.mnm = Some(mnm.clone());
@@ -190,7 +210,6 @@ impl Entry {
         if self.ext_name!=ext_name {
             self.check_valid_id()?;
             let entry_id = self.id;
-            println!("Updating entry {}: ext_name '{}' => '{}'",entry_id,&self.ext_name,&ext_name);
             self.ext_name = ext_name.to_string();
             let sql = "UPDATE `entry` SET `ext_name`=:ext_name WHERE `id`=:entry_id";
             self.mnm()?.app.get_mnm_conn().await?.exec_drop(sql, params! {ext_name,entry_id}).await?;
@@ -203,7 +222,6 @@ impl Entry {
         if self.ext_desc!=ext_desc {
             self.check_valid_id()?;
             let entry_id = self.id;
-            println!("Updating entry {}: ext_desc '{}' => '{}'",entry_id,&self.ext_desc,&ext_desc);
             self.ext_desc = ext_desc.to_string();
             let sql = "UPDATE `entry` SET `ext_desc`=:ext_desc WHERE `id`=:entry_id";
             self.mnm()?.app.get_mnm_conn().await?.exec_drop(sql, params! {ext_desc,entry_id}).await?;
@@ -216,7 +234,6 @@ impl Entry {
         if self.ext_id!=ext_id {
             self.check_valid_id()?;
             let entry_id = self.id;
-            println!("Updating entry {}: ext_id '{}' => '{}'",entry_id,&self.ext_id,&ext_id);
             self.ext_id = ext_id.to_string();
             let sql = "UPDATE `entry` SET `ext_id`=:ext_id WHERE `id`=:entry_id";
             self.mnm()?.app.get_mnm_conn().await?.exec_drop(sql, params! {ext_id,entry_id}).await?;
@@ -229,7 +246,6 @@ impl Entry {
         if self.ext_url!=ext_url {
             self.check_valid_id()?;
             let entry_id = self.id;
-            println!("Updating entry {}: ext_url '{}' => '{}'",entry_id,&self.ext_url,&ext_url);
             self.ext_url = ext_url.to_string();
             let sql = "UPDATE `entry` SET `ext_url`=:ext_url WHERE `id`=:entry_id";
             self.mnm()?.app.get_mnm_conn().await?.exec_drop(sql, params! {ext_url,entry_id}).await?;
@@ -242,56 +258,12 @@ impl Entry {
         if self.type_name!=type_name {
             self.check_valid_id()?;
             let entry_id = self.id;
-            println!("Updating entry {}: type_name '{:?}' => '{:?}'",entry_id,&self.type_name,&type_name);
             self.type_name = type_name.clone();
             let sql = "UPDATE `entry` SET `type`=:type_name WHERE `id`=:entry_id";
             self.mnm()?.app.get_mnm_conn().await?.exec_drop(sql, params! {type_name,entry_id}).await?;
         }
         Ok(())
     }
-
-    /* These are all working fine just not needed at the moment
-    /// Updates user locally and in the database
-    /// /// ATTENTION: This might invalidate the overview table!
-    pub async fn set_user(&mut self, user: Option<usize>) -> Result<(),GenericError> {
-        if self.user!=user {
-            self.check_valid_id()?;
-            let entry_id = self.id;
-            println!("Updating entry {}: user '{:?}' => '{:?}'",entry_id,&self.user,&user);
-            self.user = user.clone();
-            let sql = "UPDATE `entry` SET `type`=:user WHERE `id`=:entry_id";
-            self.mnm()?.app.get_mnm_conn().await?.exec_drop(sql, params! {user,entry_id}).await?;
-        }
-        Ok(())
-    }
-
-    /// Updates timestamp locally and in the database
-    pub async fn set_timestamp(&mut self, timestamp: Option<String>) -> Result<(),GenericError> {
-        if self.timestamp!=timestamp {
-            self.check_valid_id()?;
-            let entry_id = self.id;
-            println!("Updating entry {}: timestamp '{:?}' => '{:?}'",entry_id,&self.timestamp,&timestamp);
-            self.timestamp = timestamp.clone();
-            let sql = "UPDATE `entry` SET `type`=:timestamp WHERE `id`=:entry_id";
-            self.mnm()?.app.get_mnm_conn().await?.exec_drop(sql, params! {timestamp,entry_id}).await?;
-        }
-        Ok(())
-    }
-
-    /// Updates q locally and in the database
-    /// ATTENTION: This might invalidate the overview table!
-    pub async fn set_q(&mut self, q: Option<isize>) -> Result<(),GenericError> {
-        if self.q!=q {
-            self.check_valid_id()?;
-            let entry_id = self.id;
-            println!("Updating entry {}: q '{:?}' => '{:?}'",entry_id,&self.q,&q);
-            self.q = q.clone();
-            let sql = "UPDATE `entry` SET `type`=:q WHERE `id`=:entry_id";
-            self.mnm()?.app.get_mnm_conn().await?.exec_drop(sql, params! {q,entry_id}).await?;
-        }
-        Ok(())
-    }
-    */
 
     /// Update person dates in the database, where necessary
     pub async fn set_person_dates(&self, born: &Option<String>, died: &Option<String>) -> Result<(),GenericError> {
@@ -352,7 +324,7 @@ impl Entry {
         let entry_id = self.id;
         let mnm = self.mnm()?;
         let rows: Vec<(String,String)> = mnm.app.get_mnm_conn().await?
-            .exec_iter(r"SELECT `language`,`label` FROM `descriptions` WHERE `entry_id`=:entry_id",params! {entry_id}).await?
+            .exec_iter(r"SELECT `language`,`label` FROM `aliases` WHERE `entry_id`=:entry_id",params! {entry_id}).await?
             .map_and_drop(from_row::<(String,String)>).await?;
         let mut ret: Vec<wikibase::locale_string::LocaleString> = vec![];
         rows.iter().for_each(|(k,v)|{ret.push(LocaleString::new(k,v));});

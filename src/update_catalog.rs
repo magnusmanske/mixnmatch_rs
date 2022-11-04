@@ -116,14 +116,13 @@ impl ExtendedEntry {
     pub fn from_row(row: &csv::StringRecord, datasource: &mut DataSource) -> Result<Self,GenericError> {
         let ext_id = row.get(datasource.ext_id_column).ok_or(format!("No external ID for entry"))?;
         let mut ret = Self {
-            entry:  Entry::from_catalog_and_ext_id(datasource.catalog_id, &ext_id),
+            entry:  Entry::new_from_catalog_and_ext_id(datasource.catalog_id, &ext_id),
             aux: HashMap::new(),
             born: None,
             died: None,
             aliases: Vec::new(),
             descriptions: HashMap::new(),
-            location: None,
-            //datasource: datasource.clone()
+            location: None
         };
 
         for (label,col_num) in &datasource.colmap {
@@ -140,8 +139,17 @@ impl ExtendedEntry {
                 None => continue
             } ;
             if let Some(new_cell) = Self::get_capture(&pattern.pattern, cell) {
-                println!("Pattern found {}: {}",&pattern.use_column_label, &new_cell);
                 ret.process_cell(&pattern.use_column_label, &new_cell)?;
+            }
+        }
+
+        if ret.entry.type_name.is_none() {
+            ret.entry.type_name = datasource.default_type.to_owned();
+        }
+
+        if ret.entry.ext_url.is_empty() {
+            if let Some(pattern) = &datasource.url_pattern {
+                ret.entry.ext_url = pattern.replace("$1",&ret.entry.ext_id);
             }
         }
 
@@ -150,7 +158,6 @@ impl ExtendedEntry {
 
     pub async fn update_existing(&mut self, entry: &mut Entry, mnm: &MixNMatch) -> Result<(),GenericError> {
         entry.set_mnm(mnm);
-        println!("Updating {:?}",&self);
 
         // We add, we do not remove from the existing data!
         if !self.entry.ext_name.is_empty() {
@@ -223,6 +230,13 @@ impl ExtendedEntry {
         self.entry.set_mnm(mnm);
         self.entry.insert_as_new().await?;
 
+        if !self.born.is_none() || !self.died.is_none() {
+            self.entry.set_person_dates(&self.born,&self.died).await?;
+        }
+        if !self.location.is_none() {
+            self.entry.set_coordinate_location(&self.location).await?;
+        }
+
         for alias in &self.aliases {
             self.entry.add_alias(&alias).await?;
         }
@@ -236,6 +250,7 @@ impl ExtendedEntry {
         Ok(())
     }
 
+    /// Processes a key-value pair, with keys from table columns, or matched patterns
     fn process_cell(&mut self, label: &str, cell: &str) -> Result<(),GenericError> {
         if !self.parse_alias(&label,cell) && !self.parse_description(&label,cell) && !self.parse_property(&label,cell)? {
             match label {
@@ -363,6 +378,8 @@ struct DataSource {
     patterns: Vec<Pattern>,
     tmp_file: Option<OsString>,
     colmap: HashMap<String,usize>,
+    default_type: Option<String>,
+    url_pattern: Option<String>,
     line_counter: LineCounter
 }
 
@@ -410,6 +427,8 @@ impl DataSource {
             ext_id_column,
             patterns,
             colmap,
+            default_type: json.get("default_type").map(|v|v.as_str().map(|s|s.to_string())).unwrap_or(None),
+            url_pattern: json.get("url_pattern").map(|v|v.as_str().map(|s|s.to_string())).unwrap_or(None),
             line_counter: LineCounter::new(),
             tmp_file: None
         })
@@ -425,7 +444,6 @@ impl DataSource {
 
     fn clear_tmp_file(&self) {
         if let Some(path) = &self.tmp_file {
-            println!("Removing tmp file at {:?}",path);
             let _ = fs::remove_file(path);
         };
     }
@@ -445,14 +463,12 @@ impl DataSource {
                 full_path.push(file_name);
                 let full_path = full_path.as_path();
                 let full_path_string = OsString::from(full_path);
-                println!("Storing tmp file at {:?}", full_path);
                 self.tmp_file = Some(full_path_string);
                 self.fetch_url(&url,full_path).await?;
                 let builder = builder.from_path(&full_path)?;
                 Ok(builder)
             }
             DataSourceLocation::FilePath(path) => {
-                println!("Local file: {}",&path);
                 Ok(builder.from_path(path)?)
             }
         }
@@ -573,11 +589,10 @@ impl UpdateCatalog {
             let ext_ids: Vec<String> = rows.iter().filter_map(|row|row.get(datasource.ext_id_column)).map(|s|s.to_string()).collect();
             existing_ext_ids = self.get_existing_ext_ids(datasource.catalog_id, &ext_ids).await?;
         }
-        println!("Existing: {} {:?}",datasource.just_add,&existing_ext_ids);
         for row in rows.iter() {
             let ext_id = row.get(datasource.ext_id_column).unwrap();
             if existing_ext_ids.contains(ext_id) {
-                println!("Entry with external ID {} already exists, skipping",&ext_id);
+                //println!("Entry with external ID {} already exists, skipping",&ext_id);
             } else {
                 self.process_row(&row,datasource).await?;
             }
@@ -645,20 +660,18 @@ mod tests {
 
     use super::*;
 
-    const TEST_CATALOG_ID: usize = 4175 ;
-    //const TEST_ENTRY_ID: usize = 143962196 ;
-    //const TEST_ENTRY_ID2: usize = 144000954 ;
+    const TEST_CATALOG_ID: usize = 5526 ; // was 4175
 
     #[tokio::test]
     async fn test_get_source_location() {
         let mnm = get_test_mnm();
 
         let url = "http://www.example.org".to_string();
-        let ds = DataSource::new(TEST_CATALOG_ID, &json!({"source_url":&url})).unwrap();
+        let ds = DataSource::new(TEST_CATALOG_ID, &json!({"source_url":&url,"columns":["id","name"]})).unwrap();
         assert_eq!(ds.get_source_location(&mnm).unwrap(),DataSourceLocation::Url(url));
 
         let uuid = "4b115b29-2ad9-4f43-90ed-7023b51a6337";
-        let ds = DataSource::new(TEST_CATALOG_ID, &json!({"file_uuid":&uuid})).unwrap();
+        let ds = DataSource::new(TEST_CATALOG_ID, &json!({"file_uuid":&uuid,"columns":["id","name"]})).unwrap();
         assert_eq!(ds.get_source_location(&mnm).unwrap(),DataSourceLocation::FilePath(format!("{}/{}",mnm.import_file_path(),uuid)));
     }
 
@@ -691,11 +704,36 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_from_tabbed_file() {
+        let _test_lock = TEST_MUTEX.lock();
         let mnm = get_test_mnm();
-        let uc = UpdateCatalog::new(&mnm);
 
-        // catalog 3849: file_uuid, patterns
-        // catalog 4175: url_pattern
-        uc.update_from_tabbed_file(3849).await.unwrap();
+        // Delete the entry if it exists
+        if let Ok(mut entry) = Entry::from_ext_id(TEST_CATALOG_ID,"n2014191777",&mnm).await { entry.delete().await.unwrap(); }
+
+        // Import single entry
+        let uc = UpdateCatalog::new(&mnm);
+        uc.update_from_tabbed_file(TEST_CATALOG_ID).await.unwrap();
+
+        // Get new entry
+        let entry = Entry::from_ext_id(TEST_CATALOG_ID,"n2014191777",&mnm).await.unwrap();
+
+        // Check base values
+        assert_eq!(entry.ext_name,"Hauk Aabel");
+        assert_eq!(entry.ext_url,"https://www.aspi.unimib.it/collections/entity/detail/n2014191777/");
+        assert_eq!(entry.type_name,Some("Q5".to_string()));
+
+        // Check aux values
+        let aux = entry.get_aux().await.unwrap();
+        assert_eq!(aux.len(),2);
+        assert_eq!(aux.iter().filter(|row|row.prop_numeric==213).next().unwrap().value,"0000 0000 6555 4670");
+        assert_eq!(aux.iter().filter(|row|row.prop_numeric==214).next().unwrap().value,"91113950");
+
+        // Check person dates
+        let (born,died) = entry.get_person_dates().await.unwrap();
+        assert_eq!(born.unwrap(),"1869");
+        assert_eq!(died.unwrap(),"1961");
+
+        // Cleanup
+        if let Ok(mut entry) = Entry::from_ext_id(TEST_CATALOG_ID,"n2014191777",&mnm).await { entry.delete().await.unwrap(); }
     }
 }

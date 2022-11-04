@@ -54,6 +54,21 @@ pub const META_ITEMS: &'static [&'static str] = &[
     "Q22808320" // Wikimedia human name disambiguation page
     ] ;
 pub const WIKIDATA_USER_AGENT: &'static str = "MixNMmatch_RS/1.0";
+pub const TABLES_WITH_ENTRY_ID_FIELDS: &'static [&'static str] = &[
+    "aliases",
+    "descriptions",
+    "auxiliary",
+    "issues",
+    "kv_entry",
+    "mnm_relation",
+    "multi_match",
+    "person_dates",
+    "location",
+    "log",
+    "entry_creation",
+    "entry2given_name",
+    "statement_text"
+];
 
 #[derive(Debug, Clone)]
 pub struct MatchState {
