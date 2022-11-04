@@ -286,8 +286,8 @@ mod tests {
     const _TEST_CATALOG_ID: usize = 5526 ;
     const _TEST_ENTRY_ID: usize = 143962196 ;
 
-    // TODO sanitize_person_name
-    // TODO simplify_person_name
+    // TODO test sanitize_person_name
+    // TODO test simplify_person_name
 
     #[tokio::test]
     async fn test_remove_meta_items() {

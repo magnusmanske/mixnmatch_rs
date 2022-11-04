@@ -12,6 +12,7 @@ use std::error::Error;
 use std::fmt;
 use serde_json::json;
 use mysql_async::prelude::*;
+use wikibase::locale_string::LocaleString;
 use crate::app_state::*;
 use crate::mixnmatch::*;
 use crate::entry::*;
@@ -99,11 +100,6 @@ enum DataSourceLocation {
     FilePath(String)
 }
 
-#[derive(Debug, Clone)]
-struct CoordinateLocation {
-    pub lat: f64,
-    pub lon: f64
-}
 
 #[derive(Debug, Clone)]
 struct ExtendedEntry{
@@ -111,7 +107,7 @@ struct ExtendedEntry{
     pub aux: HashMap<usize,String>,
     pub born: Option<String>,
     pub died: Option<String>,
-    pub aliases: HashMap<String,String>,
+    pub aliases: Vec<LocaleString>,
     pub descriptions: HashMap<String,String>,
     pub location: Option<CoordinateLocation>
 }
@@ -124,9 +120,10 @@ impl ExtendedEntry {
             aux: HashMap::new(),
             born: None,
             died: None,
-            aliases: HashMap::new(),
+            aliases: Vec::new(),
             descriptions: HashMap::new(),
-            location: None
+            location: None,
+            //datasource: datasource.clone()
         };
 
         for (label,col_num) in &datasource.colmap {
@@ -149,6 +146,94 @@ impl ExtendedEntry {
         }
 
         Ok(ret)
+    }
+
+    pub async fn update_existing(&mut self, entry: &mut Entry, mnm: &MixNMatch) -> Result<(),GenericError> {
+        entry.set_mnm(mnm);
+        println!("Updating {:?}",&self);
+
+        // We add, we do not remove from the existing data!
+        if !self.entry.ext_name.is_empty() {
+            entry.set_ext_name(&self.entry.ext_name).await?;
+        }
+        if !self.entry.ext_desc.is_empty() {
+            entry.set_ext_desc(&self.entry.ext_desc).await?;
+        }
+        if !self.entry.type_name.is_none() {
+            entry.set_type_name(self.entry.type_name.clone()).await?;
+        }
+        if !self.entry.ext_url.is_empty() {
+            entry.set_ext_url(&self.entry.ext_url).await?;
+        }
+        // Ignore ID, this is the key anyway
+        // q, user, and timetamp would not change
+        // Ignore random
+
+        if !self.born.is_none() || !self.died.is_none() {
+            entry.set_person_dates(&self.born,&self.died).await?;
+        }
+        if !self.location.is_none() {
+            entry.set_coordinate_location(&self.location).await?;
+        }
+        self.sync_aliases(entry).await?;
+        self.sync_descriptions(entry).await?;
+        self.sync_auxiliary(entry).await?;
+
+        Ok(())
+    }
+
+    // Adds new aliases.
+    // Does NOT remove ones that don't exist anymore. Who knows how they got into the database.
+    pub async fn sync_aliases(&self, entry: &Entry)  -> Result<(),GenericError> {
+        let existing = entry.get_aliases().await?;
+        for alias in &self.aliases {
+            if !existing.contains(alias) {
+                self.entry.add_alias(&alias).await?;
+            }
+        }
+        Ok(())
+    }
+
+    // Adds/replaces new aux values.
+    // Does NOT remove ones that don't exist anymore. Who knows how they got into the database.
+    pub async fn sync_auxiliary(&self, entry: &Entry)  -> Result<(),GenericError> {
+        let existing: HashMap<usize,String> = entry.get_aux().await?.iter().map(|a|(a.prop_numeric,a.value.to_owned())).collect();
+        for (prop,value) in &self.aux {
+            if existing.get(&prop)!=Some(&value) {
+                entry.set_auxiliary(*prop,Some(value.to_owned())).await?;
+            }
+        }
+        Ok(())
+    }
+
+    // Adds/replaces new language descriptions.
+    // Does NOT remove ones that don't exist anymore. Who knows how they got into the database.
+    pub async fn sync_descriptions(&self, entry: &Entry)  -> Result<(),GenericError> {
+        let existing = entry.get_language_descriptions().await?;
+        for (language,value) in &self.descriptions {
+            if existing.get(language)!=Some(&value) {
+                entry.set_language_description(language,Some(value.to_owned())).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Inserts a new entry and its associated data into the database
+    pub async fn insert_new(&mut self, mnm: &MixNMatch) -> Result<(),GenericError> {
+        self.entry.set_mnm(mnm);
+        self.entry.insert_as_new().await?;
+
+        for alias in &self.aliases {
+            self.entry.add_alias(&alias).await?;
+        }
+        for (prop,value) in &self.aux {
+            self.entry.set_auxiliary(*prop,Some(value.to_owned())).await?;
+        }
+        for (language,text) in &self.descriptions {
+            self.entry.set_language_description(language,Some(text.to_owned())).await?;
+        }
+
+        Ok(())
     }
 
     fn process_cell(&mut self, label: &str, cell: &str) -> Result<(),GenericError> {
@@ -177,7 +262,7 @@ impl ExtendedEntry {
 
     fn parse_alias(&mut self, label: &str, cell: &str) -> bool {
         if let Some(s) = Self::get_capture(&RE_ALIAS, label) {
-            self.aliases.insert(s, cell.to_string());
+            self.aliases.push(LocaleString::new(s, cell.to_string()));
             true
         } else {
             false
@@ -444,7 +529,12 @@ impl UpdateCatalog {
 
         let mut row_cache = vec![];
         while let Some(result) = reader.records().next() {
-            let result = result?; // TODO parsingerror
+            let result = match result {
+                Ok(result) => result,
+                Err(_e) => {
+                    continue;
+                }
+            };
             if result.is_empty() { // Skip blank lines
                 continue ;
             }
@@ -498,17 +588,16 @@ impl UpdateCatalog {
     
     async fn process_row(&self, row: &csv::StringRecord, datasource: &mut DataSource) -> Result<(),GenericError> {
         let ext_id = row.get(datasource.ext_id_column).unwrap();
-        match  Entry::from_ext_id(datasource.catalog_id,ext_id, &self.mnm).await {
-            Ok(_entry) => {
+        match Entry::from_ext_id(datasource.catalog_id,ext_id, &self.mnm).await {
+            Ok(mut entry) => {
                 if !datasource.just_add {
-                    // TODO modify entry
-                    let extended_entry = ExtendedEntry::from_row(row, datasource);
-                    println!("Modifying {:?}",&extended_entry);
-                    }
+                    let mut extended_entry = ExtendedEntry::from_row(row, datasource)?;
+                    extended_entry.update_existing(&mut entry, &self.mnm).await?;
+                }
             }
             _ => {
-                let extended_entry = ExtendedEntry::from_row(row, datasource);
-                println!("Creating {:?}",&extended_entry);
+                let mut extended_entry = ExtendedEntry::from_row(row, datasource)?;
+                extended_entry.insert_new(&self.mnm).await?;
             }
         }
         Ok(())

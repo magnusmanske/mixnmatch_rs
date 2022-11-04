@@ -1,11 +1,55 @@
+use std::error::Error;
+use std::fmt;
 use rand::prelude::*;
+use std::collections::HashMap;
 use mysql_async::prelude::*;
 use mysql_async::{Row,from_row,Value};
+use wikibase::locale_string::LocaleString;
 use crate::mixnmatch::*;
 use crate::app_state::*;
 
 pub const ENTRY_NEW_ID: usize = 0;
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct CoordinateLocation {
+    pub lat: f64,
+    pub lon: f64
+}
+
+#[derive(Debug, Clone, PartialEq, PartialOrd)]
+pub struct AuxiliaryRow {
+    pub row_id: usize,
+    pub prop_numeric: usize,
+    pub value: String,
+    pub in_wikidata: bool,
+    pub entry_is_matched: bool
+}
+
+impl AuxiliaryRow {
+    pub fn from_row(row: &Row) -> Self {
+        Self {
+            row_id: row.get(0).unwrap(),
+            prop_numeric: row.get(1).unwrap(),
+            value: row.get(2).unwrap(),
+            in_wikidata: row.get(3).unwrap(),
+            entry_is_matched: row.get(4).unwrap(),
+        }
+    }
+}
+
+#[derive(Debug)]
+enum EntryError {
+    TryingToUpdateNewEntry,
+    TryingToInsertExistingEntry,
+}
+
+impl Error for EntryError {}
+
+impl fmt::Display for EntryError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self) // user-facing output
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Entry {
@@ -57,6 +101,27 @@ impl Entry {
             type_name: Self::value2opt_string(row.get(10).unwrap()).unwrap(),
             mnm: None
         }
+    }
+
+    pub async fn insert_as_new(&mut self) -> Result<(),GenericError> {
+        if self.id!=ENTRY_NEW_ID {
+            return Err(Box::new(EntryError::TryingToInsertExistingEntry));
+        }
+        let sql = "INSERT IGNORE INTO `entry` (`catalog`,`ext_id`,`ext_url`,`ext_name`,`ext_desc`,`q`,`user`,`timestamp`,`random`,`type`) VALUES (:catalog,:ext_id,:ext_url,:ext_name,:ext_desc,:q,:user,:timestamp,:random,:type_name)";
+        let params = params! {
+            "catalog" => self.catalog,
+            "ext_id" => self.ext_id.to_owned(),
+            "ext_url" => self.ext_url.to_owned(),
+            "ext_name" => self.ext_name.to_owned(),
+            "ext_desc" => self.ext_desc.to_owned(),
+            "q" => self.q,
+            "user" => self.user,
+            "timestamp" => self.timestamp.to_owned(),
+            "random" => self.random,
+            "type_name" => self.type_name.to_owned(),
+        };
+        self.mnm()?.app.get_mnm_conn().await?.exec_drop(sql, params).await?;
+        Ok(())
     }
 
     /// Helper function for from_row().
@@ -120,8 +185,273 @@ impl Entry {
         Ok(mnm)
     }
 
-    // Sets a match for the entry, and marks the entry as matched in other tables.
+    /// Updates ext_name locally and in the database
+    pub async fn set_ext_name(&mut self, ext_name: &str) -> Result<(),GenericError> {
+        if self.ext_name!=ext_name {
+            self.check_valid_id()?;
+            let entry_id = self.id;
+            println!("Updating entry {}: ext_name '{}' => '{}'",entry_id,&self.ext_name,&ext_name);
+            self.ext_name = ext_name.to_string();
+            let sql = "UPDATE `entry` SET `ext_name`=:ext_name WHERE `id`=:entry_id";
+            self.mnm()?.app.get_mnm_conn().await?.exec_drop(sql, params! {ext_name,entry_id}).await?;
+        }
+        Ok(())
+    }
+
+    /// Updates ext_desc locally and in the database
+    pub async fn set_ext_desc(&mut self, ext_desc: &str) -> Result<(),GenericError> {
+        if self.ext_desc!=ext_desc {
+            self.check_valid_id()?;
+            let entry_id = self.id;
+            println!("Updating entry {}: ext_desc '{}' => '{}'",entry_id,&self.ext_desc,&ext_desc);
+            self.ext_desc = ext_desc.to_string();
+            let sql = "UPDATE `entry` SET `ext_desc`=:ext_desc WHERE `id`=:entry_id";
+            self.mnm()?.app.get_mnm_conn().await?.exec_drop(sql, params! {ext_desc,entry_id}).await?;
+        }
+        Ok(())
+    }
+
+    /// Updates ext_id locally and in the database
+    pub async fn set_ext_id(&mut self, ext_id: &str) -> Result<(),GenericError> {
+        if self.ext_id!=ext_id {
+            self.check_valid_id()?;
+            let entry_id = self.id;
+            println!("Updating entry {}: ext_id '{}' => '{}'",entry_id,&self.ext_id,&ext_id);
+            self.ext_id = ext_id.to_string();
+            let sql = "UPDATE `entry` SET `ext_id`=:ext_id WHERE `id`=:entry_id";
+            self.mnm()?.app.get_mnm_conn().await?.exec_drop(sql, params! {ext_id,entry_id}).await?;
+        }
+        Ok(())
+    }
+
+    /// Updates ext_url locally and in the database
+    pub async fn set_ext_url(&mut self, ext_url: &str) -> Result<(),GenericError> {
+        if self.ext_url!=ext_url {
+            self.check_valid_id()?;
+            let entry_id = self.id;
+            println!("Updating entry {}: ext_url '{}' => '{}'",entry_id,&self.ext_url,&ext_url);
+            self.ext_url = ext_url.to_string();
+            let sql = "UPDATE `entry` SET `ext_url`=:ext_url WHERE `id`=:entry_id";
+            self.mnm()?.app.get_mnm_conn().await?.exec_drop(sql, params! {ext_url,entry_id}).await?;
+        }
+        Ok(())
+    }
+    
+    /// Updates type_name locally and in the database
+    pub async fn set_type_name(&mut self, type_name: Option<String>) -> Result<(),GenericError> {
+        if self.type_name!=type_name {
+            self.check_valid_id()?;
+            let entry_id = self.id;
+            println!("Updating entry {}: type_name '{:?}' => '{:?}'",entry_id,&self.type_name,&type_name);
+            self.type_name = type_name.clone();
+            let sql = "UPDATE `entry` SET `type`=:type_name WHERE `id`=:entry_id";
+            self.mnm()?.app.get_mnm_conn().await?.exec_drop(sql, params! {type_name,entry_id}).await?;
+        }
+        Ok(())
+    }
+
+    /* These are all working fine just not needed at the moment
+    /// Updates user locally and in the database
+    /// /// ATTENTION: This might invalidate the overview table!
+    pub async fn set_user(&mut self, user: Option<usize>) -> Result<(),GenericError> {
+        if self.user!=user {
+            self.check_valid_id()?;
+            let entry_id = self.id;
+            println!("Updating entry {}: user '{:?}' => '{:?}'",entry_id,&self.user,&user);
+            self.user = user.clone();
+            let sql = "UPDATE `entry` SET `type`=:user WHERE `id`=:entry_id";
+            self.mnm()?.app.get_mnm_conn().await?.exec_drop(sql, params! {user,entry_id}).await?;
+        }
+        Ok(())
+    }
+
+    /// Updates timestamp locally and in the database
+    pub async fn set_timestamp(&mut self, timestamp: Option<String>) -> Result<(),GenericError> {
+        if self.timestamp!=timestamp {
+            self.check_valid_id()?;
+            let entry_id = self.id;
+            println!("Updating entry {}: timestamp '{:?}' => '{:?}'",entry_id,&self.timestamp,&timestamp);
+            self.timestamp = timestamp.clone();
+            let sql = "UPDATE `entry` SET `type`=:timestamp WHERE `id`=:entry_id";
+            self.mnm()?.app.get_mnm_conn().await?.exec_drop(sql, params! {timestamp,entry_id}).await?;
+        }
+        Ok(())
+    }
+
+    /// Updates q locally and in the database
+    /// ATTENTION: This might invalidate the overview table!
+    pub async fn set_q(&mut self, q: Option<isize>) -> Result<(),GenericError> {
+        if self.q!=q {
+            self.check_valid_id()?;
+            let entry_id = self.id;
+            println!("Updating entry {}: q '{:?}' => '{:?}'",entry_id,&self.q,&q);
+            self.q = q.clone();
+            let sql = "UPDATE `entry` SET `type`=:q WHERE `id`=:entry_id";
+            self.mnm()?.app.get_mnm_conn().await?.exec_drop(sql, params! {q,entry_id}).await?;
+        }
+        Ok(())
+    }
+    */
+
+    /// Update person dates in the database, where necessary
+    pub async fn set_person_dates(&self, born: &Option<String>, died: &Option<String>) -> Result<(),GenericError> {
+        let (already_born,already_died) = self.get_person_dates().await?;
+        if already_born!=*born || already_died!=*died {
+            let entry_id = self.id;
+            if born.is_none() && died.is_none() {
+                let sql = "DELETE FROM `person_dates` WHERE `entry_id`=:entry_id";
+                self.mnm()?.app.get_mnm_conn().await?.exec_drop(sql, params! {entry_id}).await?;
+            } else {
+                let born = born.to_owned().unwrap_or("".to_string());
+                let died = died.to_owned().unwrap_or("".to_string());
+                let sql = "REPLACE INTO `person_dates` (`entry_id`,`born`,`died`) VALUES (:entry_id,:born,:died)";
+                self.mnm()?.app.get_mnm_conn().await?.exec_drop(sql, params! {entry_id,born,died}).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Returns the birth and death date of a person as a tuple (born,died)
+    /// Born/died are Option<String>
+    pub async fn get_person_dates(&self) -> Result<(Option<String>,Option<String>),GenericError> {
+        self.check_valid_id()?;
+        let entry_id = self.id;
+        let mnm = self.mnm()?;
+        let mut rows: Vec<(String,String)> = mnm.app.get_mnm_conn().await?
+            .exec_iter(r"SELECT `born`,`died` FROM `person_dates` WHERE `entry_id`=:entry_id LIMIT 1",params! {entry_id}).await?
+            .map_and_drop(from_row::<(String,String)>).await?;
+        match rows.pop() {
+            Some(bd) => {
+                let born = if bd.0.is_empty() { None } else { Some(bd.0) } ;
+                let died = if bd.1.is_empty() { None } else { Some(bd.1) } ;
+                Ok((born,died))
+            },
+            None => Ok((None,None))
+        }
+    }
+
+    pub async fn set_language_description(&self, language: &str, text: Option<String>) -> Result<(),GenericError> {
+        self.check_valid_id()?;
+        let entry_id = self.id;
+        match text {
+            Some(text) => {
+                let sql = "REPLACE INTO `descriptions` (`entry_id`,`language`,`label`) VALUES (:entry_id,:language,:text)";
+                self.mnm()?.app.get_mnm_conn().await?.exec_drop(sql, params! {entry_id,language,text}).await?;
+            }
+            None => {
+                let sql = "DELETE FROM `descriptions` WHERE `entry_id`=:entry_id AND `language`=:language";
+                self.mnm()?.app.get_mnm_conn().await?.exec_drop(sql, params! {entry_id,language}).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Returns a LocaleString Vec of all aliases of the entry
+    pub async fn get_aliases(&self) -> Result<Vec<LocaleString>,GenericError> {
+        self.check_valid_id()?;
+        let entry_id = self.id;
+        let mnm = self.mnm()?;
+        let rows: Vec<(String,String)> = mnm.app.get_mnm_conn().await?
+            .exec_iter(r"SELECT `language`,`label` FROM `descriptions` WHERE `entry_id`=:entry_id",params! {entry_id}).await?
+            .map_and_drop(from_row::<(String,String)>).await?;
+        let mut ret: Vec<wikibase::locale_string::LocaleString> = vec![];
+        rows.iter().for_each(|(k,v)|{ret.push(LocaleString::new(k,v));});
+        Ok(ret)
+    }
+
+    pub async fn add_alias(&self, s: &LocaleString) -> Result<(),GenericError> {
+        self.check_valid_id()?;
+        let entry_id = self.id;
+        let language = s.language();
+        let label = s.value();
+        let sql = "INSERT IGNORE INTO `aliases` (`entry_id`,`language`,`label`) VALUES (:entry_id,:language,:label)";
+        self.mnm()?.app.get_mnm_conn().await?.exec_drop(sql, params! {entry_id,language,label}).await?;
+        Ok(())
+    }
+
+    /// Returns a language:text HashMap of all language descriptions of the entry
+    pub async fn get_language_descriptions(&self) -> Result<HashMap<String,String>,GenericError> {
+        self.check_valid_id()?;
+        let entry_id = self.id;
+        let mnm = self.mnm()?;
+        let rows: Vec<(String,String)> = mnm.app.get_mnm_conn().await?
+            .exec_iter(r"SELECT `language`,`label` FROM `descriptions` WHERE `entry_id`=:entry_id",params! {entry_id}).await?
+            .map_and_drop(from_row::<(String,String)>).await?;
+        let mut map: HashMap<String,String> = HashMap::new();
+        rows.iter().for_each(|(k,v)|{map.insert(k.to_string(),v.to_string());});
+        Ok(map)
+    }
+
+    pub async fn set_auxiliary(&self, prop_numeric: usize, value: Option<String>) -> Result<(),GenericError> {
+        self.check_valid_id()?;
+        let entry_id = self.id;
+        match value {
+            Some(value) => {
+                let sql = "REPLACE INTO `auxiliary` (`entry_id`,`aux_p`,`aux_name`) VALUES (:entry_id,:prop_numeric,:value)";
+                self.mnm()?.app.get_mnm_conn().await?.exec_drop(sql, params! {entry_id,prop_numeric,value}).await?;
+            }
+            None => {
+                let sql = "DELETE FROM `auxiliary` WHERE `entry_id`=:entry_id AND `aux_p`=:prop_numeric";
+                self.mnm()?.app.get_mnm_conn().await?.exec_drop(sql, params! {entry_id,prop_numeric}).await?;
+            }
+        }
+        Ok(())
+    }
+    
+
+    /// Update coordinate location in the database, where necessary
+    pub async fn set_coordinate_location(&self, cl: &Option<CoordinateLocation>) -> Result<(),GenericError> {
+        let existing_cl = self.get_coordinate_location().await?;
+        if existing_cl!=*cl {
+            let entry_id = self.id;
+            match cl {
+                Some(cl) => {
+                    let lat = cl.lat;
+                    let lon = cl.lon;
+                    let sql = "REPLACE INTO `location` (`entry_id`,`lat`,`lon`) VALUES (:entry_id,:lat,:lon)";
+                    self.mnm()?.app.get_mnm_conn().await?.exec_drop(sql, params! {entry_id,lat,lon}).await?;    
+                }
+                None => {
+                    let sql = "DELETE FROM `location` WHERE `entry_id`=:entry_id";
+                    self.mnm()?.app.get_mnm_conn().await?.exec_drop(sql, params! {entry_id}).await?;    
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Returns the coordinate locationm or None
+    pub async fn get_coordinate_location(&self) -> Result<Option<CoordinateLocation>,GenericError> {
+        self.check_valid_id()?;
+        let entry_id = self.id;
+        let mnm = self.mnm()?;
+        let mut rows: Vec<(f64,f64)> = mnm.app.get_mnm_conn().await?
+            .exec_iter(r"SELECT `lat`,`lon` FROM `location` WHERE `entry_id`=:entry_id LIMIT 1",params! {entry_id}).await?
+            .map_and_drop(from_row::<(f64,f64)>).await?;
+        Ok(rows.pop().map(|cl|CoordinateLocation{lat:cl.0,lon:cl.1}))
+    }
+
+    /// Returns auxiliary data for the entry
+    pub async fn get_aux(&self) -> Result<Vec<AuxiliaryRow>,GenericError> {
+        self.check_valid_id()?;
+        let entry_id = self.id;
+        let mnm = self.mnm()?;
+        Ok(mnm.app.get_mnm_conn().await?
+            .exec_iter(r"SELECT `id`,`aux_p`,`aux_name`,`in_wikidata`,`entry_is_matched` FROM `auxiliary` WHERE `entry_id`=:entry_id",params! {entry_id}).await?
+            .map_and_drop(|row| AuxiliaryRow::from_row(&row)).await?)
+    }
+
+    /// Before q query or an update to the entry in the database, checks if this is a valid entry ID (eg not a new entry)
+    pub fn check_valid_id(&self) -> Result<(),GenericError> {
+        match self.id {
+            ENTRY_NEW_ID => Err(Box::new(EntryError::TryingToUpdateNewEntry)),
+            _ => Ok(())
+        }
+    }
+
+    /// Sets a match for the entry, and marks the entry as matched in other tables.
     pub async fn set_match(&mut self, q: &str, user_id: usize) -> Result<bool,GenericError> {
+        self.check_valid_id()?;
         let entry_id = self.id;
         let mnm = self.mnm()?;
         let q_numeric = mnm.item2numeric(q).ok_or(format!("'{}' is not a valid item",&q))?;
@@ -252,6 +582,55 @@ mod tests {
 
     const _TEST_CATALOG_ID: usize = 5526 ;
     const TEST_ENTRY_ID: usize = 143962196 ;
+
+    #[tokio::test]
+    async fn test_person_dates() {
+        let _test_lock = TEST_MUTEX.lock();
+        let mnm = get_test_mnm();
+        let entry = Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        let born = Some("1974-05-24".to_string());
+        let died = Some("2000-01-01".to_string());
+        assert_eq!(entry.get_person_dates().await.unwrap(),(born.to_owned(),died.to_owned()));
+
+        // Remove died
+        entry.set_person_dates(&born, &None).await.unwrap();
+        assert_eq!(entry.get_person_dates().await.unwrap(),(born.to_owned(),None));
+
+        // Remove born
+        entry.set_person_dates(&None, &died).await.unwrap();
+        assert_eq!(entry.get_person_dates().await.unwrap(),(None,died.to_owned()));
+
+        // Remove entire row
+        entry.set_person_dates(&None, &None).await.unwrap();
+        assert_eq!(entry.get_person_dates().await.unwrap(),(None,None));
+        
+        // Set back to original and check
+        entry.set_person_dates(&born, &died).await.unwrap();
+        assert_eq!(entry.get_person_dates().await.unwrap(),(born.to_owned(),died.to_owned()));
+    }
+
+    #[tokio::test]
+    async fn test_coordinate_location() {
+        let _test_lock = TEST_MUTEX.lock();
+        let mnm = get_test_mnm();
+        let entry = Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        let cl = CoordinateLocation { lat: 1.234, lon: -5.678 };
+        assert_eq!(entry.get_coordinate_location().await.unwrap(),Some(cl.to_owned()));
+
+        // Switch
+        let cl2 = CoordinateLocation{lat:cl.lon,lon:cl.lat} ;
+        entry.set_coordinate_location(&Some(cl2.to_owned())).await.unwrap();
+        assert_eq!(entry.get_coordinate_location().await.unwrap(),Some(cl2));
+
+        // Remove
+        entry.set_coordinate_location(&None).await.unwrap();
+        assert_eq!(entry.get_coordinate_location().await.unwrap(),None);
+        
+        // Set back to original and check
+        entry.set_coordinate_location(&Some(cl.to_owned())).await.unwrap();
+        assert_eq!(entry.get_coordinate_location().await.unwrap(),Some(cl));
+    }
+    
 
     #[tokio::test]
     async fn test_match() {

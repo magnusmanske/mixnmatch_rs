@@ -1,9 +1,9 @@
+use std::error::Error;
 use std::sync::{Arc, Mutex};
 use serde_json::json;
 use mysql_async::prelude::*;
 use mysql_async::from_row;
 use chrono::Duration;
-use std::error::Error;
 use std::fmt;
 use async_trait::async_trait;
 use crate::app_state::*;
@@ -19,6 +19,7 @@ pub const STATUS_RUNNING: &'static str = "RUNNING";
 pub const STATUS_HIGH_PRIORITY: &'static str = "HIGH_PRIORITY";
 pub const STATUS_LOW_PRIORITY: &'static str = "LOW_PRIORITY";
 
+/// A trait that allows to manage temporary job data (eg offset)
 #[async_trait]
 pub trait Jobbable {
     fn set_current_job(&mut self, job: &Job) ;
@@ -67,7 +68,8 @@ pub trait Jobbable {
 enum JobError {
     S(String),
     DataNotSet,
-    PoisonedJobRowMutex
+    PoisonedJobRowMutex,
+    TimeError
 }
 
 impl Error for JobError {}
@@ -313,7 +315,7 @@ impl Job {
             None => return Err(Box::new(JobError::S(format!("Job::get_next_ts"))))
         };
         let utc = MixNMatch::parse_timestamp(&self.data()?.last_ts.clone()).ok_or("Can't parse timestamp in last_ts")?
-            .checked_add_signed(Duration::seconds(seconds)).unwrap(); // TODO fix unwrap
+            .checked_add_signed(Duration::seconds(seconds)).ok_or(JobError::TimeError)?;
         let next_ts = utc.format("%Y%m%d%H%M%S").to_string();
         Ok(next_ts)
     }
