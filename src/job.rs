@@ -217,6 +217,14 @@ impl Job {
         Ok(())
     }
 
+    /// Resets all FAILED jobs of certain types to TODO. Used when bot restarts.
+    pub async fn reset_failed_jobs(&self, actions: &Option<Vec<&str>>) -> Result<(),GenericError> {
+        let conditions = self.get_action_conditions(actions) ;
+        let sql = format!("UPDATE `jobs` SET `status`='{}' WHERE `status`='{}' {}",STATUS_TODO,STATUS_FAILED,&conditions) ;
+        self.mnm.app.get_mnm_conn().await?.exec_drop(sql, ()).await?;
+        Ok(())
+    }
+    
     /// Returns the current `json` as an Option<serde_json::Value>
     pub fn get_json_value(&self) ->  Option<serde_json::Value> {
         serde_json::from_str(self.get_json().ok()?.as_ref()?).ok()

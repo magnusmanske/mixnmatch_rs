@@ -35,7 +35,8 @@ async fn main() -> Result<(),app_state::GenericError> {
         "match_person_dates",
         "update_from_tabbed_file"
     );
-    Job::new(&mnm).reset_running_jobs(&Some(valid_actions.clone())).await?; // Reset jobs
+    Job::new(&mnm).reset_running_jobs(&Some(valid_actions.clone())).await?; // Reset running jobs
+    Job::new(&mnm).reset_failed_jobs(&Some(valid_actions.clone())).await?;  // Reset failed jobs
     println!("Old {:?} jobs reset, starting bot",&valid_actions);
 
     loop {
