@@ -264,7 +264,7 @@ impl AutoMatch {
                 AND entry.id=person_dates.entry_id
             ) UNION (
                 SELECT entry_id,born,died,q qs FROM person_dates,entry
-                WHERE (q is null or user=0) AND catalog=:catalog_id AND length({})=:precision AND entry.id=person_dates.entry_id
+                WHERE (q is not null and user=0) AND catalog=:catalog_id AND length({})=:precision AND entry.id=person_dates.entry_id
             )
             ORDER BY entry_id LIMIT :batch_size OFFSET :offset",match_field,match_field);
         let mut offset = self.get_last_job_offset() ;
