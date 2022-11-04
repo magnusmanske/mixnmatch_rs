@@ -464,11 +464,12 @@ mod tests {
         am.match_person_by_single_date(TEST_CATALOG_ID).await.unwrap();
 
         // Check match
-        let entry= Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        let mut entry= Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
         assert_eq!(entry.q,Some(13520818));
         assert_eq!(entry.user,Some(USER_DATE_MATCH));
 
         // Cleanup
+        entry.unmatch().await.unwrap();
         am.purge_automatches(TEST_CATALOG_ID).await.unwrap();
     }
 
