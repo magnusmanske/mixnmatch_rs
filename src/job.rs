@@ -276,6 +276,11 @@ impl Job {
                 am.set_current_job(self);
                 am.match_person_by_dates(catalog_id).await
             },
+            "match_on_birthdate" => {
+                let mut am = AutoMatch::new(&self.mnm);
+                am.set_current_job(self);
+                am.match_person_by_single_date(catalog_id).await
+            },
             "taxon_matcher" => {
                 let mut tm = TaxonMatcher::new(&self.mnm);
                 tm.set_current_job(self);

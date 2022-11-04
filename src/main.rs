@@ -40,6 +40,7 @@ async fn main() -> Result<(),app_state::GenericError> {
         "taxon_matcher",
         "purge_automatches",
         "match_person_dates",
+        "match_on_birthdate",
         "update_from_tabbed_file"
     );
 

@@ -3,6 +3,7 @@ use regex::Regex;
 use chrono::prelude::*;
 use lazy_static::lazy_static;
 use mysql_async::prelude::*;
+use chrono::{Utc, NaiveDateTime};
 use mysql_async::{from_row, Params};
 use crate::app_state::*;
 use crate::mixnmatch::*;
@@ -11,6 +12,25 @@ use crate::job::*;
 
 lazy_static!{
     static ref RE_YEAR : Regex = Regex::new(r"(\d{3,4})").unwrap();
+}
+
+#[derive(Debug, Clone)]
+struct CandidateDates {
+    pub entry_id: usize,
+    pub born: String,
+    pub died: String,
+    pub matches: Vec<String>
+}
+
+impl CandidateDates {
+    fn from_row(r: &(usize,String,String,String)) -> Self {
+        Self {
+            entry_id: r.0,
+            born: r.1.clone(),
+            died: r.2.clone(),
+            matches: r.3.split(",").filter(|s|!s.is_empty()).map(|s|format!("Q{}",s)).collect()
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -232,6 +252,80 @@ impl AutoMatch {
         Ok(())
     }
 
+    pub async fn match_person_by_single_date(&self, catalog_id: usize) -> Result<(),GenericError> {
+        let precision = 10; // 2022-xx-xx=10; use 4 for just the year
+        let match_field = "born" ;
+        let match_prop = if match_field=="born" { "P569" }  else { "P570" } ;
+        let mw_api = self.mnm.get_mw_api().await.unwrap();
+        // CAUTION: Do NOT use views in the SQL statement, it will/might throw an "Prepared statement needs to be re-prepared" error
+        let sql = format!("(
+                SELECT multi_match.entry_id AS entry_id,born,died,candidates AS qs FROM person_dates,multi_match,entry
+                WHERE (q IS NULL OR user=0) AND person_dates.entry_id=multi_match.entry_id AND multi_match.catalog=:catalog_id AND length({})=:precision
+                AND entry.id=person_dates.entry_id
+            ) UNION (
+                SELECT entry_id,born,died,q qs FROM person_dates,entry
+                WHERE (q is null or user=0) AND catalog=:catalog_id AND length({})=:precision AND entry.id=person_dates.entry_id
+            )
+            ORDER BY entry_id LIMIT :batch_size OFFSET :offset",match_field,match_field);
+        let mut offset = self.get_last_job_offset() ;
+        let batch_size = 100 ;
+        loop {
+            let results = self.mnm.app.get_mnm_conn().await?
+                .exec_iter(sql.clone(),params! {catalog_id,precision,batch_size,offset}).await?
+                .map_and_drop(from_row::<(usize,String,String,String)>).await?;
+            let results: Vec<CandidateDates> = results.iter().map(|r| CandidateDates::from_row(r)).collect();
+            let items_to_load: Vec<String> = results.iter().map(|r|r.matches.clone()).flatten().collect();
+            let items = wikibase::entity_container::EntityContainer::new();
+            let _ = items.load_entities(&mw_api, &items_to_load).await; // We don't really care if there was an error in the grand scheme of things
+            for result in &results {
+                let mut candidates = vec![];
+                for q in &result.matches {
+                    let item = match items.get_entity(q.to_owned()) {
+                        Some(item) => item,
+                        None => continue
+                    } ;
+                    let statements = item.claims_with_property(match_prop);
+                    for statement in &statements {
+                        let main_snak = statement.main_snak();
+                        let data_value = match main_snak.data_value() {
+                            Some(dv) => dv,
+                            None => continue
+                        };
+                        let time = match data_value.value() {
+                            wikibase::value::Value::Time(tv) => tv,
+                            _ => continue
+                        };
+                        let dt = match NaiveDateTime::parse_from_str(time.time(),"+%Y-%m-%dT%H:%M:%SZ") {
+                            Ok(dt) => dt,
+                            _ => continue // Could not parse date
+                        };
+                        let date = match precision {
+                            4 => format!("{}",dt.format("%Y")),
+                            10 => format!("{}",dt.format("%Y-%m-%d")),
+                            other => panic!("Bad precision {}",other) // Should never happen
+                        };
+                        if (match_field=="born"&&date==result.born) || (match_field=="died"&&date==result.died) {
+                            candidates.push(q.clone());
+                        }
+                    }
+                }
+                if candidates.len()==1 { // TODO >1
+                    let q = candidates.get(0).unwrap(); // Safe
+                    //println!("Matching https://mix-n-match.toolforge.org/#/entry/{} to www.wikidata.org/wiki/{}",result.entry_id,&q);
+                    let _ = Entry::from_id(result.entry_id, &self.mnm).await?.set_match(&q,USER_DATE_MATCH).await;
+                }
+            }
+
+            if results.len()<batch_size {
+                break;
+            }
+            let _ = self.remember_offset(offset).await;
+            offset += results.len()
+        }
+        let _ = self.clear_offset().await;
+        Ok(())
+    }
+
     async fn search_person(&self, name: &str) -> Result<Vec<String>,GenericError> {
         let name = MixNMatch::sanitize_person_name(&name);
         let name = MixNMatch::simplify_person_name(&name);
@@ -353,6 +447,29 @@ mod tests {
         // Check that the entry is now unmatched
         let entry= Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
         assert!(entry.is_unmatched());
+    }
+
+    #[tokio::test]
+    async fn test_match_person_by_single_date() {
+        let _test_lock = TEST_MUTEX.lock();
+        let mnm = get_test_mnm();
+        let am = AutoMatch::new(&mnm);
+        am.purge_automatches(TEST_CATALOG_ID).await.unwrap();
+
+        // Set prelim match
+        let mut entry= Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        entry.set_match("Q13520818",0).await.unwrap();
+
+        // Run automatch
+        am.match_person_by_single_date(TEST_CATALOG_ID).await.unwrap();
+
+        // Check match
+        let entry= Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        assert_eq!(entry.q,Some(13520818));
+        assert_eq!(entry.user,Some(USER_DATE_MATCH));
+
+        // Cleanup
+        am.purge_automatches(TEST_CATALOG_ID).await.unwrap();
     }
 
 }

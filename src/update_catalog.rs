@@ -386,8 +386,8 @@ struct DataSource {
     colmap: HashMap<String,usize>,
     default_type: Option<String>,
     url_pattern: Option<String>,
-    update_existing_description: Option<bool>,
-    update_all_descriptions: Option<bool>,
+    _update_existing_description: Option<bool>,
+    _update_all_descriptions: Option<bool>,
     line_counter: LineCounter
 }
 
@@ -437,8 +437,8 @@ impl DataSource {
             colmap,
             default_type: json.get("default_type").map(|v|v.as_str().map(|s|s.to_string())).unwrap_or(None),
             url_pattern: json.get("url_pattern").map(|v|v.as_str().map(|s|s.to_string())).unwrap_or(None),
-            update_existing_description: json.get("update_existing_description").map(|v|v.as_bool()).unwrap_or(None),
-            update_all_descriptions: json.get("update_all_descriptions").map(|v|v.as_bool()).unwrap_or(None),
+            _update_existing_description: json.get("update_existing_description").map(|v|v.as_bool()).unwrap_or(None),
+            _update_all_descriptions: json.get("update_all_descriptions").map(|v|v.as_bool()).unwrap_or(None),
             line_counter: LineCounter::new(),
             tmp_file: None
         })

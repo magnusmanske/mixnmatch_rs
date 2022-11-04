@@ -428,7 +428,7 @@ impl Entry {
         let mnm = self.mnm()?;
         let q_numeric = mnm.item2numeric(q).ok_or(format!("'{}' is not a valid item",&q))?;
         let timestamp = MixNMatch::get_timestamp();
-        let mut sql = format!("UPDATE `entry` SET `q`=:q_numeric,`user`=:user_id,`timestamp`=:timestamp WHERE `id`=:entry_id AND (`q` IS NULL OR `q`!=:q_numeric)");
+        let mut sql = format!("UPDATE `entry` SET `q`=:q_numeric,`user`=:user_id,`timestamp`=:timestamp WHERE `id`=:entry_id AND (`q` IS NULL OR `q`!=:q_numeric OR `user`!=:user_id)");
         if user_id==USER_AUTO {
             if mnm.avoid_auto_match(entry_id,Some(q_numeric)).await? {
                 return Ok(false) // Nothing wrong but shouldn't be matched
