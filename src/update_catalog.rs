@@ -68,12 +68,13 @@ impl UpdateInfo {
 struct LineCounter {
     pub all: usize,
     pub added: usize,
-    pub updates: usize
+    pub updates: usize,
+    pub offset: usize
 }
 
 impl LineCounter {
     pub fn new() -> Self {
-        Self { all: 0, added: 0, updates: 0 }
+        Self { all: 0, added: 0, updates: 0 , offset: 0 }
     }
 }
 
@@ -548,10 +549,11 @@ impl UpdateCatalog {
         let update_info = self.get_update_info(catalog_id).await?;
         let json = update_info.json()?;
         let mut datasource = DataSource::new(catalog_id, &json)?;
+        let offset = self.get_last_job_offset() ;
         let batch_size = 5000;
         let entries_already_in_catalog = self.number_of_entries_in_catalog(catalog_id).await?;
 
-        let mut rows_to_skip = datasource.num_header_rows + datasource.skip_first_rows;// TODO +  self.get_last_job_offset() ;
+        let mut rows_to_skip = datasource.num_header_rows + datasource.skip_first_rows;
         datasource.just_add = entries_already_in_catalog==0 || datasource.just_add ;
         let mut reader = datasource.get_reader(&self.mnm).await?;
 
@@ -567,7 +569,7 @@ impl UpdateCatalog {
                 continue ;
             }
             datasource.line_counter.all += 1;
-            // TODO? read_max_rows
+            // TODO? read_max_rows but it's only used from the API so...
             if rows_to_skip>0 {
                 rows_to_skip = rows_to_skip-1 ;
                 continue;
@@ -578,12 +580,18 @@ impl UpdateCatalog {
                 }
                 continue
             }
+
+            datasource.line_counter.offset += 1;
+            if datasource.line_counter.offset < offset {
+                continue;
+            }
+
             row_cache.push(result);
             if row_cache.len()>= batch_size {
                 if let Err(e) = self.process_rows(&mut row_cache, &mut datasource).await {
                     if datasource.fail_on_error { return Err(e) }
                 }
-                // let _ = self.remember_offset(offset).await; // TODO
+                let _ = self.remember_offset(datasource.line_counter.offset).await;
             }
         }
         if let Err(e) = self.process_rows(&mut row_cache, &mut datasource).await {
