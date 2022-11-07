@@ -19,10 +19,9 @@ ssh magnus@tools-login.wmflabs.org -L 3309:wikidatawiki.web.db.svc.eqiad.wmflabs
 ssh magnus@tools-login.wmflabs.org -L 3308:tools-db:3306 -N &
 cargo test  -- --test-threads=1 --nocapture
 
-git pull
-./build.sh
-\rm ~/rustbot.*
-toolforge-jobs run --image tf-golang111 --mem 500Mi --command '/data/project/mix-n-match/mixnmatch_rs/run.sh' rustbot
+git pull && ./build.sh
+toolforge-jobs delete rustbot && \rm ~/rustbot.*
+toolforge-jobs run --image tf-golang111 --mem 500Mi --continuous --command '/data/project/mix-n-match/mixnmatch_rs/run.sh' rustbot
 #jsub -mem 500m -cwd -N rustbot ./run.sh
 */
 
