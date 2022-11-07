@@ -88,10 +88,9 @@ impl Entry {
     }
 
     /// Returns an Entry object for a given entry ID.
-    pub async fn from_id(entry_id: usize, mnm: &MixNMatch) -> Result<Entry,GenericError> {
+    pub async fn from_id(entry_id: usize, mnm: &MixNMatch) -> Result<Self,GenericError> {
         let sql = r"SELECT id,catalog,ext_id,ext_url,ext_name,ext_desc,q,user,timestamp,random,`type` FROM `entry` WHERE `id`=:entry_id";
-        let mut conn = mnm.app.get_mnm_conn().await? ;
-        let mut rows: Vec<Entry> = conn
+        let mut rows: Vec<Self> = mnm.app.get_mnm_conn().await?
             .exec_iter(sql,params! {entry_id}).await?
             .map_and_drop(|row| Self::from_row(&row)).await?;
         // `id` is a unique index, so there can be only zero or one row in rows.

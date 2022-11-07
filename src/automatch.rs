@@ -7,6 +7,7 @@ use chrono::{Utc, NaiveDateTime};
 use mysql_async::{from_row, Params};
 use crate::app_state::*;
 use crate::mixnmatch::*;
+use crate::catalog::*;
 use crate::entry::*;
 use crate::job::*;
 
@@ -54,6 +55,60 @@ impl AutoMatch {
             mnm: mnm.clone(),
             job: None
         }
+    }
+
+    pub async fn automatch_by_sitelink(&self, catalog_id: usize) -> Result<(),GenericError> {
+        let language = Catalog::from_id(catalog_id, &self.mnm).await?.search_wp;
+        let site = format!("{}wiki",&language);
+        let sql = format!("SELECT `id`,`ext_name` FROM entry WHERE catalog=:catalog_id AND q IS NULL
+            AND NOT EXISTS (SELECT * FROM `log` WHERE log.entry_id=entry.id AND log.action='remove_q')
+            {}
+            ORDER BY `id` LIMIT :batch_size OFFSET :offset",MatchState::not_fully_matched().get_sql());
+        let mut offset = self.get_last_job_offset() ;
+        let batch_size = 5000 ;
+        loop {
+            let entries = self.mnm.app.get_mnm_conn().await?
+                .exec_iter(sql.clone(),params! {catalog_id,offset,batch_size}).await?
+                .map_and_drop(from_row::<(usize,String)>).await?;
+            let mut name2entries: HashMap<String,Vec<usize>> = HashMap::new();
+            entries
+                .iter()
+                .for_each(|(id,name)|{
+                    name2entries.entry(name.to_owned()).and_modify(|n2e|n2e.push(*id)).or_insert(vec![*id]);
+                });
+            
+            let params:Vec<String> = name2entries.keys().map(|s|s.to_owned()).collect();
+            let mut placeholders: Vec<String> = Vec::new();
+            placeholders.resize(params.len(),"?".to_string());
+            let sql2 = format!("SELECT `ips_item_id`,`ips_site_page` FROM `wb_items_per_site` WHERE `ips_site_id`='{}' AND `ips_site_page` IN ({})",&site,placeholders.join(","));
+            let wd_matches = self.mnm.app.get_wd_conn().await?
+                .exec_iter(sql2,params).await?
+                .map_and_drop(from_row::<(usize,String)>).await?;
+            
+            for (q,title) in wd_matches {
+                match name2entries.get(&title) {
+                    Some(v) => {
+                        for entry_id in v {
+                            //println!("https://mix-n-match.toolforge.org/#/entry/{}: https://www.wikidata.org/wiki/Q{}",entry_id,q);
+                            if let Ok(mut entry) = Entry::from_id(*entry_id, &self.mnm).await {
+                                let _ = entry.set_match(&format!("Q{}",q),USER_AUTO).await;
+                            }
+                                
+                        }
+                    }
+                    None => {}
+                }
+            }
+
+            
+            if entries.len()<batch_size {
+                break;
+            }
+            offset += entries.len();
+            let _ = self.remember_offset(offset).await;
+        }
+        let _ = self.clear_offset().await;
+        Ok(())
     }
 
     pub async fn automatch_by_search(&self, catalog_id: usize) -> Result<(),GenericError> {
@@ -409,10 +464,31 @@ mod tests {
         // Check in-database changes
         let mut entry= Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
         assert_eq!(entry.q,Some(13520818));
-        assert_eq!(entry.user,Some(0));
+        assert_eq!(entry.user,Some(USER_AUTO));
         
         // Clear
         entry.unmatch().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_automatch_by_sitelink() {
+        let _test_lock = TEST_MUTEX.lock();
+        let mnm = get_test_mnm();
+        let am = AutoMatch::new(&mnm);
+
+        // Clear
+        am.purge_automatches(TEST_CATALOG_ID).await.unwrap();
+
+        // Run automatch
+        am.automatch_by_sitelink(TEST_CATALOG_ID).await.unwrap();
+
+        // Check in-database changes
+        let entry= Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        assert_eq!(entry.q,Some(13520818));
+        assert_eq!(entry.user,Some(USER_AUTO));
+        
+        // Clear
+        am.purge_automatches(TEST_CATALOG_ID).await.unwrap();
     }
 
     #[tokio::test]

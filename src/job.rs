@@ -330,7 +330,7 @@ impl Job {
     fn get_next_ts(&mut self) -> Result<String,GenericError> {
         let seconds = match self.data()?.repeat_after_sec {
             Some(sec) => sec as i64,
-            None => return Err(Box::new(JobError::S(format!("Job::get_next_ts"))))
+            None => return Ok(String::new())
         };
         let utc = MixNMatch::parse_timestamp(&self.data()?.last_ts.clone()).ok_or("Can't parse timestamp in last_ts")?
             .checked_add_signed(Duration::seconds(seconds)).ok_or(JobError::TimeError)?;
