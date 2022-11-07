@@ -388,6 +388,7 @@ struct DataSource {
     url_pattern: Option<String>,
     _update_existing_description: Option<bool>,
     _update_all_descriptions: Option<bool>,
+    fail_on_error: bool,
     line_counter: LineCounter
 }
 
@@ -440,6 +441,7 @@ impl DataSource {
             _update_existing_description: json.get("update_existing_description").map(|v|v.as_bool()).unwrap_or(None),
             _update_all_descriptions: json.get("update_all_descriptions").map(|v|v.as_bool()).unwrap_or(None),
             line_counter: LineCounter::new(),
+            fail_on_error: false, // TODO?
             tmp_file: None
         })
     }
@@ -557,8 +559,8 @@ impl UpdateCatalog {
         while let Some(result) = reader.records().next() {
             let result = match result {
                 Ok(result) => result,
-                Err(_e) => {
-                    continue;
+                Err(e) => {
+                    if datasource.fail_on_error { return Err(Box::new(e)) } else {continue}
                 }
             };
             if result.is_empty() { // Skip blank lines
@@ -571,16 +573,22 @@ impl UpdateCatalog {
                 continue;
             }
             if result.len() < datasource.min_cols {
-                // TODO? ignore_errors
-                return Err(Box::new(UpdateCatalogError::NotEnoughColumns(datasource.line_counter.all)))
+                if datasource.fail_on_error {
+                    return Err(Box::new(UpdateCatalogError::NotEnoughColumns(datasource.line_counter.all)))
+                }
+                continue
             }
             row_cache.push(result);
             if row_cache.len()>= batch_size {
-                self.process_rows(&mut row_cache, &mut datasource).await?;
+                if let Err(e) = self.process_rows(&mut row_cache, &mut datasource).await {
+                    if datasource.fail_on_error { return Err(e) }
+                }
                 // let _ = self.remember_offset(offset).await; // TODO
             }
         }
-        self.process_rows(&mut row_cache, &mut datasource).await?;
+        if let Err(e) = self.process_rows(&mut row_cache, &mut datasource).await {
+            if datasource.fail_on_error { return Err(e) }
+        }
 
         datasource.clear_tmp_file();
         let _ = self.clear_offset().await;
@@ -597,14 +605,21 @@ impl UpdateCatalog {
         let mut existing_ext_ids = HashSet::new();
         if datasource.just_add {
             let ext_ids: Vec<String> = rows.iter().filter_map(|row|row.get(datasource.ext_id_column)).map(|s|s.to_string()).collect();
-            existing_ext_ids = self.get_existing_ext_ids(datasource.catalog_id, &ext_ids).await?;
+            existing_ext_ids = match self.get_existing_ext_ids(datasource.catalog_id, &ext_ids).await {
+                Ok(x) => x,
+                Err(_e) => { return Ok(()) } // TODO is this the correct thing to do?
+            }
         }
         for row in rows.iter() {
             let ext_id = row.get(datasource.ext_id_column).unwrap();
             if existing_ext_ids.contains(ext_id) {
-                //println!("Entry with external ID {} already exists, skipping",&ext_id);
+                // An entry with this ext_id already exists, and we only know that because just_add==true, so skip this
             } else {
-                self.process_row(&row,datasource).await?;
+                if let Err(e) = self.process_row(&row,datasource).await {
+                    if datasource.fail_on_error {
+                        return Err(e)
+                    }
+                }
             }
         }
         rows.clear();
