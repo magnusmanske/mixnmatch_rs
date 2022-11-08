@@ -193,6 +193,14 @@ impl Entry {
         }
     }
 
+    pub fn get_entry_url(&self) -> Option<String> {
+        if self.id==ENTRY_NEW_ID {
+            None
+        } else {
+            Some(format!("https://mix-n-match.toolforge.org/#/entry/{}",self.id))
+        }
+    }
+
     /// Sets the MixNMatch object. Automatically done when created via from_id().
     pub fn set_mnm(&mut self, mnm: &MixNMatch) {
         self.mnm = Some(mnm.clone());
@@ -213,6 +221,12 @@ impl Entry {
             let sql = "UPDATE `entry` SET `ext_name`=:ext_name WHERE `id`=:entry_id";
             self.mnm()?.app.get_mnm_conn().await?.exec_drop(sql, params! {ext_name,entry_id}).await?;
         }
+        Ok(())
+    }
+
+    pub async fn set_auxiliary_in_wikidata(&self, aux_id: usize, in_wikidata: bool) -> Result<(),GenericError> {
+        let sql = "UPDATE auxiliary SET in_wikidata=:in_wikidata WHERE id=:aux_id AND in_wikidata!=:in_wikidata";
+        self.mnm()?.app.get_mnm_conn().await?.exec_drop(sql, params! {in_wikidata,aux_id}).await?;
         Ok(())
     }
 

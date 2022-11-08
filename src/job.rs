@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use crate::app_state::*;
 use crate::mixnmatch::*;
 use crate::automatch::*;
+use crate::auxiliary_matcher::*;
 use crate::taxon_matcher::*;
 use crate::update_catalog::*;
 
@@ -265,6 +266,11 @@ impl Job {
                 am.set_current_job(self);
                 am.automatch_from_other_catalogs(catalog_id).await
             },
+            "automatch_from_sitelinks" => {
+                let mut am = AutoMatch::new(&self.mnm);
+                am.set_current_job(self);
+                am.automatch_by_sitelink(catalog_id).await
+            },
             "purge_automatches" => {
                 let mut am = AutoMatch::new(&self.mnm);
                 am.set_current_job(self);
@@ -279,6 +285,11 @@ impl Job {
                 let mut am = AutoMatch::new(&self.mnm);
                 am.set_current_job(self);
                 am.match_person_by_single_date(catalog_id).await
+            },
+            "aux2wd" => {
+                let mut am = AuxiliaryMatcher::new(&self.mnm);
+                am.set_current_job(self);
+                am.add_auxiliary_to_wikidata(catalog_id).await
             },
             "taxon_matcher" => {
                 let mut tm = TaxonMatcher::new(&self.mnm);

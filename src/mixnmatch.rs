@@ -229,7 +229,7 @@ impl MixNMatch {
         self.wd_search(&query).await
     }
 
-    /// Performs a Wikidata API search for the query string.
+    /// Performs a Wikidata API search for the query string. Returns item IDs matching the query.
     pub async fn wd_search(&self, query: &str) -> Result<Vec<String>,GenericError> {    
         // TODO via mw_api?
         if query.is_empty() {
