@@ -240,9 +240,12 @@ impl AuxiliaryMatcher {
             if AUX_BLACKLISTED_PROPERTIES.contains(&aux.property) { // No blacklisted properties
                 continue;
             }
-            if let Some(entity) = entities.get_entity(aux.q()) { // Don't add anything if item already has a statement with that property
+            if let Some(entity) = entities.get_entity(aux.q()) {
+                if META_ITEMS.iter().any(|q|entity.has_target_entity("P31", q)) {
+                    continue // Don't edit items that are META items
+                }
                 if self.entity_already_has_property(&aux, &entity).await {
-                    continue
+                    continue // Don't add anything if item already has a statement with that property
                 }
             }
             if self.aux2wd_check_if_property_value_is_on_wikidata(aux).await { // Search Wikidata for other occurrences
