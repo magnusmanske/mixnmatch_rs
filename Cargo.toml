@@ -24,6 +24,7 @@ async-trait = "*"
 csv = "*"
 rand = "*"
 uuid = { version="*", features=["v4"] }
+itertools = "*"
 
 [profile.release]
 lto = 'thin'

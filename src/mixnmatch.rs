@@ -1,14 +1,17 @@
 use std::sync::Mutex;
+use std::collections::{HashMap, HashSet};
 use lazy_static::lazy_static;
 use regex::Regex;
 use reqwest;
 use urlencoding::encode;
 use chrono::{DateTime, Utc, NaiveDateTime};
-use serde_json::Value;
+use serde_json::{Value,json};
 use mysql_async::prelude::*;
 use mysql_async::from_row;
+use itertools::Itertools;
 use crate::app_state::*;
 use crate::entry::*;
+use crate::wikidata_commands::WikidataCommand;
 
 /// Global function for tests.
 pub fn get_test_mnm() -> MixNMatch {
@@ -289,6 +292,29 @@ impl MixNMatch {
 
     pub fn import_file_path(&self) -> String {
         self.app.import_file_path.to_owned()
+    }
+
+    pub async fn execute_commands(&self, commands: Vec<WikidataCommand> ) -> Result<(),GenericError> {
+        // TODO this could be one command I believe:
+        let mut item2commands: HashMap<usize,Vec<WikidataCommand>> = HashMap::new();
+        for (key, group) in &commands.into_iter().group_by(|command| command.item_id) {
+            item2commands.insert(key, group.collect());
+        }
+        println!("{:?}",&item2commands);
+        for (_item,commands) in &item2commands {
+            let mut comments: HashSet<String> = HashSet::new();
+            let mut json = json!({});
+            for command in commands {
+                if let Some(comment)=&command.comment {
+                    comments.insert(comment.to_owned());
+                }
+                command.edit_entity(&mut json);
+            }
+            let comment: String = comments.iter().join(";");
+            println!("Payload:\n{}\n{}",&json,&comment);
+        }
+
+        Ok(())
     }
 
 }

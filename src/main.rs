@@ -7,6 +7,7 @@ pub mod auxiliary_matcher ;
 pub mod catalog ;
 pub mod entry ;
 pub mod job ;
+pub mod wikidata_commands;
 
 use std::env;
 use std::sync::{Arc, Mutex};

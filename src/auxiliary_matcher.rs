@@ -5,13 +5,12 @@ use std::fmt;
 use mysql_async::prelude::*;
 use std::collections::HashMap;
 use mysql_async::from_row;
-use wikibase::EntityTrait;
 use crate::mixnmatch::*;
 use crate::entry::*;
 use crate::catalog::*;
 use crate::job::*;
 use crate::app_state::*;
-
+use crate::wikidata_commands::*;
 
 const AUX_BLACKLISTED_CATALOGS_PROPERTIES: &'static [(usize,usize)] = &[
     (2099,428)
@@ -28,11 +27,10 @@ const AUX_DO_NOT_SYNC_CATALOG_TO_WIKIDATA: &'static [usize] = &[
 ];
 
 lazy_static!{
-    static ref RE_COORDINATE_PATTERN : Regex = Regex::new(r"^\@[0-9\.\-]+\/[0-9\.\-]+$").unwrap();
+    static ref RE_COORDINATE_PATTERN : Regex = Regex::new(r"^\@{0,1}([0-9\.\-]+)[,/]([0-9\.\-]+)$").unwrap();
 }
 
 #[derive(Debug, Clone)]
-
 struct AuxiliaryResults {
     pub aux_id: usize,
     pub entry_id: usize,
@@ -52,6 +50,24 @@ impl AuxiliaryResults {
         }
     }
 
+    fn value_as_item_id(&self) -> Option<WikidataCommandValue> {
+        self.value
+            .replace("Q","")
+            .parse::<usize>()
+            .map(|numeric|WikidataCommandValue::Item(numeric))
+            .ok()
+    }
+
+    fn value_as_item_location(&self) -> Option<WikidataCommandValue> {
+        let captures = RE_COORDINATE_PATTERN.captures(&self.value)?;
+        if captures.len()==3 {
+            let lat = captures.get(1)?.as_str().parse::<f64>().ok()?;
+            let lon = captures.get(2)?.as_str().parse::<f64>().ok()?;
+            return Some(WikidataCommandValue::Location(CoordinateLocation{lat,lon}));
+        }
+        None
+    }
+
     fn q(&self) -> String {
         format!("Q{}",self.q_numeric)
     }
@@ -61,7 +77,7 @@ impl AuxiliaryResults {
     }
 
     fn entry_comment_link(&self) -> String {
-        format!("\t/*via https://mix-n-match.toolforge.org/#/entry/{} ;*/",self.entry_id)
+        format!("via https://mix-n-match.toolforge.org/#/entry/{} ;",self.entry_id)
     }
 }
 
@@ -140,10 +156,8 @@ impl AuxiliaryMatcher {
             ORDER BY auxiliary.id LIMIT :batch_size OFFSET :offset"
             ,MatchState::fully_matched().get_sql()
             ,blacklisted_properties.join(","));
-        println!("{}",&sql);
         let mut offset = self.get_last_job_offset() ;
         let batch_size = 500 ;
-        let mw_api = self.mnm.get_mw_api().await.unwrap();
         
         loop {
             let results = self.mnm.app.get_mnm_conn().await?
@@ -151,17 +165,15 @@ impl AuxiliaryMatcher {
                 .map_and_drop(from_row::<(usize,usize,usize,usize,String)>).await?;
             let results: Vec<AuxiliaryResults> = results.iter().map(|r|AuxiliaryResults::from_result(r)).collect();
             let (aux,sources) = self.aux2wd_remap_results(catalog_id, &results).await;
-            let qids = aux.keys().map(|id|format!("Q{}",id)).collect();
-            let items = wikibase::entity_container::EntityContainer::new();
-            if let Err(_) = items.load_entities(&mw_api,&qids).await {continue;}
-            for (q_numeric,data) in &aux {
-                let q = format!("Q{}",q_numeric);
-                let item = match items.get_entity(&q) {
-                    Some(item) => item,
-                    None => continue
-                };
-                let _ = self.aux2wd_process_item(&item,data, &sources).await;
+            let mut commands: Vec<WikidataCommand> = vec![];
+            for (_,data) in &aux {
+                commands.append(&mut self.aux2wd_process_item(data, &sources).await);
+
             }
+
+            let _ = self.mnm.execute_commands(commands).await;
+
+            //self.mnm.run_commands
 
             // ________________________________________________________________________________
             if results.len()<batch_size {
@@ -174,46 +186,48 @@ impl AuxiliaryMatcher {
         Ok(())
     }
 
-    async fn aux2wd_process_item(&self, item: &wikibase::Entity, aux_data: &Vec<AuxiliaryResults>, sources: &HashMap<String,String>) {
-        let source: String = sources.get(item.id()).unwrap_or(&String::new()).to_owned();
-        let mut quickstatement_commands: Vec<String> = vec![];
+    async fn aux2wd_process_item(&self, aux_data: &Vec<AuxiliaryResults>, sources: &HashMap<String,WikidataCommandPropertyValueGroups>) -> Vec<WikidataCommand> {
+        let q = match aux_data.get(0) {
+            Some(aux) => aux.q(),
+            None => {return vec![];} // Empty input
+        };
+        let source: WikidataCommandPropertyValueGroups = sources.get(&q).unwrap_or(&vec![]).to_owned();
+        let mut commands: Vec<WikidataCommand> = vec![];
         for aux in aux_data {
-            println!("{:?}",&aux);
             if AUX_BLACKLISTED_PROPERTIES.contains(&aux.property) {
                 continue;
             }
-            println!("A");
-            if item.has_claims_with_property(aux.prop()) {
-                continue;
-            }
-            println!("B");
             if self.aux2wd_check_if_property_value_is_on_wikidata(aux).await {
                 continue
             }
-            println!("C");
             if let Ok(b) = self.mnm.avoid_auto_match(aux.entry_id,Some(aux.q_numeric as isize)).await {
-                println!("D {}",&b);
                 if b { continue }
             } else { // Something went wrong, ignore this one
-                println!("D");
                 continue
             }
-            println!("E");
 
+            let command_value: Option<WikidataCommandValue> =
             if self.properties_using_items.contains(&aux.prop()) {
-                quickstatement_commands.push(format!("{}\t{}\t{}{}{}",aux.q(),aux.prop(),&aux.value,&source,aux.entry_comment_link()));
+                aux.value_as_item_id()
             } else if self.properties_with_coordinates.contains(&aux.prop()) {
-                if RE_COORDINATE_PATTERN.is_match(&aux.value) {
-                    quickstatement_commands.push(format!("{}\t{}\t{}{}{}",aux.q(),aux.prop(),&aux.value,&source,aux.entry_comment_link()));
-                } else {
-                    let value = aux.value.replace(",", "/");
-                    quickstatement_commands.push(format!("{}\t{}\t@{}{}{}",aux.q(),aux.prop(),&value,&source,aux.entry_comment_link()));
-                }
+                aux.value_as_item_location()
             } else {
-                quickstatement_commands.push(format!("{}\t{}\t\"{}\"{}{}",aux.q(),aux.prop(),&aux.value,&source,aux.entry_comment_link()));
+                Some(WikidataCommandValue::String(aux.value.to_owned()))
+            };
+
+            if let Some(value) = command_value {
+                commands.push(WikidataCommand {
+                    item_id: aux.q_numeric,
+                    what: WikidataCommandWhat::Property(aux.property),
+                    value: value.to_owned(),
+                    references: source.clone(),
+                    qualifiers: vec![],
+                    comment: Some(aux.entry_comment_link()),
+                    rank: None
+                });        
             }
         }
-        println!("{:?}",&quickstatement_commands);
+        commands
     }
 
     /// Check if that property/value combination is on Wikidata. Returns true if something was found.
@@ -240,9 +254,9 @@ impl AuxiliaryMatcher {
         true
     }
 
-    async fn aux2wd_remap_results(&mut self, catalog_id: usize, results: &Vec<AuxiliaryResults>) -> (HashMap<usize,Vec<AuxiliaryResults>>,HashMap<String,String>) {
+    async fn aux2wd_remap_results(&mut self, catalog_id: usize, results: &Vec<AuxiliaryResults>) -> (HashMap<usize,Vec<AuxiliaryResults>>,HashMap<String,WikidataCommandPropertyValueGroups>) {
         let mut aux: HashMap<usize,Vec<AuxiliaryResults>> = HashMap::new();
-        let mut sources: HashMap<String,String> = HashMap::new();
+        let mut sources: HashMap<String,WikidataCommandPropertyValueGroups> = HashMap::new();
         for result in results {
             if self.is_catalog_property_combination_suspect(catalog_id,result.property) {
                 continue
@@ -257,7 +271,7 @@ impl AuxiliaryMatcher {
         (aux,sources)
     }
 
-    async fn get_source_for_entry(&mut self, entry_id: usize, catalog_id: usize, ext_id: &str) -> Option<String> {
+    async fn get_source_for_entry(&mut self, entry_id: usize, catalog_id: usize, ext_id: &str) -> Option<WikidataCommandPropertyValueGroups> {
         if !self.catalogs.contains_key(&catalog_id) {
             let catalog = Catalog::from_id(catalog_id, &self.mnm).await.ok();
             self.catalogs.insert(catalog_id,catalog);
@@ -266,7 +280,13 @@ impl AuxiliaryMatcher {
             Some(catalog) => catalog,
             None => { return None } // No catalog, no source
         };
-        let mut stated_in = catalog.source_item.map(|s|format!("\t!S248\tQ{}",s)).unwrap_or(String::new());
+        let mut stated_in: WikidataCommandPropertyValueGroup = vec![];
+        match catalog.source_item {
+            Some(q) => {
+                stated_in.push(WikidataCommandPropertyValue{property:248,value: WikidataCommandValue::Item(q)});
+            }
+            None => {}
+        }
 
         // Source via catalog property
         if let Some(wd_prop) = catalog.wd_prop {
@@ -280,23 +300,36 @@ impl AuxiliaryMatcher {
                     let p9073 = prop_entity.values_for_property("P9073");
                     if let Some(value) = p9073.get(0) {
                         if let wikibase::Value::Entity(entity_value) = value {
-                            stated_in = format!("\t!S248\t{}",entity_value.id());
+                            if let Ok(q) = entity_value.id().replace("Q","").parse::<usize>() {
+                                stated_in.push(WikidataCommandPropertyValue{property:248,value: WikidataCommandValue::Item(q)});
+                            }
                         }
                     }
                 }
             }
-            return Some(format!("{}\tS{}\t\"{}\"",stated_in,wd_prop,ext_id));
+
+            return Some(vec![
+                stated_in,
+                vec![WikidataCommandPropertyValue{property:wd_prop,value:WikidataCommandValue::String(ext_id.to_string())}]
+            ]);
         }
 
         // Source via external URL of the entry
         if let Ok(entry) = Entry::from_id(entry_id, &self.mnm).await {
             if !entry.ext_url.is_empty() {
-                return Some(format!("{}\tS854\t\"{}\"",stated_in,&entry.ext_url));
+                return Some(vec![
+                    stated_in,
+                    vec![WikidataCommandPropertyValue{property:854,value:WikidataCommandValue::String(entry.ext_url.to_string())}]
+                ]);
             }
         }
 
         // Fallback: Source via Mix'n'match entry URL
-        Some(format!("{}\tS854\t\"https://mix-n-match.toolforge.org/#/entry/{}\"",stated_in,entry_id))
+        let mnm_entry_url = format!("https://mix-n-match.toolforge.org/#/entry/{}",entry_id);
+        return Some(vec![
+            stated_in,
+            vec![WikidataCommandPropertyValue{property:854,value:WikidataCommandValue::String(mnm_entry_url)}]
+        ]);
     }
 
     fn is_catalog_property_combination_suspect(&self,catalog_id: usize,prop: usize) -> bool {
@@ -329,9 +362,11 @@ mod tests {
         // Check
         let aux  = entry.get_aux().await.unwrap();
         assert!(aux.iter().any(|x|x.prop_numeric==214&&x.in_wikidata));
+        assert!(aux.iter().any(|x|x.prop_numeric==370&&!x.in_wikidata));
 
         // Cleanup
         entry.set_auxiliary(214,None).await.unwrap();
+        entry.set_auxiliary(370,None).await.unwrap();
         entry.unmatch().await.unwrap();
     }
 }
