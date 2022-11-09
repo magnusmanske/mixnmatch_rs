@@ -170,9 +170,9 @@ impl AuxiliaryMatcher {
             let results: Vec<AuxiliaryResults> = results.iter().map(|r|AuxiliaryResults::from_result(r)).collect();
             let (aux,sources) = self.aux2wd_remap_results(catalog_id, &results).await;
             
-            let entity_ids: Vec<String> = aux.keys().map(|q|format!("Q{}",q)).collect();
             let entities = wikibase::entity_container::EntityContainer::new();
             if self.aux2wd_skip_existing_property {
+                let entity_ids: Vec<String> = aux.keys().map(|q|format!("Q{}",q)).collect();
                 if let Err(_) = entities.load_entities(&mw_api, &entity_ids).await {
                     continue // We can't know which items already have specific properties, so skip this batch
                 }
@@ -196,6 +196,39 @@ impl AuxiliaryMatcher {
         Ok(())
     }
 
+    fn is_statement_in_entity(&self, entity: &wikibase::Entity, property:&str, value: &str) -> bool {
+        entity
+            .claims_with_property(property)
+            .iter()
+            .filter_map(|claim|{
+                match &claim.main_snak().data_value() {
+                    Some(datavalue) => {
+                        match datavalue.value() {
+                            wikibase::Value::StringValue(s) => Some(s.to_string()),
+                            wikibase::Value::Entity(e) => Some(e.id().to_string()),
+                            wikibase::Value::Coordinate(c) => Some(format!("@{}/{}",c.latitude(),c.longitude())),
+                            _ => None // TODO more
+                        }
+                    }
+                    _ => None
+                }
+            })
+            .any(|simplified_value|value==simplified_value)
+    }
+
+    async fn entity_already_has_property(&self, aux: &AuxiliaryResults, entity: &wikibase::Entity) -> bool {
+        if !entity.has_claims_with_property(aux.prop()) {
+            return false
+        }
+        // Is that specific value in the entity?
+        if self.is_statement_in_entity(&entity,&aux.prop(),&aux.value) {
+            if let Ok(entry) = Entry::from_id(aux.entry_id,&self.mnm).await {
+                let _ = entry.set_auxiliary_in_wikidata(aux.aux_id,true).await;
+            };
+        }
+        true
+    }
+
     async fn aux2wd_process_item(&self, aux_data: &Vec<AuxiliaryResults>, sources: &HashMap<String,WikidataCommandPropertyValueGroups>, entities: &EntityContainer) -> Vec<WikidataCommand> {
         let q = match aux_data.get(0) {
             Some(aux) => aux.q(),
@@ -208,31 +241,7 @@ impl AuxiliaryMatcher {
                 continue;
             }
             if let Some(entity) = entities.get_entity(aux.q()) { // Don't add anything if item already has a statement with that property
-                if entity.has_claims_with_property(aux.prop()) {
-                    // Is that specific value on Wikidata?
-                    if entity
-                        .claims_with_property(aux.prop())
-                        .iter()
-                        .filter_map(|claim|{
-                            match &claim.main_snak().data_value() {
-                                Some(datavalue) => {
-                                    match datavalue.value() {
-                                        wikibase::Value::StringValue(s) => Some(s.to_string()),
-                                        wikibase::Value::Entity(e) => Some(e.id().to_string()),
-                                        wikibase::Value::Coordinate(c) => Some(format!("@{}/{}",c.latitude(),c.longitude())),
-                                        _ => None // TODO more
-                                    }
-                                }
-                                _ => None
-                            }
-                        })
-                        .any(|value|value==aux.value)
-                        {
-                            if let Ok(entry) = Entry::from_id(aux.entry_id,&self.mnm).await {
-                                let _ = entry.set_auxiliary_in_wikidata(aux.aux_id,true).await;
-                            };
-                        }
-                        
+                if self.entity_already_has_property(&aux, &entity).await {
                     continue
                 }
             }
@@ -384,6 +393,35 @@ mod tests {
 
     const TEST_CATALOG_ID: usize = 5526 ;
     const TEST_ENTRY_ID: usize = 143962196 ;
+    const TEST_ITEM_ID: usize = 13520818 ; // Q13520818
+
+    #[tokio::test]
+    async fn test_is_statement_in_entity() {
+        let mnm = get_test_mnm();
+        let mw_api = mnm.get_mw_api().await.unwrap();
+        let entities = wikibase::entity_container::EntityContainer::new();
+        let entity = entities.load_entity(&mw_api, "Q13520818").await.unwrap();
+        let am = AuxiliaryMatcher::new(&mnm);
+        assert!(am.is_statement_in_entity(&entity, "P31", "Q5"));
+        assert!(am.is_statement_in_entity(&entity, "P214", "30701597"));
+        assert!(!am.is_statement_in_entity(&entity, "P214", "30701596"));
+    }
+
+    #[tokio::test]
+    async fn test_entity_already_has_property() {
+        let mnm = get_test_mnm();
+        let mw_api = mnm.get_mw_api().await.unwrap();
+        let entities = wikibase::entity_container::EntityContainer::new();
+        let entity = entities.load_entity(&mw_api, "Q13520818").await.unwrap();
+        let aux = AuxiliaryResults { aux_id:0, entry_id:0, q_numeric:TEST_ITEM_ID, property:214 , value:"30701597".to_string() };
+        let am = AuxiliaryMatcher::new(&mnm);
+        assert!(am.entity_already_has_property(&aux, &entity).await);
+        let aux = AuxiliaryResults { aux_id:0, entry_id:0, q_numeric:TEST_ITEM_ID, property:214 , value:"foobar".to_string() };
+        assert!(am.entity_already_has_property(&aux, &entity).await);
+        let aux = AuxiliaryResults { aux_id:0, entry_id:0, q_numeric:TEST_ITEM_ID, property:212 , value:"foobar".to_string() };
+        assert!(!am.entity_already_has_property(&aux, &entity).await);
+
+    }
 
     #[tokio::test]
     async fn test_add_auxiliary_to_wikidata() {

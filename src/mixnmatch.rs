@@ -56,7 +56,8 @@ pub const META_ITEMS: &'static [&'static str] = &[
     "Q11266439", // Wikimedia template
     "Q4167836", // Wikimedia category
     "Q13406463", // Wikimedia list article
-    "Q22808320" // Wikimedia human name disambiguation page
+    "Q22808320", // Wikimedia human name disambiguation page
+    "Q17362920", // Wikimedia duplicated page
     ] ;
 pub const WIKIDATA_USER_AGENT: &'static str = "MixNMmatch_RS/1.0";
 pub const TABLES_WITH_ENTRY_ID_FIELDS: &'static [&'static str] = &[
