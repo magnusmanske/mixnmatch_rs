@@ -322,7 +322,6 @@ impl MixNMatch {
         }
         
         self.api_log_in().await?;
-        //println!("{:?}",&item2commands);
         for (item_id,commands) in &item2commands {
             let mut comments: HashSet<String> = HashSet::new();
             let mut json = json!({});
@@ -343,9 +342,12 @@ impl MixNMatch {
                 if !comment.is_empty() {
                     params.insert("summary".to_string(),comment);
                 }
-                println!("Payload:\n{:?}",&params);
-                let result = mw_api.post_query_api_json_mut(&params).await?;
-                println!("Result:\n{:?}",&result);
+                match mw_api.post_query_api_json_mut(&params).await {
+                    Ok(_) => {}
+                    _ => {
+                        println!("wbeditentiry failed for Q{}: {:?}",item_id,commands);
+                    }
+                }
             }
         }
 

@@ -266,7 +266,7 @@ impl Job {
                 am.set_current_job(self);
                 am.automatch_from_other_catalogs(catalog_id).await
             },
-            "automatch_from_sitelinks" => {
+            "automatch_by_sitelink" => {
                 let mut am = AutoMatch::new(&self.mnm);
                 am.set_current_job(self);
                 am.automatch_by_sitelink(catalog_id).await

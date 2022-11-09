@@ -89,7 +89,6 @@ impl AutoMatch {
                 match name2entries.get(&title) {
                     Some(v) => {
                         for entry_id in v {
-                            //println!("https://mix-n-match.toolforge.org/#/entry/{}: https://www.wikidata.org/wiki/Q{}",entry_id,q);
                             if let Ok(mut entry) = Entry::from_id(*entry_id, &self.mnm).await {
                                 let _ = entry.set_match(&format!("Q{}",q),USER_AUTO).await;
                             }
@@ -366,7 +365,6 @@ impl AutoMatch {
                 }
                 if candidates.len()==1 { // TODO >1
                     let q = candidates.get(0).unwrap(); // Safe
-                    //println!("Matching https://mix-n-match.toolforge.org/#/entry/{} to www.wikidata.org/wiki/{}",result.entry_id,&q);
                     let _ = Entry::from_id(result.entry_id, &self.mnm).await?.set_match(&q,USER_DATE_MATCH).await;
                 }
             }
