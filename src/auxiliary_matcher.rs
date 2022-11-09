@@ -1,5 +1,6 @@
 use lazy_static::lazy_static;
 use regex::Regex;
+use wikibase::entity_container::EntityContainer;
 use std::error::Error;
 use std::fmt;
 use mysql_async::prelude::*;
@@ -102,6 +103,7 @@ pub struct AuxiliaryMatcher {
     mnm: MixNMatch,
     catalogs: HashMap<usize,Option<Catalog>>,
     properties: wikibase::entity_container::EntityContainer,
+    aux2wd_skip_existing_property: bool,
     job: Option<Job>
 }
 
@@ -123,6 +125,7 @@ impl AuxiliaryMatcher {
             mnm: mnm.clone(),
             catalogs: HashMap::new(),
             properties: wikibase::entity_container::EntityContainer::new(),
+            aux2wd_skip_existing_property: true,
             job: None
         }
     }
@@ -158,6 +161,7 @@ impl AuxiliaryMatcher {
             ,blacklisted_properties.join(","));
         let mut offset = self.get_last_job_offset() ;
         let batch_size = 500 ;
+        let mw_api = self.mnm.get_mw_api().await?;
         
         loop {
             let results = self.mnm.app.get_mnm_conn().await?
@@ -165,9 +169,18 @@ impl AuxiliaryMatcher {
                 .map_and_drop(from_row::<(usize,usize,usize,usize,String)>).await?;
             let results: Vec<AuxiliaryResults> = results.iter().map(|r|AuxiliaryResults::from_result(r)).collect();
             let (aux,sources) = self.aux2wd_remap_results(catalog_id, &results).await;
+            
+            let entity_ids: Vec<String> = aux.keys().map(|q|format!("Q{}",q)).collect();
+            let entities = wikibase::entity_container::EntityContainer::new();
+            if self.aux2wd_skip_existing_property {
+                if let Err(_) = entities.load_entities(&mw_api, &entity_ids).await {
+                    continue // We can't know which items already have specific properties, so skip this batch
+                }
+            }
+            
             let mut commands: Vec<WikidataCommand> = vec![];
             for (_,data) in &aux {
-                commands.append(&mut self.aux2wd_process_item(data, &sources).await);
+                commands.append(&mut self.aux2wd_process_item(data, &sources, &entities).await);
 
             }
             let _ = self.mnm.execute_commands(commands).await;
@@ -183,7 +196,7 @@ impl AuxiliaryMatcher {
         Ok(())
     }
 
-    async fn aux2wd_process_item(&self, aux_data: &Vec<AuxiliaryResults>, sources: &HashMap<String,WikidataCommandPropertyValueGroups>) -> Vec<WikidataCommand> {
+    async fn aux2wd_process_item(&self, aux_data: &Vec<AuxiliaryResults>, sources: &HashMap<String,WikidataCommandPropertyValueGroups>, entities: &EntityContainer) -> Vec<WikidataCommand> {
         let q = match aux_data.get(0) {
             Some(aux) => aux.q(),
             None => {return vec![];} // Empty input
@@ -191,10 +204,39 @@ impl AuxiliaryMatcher {
         let source: WikidataCommandPropertyValueGroups = sources.get(&q).unwrap_or(&vec![]).to_owned();
         let mut commands: Vec<WikidataCommand> = vec![];
         for aux in aux_data {
-            if AUX_BLACKLISTED_PROPERTIES.contains(&aux.property) {
+            if AUX_BLACKLISTED_PROPERTIES.contains(&aux.property) { // No blacklisted properties
                 continue;
             }
-            if self.aux2wd_check_if_property_value_is_on_wikidata(aux).await {
+            if let Some(entity) = entities.get_entity(aux.q()) { // Don't add anything if item already has a statement with that property
+                if entity.has_claims_with_property(aux.prop()) {
+                    // Is that specific value on Wikidata?
+                    if entity
+                        .claims_with_property(aux.prop())
+                        .iter()
+                        .filter_map(|claim|{
+                            match &claim.main_snak().data_value() {
+                                Some(datavalue) => {
+                                    match datavalue.value() {
+                                        wikibase::Value::StringValue(s) => Some(s.to_string()),
+                                        wikibase::Value::Entity(e) => Some(e.id().to_string()),
+                                        wikibase::Value::Coordinate(c) => Some(format!("@{}/{}",c.latitude(),c.longitude())),
+                                        _ => None // TODO more
+                                    }
+                                }
+                                _ => None
+                            }
+                        })
+                        .any(|value|value==aux.value)
+                        {
+                            if let Ok(entry) = Entry::from_id(aux.entry_id,&self.mnm).await {
+                                let _ = entry.set_auxiliary_in_wikidata(aux.aux_id,true).await;
+                            };
+                        }
+                        
+                    continue
+                }
+            }
+            if self.aux2wd_check_if_property_value_is_on_wikidata(aux).await { // Search Wikidata for other occurrences
                 continue
             }
             if let Ok(b) = self.mnm.avoid_auto_match(aux.entry_id,Some(aux.q_numeric as isize)).await {
@@ -232,7 +274,7 @@ impl AuxiliaryMatcher {
         if !self.properties_that_have_external_ids.contains(&aux.prop()) {
             return false;
         }
-        let query = format!("haswbstatement:{}={}",aux.prop(),aux.value);
+        let query = format!("haswbstatement:\"{}={}\"",aux.prop(),aux.value);
         let search_results = match self.mnm.wd_search(&query).await {
             Ok(result) => result,
             Err(_) => return true // Something went wrong, just skip this one
