@@ -44,7 +44,8 @@ async fn main() -> Result<(),app_state::GenericError> {
         "match_person_dates",
         "match_on_birthdate",
         "update_from_tabbed_file",
-        "automatch_by_sitelink"
+        "automatch_by_sitelink",
+        "aux2wd"
     );
 
     let argv: Vec<String> = env::args_os().map(|s|s.into_string().unwrap()).collect();
