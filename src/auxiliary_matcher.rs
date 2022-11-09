@@ -170,10 +170,7 @@ impl AuxiliaryMatcher {
                 commands.append(&mut self.aux2wd_process_item(data, &sources).await);
 
             }
-
             let _ = self.mnm.execute_commands(commands).await;
-
-            //self.mnm.run_commands
 
             // ________________________________________________________________________________
             if results.len()<batch_size {

@@ -15,7 +15,9 @@ use crate::wikidata_commands::WikidataCommand;
 
 /// Global function for tests.
 pub fn get_test_mnm() -> MixNMatch {
-    MixNMatch::new(AppState::from_config_file("config.json").unwrap())
+    let mut ret = MixNMatch::new(AppState::from_config_file("config.json").unwrap());
+    ret.testing = true;
+    ret
 }
 
 lazy_static! {
@@ -115,17 +117,29 @@ impl MatchState {
 
 #[derive(Debug, Clone)]
 pub struct MixNMatch {
-    pub app: AppState
+    pub app: AppState,
+    mw_api: Option<mediawiki::api::Api>,
+    pub testing: bool
 }
 
 impl MixNMatch {
     pub fn new(app: AppState) -> Self {
         Self {
-            app
+            app,
+            mw_api: None,
+            testing: false
         }
     }
 
     pub async fn get_mw_api(&self) -> Result<mediawiki::api::Api,mediawiki::media_wiki_error::MediaWikiError> {
+        /*if self.mw_api.lock().unwrap().is_none() {
+            let new_api = mediawiki::api::Api::new(WIKIDATA_API_URL).await?;
+            *self.mw_api.lock().unwrap() = Some(new_api);
+        }
+        if let Some(mw_api) = (*self.mw_api.lock().unwrap()).as_ref() {
+            return Ok(mw_api.clone());
+        }
+        panic!("No MediaWiki API created")*/
         mediawiki::api::Api::new(WIKIDATA_API_URL).await
     }
     
@@ -294,14 +308,22 @@ impl MixNMatch {
         self.app.import_file_path.to_owned()
     }
 
-    pub async fn execute_commands(&self, commands: Vec<WikidataCommand> ) -> Result<(),GenericError> {
-        // TODO this could be one command I believe:
+    pub async fn execute_commands(&mut self, commands: Vec<WikidataCommand> ) -> Result<(),GenericError> {
+        if self.testing {
+            println!("SKIPPING COMMANDS {:?}",commands);
+            return Ok(())
+        }
+        if commands.is_empty() {
+            return Ok(())
+        }
         let mut item2commands: HashMap<usize,Vec<WikidataCommand>> = HashMap::new();
         for (key, group) in &commands.into_iter().group_by(|command| command.item_id) {
             item2commands.insert(key, group.collect());
         }
-        println!("{:?}",&item2commands);
-        for (_item,commands) in &item2commands {
+        
+        self.api_log_in().await?;
+        //println!("{:?}",&item2commands);
+        for (item_id,commands) in &item2commands {
             let mut comments: HashSet<String> = HashSet::new();
             let mut json = json!({});
             for command in commands {
@@ -311,9 +333,34 @@ impl MixNMatch {
                 command.edit_entity(&mut json);
             }
             let comment: String = comments.iter().join(";");
-            println!("Payload:\n{}\n{}",&json,&comment);
+            
+            if let Some(mw_api) = self.mw_api.as_mut() {
+                let mut params: HashMap<String,String> = HashMap::new();
+                params.insert("action".to_string(),"wbeditentity".to_string());
+                params.insert("id".to_string(),format!("Q{}",item_id));
+                params.insert("data".to_string(),json.to_string());
+                params.insert("token".to_string(), mw_api.get_edit_token().await?);
+                if !comment.is_empty() {
+                    params.insert("summary".to_string(),comment);
+                }
+                println!("Payload:\n{:?}",&params);
+                let result = mw_api.post_query_api_json_mut(&params).await?;
+                println!("Result:\n{:?}",&result);
+            }
         }
 
+        Ok(())
+    }
+
+    async fn api_log_in(&mut self) -> Result<(),GenericError> {
+        if self.mw_api.is_none() {
+            self.mw_api = Some(self.get_mw_api().await?);
+        }
+        let mw_api = self.mw_api.as_mut().unwrap();
+        if mw_api.user().logged_in() { // Already logged in
+            return Ok(());
+        }
+        mw_api.login(self.app.bot_name.to_owned(), self.app.bot_password.to_owned()).await?;
         Ok(())
     }
 
@@ -366,3 +413,6 @@ mod tests {
     }
     
 }
+
+unsafe impl Send for MixNMatch {}
+unsafe impl Sync for MixNMatch {}

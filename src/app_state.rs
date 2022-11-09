@@ -14,7 +14,9 @@ pub const DB_POOL_KEEP_SEC: u64 = 120;
 pub struct AppState {
     wd_pool: mysql_async::Pool,
     mnm_pool: mysql_async::Pool,
-    pub import_file_path: String
+    pub import_file_path: String,
+    pub bot_name: String,
+    pub bot_password: String
 }
 
 impl AppState {
@@ -32,7 +34,9 @@ impl AppState {
         let ret = Self {
             wd_pool: Self::create_pool(&config["wikidata"]),
             mnm_pool: Self::create_pool(&config["mixnmatch"]),
-            import_file_path: config["import_file_path"].as_str().unwrap().to_string()
+            import_file_path: config["import_file_path"].as_str().unwrap().to_string(),
+            bot_name: config["bot_name"].as_str().unwrap().to_string(),
+            bot_password: config["bot_password"].as_str().unwrap().to_string(),
         };
         ret
     }
