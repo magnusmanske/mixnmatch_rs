@@ -232,7 +232,6 @@ impl Job {
     }
 
     pub async fn queue_simple_job(mnm: &MixNMatch, catalog_id: usize, action: &str, depends_on: Option<usize>) -> Result<usize,GenericError> {
-        let depends_on = depends_on.unwrap_or(0);
         let timestamp = MixNMatch::get_timestamp();
         let status = "TODO";
         let sql = "INSERT INTO `jobs` (catalog,action,status,depends_on,last_ts) VALUES (:catalog_id,:action,:status,:depends_on,:timestamp)
