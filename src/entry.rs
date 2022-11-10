@@ -38,7 +38,7 @@ impl AuxiliaryRow {
 }
 
 #[derive(Debug)]
-enum EntryError {
+pub enum EntryError {
     TryingToUpdateNewEntry,
     TryingToInsertExistingEntry,
     EntryInsertFailed

@@ -13,6 +13,9 @@ use crate::job::*;
 use crate::app_state::*;
 use crate::wikidata_commands::*;
 
+const AUX_BLACKLISTED_CATALOGS: &'static [usize] = &[
+    506
+];
 const AUX_BLACKLISTED_CATALOGS_PROPERTIES: &'static [(usize,usize)] = &[
     (2099,428)
 ];
@@ -25,6 +28,9 @@ const AUX_BLACKLISTED_PROPERTIES: &'static [usize] = &[
 ];
 const AUX_DO_NOT_SYNC_CATALOG_TO_WIKIDATA: &'static [usize] = &[
     655
+];
+const AUX_PROPERTIES_ALSO_USING_LOWERCASE: &'static [usize] = &[
+    2002
 ];
 
 lazy_static!{
@@ -80,6 +86,28 @@ impl AuxiliaryResults {
     fn entry_comment_link(&self) -> String {
         format!("via https://mix-n-match.toolforge.org/#/entry/{} ;",self.entry_id)
     }
+
+    fn entity_has_statement(&self, entity: &wikibase::Entity) -> bool {
+        entity
+            .claims_with_property(self.prop())
+            .iter()
+            .filter_map(|statement|statement.main_snak().data_value().to_owned())
+            .map(|datavalue|datavalue.value().to_owned())
+            .any(|v|{
+                match v {
+                    wikibase::Value::StringValue(s) => {
+                        if AUX_PROPERTIES_ALSO_USING_LOWERCASE.contains(&self.property) {
+                            return s.to_lowercase()==self.value.to_lowercase()
+                        } else {
+                            return *s==self.value
+                        }    
+                    }
+                    _ => (), // TODO more types?
+                }
+                false
+            })
+        }
+
 }
 
 #[derive(Debug, Clone)]
@@ -144,6 +172,77 @@ impl AuxiliaryMatcher {
         Ok(mw_api.entities_from_sparql_result(&sparql_results,"p"))
     }
 
+    pub async fn match_via_auxiliary(&mut self, catalog_id: usize) -> Result<(),GenericError> {
+        let blacklisted_catalogs: Vec<String> = AUX_BLACKLISTED_CATALOGS.iter().map(|u|format!("{}",u)).collect();
+        self.properties_that_have_external_ids = Self::get_properties_that_have_external_ids(&self.mnm).await?;
+        let extid_props: Vec<String> = self.properties_that_have_external_ids
+            .iter()
+            .filter_map(|s|s.replace("P","").parse::<usize>().ok())
+            .filter(|i|!AUX_BLACKLISTED_PROPERTIES.contains(i))
+            .map(|i|format!("{}",i))
+            .collect(); 
+        let sql = format!("SELECT auxiliary.id,entry_id,0,aux_p,aux_name FROM entry,auxiliary 
+            WHERE entry_id=entry.id AND catalog=:catalog_id 
+            {}
+            AND in_wikidata=0 
+            AND aux_p IN ({})
+            AND catalog NOT IN ({})
+            ORDER BY auxiliary.id LIMIT :batch_size OFFSET :offset"
+            ,MatchState::not_fully_matched().get_sql()
+            ,extid_props.join(",")
+            ,blacklisted_catalogs.join(","));
+        let mut offset = self.get_last_job_offset() ;
+        let batch_size = 500 ;
+        let mw_api = self.mnm.get_mw_api().await?;
+        loop {
+            let results = self.mnm.app.get_mnm_conn().await?
+                .exec_iter(sql.clone(),params! {catalog_id,offset,batch_size}).await?
+                .map_and_drop(from_row::<(usize,usize,usize,usize,String)>).await?;
+            let results: Vec<AuxiliaryResults> = results.iter().map(|r|AuxiliaryResults::from_result(r)).collect();
+            let mut items_to_check: Vec<(String,AuxiliaryResults)> = vec![];
+
+            for aux in &results {
+                if self.is_catalog_property_combination_suspect(catalog_id,aux.property) {
+                    continue
+                }
+                let query = format!("haswbstatement:\"{}={}\"",aux.prop(),aux.value);
+                let search_results = match self.mnm.wd_search(&query).await {
+                    Ok(result) => result,
+                    Err(_) => continue // Something went wrong, just skip this one
+                };
+                if search_results.len()==1 {
+                    let q = search_results.get(0).unwrap(); // Safe
+                    items_to_check.push((q.to_owned(),aux.to_owned()));
+                } else if search_results.len()>1 {
+                    // TODO issue
+                }
+            }
+            
+        // Load the actual entities, don't trust the search results
+        let items_to_load = items_to_check.iter().map(|(q,_aux)|q.to_owned()).collect();
+        let entities = wikibase::entity_container::EntityContainer::new();
+        let _ = entities.load_entities(&mw_api,&items_to_load).await;
+        for (q,aux) in &items_to_check {
+                if let Some(entity) = &entities.get_entity(q.to_owned()) {
+                    if aux.entity_has_statement(entity) {
+                        if let Ok(mut entry) = Entry::from_id(aux.entry_id, &self.mnm).await {
+                            let _ = entry.set_match(q,USER_AUX_MATCH).await;
+                        }
+                    }
+                }
+            }
+
+            if results.len()<batch_size {
+                break;
+            }
+            offset += results.len();
+            let _ = self.remember_offset(offset).await;
+        }
+        let _ = self.clear_offset().await;
+        let _ = Job::queue_simple_job(&self.mnm, catalog_id,"aux2wd",None).await;
+        Ok(())
+        }
+
     pub async fn add_auxiliary_to_wikidata(&mut self, catalog_id: usize) -> Result<(),GenericError> {
         if AUX_DO_NOT_SYNC_CATALOG_TO_WIKIDATA.contains(&catalog_id) {
             return Err(Box::new(AuxiliaryMatcherError::BlacklistedCatalog));
@@ -185,7 +284,6 @@ impl AuxiliaryMatcher {
             }
             let _ = self.mnm.execute_commands(commands).await;
 
-            // ________________________________________________________________________________
             if results.len()<batch_size {
                 break;
             }
@@ -207,7 +305,7 @@ impl AuxiliaryMatcher {
                             wikibase::Value::StringValue(s) => Some(s.to_string()),
                             wikibase::Value::Entity(e) => Some(e.id().to_string()),
                             wikibase::Value::Coordinate(c) => Some(format!("@{}/{}",c.latitude(),c.longitude())),
-                            _ => None // TODO more
+                            _ => None // TODO more types?
                         }
                     }
                     _ => None
@@ -448,5 +546,28 @@ mod tests {
         entry.set_auxiliary(214,None).await.unwrap();
         entry.set_auxiliary(370,None).await.unwrap();
         entry.unmatch().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_match_via_auxiliary() {
+        let _test_lock = TEST_MUTEX.lock();
+        let mnm = get_test_mnm();
+        let mut entry = Entry::from_id(TEST_ENTRY_ID,&mnm).await.unwrap();
+        entry.set_auxiliary(214,Some("30701597".to_string())).await.unwrap();
+        entry.unmatch().await.unwrap();
+
+        // Run matcher
+        let mut am = AuxiliaryMatcher::new(&mnm);
+        am.match_via_auxiliary(TEST_CATALOG_ID).await.unwrap();
+
+        // Check
+        let mut entry = Entry::from_id(TEST_ENTRY_ID,&mnm).await.unwrap();
+        assert_eq!(entry.q.unwrap(),13520818);
+
+        // Cleanup
+        entry.set_auxiliary(214,None).await.unwrap();
+        entry.unmatch().await.unwrap();
+        let catalog_id = TEST_CATALOG_ID;
+        mnm.app.get_mnm_conn().await.unwrap().exec_drop("DELETE FROM `jobs` WHERE `action`='aux2wd' AND `catalog`=:catalog_id", params!{catalog_id}).await.unwrap();
     }
 }

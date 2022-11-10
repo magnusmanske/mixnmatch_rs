@@ -7,6 +7,7 @@ use chrono::Duration;
 use std::fmt;
 use async_trait::async_trait;
 use crate::app_state::*;
+use crate::entry::*;
 use crate::mixnmatch::*;
 use crate::automatch::*;
 use crate::auxiliary_matcher::*;
@@ -230,6 +231,18 @@ impl Job {
         serde_json::from_str(self.get_json().ok()?.as_ref()?).ok()
     }
 
+    pub async fn queue_simple_job(mnm: &MixNMatch, catalog_id: usize, action: &str, depends_on: Option<usize>) -> Result<usize,GenericError> {
+        let depends_on = depends_on.unwrap_or(0);
+        let timestamp = MixNMatch::get_timestamp();
+        let status = "TODO";
+        let sql = "INSERT INTO `jobs` (catalog,action,status,depends_on,last_ts) VALUES (:catalog_id,:action,:status,:depends_on,:timestamp)
+        ON DUPLICATE KEY UPDATE status=:status,depends_on=:depends_on,last_ts=:timestamp";
+        let mut conn = mnm.app.get_mnm_conn().await?;
+        conn.exec_drop(sql, params!{catalog_id,action,depends_on,status,timestamp}).await?;
+        let last_id = conn.last_insert_id().ok_or(EntryError::EntryInsertFailed)? as usize;
+        Ok(last_id)
+    }
+
     /// Sets the value for `json` locally and in database, from a serde_json::Value
     pub async fn set_json(&self, json: Option<serde_json::Value> ) ->  Result<(),GenericError> {
         let job_id = self.get_id()?;
@@ -290,6 +303,11 @@ impl Job {
                 let mut am = AuxiliaryMatcher::new(&self.mnm);
                 am.set_current_job(self);
                 am.add_auxiliary_to_wikidata(catalog_id).await
+            },
+            "auxiliary_matcher" => {
+                let mut am = AuxiliaryMatcher::new(&self.mnm);
+                am.set_current_job(self);
+                am.match_via_auxiliary(catalog_id).await
             },
             "taxon_matcher" => {
                 let mut tm = TaxonMatcher::new(&self.mnm);

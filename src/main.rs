@@ -20,7 +20,7 @@ const MAX_CONCURRENT_JOBS: usize = 10 ; // Runs fine with >40 in <500MB but migh
 /*
 ssh magnus@tools-login.wmflabs.org -L 3309:wikidatawiki.web.db.svc.eqiad.wmflabs:3306 -N &
 ssh magnus@tools-login.wmflabs.org -L 3308:tools-db:3306 -N &
-cargo test  -- --test-threads=1 --nocapture
+cargo test  -- --nocapture
 
 git pull && ./build.sh && toolforge-jobs delete rustbot && \rm ~/rustbot.* && \
 toolforge-jobs run --image tf-golang111 --mem 500Mi --continuous --command '/data/project/mix-n-match/mixnmatch_rs/run.sh' rustbot
@@ -45,6 +45,7 @@ async fn main() -> Result<(),app_state::GenericError> {
         "match_on_birthdate",
         "update_from_tabbed_file",
         "automatch_by_sitelink",
+        "auxiliary_matcher",
         "aux2wd"
     );
 

@@ -279,15 +279,6 @@ impl MixNMatch {
     }
 
 
-    pub async fn test_db_connection(&self) -> Result<(),GenericError> {
-        let limit = 3 ;
-        let rows = self.app.get_mnm_conn().await?
-            .exec_iter(r"SELECT page_title,page_namespace from page LIMIT :limit",params! {limit}).await?
-            .map_and_drop(from_row::<(String,i32)>).await?;
-        println!("{:?}",&rows);
-        Ok(())
-    }
-
     pub fn sanitize_person_name(name: &str) -> String {
         let mut name = name.to_string();
         for re in SANITIZE_PERSON_NAME_RES.iter() {
