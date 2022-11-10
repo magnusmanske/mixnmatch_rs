@@ -4,6 +4,7 @@ pub mod automatch ;
 pub mod taxon_matcher ;
 pub mod update_catalog ;
 pub mod auxiliary_matcher ;
+pub mod autoscrape ;
 pub mod catalog ;
 pub mod entry ;
 pub mod job ;
