@@ -430,7 +430,7 @@ impl AutoscrapeResolveAux {
 pub struct AutoscrapeScraper {
     url: String,
     regex_block: Option<Regex>,
-    regex_entry: Regex, // TODO might be an array, first matching one is used?
+    regex_entry: Vec<Regex>,
     resolve_id: AutoscrapeResolve,
     resolve_name: AutoscrapeResolve,
     resolve_desc: AutoscrapeResolve,
@@ -447,7 +447,7 @@ impl AutoscrapeScraper {
         Ok(Self{
             url: Self::json_as_str(json,"url")?,
             regex_block: Self::regex_block_from_json(json)?,
-            regex_entry: RegexBuilder::new(&Self::json_as_str(json,"rx_entry")?).multi_line(true).build()?,
+            regex_entry: Self::regex_entry_from_json(json)?,
             resolve_id: AutoscrapeResolve::from_json(resolve,"id")?,
             resolve_name: AutoscrapeResolve::from_json(resolve,"name")?,
             resolve_desc: AutoscrapeResolve::from_json(resolve,"desc")?,
@@ -470,6 +470,25 @@ impl AutoscrapeScraper {
             .filter_map(|x|AutoscrapeResolveAux::from_json(x).ok())
             .collect()
         )
+    }
+
+    fn regex_entry_from_json(json: &Value) -> Result<Vec<Regex>,GenericError> {
+        let rx_entry = json.get("rx_entry").ok_or_else(||AutoscrapeError::BadType(json.to_owned()))?;
+        if rx_entry.is_string() {
+            let s = rx_entry.as_str().ok_or_else(||AutoscrapeError::BadType(json.to_owned()))?;
+            Ok(vec![RegexBuilder::new(&s).multi_line(true).build()?])
+        } else { // Assuming array
+            let arr = rx_entry.as_array().ok_or_else(||AutoscrapeError::BadType(json.to_owned()))?;
+            let mut ret = vec![];
+            for x in arr {
+                if let Some(s) = x.as_str() {
+                    ret.push(RegexBuilder::new(&s).multi_line(true).build()?)
+                }
+            }
+            Ok(ret)
+        }
+        //RegexBuilder::new(&Self::json_as_str(json,"rx_entry")?).multi_line(true).build()?
+        
     }
 
     fn regex_block_from_json(json: &Value) -> Result<Option<Regex>,GenericError> {
@@ -510,38 +529,43 @@ impl AutoscrapeScraper {
 
     fn process_html_block(&self, html: &str, autoscrape: &Autoscrape) -> Vec<ExtendedEntry> {
         let mut ret = vec![];
-        for cap in self.regex_entry.captures_iter(html) {
-            let values: Vec<String> = cap.iter().map(|v|v.map(|x|x.as_str().to_string()).unwrap_or(String::new())).collect();
-            let mut map: HashMap<String,String> = values.iter().enumerate().skip(1).map(|(num,value)|(format!("${}",num),value.to_owned())).collect();
-            for (num,level) in autoscrape.levels.iter().enumerate() {
-                map.insert(format!("$L{}",num+1), level.current());
+        for regex_entry in &self.regex_entry {
+            if !regex_entry.is_match(html) {
+                continue;
+            }            
+            for cap in regex_entry.captures_iter(html) {
+                let values: Vec<String> = cap.iter().map(|v|v.map(|x|x.as_str().to_string()).unwrap_or(String::new())).collect();
+                let mut map: HashMap<String,String> = values.iter().enumerate().skip(1).map(|(num,value)|(format!("${}",num),value.to_owned())).collect();
+                for (num,level) in autoscrape.levels.iter().enumerate() {
+                    map.insert(format!("$L{}",num+1), level.current());
+                }
+                let type_name = self.resolve_type.replace_vars(&map);
+                let type_name = if type_name.is_empty() {None} else {Some(type_name)};
+                let entry_ex = ExtendedEntry {
+                    entry : Entry {
+                        id: ENTRY_NEW_ID,
+                        catalog: autoscrape.catalog_id,
+                        ext_id: self.resolve_id.replace_vars(&map),
+                        ext_url: self.resolve_url.replace_vars(&map),
+                        ext_name: self.resolve_name.replace_vars(&map),
+                        ext_desc: self.resolve_desc.replace_vars(&map),
+                        q: None,
+                        user: None,
+                        timestamp: None,
+                        random: rand::thread_rng().gen(),
+                        type_name,
+                        mnm: Some(autoscrape.mnm.clone())
+                    },
+                    aux: self.resolve_aux.iter().map(|aux|aux.replace_vars(&map)).collect(),
+                    born: None,
+                    died: None,
+                    aliases: vec![],
+                    descriptions: HashMap::new(),
+                    location: None,
+                };
+                ret.push(entry_ex);
             }
-            let type_name = self.resolve_type.replace_vars(&map);
-            let type_name = if type_name.is_empty() {None} else {Some(type_name)};
-            let entry_ex = ExtendedEntry {
-                entry : Entry {
-                    id: ENTRY_NEW_ID,
-                    catalog: autoscrape.catalog_id,
-                    ext_id: self.resolve_id.replace_vars(&map),
-                    ext_url: self.resolve_url.replace_vars(&map),
-                    ext_name: self.resolve_name.replace_vars(&map),
-                    ext_desc: self.resolve_desc.replace_vars(&map),
-                    q: None,
-                    user: None,
-                    timestamp: None,
-                    random: rand::thread_rng().gen(),
-                    type_name,
-                    mnm: Some(autoscrape.mnm.clone())
-                },
-                aux: self.resolve_aux.iter().map(|aux|aux.replace_vars(&map)).collect(),
-                born: None,
-                died: None,
-                aliases: vec![],
-                descriptions: HashMap::new(),
-                location: None,
-            };
-            //println!("{:?}",&entry_ex);
-            ret.push(entry_ex);
+            break; // First regexp to match wins
         }
         ret
     }
