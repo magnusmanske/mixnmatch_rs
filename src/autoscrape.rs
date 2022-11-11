@@ -679,7 +679,7 @@ impl Autoscrape {
         let current = self.current();
         let mut url = self.scraper.url.to_owned();
         current.iter().enumerate().for_each(|(l0,s)| url = url.replace(&format!("${}",l0+1),s));
-        println!("{}",&url);
+        //println!("{}",&url);
         if let Some(mut html) = self.load_url(&url).await {
             if self.simple_space {
                 html = RE_SIMPLE_SPACE.replace_all(&html," ").to_string();
