@@ -25,6 +25,7 @@ csv = "*"
 rand = "*"
 uuid = { version="*", features=["v4"] }
 itertools = "*"
+html-escape = "*"
 
 [profile.release]
 lto = 'thin'

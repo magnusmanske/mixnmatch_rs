@@ -78,9 +78,8 @@ impl AutoMatch {
                 });
             
             let params:Vec<String> = name2entries.keys().map(|s|s.to_owned()).collect();
-            let mut placeholders: Vec<String> = Vec::new();
-            placeholders.resize(params.len(),"?".to_string());
-            let sql2 = format!("SELECT `ips_item_id`,`ips_site_page` FROM `wb_items_per_site` WHERE `ips_site_id`='{}' AND `ips_site_page` IN ({})",&site,placeholders.join(","));
+            let placeholders = MixNMatch::sql_placeholders(params.len());
+            let sql2 = format!("SELECT `ips_item_id`,`ips_site_page` FROM `wb_items_per_site` WHERE `ips_site_id`='{}' AND `ips_site_page` IN ({})",&site,placeholders);
             let wd_matches = self.mnm.app.get_wd_conn().await?
                 .exec_iter(sql2,params).await?
                 .map_and_drop(from_row::<(usize,String)>).await?;
@@ -209,10 +208,9 @@ impl AutoMatch {
             }
 
             let params = Params::Positional(ext_names);
-            let mut placeholders: Vec<String> = Vec::new();
-            placeholders.resize(results_in_original_catalog.len(),"?".to_string());
+            let placeholders = MixNMatch::sql_placeholders(results_in_original_catalog.len());
             let sql2 = "SELECT `id`,`ext_name`,`type`,q FROM entry 
-            WHERE ext_name IN (".to_string()+&placeholders.join(",")+")
+            WHERE ext_name IN (".to_string()+&placeholders+")
             AND q IS NOT NULL AND q > 0 AND user IS NOT NULL AND user>0
             AND catalog IN (SELECT id from catalog WHERE active=1)
             GROUP BY ext_name,type HAVING count(DISTINCT q)=1";

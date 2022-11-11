@@ -1,20 +1,25 @@
 use lazy_static::lazy_static;
+use rand::prelude::*;
 use regex::RegexBuilder;
 use serde_json::{json, Value};
 use regex::Regex;
+use std::collections::HashMap;
 use mysql_async::from_row;
 use std::error::Error;
 use std::fmt;
 use mysql_async::prelude::*;
+use crate::update_catalog::ExtendedEntry;
 use crate::entry::*;
 use crate::job::*;
 use crate::app_state::*;
 use crate::mixnmatch::MixNMatch;
 
 const AUTOSCRAPER_USER_AGENT: &str = "Mozilla/5.0 (platform; rv:geckoversion) Gecko/geckotrail Firefox/firefoxversion";
+const AUTOSCRAPE_ENTRY_BATCH_SIZE: usize = 5;
 
 lazy_static!{
     static ref RE_SIMPLE_SPACE : Regex = RegexBuilder::new(r"\s+").multi_line(true).ignore_whitespace(true).build().unwrap() ;
+    static ref RE_HTML: Regex = Regex::new(r"(<.*?>)").unwrap();
 }
 
 #[derive(Debug, Clone)]
@@ -42,10 +47,16 @@ trait JsonStuff {
     }
 
     fn json_as_u64(json: &Value, key: &str) -> Result<u64,AutoscrapeError> {
-        Ok(json.get(key)
-            .ok_or_else(||AutoscrapeError::BadType(json.to_owned()))?
-            .as_u64()
-            .ok_or_else(||AutoscrapeError::BadType(json.to_owned()))?)
+        let value = json.get(key).ok_or_else(||AutoscrapeError::BadType(json.to_owned()))?;
+        if value.is_string() {
+            let s = value.as_str().ok_or_else(||AutoscrapeError::BadType(json.to_owned()))?;
+            match s.parse::<u64>() {
+                Ok(ret) => Ok(ret),
+                _ => Err(AutoscrapeError::BadType(json.to_owned()))
+            }
+        } else {
+            value.as_u64().ok_or_else(||AutoscrapeError::BadType(json.to_owned()))
+        }
     }
 }
 
@@ -125,7 +136,7 @@ impl AutoscrapeRange {
             start: Self::json_as_u64(json,"start")?,
             end: Self::json_as_u64(json,"end")?,
             step: Self::json_as_u64(json,"step")?,
-            current_value: 0, // Gets overwritten by init()
+            current_value: Self::json_as_u64(json,"start")?,
         })
     }
 }
@@ -230,7 +241,6 @@ impl AutoscrapeLevelType {
 #[derive(Debug, Clone)]
 pub struct AutoscrapeLevel {
     level_type: AutoscrapeLevelType,
-    last_value: Option<Value>,
 }
 
 impl AutoscrapeLevel {
@@ -244,7 +254,6 @@ impl AutoscrapeLevel {
         };
         Ok(Self {
             level_type,
-            last_value: None,
         })
     }
 
@@ -306,84 +315,170 @@ impl AutoscrapeResolve {
             regexs,
         })
     }
+
+    fn replace_vars(&self, map: &HashMap<String,String>) -> String {
+        let mut ret = self.use_pattern.to_owned();
+        for (key,value) in map {
+            ret = ret.replace(key,value);
+        }
+        for regex in &self.regexs {
+            ret = regex.0.replace_all(&ret, &regex.1).into();
+        }
+        Self::fix_html(&ret).trim().into()
+    }
+
+    fn fix_html(s: &str) -> String {
+        let ret = html_escape::decode_html_entities(s);
+        let ret = RE_HTML.replace_all(&ret, " ");
+        RE_SIMPLE_SPACE.replace_all(&ret, " ").trim().into()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct AutoscrapeResolveAux {
+    property: usize,
+    id: String,
+}
+
+impl JsonStuff for AutoscrapeResolveAux {}
+
+impl AutoscrapeResolveAux {
+    fn from_json(json: &Value) -> Result<Self,AutoscrapeError> {
+        let property = Self::json_as_str(json, "prop")?.replace("P","");
+        let property = match property.parse::<usize>() {
+            Ok(property) => property,
+            _ => return Err(AutoscrapeError::BadType(json.to_owned()))
+        } ;
+        let id = Self::json_as_str(json, "id")?;
+        Ok(Self{property,id})
+    }
+
+    fn replace_vars(&self, map: &HashMap<String,String>) -> (usize,String) {
+        let mut ret = self.id.to_owned();
+        for (key,value) in map {
+            ret = ret.replace(key,value);
+        }
+        let ret = AutoscrapeResolve::fix_html(&ret);
+        (self.property, ret)
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct AutoscrapeScraper {
     url: String,
     regex_block: Option<Regex>,
-    regex_entry: Regex, // TODO mioght be an array, first matching one is used?
+    regex_entry: Regex, // TODO might be an array, first matching one is used?
     resolve_id: AutoscrapeResolve,
     resolve_name: AutoscrapeResolve,
     resolve_desc: AutoscrapeResolve,
     resolve_url: AutoscrapeResolve,
     resolve_type: AutoscrapeResolve,
+    resolve_aux: Vec<AutoscrapeResolveAux>,
 }
 
 impl JsonStuff for AutoscrapeScraper {}
 
 impl AutoscrapeScraper {
     fn from_json(json: &Value) -> Result<Self,GenericError> {
-        let resolve = json
-            .get("resolve")
-            .ok_or_else(||AutoscrapeError::BadType(json.to_owned()))?;
-        let regex_block = match json.get("rx_block") {
-            Some(v) => {
-                match v.as_str() {
-                    Some(s) => {
-                        if s.is_empty() {
-                            None
-                        } else {
-                            let r = RegexBuilder::new(s)
-                                .multi_line(true)
-                                .build()?;
-                            Some(r)
-                        }
-                    }
-                    None => None
-                }
-            },
-            None => None
-        } ;
-        let regex_entry = RegexBuilder::new(&Self::json_as_str(json,"rx_entry")?)
-            .multi_line(true)
-            .build()?;
+        let resolve = json.get("resolve").ok_or_else(||AutoscrapeError::BadType(json.to_owned()))?;
         Ok(Self{
             url: Self::json_as_str(json,"url")?,
-            regex_block,
-            regex_entry,
+            regex_block: Self::regex_block_from_json(json)?,
+            regex_entry: RegexBuilder::new(&Self::json_as_str(json,"rx_entry")?).multi_line(true).build()?,
             resolve_id: AutoscrapeResolve::from_json(resolve,"id")?,
             resolve_name: AutoscrapeResolve::from_json(resolve,"name")?,
             resolve_desc: AutoscrapeResolve::from_json(resolve,"desc")?,
             resolve_url: AutoscrapeResolve::from_json(resolve,"url")?,
             resolve_type: AutoscrapeResolve::from_json(resolve,"type")?,
+            resolve_aux: Self::resolve_aux_from_json(json)?,
         })
     }
 
-    fn process_html_page(&self, html: &str) -> Vec<Entry> {
+    fn resolve_aux_from_json(json: &Value) -> Result<Vec<AutoscrapeResolveAux>,GenericError> {
+        Ok(
+            json // TODO test aux, eg catalog 287
+            .get("aux")
+            .map(|x|x.to_owned())
+            .unwrap_or_else(||json!([]))
+            .as_array()
+            .map(|x|x.to_owned())
+            .unwrap_or_else(||vec![])
+            .iter()
+            .filter_map(|x|AutoscrapeResolveAux::from_json(x).ok())
+            .collect()
+        )
+    }
+
+    fn regex_block_from_json(json: &Value) -> Result<Option<Regex>,GenericError> {
+        Ok( // TODO test
+        if let Some(v) = json.get("rx_block") {
+            if let Some(s) = v.as_str() {
+                if s.is_empty() {
+                    None
+                } else {
+                    let r = RegexBuilder::new(s)
+                        .multi_line(true)
+                        .build()?;
+                    Some(r)
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        })
+    }
+
+    fn process_html_page(&self, html: &str, autoscrape: &Autoscrape) -> Vec<ExtendedEntry> {
         match &self.regex_block {
             Some(regex_block) => {
                 regex_block
                     .captures_iter(html)
                     .filter_map(|cap|cap.get(1))
                     .map(|s|s.as_str().to_string())
-                    .flat_map(|s|self.process_html_block(&s))
+                    .flat_map(|s|self.process_html_block(&s, autoscrape))
                     .collect()
             }
             None => {
-                self.process_html_block(html)
+                self.process_html_block(html, autoscrape)
             }
         }
     }
 
-    fn process_html_block(&self, html: &str) -> Vec<Entry> {
-        println!("\n{}\n{:?}",&html,&self.regex_entry);
+    fn process_html_block(&self, html: &str, autoscrape: &Autoscrape) -> Vec<ExtendedEntry> {
         let mut ret = vec![];
-        println!("{:?}",self.regex_entry.captures(html));
         for cap in self.regex_entry.captures_iter(html) {
-            println!("{:?}",&cap);
             let values: Vec<String> = cap.iter().map(|v|v.map(|x|x.as_str().to_string()).unwrap_or(String::new())).collect();
-            println!("{:?}",&values);
+            let mut map: HashMap<String,String> = values.iter().enumerate().skip(1).map(|(num,value)|(format!("${}",num),value.to_owned())).collect();
+            for (num,level) in autoscrape.levels.iter().enumerate() {
+                map.insert(format!("$L{}",num+1), level.current());
+            }
+            let type_name = self.resolve_type.replace_vars(&map);
+            let type_name = if type_name.is_empty() {None} else {Some(type_name)};
+            let entry_ex = ExtendedEntry {
+                entry : Entry {
+                    id: ENTRY_NEW_ID,
+                    catalog: autoscrape.catalog_id,
+                    ext_id: self.resolve_id.replace_vars(&map),
+                    ext_url: self.resolve_url.replace_vars(&map),
+                    ext_name: self.resolve_name.replace_vars(&map),
+                    ext_desc: self.resolve_desc.replace_vars(&map),
+                    q: None,
+                    user: None,
+                    timestamp: None,
+                    random: rand::thread_rng().gen(),
+                    type_name,
+                    mnm: Some(autoscrape.mnm.clone())
+                },
+                aux: self.resolve_aux.iter().map(|aux|aux.replace_vars(&map)).collect(),
+                born: None,
+                died: None,
+                aliases: vec![],
+                descriptions: HashMap::new(),
+                location: None,
+            };
+            //println!("{:?}",&entry_ex);
+            ret.push(entry_ex);
         }
         ret
     }
@@ -391,7 +486,7 @@ impl AutoscrapeScraper {
 
 #[derive(Debug, Clone)]
 pub struct Autoscrape {
-    id: usize,
+    autoscrape_id: usize,
     catalog_id: usize,
     //json: Value,
     simple_space: bool,
@@ -402,6 +497,8 @@ pub struct Autoscrape {
     mnm: MixNMatch,
     job: Option<Job>,
     client: reqwest::Client,
+    urls_loaded: usize,
+    entry_batch: Vec<ExtendedEntry>,
 }
 
 impl Jobbable for Autoscrape {
@@ -421,17 +518,18 @@ impl Autoscrape {
         let (id,json) = results.get(0).ok_or_else(||AutoscrapeError::NoAutoscrapeForCatalog)?;
         let json: Value = serde_json::from_str(json)?;
         let mut ret = Self {
-            id:*id,
-            mnm: mnm.clone(), 
+            autoscrape_id:*id,
             catalog_id,
+            mnm: mnm.clone(), 
             simple_space:false,
             skip_failed:false,
             utf8_encode:false,
             levels:vec![],
             scraper: AutoscrapeScraper::from_json(json.get("scraper").ok_or_else(||AutoscrapeError::NoAutoscrapeForCatalog)?)?,
             job: None,
-            client : reqwest::Client::builder().user_agent(AUTOSCRAPER_USER_AGENT).build()?
-    
+            client : reqwest::Client::builder().user_agent(AUTOSCRAPER_USER_AGENT).build()?,
+            urls_loaded: 0,
+            entry_batch: vec![],
         };
         if let Some(options) = json.get("options") { // Options in main JSON
             ret.options_from_json(options);
@@ -460,10 +558,7 @@ impl Autoscrape {
 
     /// Iterates one permutation. Returns true if all possible permutations have been done.
     pub fn tick(&mut self) -> bool {
-        if self.levels.is_empty() {
-            return true;
-        }
-        let mut l = self.levels.len() ; // lowest level, starting at 1
+        let mut l = self.levels.len() ; // start with deepest level; level numbers starting at 1
         while l>0 {
             if self.levels[l-1].tick() {
                 self.levels[l-1].init();
@@ -475,11 +570,13 @@ impl Autoscrape {
         true
     }
 
+    /// Returns the current values of all levels.
     fn current(&self) -> Vec<String> {
         self.levels.iter().map(|level|level.current()).collect()
     }
 
-    async fn load_url(&self, url: &str) -> Option<String> {
+    async fn load_url(&mut self, url: &str) -> Option<String> {
+        self.urls_loaded += 1;
         // TODO POST
         self.client.get(url)
             .send()
@@ -491,6 +588,7 @@ impl Autoscrape {
     }
 
     async fn iterate_one(&mut self) -> bool {
+        // Run current permutation
         let current = self.current();
         let mut url = self.scraper.url.to_owned();
         current.iter().enumerate().for_each(|(l0,s)| url = url.replace(&format!("${}",l0+1),s));
@@ -499,14 +597,78 @@ impl Autoscrape {
             if self.simple_space {
                 html = RE_SIMPLE_SPACE.replace_all(&html," ").to_string();
             }
-            // TODO simple_space
-            // TODO UTF8-encode
-            let results = self.scraper.process_html_page(&html);
+            if self.utf8_encode {
+                // TODO
+            }
+            self.entry_batch.append(&mut self.scraper.process_html_page(&html,&self));
+            if self.entry_batch.len()>= AUTOSCRAPE_ENTRY_BATCH_SIZE {
+                let _ = self.add_batch().await;
+            }
         }
+
+        // Next permutation
         self.tick()
+    }
+
+    async fn add_batch(&mut self) -> Result<(),GenericError> {
+        if self.entry_batch.is_empty() {
+            return Ok(())
+        }
+        let ext_ids: Vec<String> = self.entry_batch.iter().map(|e|e.entry.ext_id.to_owned()).collect();
+        let placeholders = MixNMatch::sql_placeholders(ext_ids.len());
+        let sql = format!("SELECT `ext_id`,`id` FROM entry WHERE `ext_id` IN ({}) AND `catalog`={}",&placeholders,self.catalog_id);
+        let existing_ext_ids: Vec<(String,usize)> = sql.with(ext_ids.clone())
+        .map(self.mnm.app.get_mnm_conn().await?, |(id,ext_id)|(id,ext_id))
+        .await?;
+        let existing_ext_ids: HashMap<String,usize> = existing_ext_ids.into_iter().collect();
+        for ex in &mut self.entry_batch {
+            match existing_ext_ids.get(&ex.entry.ext_id) {
+                Some(entry_id) => { // Entry already exists
+                    ex.entry.id = *entry_id;
+                    // TODO update?
+                }
+                None => {
+                    //println!("Adding to database: {:?}",&ex);
+                    let _ = ex.insert_new(&self.mnm).await;
+                }
+            }
+        }
+
+        self.entry_batch.clear();
+        Ok(())
+    }
+
+    pub async fn run(&mut self) -> Result<(),GenericError> {
+        self.init();
+        let _ = self.start().await;
+        while !self.iterate_one().await {}
+        let _ = self.finish().await;
+        Ok(())
+    }
+
+    pub async fn start(&self) -> Result<(),GenericError> {
+        let autoscrape_id = self.autoscrape_id;
+        let sql = "UPDATE `autoscrape` SET `status`='RUNNING'`last_run_min`=NULL,`last_run_urls`=NULL WHERE `id`=:autoscrape_id" ;
+        if let Ok(mut conn) = self.mnm.app.get_mnm_conn().await {
+            let _ = conn.exec_drop(sql, params! {autoscrape_id}).await;
+        }
+        Ok(())
+    }
+
+    pub async fn finish(&self) -> Result<(),GenericError> {
+        let autoscrape_id = self.autoscrape_id;
+        let last_run_urls = self.urls_loaded;
+        let sql = "UPDATE `autoscrape` SET `status`='OK',`last_run_min`=NULL,`last_run_urls`=:last_run_urls WHERE `id`=:autoscrape_id" ;
+        if let Ok(mut conn) = self.mnm.app.get_mnm_conn().await {
+            let _ = conn.exec_drop(sql, params! {autoscrape_id,last_run_urls}).await;
+        }
+        let _ = self.mnm.refresh_overview_table(self.catalog_id).await;
+        let _ = self.clear_offset().await;
+        Ok(())
     }
 }
 
+// JOB IDs 6, 22442
 
 #[cfg(test)]
 mod tests {
@@ -514,17 +676,17 @@ mod tests {
     use super::*;
     use crate::mixnmatch::*;
 
-    const TEST_CATALOG_ID: usize = 5526 ;
+    const TEST_CATALOG_ID: usize = 91;//5526 ;
     const _TEST_ENTRY_ID: usize = 143962196 ;
     const _TEST_ITEM_ID: usize = 13520818 ; // Q13520818
 
     #[tokio::test]
     async fn test_autoscrape() {
         let mnm = get_test_mnm();
-        let mut autoscrape = Autoscrape::new(91,&mnm).await.unwrap();
+        let mut autoscrape = Autoscrape::new(TEST_CATALOG_ID,&mnm).await.unwrap();
         let mut cnt: usize = 1;
         autoscrape.init();
-        while !autoscrape.iterate_one().await { cnt += 1 } // tick
+        while !autoscrape.tick() { cnt += 1 }
         assert_eq!(cnt,319);
     }
 }

@@ -103,7 +103,7 @@ enum DataSourceLocation {
 
 
 #[derive(Debug, Clone)]
-struct ExtendedEntry{
+pub struct ExtendedEntry {
     pub entry: Entry,
     pub aux: HashMap<usize,String>,
     pub born: Option<String>,
@@ -373,7 +373,7 @@ impl Pattern {
 }
 
 #[derive(Debug, Clone)]
-struct DataSource {
+pub struct DataSource {
     catalog_id: usize,
     json: serde_json::Value,
     _columns: Vec<String>,
@@ -656,9 +656,8 @@ impl UpdateCatalog {
         if ext_ids.is_empty() {
             return Ok(ret);
         }
-        let mut placeholders: Vec<String> = Vec::new();
-        placeholders.resize(ext_ids.len(),"?".to_string());
-        let sql = format!("SELECT `ext_id` FROM entry WHERE `ext_id` IN ({}) AND `catalog`={}",&placeholders.join(","),catalog_id);
+        let placeholders = MixNMatch::sql_placeholders(ext_ids.len());
+        let sql = format!("SELECT `ext_id` FROM entry WHERE `ext_id` IN ({}) AND `catalog`={}",&placeholders,catalog_id);
         let existing_ext_ids: Vec<String> = sql.with(ext_ids.clone())
         .map(self.mnm.app.get_mnm_conn().await?, |ext_id|ext_id)
         .await?;

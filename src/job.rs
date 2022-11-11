@@ -13,7 +13,7 @@ use crate::automatch::*;
 use crate::auxiliary_matcher::*;
 use crate::taxon_matcher::*;
 use crate::update_catalog::*;
-
+use crate::autoscrape::*;
 
 pub const STATUS_TODO: &'static str = "TODO";
 pub const STATUS_DONE: &'static str = "DONE";
@@ -27,6 +27,18 @@ pub const STATUS_LOW_PRIORITY: &'static str = "LOW_PRIORITY";
 pub trait Jobbable {
     fn set_current_job(&mut self, job: &Job) ;
     fn get_current_job(&self) -> Option<&Job> ;
+
+    fn get_last_job_data(&self) -> Option<serde_json::Value> {
+        self.get_current_job()?.get_json_value()
+    }
+
+    async fn remember_job_data(&self, json: &serde_json::Value) -> Result<(),GenericError> {
+        let job = match self.get_current_job() {
+            Some(job) => job,
+            None => return Ok(())
+        };
+        job.set_json(Some(json.to_owned())).await
+    }
 
     fn get_last_job_offset(&self) -> usize {
         let job = match self.get_current_job() {
@@ -62,8 +74,7 @@ pub trait Jobbable {
             Some(job) => job,
             None => return Ok(())
         };
-        job.set_json(None).await?;
-        Ok(())
+        job.set_json(None).await
     }
 }
 
@@ -174,9 +185,9 @@ impl Job {
                 self.set_status(STATUS_DONE).await?;
                 println!("Job {}:{} completed.",catalog_id,action);
             }
-            _ => {
+            Err(e) => {
                 self.set_status(STATUS_FAILED).await?;
-                println!("Job {}:{} FAILED.",catalog_id,action);
+                println!("Job {}:{} FAILED: {:?}",catalog_id,action,&e);
             }
         }
         self.update_next_ts().await
@@ -297,6 +308,11 @@ impl Job {
                 let mut am = AutoMatch::new(&self.mnm);
                 am.set_current_job(self);
                 am.match_person_by_single_date(catalog_id).await
+            },
+            "autoscrape" => {
+                let mut autoscrape = Autoscrape::new(catalog_id, &self.mnm).await?;
+                autoscrape.set_current_job(self);
+                autoscrape.run().await
             },
             "aux2wd" => {
                 let mut am = AuxiliaryMatcher::new(&self.mnm);

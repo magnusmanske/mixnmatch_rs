@@ -46,6 +46,7 @@ async fn main() -> Result<(),app_state::GenericError> {
         "match_on_birthdate",
         "update_from_tabbed_file",
         "automatch_by_sitelink",
+        "autoscrape",
         "auxiliary_matcher",
         "aux2wd"
     );

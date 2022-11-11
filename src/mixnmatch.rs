@@ -166,6 +166,22 @@ impl MixNMatch {
         Ok(())
     }
 
+    pub async fn refresh_overview_table(&self, catalog_id: usize) -> Result<(),GenericError> {
+        let sql = r"REPLACE INTO `overview` (catalog,total,noq,autoq,na,manual,nowd,multi_match,types) VALUES (
+            :catalog_id,
+            (SELECT count(*) FROM `entry` WHERE `catalog`=:catalog_id),
+            (SELECT count(*) FROM `entry` WHERE `catalog`=:catalog_id AND `q` IS NULL),
+            (SELECT count(*) FROM `entry` WHERE `catalog`=:catalog_id AND `user`=0),
+            (SELECT count(*) FROM `entry` WHERE `catalog`=:catalog_id AND `q`=0),
+            (SELECT count(*) FROM `entry` WHERE `catalog`=:catalog_id AND `q` IS NOT NULL AND `user`>0),
+            (SELECT count(*) FROM `entry` WHERE `catalog`=:catalog_id AND `q`=-1),
+            (SELECT count(*) FROM `multi_match` WHERE `catalog`=:catalog_id),
+            (SELECT group_concat(DISTINCT `type` SEPARATOR '|') FROM `entry` WHERE `catalog`=:catalog_id)
+            )";
+        self.app.get_mnm_conn().await?.exec_drop(sql,params! {catalog_id}).await?;
+        Ok(())
+    }
+
     /// Adds the item into a queue for reference fixer. Possibly deprecated.
     pub async fn queue_reference_fixer(&self, q_numeric: isize) -> Result<(),GenericError>{
         self.app.get_mnm_conn().await?
@@ -225,6 +241,12 @@ impl MixNMatch {
             return cap[1].parse::<isize>().ok()
         }
         None
+    }
+
+    pub fn sql_placeholders(num: usize) -> String {
+        let mut placeholders: Vec<String> = Vec::new();
+        placeholders.resize(num,"?".to_string());
+        placeholders.join(",")
     }
 
     /// Runs a Wikidata API text search, specifying a P31 value `type_q`.
