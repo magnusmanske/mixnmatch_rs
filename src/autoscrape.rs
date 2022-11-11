@@ -15,7 +15,7 @@ use crate::app_state::*;
 use crate::mixnmatch::MixNMatch;
 
 const AUTOSCRAPER_USER_AGENT: &str = "Mozilla/5.0 (platform; rv:geckoversion) Gecko/geckotrail Firefox/firefoxversion";
-const AUTOSCRAPE_ENTRY_BATCH_SIZE: usize = 5;
+const AUTOSCRAPE_ENTRY_BATCH_SIZE: usize = 100;
 
 lazy_static!{
     static ref RE_SIMPLE_SPACE : Regex = RegexBuilder::new(r"\s+").multi_line(true).ignore_whitespace(true).build().unwrap() ;
@@ -64,6 +64,8 @@ trait Level {
     fn init(&mut self);
     fn tick(&mut self) -> bool;
     fn current(&self) -> String;
+    fn get_state(&self) -> Value;
+    fn set_state(&mut self, json: &Value);
 }
 
 #[derive(Debug, Clone)]
@@ -86,6 +88,16 @@ impl Level for AutoscrapeKeys {
         match self.keys.get(self.position) {
             Some(v) => v.to_owned(),
             None => String::new()
+        }
+    }
+
+    fn get_state(&self) -> Value {
+        json!({"position":self.position})
+    }
+
+    fn set_state(&mut self, json: &Value) {
+        if let Some(position) = json.get("position") {
+            if let Some(position) = position.as_u64() { self.position = position as usize}
         }
     }
 }
@@ -128,6 +140,16 @@ impl Level for AutoscrapeRange {
     fn current(&self) -> String {
         format!("{}",self.current_value)
     }
+
+    fn get_state(&self) -> Value {
+        json!({"current_value":self.current_value})
+    }
+
+    fn set_state(&mut self, json: &Value) {
+        if let Some(current_value) = json.get("current_value") {
+            if let Some(current_value) = current_value.as_u64() { self.current_value = current_value}
+        }
+    }
 }
 
 impl AutoscrapeRange {
@@ -162,6 +184,19 @@ impl Level for AutoscrapeFollow {
     fn current(&self) -> String {
         String::new() // TODO
     }
+
+    fn get_state(&self) -> Value {
+        json!({"url":self.url.to_owned(),"regex":self.regex.to_owned()})
+    }
+
+    fn set_state(&mut self, json: &Value) {
+        if let Some(url) = json.get("url") {
+            if let Some(url) = url.as_str() { self.url = url.to_string()}
+        }
+        if let Some(regex) = json.get("regex") {
+            if let Some(regex) = regex.as_str() { self.regex = regex.to_string()}
+        }
+    }
 }
 
 impl AutoscrapeFollow {
@@ -191,6 +226,16 @@ impl Level for AutoscrapeMediaWiki {
 
     fn current(&self) -> String {
         String::new() // TODO
+    }
+
+    fn get_state(&self) -> Value {
+        json!({"url":self.url.to_owned()})
+    }
+
+    fn set_state(&mut self, json: &Value) {
+        if let Some(url) = json.get("url") {
+            if let Some(url) = url.as_str() { self.url = url.to_string()}
+        }
     }
 }
 
@@ -234,6 +279,24 @@ impl AutoscrapeLevelType {
             AutoscrapeLevelType::Range(x) => x.current(),
             AutoscrapeLevelType::Follow(x) => x.current(),
             AutoscrapeLevelType::MediaWiki(x) => x.current(),
+        }
+    }
+
+    fn get_state(&self) -> Value {
+        match self {
+            AutoscrapeLevelType::Keys(x) => x.get_state(),
+            AutoscrapeLevelType::Range(x) => x.get_state(),
+            AutoscrapeLevelType::Follow(x) => x.get_state(),
+            AutoscrapeLevelType::MediaWiki(x) => x.get_state(),
+        }
+    }
+
+    fn set_state(&mut self, json: &Value) {
+        match self {
+            AutoscrapeLevelType::Keys(x) => x.set_state(json),
+            AutoscrapeLevelType::Range(x) => x.set_state(json),
+            AutoscrapeLevelType::Follow(x) => x.set_state(json),
+            AutoscrapeLevelType::MediaWiki(x) => x.set_state(json),
         }
     }
 }
@@ -633,8 +696,15 @@ impl Autoscrape {
                 }
             }
         }
-
         self.entry_batch.clear();
+        let _ = self.remember_state().await;
+        Ok(())
+    }
+
+    pub async fn remember_state(&self) -> Result<(),GenericError> {
+        let json: Vec<Value> = self.levels.iter().map(|level|level.level_type.get_state()).collect();
+        let json = json!(json);
+        self.remember_job_data(&json).await?;
         Ok(())
     }
 
@@ -646,16 +716,27 @@ impl Autoscrape {
         Ok(())
     }
 
-    pub async fn start(&self) -> Result<(),GenericError> {
+    pub async fn start(&mut self) -> Result<(),GenericError> {
         let autoscrape_id = self.autoscrape_id;
         let sql = "UPDATE `autoscrape` SET `status`='RUNNING'`last_run_min`=NULL,`last_run_urls`=NULL WHERE `id`=:autoscrape_id" ;
         if let Ok(mut conn) = self.mnm.app.get_mnm_conn().await {
             let _ = conn.exec_drop(sql, params! {autoscrape_id}).await;
         }
+        if let Some(json) = self.get_last_job_data() {
+            match json.as_array() {
+                Some(arr) => {
+                    if arr.len()==self.levels.len() {
+                        arr.iter().enumerate().for_each(|(num,j)|self.levels[num].level_type.set_state(j));
+                    }
+                }
+                None => {}
+            }
+        }
         Ok(())
     }
 
-    pub async fn finish(&self) -> Result<(),GenericError> {
+    pub async fn finish(&mut self) -> Result<(),GenericError> {
+        let _ = self.add_batch().await; // Flush
         let autoscrape_id = self.autoscrape_id;
         let last_run_urls = self.urls_loaded;
         let sql = "UPDATE `autoscrape` SET `status`='OK',`last_run_min`=NULL,`last_run_urls`=:last_run_urls WHERE `id`=:autoscrape_id" ;
