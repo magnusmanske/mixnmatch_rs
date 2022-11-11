@@ -1,3 +1,4 @@
+use lazy_static::lazy_static;
 use std::error::Error;
 use std::sync::{Arc, Mutex};
 use serde_json::json;
@@ -21,6 +22,23 @@ pub const STATUS_FAILED: &'static str = "FAILED";
 pub const STATUS_RUNNING: &'static str = "RUNNING";
 pub const STATUS_HIGH_PRIORITY: &'static str = "HIGH_PRIORITY";
 pub const STATUS_LOW_PRIORITY: &'static str = "LOW_PRIORITY";
+
+lazy_static!{
+    pub static ref JOB_SUPPORTED_ACTIONS: Vec<&'static str> = {vec!(
+        "autoscrape",
+        "automatch_by_search",
+        "automatch_from_other_catalogs",
+        "taxon_matcher",
+        "purge_automatches",
+        "match_person_dates",
+        "match_on_birthdate",
+        "update_from_tabbed_file",
+        "automatch_by_sitelink",
+        "auxiliary_matcher",
+        "aux2wd"
+    )};
+}
+
 
 /// A trait that allows to manage temporary job data (eg offset)
 #[async_trait]

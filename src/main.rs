@@ -37,20 +37,6 @@ async fn main() -> Result<(),app_state::GenericError> {
     let app = app_state::AppState::from_config_file("config.json")?;
     let mnm = mixnmatch::MixNMatch::new(app.clone());
 
-    let valid_actions = vec!(
-        "automatch_by_search",
-        "automatch_from_other_catalogs",
-        "taxon_matcher",
-        "purge_automatches",
-        "match_person_dates",
-        "match_on_birthdate",
-        "update_from_tabbed_file",
-        "automatch_by_sitelink",
-        "autoscrape",
-        "auxiliary_matcher",
-        "aux2wd"
-    );
-
     let argv: Vec<String> = env::args_os().map(|s|s.into_string().unwrap()).collect();
     match argv.get(1).map(|s|s.as_str()) {
         Some("job") => {
@@ -73,9 +59,9 @@ async fn main() -> Result<(),app_state::GenericError> {
     let concurrent:Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
 
     // Reset old running&failed jobs
-    Job::new(&mnm).reset_running_jobs(&Some(valid_actions.clone())).await?;
-    Job::new(&mnm).reset_failed_jobs(&Some(valid_actions.clone())).await?;
-    println!("Old {:?} jobs reset, starting bot",&valid_actions);
+    Job::new(&mnm).reset_running_jobs(&Some(JOB_SUPPORTED_ACTIONS.clone())).await?;
+    Job::new(&mnm).reset_failed_jobs(&Some(JOB_SUPPORTED_ACTIONS.clone())).await?;
+    println!("Old {} jobs reset, starting bot",&JOB_SUPPORTED_ACTIONS.join(","));
 
     loop {
         if *concurrent.lock().unwrap()>=MAX_CONCURRENT_JOBS {
@@ -83,7 +69,7 @@ async fn main() -> Result<(),app_state::GenericError> {
             continue;
         }
         let mut job = Job::new(&mnm);
-        match job.set_next(&Some(valid_actions.clone())).await {
+        match job.set_next(&Some(JOB_SUPPORTED_ACTIONS.clone())).await {
             Ok(true) => {
                 let _ = job.set_status(STATUS_RUNNING).await;
                 let concurrent = concurrent.clone();
