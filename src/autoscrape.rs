@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use lazy_static::lazy_static;
 use rand::prelude::*;
 use regex::RegexBuilder;
@@ -27,6 +28,7 @@ enum AutoscrapeError {
     NoAutoscrapeForCatalog,
     UnknownLevelType(Value),
     BadType(Value),
+    MediawikiFailure(String),
 }
 
 impl Error for AutoscrapeError {}
@@ -60,9 +62,13 @@ trait JsonStuff {
     }
 }
 
+#[async_trait]
 trait Level {
     fn init(&mut self);
-    fn tick(&mut self) -> bool;
+
+    /// Returns true if this level has been completed, false if there was at least one more result.
+    async fn tick(&mut self) -> bool;
+
     fn current(&self) -> String;
     fn get_state(&self) -> Value;
     fn set_state(&mut self, json: &Value);
@@ -74,12 +80,13 @@ struct AutoscrapeKeys {
     position: usize
 }
 
+#[async_trait]
 impl Level for AutoscrapeKeys {
     fn init(&mut self) {
         self.position = 0;
     }
 
-    fn tick(&mut self) -> bool {
+    async fn tick(&mut self) -> bool {
         self.position += 1 ;
         self.position >= self.keys.len()
     }
@@ -127,12 +134,13 @@ struct AutoscrapeRange {
 
 impl JsonStuff for AutoscrapeRange {}
 
+#[async_trait]
 impl Level for AutoscrapeRange {
     fn init(&mut self) {
         self.current_value = self.start;
     }
 
-    fn tick(&mut self) -> bool {
+    async fn tick(&mut self) -> bool {
         self.current_value += self.step ;
         self.current_value > self.end
     }
@@ -172,12 +180,13 @@ struct AutoscrapeFollow {
 
 impl JsonStuff for AutoscrapeFollow {}
 
+#[async_trait]
 impl Level for AutoscrapeFollow {
     fn init(&mut self) {
         // TODO
     }
 
-    fn tick(&mut self) -> bool {
+    async fn tick(&mut self) -> bool {
         false // TODO
     }
 
@@ -210,31 +219,50 @@ impl AutoscrapeFollow {
 
 #[derive(Debug, Clone)]
 struct AutoscrapeMediaWiki {
-    url: String
+    url: String,
+    apfrom: String,
+    title_cache: Vec<String>,
+    last_url: Option<String>,
 }
 
 impl JsonStuff for AutoscrapeMediaWiki {}
 
+#[async_trait]
 impl Level for AutoscrapeMediaWiki {
     fn init(&mut self) {
-        // TODO
+        self.title_cache.clear();
     }
 
-    fn tick(&mut self) -> bool {
-        false // TODO
+    async fn tick(&mut self) -> bool {
+        if self.title_cache.is_empty() {
+            if let Err(_) = self.refill_cache().await {
+                return true
+            }
+        }
+        match self.title_cache.pop() {
+            Some(title) => {
+                self.apfrom = title.into();
+                false
+            }
+            None => true
+        }
     }
 
     fn current(&self) -> String {
-        String::new() // TODO
+        self.apfrom.to_owned()
     }
 
     fn get_state(&self) -> Value {
-        json!({"url":self.url.to_owned()})
+        json!({"url":self.url.to_owned(),"apfrom":self.apfrom.to_owned()})
     }
 
     fn set_state(&mut self, json: &Value) {
+        self.title_cache.clear();
         if let Some(url) = json.get("url") {
             if let Some(url) = url.as_str() { self.url = url.to_string()}
+        }
+        if let Some(apfrom) = json.get("apfrom") {
+            if let Some(apfrom) = apfrom.as_str() { self.apfrom = apfrom.to_string()}
         }
     }
 }
@@ -242,7 +270,40 @@ impl Level for AutoscrapeMediaWiki {
 
 impl AutoscrapeMediaWiki {
     fn from_json(json: &Value) -> Result<Self,AutoscrapeError> {
-        Ok(Self{url: Self::json_as_str(json,"url")?})
+        Ok(Self{url: Self::json_as_str(json,"url")?,apfrom:String::new(),title_cache:vec![],last_url:None})
+    }
+
+    /// Returns an allpages query result. Order is reversed so A->Z works via pop().
+    async fn refill_cache(&mut self) -> Result<(),GenericError> {
+        let url = format!("{}?action=query&format=json&list=allpages&apnamespace=0&aplimit=500&apfilterredir=nonredirects&apfrom={}",&self.url,&self.apfrom) ;
+        if Some(url.to_owned())==self.last_url {
+            return Ok(()); // Empty cache, will trigger end-of-the-line
+        }
+        self.last_url = Some(url.to_owned());
+        let text =
+            match reqwest::get(&url).await {
+                Ok(x) => {
+                    if let Ok(text) = x.text().await {
+                        Some(text)
+                    } else {
+                        None
+                    }
+                }
+                _ => None
+            }
+        .ok_or_else(||AutoscrapeError::MediawikiFailure(url.to_owned()))?;
+        let json: Value = serde_json::from_str(&text)?;
+        self.title_cache = json
+            .get("query").ok_or_else(||AutoscrapeError::MediawikiFailure(url.to_owned()))?
+            .get("allpages").ok_or_else(||AutoscrapeError::MediawikiFailure(url.to_owned()))?
+            .as_array().ok_or_else(||AutoscrapeError::MediawikiFailure(url.to_owned()))?
+            .iter()
+            .filter_map(|v|v.get("title"))
+            .filter_map(|v|v.as_str())
+            .map(|s|s.to_string())
+            .rev()
+            .collect();
+        Ok(())
     }
 }
 
@@ -264,12 +325,12 @@ impl AutoscrapeLevelType {
         }
     }
 
-    fn tick(&mut self) -> bool {
+    async fn tick(&mut self) -> bool {
         match self {
-            AutoscrapeLevelType::Keys(x) => x.tick(),
-            AutoscrapeLevelType::Range(x) => x.tick(),
-            AutoscrapeLevelType::Follow(x) => x.tick(),
-            AutoscrapeLevelType::MediaWiki(x) => x.tick(),
+            AutoscrapeLevelType::Keys(x) => x.tick().await,
+            AutoscrapeLevelType::Range(x) => x.tick().await,
+            AutoscrapeLevelType::Follow(x) => x.tick().await,
+            AutoscrapeLevelType::MediaWiki(x) => x.tick().await,
         }
     }
 
@@ -324,8 +385,8 @@ impl AutoscrapeLevel {
         self.level_type.init()
     }
 
-    fn tick(&mut self) -> bool {
-        self.level_type.tick()
+    async fn tick(&mut self) -> bool {
+        self.level_type.tick().await
     }
 
     fn current(&self) -> String {
@@ -644,10 +705,10 @@ impl Autoscrape {
     }
 
     /// Iterates one permutation. Returns true if all possible permutations have been done.
-    pub fn tick(&mut self) -> bool {
+    pub async fn tick(&mut self) -> bool {
         let mut l = self.levels.len() ; // start with deepest level; level numbers starting at 1
         while l>0 {
-            if self.levels[l-1].tick() {
+            if self.levels[l-1].tick().await {
                 self.levels[l-1].init();
                 l -= 1;
             } else {
@@ -694,7 +755,7 @@ impl Autoscrape {
         }
 
         // Next permutation
-        self.tick()
+        self.tick().await
     }
 
     async fn add_batch(&mut self) -> Result<(),GenericError> {
@@ -791,7 +852,7 @@ mod tests {
         let mut autoscrape = Autoscrape::new(TEST_CATALOG_ID,&mnm).await.unwrap();
         let mut cnt: usize = 1;
         autoscrape.init();
-        while !autoscrape.tick() { cnt += 1 }
+        while !autoscrape.tick().await { cnt += 1 }
         assert_eq!(cnt,319);
     }
 }
