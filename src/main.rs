@@ -16,7 +16,7 @@ pub use lazy_static::*;
 use std::{thread, time};
 use crate::job::*;
 
-const MAX_CONCURRENT_JOBS: usize = 10 ; // Runs fine with >40 in <500MB but might stress the APIs. Use usize::MAX for unlimited
+const MAX_CONCURRENT_JOBS: usize = 20 ; // Runs fine with >40 in <500MB but might stress the APIs. Use usize::MAX for unlimited
 
 /*
 ssh magnus@tools-login.wmflabs.org -L 3309:wikidatawiki.web.db.svc.eqiad.wmflabs:3306 -N &
