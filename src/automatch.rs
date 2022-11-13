@@ -70,6 +70,9 @@ impl AutoMatch {
             let entries = self.mnm.app.get_mnm_conn().await?
                 .exec_iter(sql.clone(),params! {catalog_id,offset,batch_size}).await?
                 .map_and_drop(from_row::<(usize,String)>).await?;
+            if entries.is_empty() {
+                break // Done
+            }
             let mut name2entries: HashMap<String,Vec<usize>> = HashMap::new();
             entries
                 .iter()
