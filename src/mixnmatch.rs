@@ -324,6 +324,22 @@ impl MixNMatch {
         self.app.import_file_path.to_owned()
     }
 
+    pub async fn set_wikipage_text(&mut self, title: &str, wikitext: &str, summary: &str) -> Result<(),GenericError> {
+        self.api_log_in().await?;
+        if let Some(mw_api) = self.mw_api.as_mut() {
+            let mut params: HashMap<String,String> = HashMap::new();
+            params.insert("action".to_string(),"edit".to_string());
+            params.insert("title".to_string(),title.to_string());
+            params.insert("summary".to_string(),summary.to_string());
+            params.insert("text".to_string(),wikitext.to_string());
+            params.insert("token".to_string(), mw_api.get_edit_token().await?);
+            if let Err(_) = mw_api.post_query_api_json_mut(&params).await {
+                println!("set_wikipage_text failed for [[{}]]",&title);
+            }
+        }
+        Ok(())
+    }
+
     pub async fn execute_commands(&mut self, commands: Vec<WikidataCommand> ) -> Result<(),GenericError> {
         if self.testing {
             println!("SKIPPING COMMANDS {:?}",commands);
@@ -358,11 +374,8 @@ impl MixNMatch {
                 if !comment.is_empty() {
                     params.insert("summary".to_string(),comment);
                 }
-                match mw_api.post_query_api_json_mut(&params).await {
-                    Ok(_) => {}
-                    _ => {
-                        println!("wbeditentiry failed for Q{}: {:?}",item_id,commands);
-                    }
+                if let Err(_) = mw_api.post_query_api_json_mut(&params).await {
+                    println!("wbeditentiry failed for Q{}: {:?}",item_id,commands);
                 }
             }
         }

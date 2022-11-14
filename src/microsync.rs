@@ -93,7 +93,7 @@ impl Microsync {
         }
     }
 
-    pub async fn check_catalog(&self, catalog_id: usize) -> Result<(),GenericError> {
+    pub async fn check_catalog(&mut self, catalog_id: usize) -> Result<(),GenericError> {
         if BLACKLISTED_CATALOGS.contains(&catalog_id) {
             return Ok(()) // TODO error?
         }
@@ -109,9 +109,17 @@ impl Microsync {
         let multiple_q_in_mnm = self.get_multiple_q_in_mnm(catalog_id).await?;
         let (extid_not_in_mnm,match_differs) = self.get_differences_mnm_wd(catalog_id,property).await?;
         let wikitext = self.wikitext_from_issues(&catalog, multiple_extid_in_wikidata,multiple_q_in_mnm,match_differs,extid_not_in_mnm).await?;
-        println!("{}",&wikitext);
-        // TODO write wikitext to page
+        self.update_wiki_page(catalog_id,&wikitext).await?;
         Ok(())
+    }
+
+    async fn update_wiki_page(&mut self, catalog_id: usize, wikitext: &str) -> Result<(),GenericError> {
+        let page_title = format!("User:Magnus Manske/Mix'n'match report/{}",catalog_id);
+        let day = &MixNMatch::get_timestamp()[0..7];
+        let comment = format!("Update {}",day);
+        self.mnm.set_wikipage_text(&page_title,&wikitext,&comment).await?;
+        Ok(())
+        //mw_api.
     }
 
     async fn wikitext_from_issues(&self,
@@ -233,10 +241,10 @@ impl Microsync {
 
     fn format_ext_id(&self, ext_id: &str, ext_url: &str, formatter_url: &str) -> String {
         // TODO if ( !preg_match('|^[a-zA-Z0-9._ -]+$|',$ext_id) ) $ext_id = "<nowiki>{$ext_id}</nowiki>" ;
-        if !ext_url.is_empty() {
-            format!("[{} {}]",ext_url,ext_id)
-        } else if !formatter_url.is_empty() {
+        if !formatter_url.is_empty() {
             format!("[{} {}]",formatter_url.replace("$1",ext_id),ext_id)
+        } else if !ext_url.is_empty() {
+            format!("[{} {}]",ext_url,ext_id)
         } else {
             ext_id.to_string()
         }
@@ -375,12 +383,10 @@ impl Microsync {
                 match ext_id2entry.get(ext_id) {
                     Some(entry) => {
                         if entry.user.is_none() || entry.user==Some(0) || entry.q.is_none() { // Found a match but not in MnM yet
-                            //println!("{} => {}",entry.id,q);
                             Entry::from_id(entry.id , &self.mnm).await?.set_match(&format!("Q{}",q), 4).await?;
                         } else if Some(*q)!=entry.q { // Fully matched but to different item
                             if let Some(entry_q)=entry.q { // Entry has N/A or Not In Wikidata, overwrite
                                 if entry_q<=0 {
-                                    //println!("{} => {}",entry.id,q);
                                     Entry::from_id(entry.id , &self.mnm).await?.set_match(&format!("Q{}",q), 4).await?;
                                 } else {
                                     let md = MatchDiffers {
@@ -532,7 +538,7 @@ mod tests {
     #[tokio::test]
     async fn test_check_catalog() {
         let mnm = get_test_mnm();
-        let ms = Microsync::new(&mnm);
+        let mut ms = Microsync::new(&mnm);
         ms.check_catalog(22).await.unwrap();
     }
     
