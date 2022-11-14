@@ -28,7 +28,7 @@ enum AutoscrapeError {
     NoAutoscrapeForCatalog,
     UnknownLevelType(Value),
     BadType(Value),
-    MediawikiFailure(String),
+    MediawikiFailure(String)
 }
 
 impl Error for AutoscrapeError {}
@@ -60,11 +60,15 @@ trait JsonStuff {
             value.as_u64().ok_or_else(||AutoscrapeError::BadType(json.to_owned()))
         }
     }
+
+    fn fix_regex(s: &str) -> String {
+        s.replace("\\/","/").to_string()
+    }
 }
 
 #[async_trait]
 trait Level {
-    fn init(&mut self);
+    async fn init(&mut self, autoscrape: &Autoscrape);
 
     /// Returns true if this level has been completed, false if there was at least one more result.
     async fn tick(&mut self) -> bool;
@@ -82,7 +86,7 @@ struct AutoscrapeKeys {
 
 #[async_trait]
 impl Level for AutoscrapeKeys {
-    fn init(&mut self) {
+    async fn init(&mut self, _autoscrape: &Autoscrape) {
         self.position = 0;
     }
 
@@ -136,7 +140,7 @@ impl JsonStuff for AutoscrapeRange {}
 
 #[async_trait]
 impl Level for AutoscrapeRange {
-    fn init(&mut self) {
+    async fn init(&mut self, _autoscrape: &Autoscrape) {
         self.current_value = self.start;
     }
 
@@ -175,23 +179,31 @@ impl AutoscrapeRange {
 #[derive(Debug, Clone)]
 struct AutoscrapeFollow {
     url: String,
-    regex: String
+    regex: String,
+    cache: Vec<String>,
+    current_key: String,
 }
 
 impl JsonStuff for AutoscrapeFollow {}
 
 #[async_trait]
 impl Level for AutoscrapeFollow {
-    fn init(&mut self) {
-        // TODO
+    async fn init(&mut self, autoscrape: &Autoscrape) {
+        let _ = self.refill_cache(autoscrape).await;
     }
 
     async fn tick(&mut self) -> bool {
-        false // TODO
+        match self.cache.pop() {
+            Some(key) => {
+                self.current_key = key.into();
+                false
+            }
+            None => true
+        }
     }
 
     fn current(&self) -> String {
-        String::new() // TODO
+        self.current_key.to_owned()
     }
 
     fn get_state(&self) -> Value {
@@ -212,8 +224,42 @@ impl AutoscrapeFollow {
     fn from_json(json: &Value) -> Result<Self,AutoscrapeError> {
         Ok(Self{
             url: Self::json_as_str(json,"url")?,
-            regex: Self::json_as_str(json,"rx")?,
+            regex: Self::fix_regex(&Self::json_as_str(json,"rx")?),
+            cache: vec![],
+            current_key: String::new(),
         })
+    }
+
+
+    /// Follows the next URL
+    async fn refill_cache(&mut self, autoscrape: &Autoscrape) -> Result<(),GenericError> {
+        // Construct URL with level values
+        let mut url = self.url.clone();
+        let level2value: HashMap<String,String> = autoscrape.current().iter().enumerate().map(|(num,value)|{
+            (format!("{num}"),value.to_owned())
+        }).collect();
+        for (key,value) in level2value {
+            url = url.replace(&key,&value);
+        }
+
+        // Load next URL
+        let text = 
+            match reqwest::get(&url).await {
+                Ok(x) => x.text().await.ok(),
+                _ => None
+            }
+        .ok_or_else(||AutoscrapeError::MediawikiFailure(url.clone()))?;
+
+        // Find new URLs to follow
+        let regex = Regex::new(&self.regex)?;
+        self.cache = regex
+            .captures_iter(&text)
+            .map(|cap|cap.get(1))
+            .filter_map(|url|url)
+            .map(|url|url.as_str().to_string())
+            .collect();
+
+        Ok(())
     }
 }
 
@@ -229,7 +275,7 @@ impl JsonStuff for AutoscrapeMediaWiki {}
 
 #[async_trait]
 impl Level for AutoscrapeMediaWiki {
-    fn init(&mut self) {
+    async fn init(&mut self, _autoscrape: &Autoscrape) {
         self.title_cache.clear();
     }
 
@@ -316,12 +362,12 @@ enum AutoscrapeLevelType {
 }
 
 impl AutoscrapeLevelType {
-    fn init(&mut self) {
+    async fn init(&mut self, autoscrape: &Autoscrape) {
         match self {
-            AutoscrapeLevelType::Keys(x) => x.init(),
-            AutoscrapeLevelType::Range(x) => x.init(),
-            AutoscrapeLevelType::Follow(x) => x.init(),
-            AutoscrapeLevelType::MediaWiki(x) => x.init(),
+            AutoscrapeLevelType::Keys(x) => x.init(autoscrape).await,
+            AutoscrapeLevelType::Range(x) => x.init(autoscrape).await,
+            AutoscrapeLevelType::Follow(x) => x.init(autoscrape).await,
+            AutoscrapeLevelType::MediaWiki(x) => x.init(autoscrape).await,
         }
     }
 
@@ -381,8 +427,8 @@ impl AutoscrapeLevel {
         })
     }
 
-    fn init(&mut self) {
-        self.level_type.init()
+    async fn init(&mut self, autoscrape: &Autoscrape) {
+        self.level_type.init(autoscrape).await
     }
 
     async fn tick(&mut self) -> bool {
@@ -430,7 +476,7 @@ impl AutoscrapeResolve {
                 .as_str()
                 .ok_or_else(||AutoscrapeError::UnknownLevelType(json.to_owned()))?;
             regexs.push((
-                Regex::new(pattern).ok().ok_or_else(||AutoscrapeError::UnknownLevelType(json.to_owned()))?,
+                Regex::new(&Self::fix_regex(pattern)).ok().ok_or_else(||AutoscrapeError::UnknownLevelType(json.to_owned()))?,
                 replacement.to_string()
             ));
         }
@@ -537,13 +583,13 @@ impl AutoscrapeScraper {
         let rx_entry = json.get("rx_entry").ok_or_else(||AutoscrapeError::BadType(json.to_owned()))?;
         if rx_entry.is_string() {
             let s = rx_entry.as_str().ok_or_else(||AutoscrapeError::BadType(json.to_owned()))?;
-            Ok(vec![RegexBuilder::new(&s).multi_line(true).build()?])
+            Ok(vec![RegexBuilder::new(&Self::fix_regex(s)).multi_line(true).build()?])
         } else { // Assuming array
             let arr = rx_entry.as_array().ok_or_else(||AutoscrapeError::BadType(json.to_owned()))?;
             let mut ret = vec![];
             for x in arr {
                 if let Some(s) = x.as_str() {
-                    ret.push(RegexBuilder::new(&s).multi_line(true).build()?)
+                    ret.push(RegexBuilder::new(&Self::fix_regex(s)).multi_line(true).build()?)
                 }
             }
             Ok(ret)
@@ -559,7 +605,7 @@ impl AutoscrapeScraper {
                 if s.is_empty() {
                     None
                 } else {
-                    let r = RegexBuilder::new(s)
+                    let r = RegexBuilder::new(&Self::fix_regex(s))
                         .multi_line(true)
                         .build()?;
                     Some(r)
@@ -700,18 +746,25 @@ impl Autoscrape {
         self.utf8_encode = json.get("utf8_encode").map(|x|x.as_u64().unwrap_or(0)).unwrap_or(0)==1;
     }
 
-    pub fn init(&mut self) {
-        self.levels.iter_mut().for_each(|level|level.init());
+    pub async fn init(&mut self) {
+        let mut levels = self.levels.clone();
+        for level in &mut levels {
+            level.init(&self).await
+        }
+        self.levels = levels;
     }
 
     /// Iterates one permutation. Returns true if all possible permutations have been done.
     pub async fn tick(&mut self) -> bool {
         let mut l = self.levels.len() ; // start with deepest level; level numbers starting at 1
         while l>0 {
-            if self.levels[l-1].tick().await {
-                self.levels[l-1].init();
+            let mut level = self.levels[l-1].clone();
+            if level.tick().await {
+                level.init(&self).await;
+                self.levels[l-1] = level;
                 l -= 1;
             } else {
+                self.levels[l-1] = level;
                 return false;
             }
         }
@@ -740,7 +793,6 @@ impl Autoscrape {
         let current = self.current();
         let mut url = self.scraper.url.to_owned();
         current.iter().enumerate().for_each(|(l0,s)| url = url.replace(&format!("${}",l0+1),s));
-        //println!("{}",&url);
         if let Some(mut html) = self.load_url(&url).await {
             if self.simple_space {
                 html = RE_SIMPLE_SPACE.replace_all(&html," ").to_string();
@@ -776,7 +828,6 @@ impl Autoscrape {
                     // TODO update?
                 }
                 None => {
-                    //println!("Adding to database: {:?}",&ex);
                     let _ = ex.insert_new(&self.mnm).await;
                 }
             }
@@ -794,7 +845,7 @@ impl Autoscrape {
     }
 
     pub async fn run(&mut self) -> Result<(),GenericError> {
-        self.init();
+        self.init().await;
         let _ = self.start().await;
         while !self.iterate_one().await {}
         let _ = self.finish().await;
@@ -851,7 +902,7 @@ mod tests {
         let mnm = get_test_mnm();
         let mut autoscrape = Autoscrape::new(TEST_CATALOG_ID,&mnm).await.unwrap();
         let mut cnt: usize = 1;
-        autoscrape.init();
+        autoscrape.init().await;
         while !autoscrape.tick().await { cnt += 1 }
         assert_eq!(cnt,319);
     }
