@@ -1,3 +1,4 @@
+use serde_json::json;
 use std::collections::HashMap;
 use regex::Regex;
 use chrono::prelude::*;
@@ -10,6 +11,7 @@ use crate::mixnmatch::*;
 use crate::catalog::*;
 use crate::entry::*;
 use crate::job::*;
+use crate::issue::*;
 
 lazy_static!{
     static ref RE_YEAR : Regex = Regex::new(r"(\d{3,4})").unwrap();
@@ -292,8 +294,8 @@ impl AutoMatch {
                         let q=&candidate_items[0];
                         let _ = Entry::from_id(entry_id, &self.mnm).await?.set_match(&q,USER_DATE_MATCH).await;
                     }
-                    _x => {
-                        // TODO addIssue ( $o->entry_id , 'WD_DUPLICATE' , $items ) ;
+                    _ => {
+                        Issue::new(entry_id,IssueType::WdDuplicate,json!(candidate_items),&self.mnm).await?.insert().await?;
                     }
                 }
             }

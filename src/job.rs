@@ -15,6 +15,7 @@ use crate::auxiliary_matcher::*;
 use crate::taxon_matcher::*;
 use crate::update_catalog::*;
 use crate::autoscrape::*;
+use crate::microsync::*;
 
 pub const STATUS_TODO: &'static str = "TODO";
 pub const STATUS_DONE: &'static str = "DONE";
@@ -35,7 +36,8 @@ lazy_static!{
         "update_from_tabbed_file",
         "automatch_by_sitelink",
         "auxiliary_matcher",
-        "aux2wd"
+        "aux2wd",
+        "microsync",
     )};
 }
 
@@ -352,7 +354,11 @@ impl Job {
                 uc.set_current_job(self);
                 uc.update_from_tabbed_file(catalog_id).await
             },
-
+            "microsync" => {
+                let ms = Microsync::new(&self.mnm);
+                ms.check_catalog(catalog_id).await
+            },
+            
             other => {
                 return Err(Box::new(JobError::S(format!("Job::run_this_job: Unknown action '{}'",other))))
             }

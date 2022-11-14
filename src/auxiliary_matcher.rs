@@ -1,3 +1,4 @@
+use serde_json::json;
 use lazy_static::lazy_static;
 use regex::Regex;
 use wikibase::entity_container::EntityContainer;
@@ -10,6 +11,7 @@ use crate::mixnmatch::*;
 use crate::entry::*;
 use crate::catalog::*;
 use crate::job::*;
+use crate::issue::*;
 use crate::app_state::*;
 use crate::wikidata_commands::*;
 
@@ -214,7 +216,7 @@ impl AuxiliaryMatcher {
                     let q = search_results.get(0).unwrap(); // Safe
                     items_to_check.push((q.to_owned(),aux.to_owned()));
                 } else if search_results.len()>1 {
-                    // TODO issue
+                    Issue::new(aux.entry_id,IssueType::WdDuplicate,json!(search_results),&self.mnm).await?.insert().await?;
                 }
             }
             
@@ -395,10 +397,14 @@ impl AuxiliaryMatcher {
                     let _ = entry.set_auxiliary_in_wikidata(aux.aux_id,true).await;
                 }
             } else {
-                // TODO Mismatch issue
+                if let Ok(issue) = Issue::new(aux.entry_id,IssueType::Mismatch,json!([search_results[0],aux.q()]),&self.mnm).await {
+                    let _ = issue.insert().await;
+                };
             }
         } else if search_results.len()>1 {
-            // TODO Multiple items with the same extid issue
+            if let Ok(issue) = Issue::new(aux.entry_id,IssueType::Multiple,json!({"wd": search_results,"mnm": aux.value,}),&self.mnm).await {
+                let _ = issue.insert().await;
+            };
         }
         true
     }
