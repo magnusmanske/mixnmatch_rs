@@ -355,7 +355,8 @@ impl Job {
                 uc.update_from_tabbed_file(catalog_id).await
             },
             "microsync" => {
-                let ms = Microsync::new(&self.mnm);
+                let mut ms = Microsync::new(&self.mnm);
+                ms.set_current_job(self);
                 ms.check_catalog(catalog_id).await
             },
             
