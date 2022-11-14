@@ -13,6 +13,8 @@ use crate::app_state::*;
 use crate::entry::*;
 use crate::wikidata_commands::WikidataCommand;
 
+pub const MNM_SITE_URL: &'static str = "https://mix-n-match.toolforge.org";
+
 /// Global function for tests.
 pub fn get_test_mnm() -> MixNMatch {
     let mut ret = MixNMatch::new(AppState::from_config_file("config.json").unwrap());

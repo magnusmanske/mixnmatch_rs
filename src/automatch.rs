@@ -393,11 +393,7 @@ impl AutoMatch {
             return Ok(vec![]) ;
         }
         let item_str = items.join(" wd:");
-        let sparql = "SELECT DISTINCT ?q { VALUES ?q { wd:".to_string() +
-            item_str.as_str() + 
-            " } " +
-            format!(". ?q wdt:P569 ?born ; wdt:P570 ?died. FILTER ( year(?born)={}).FILTER ( year(?died)={} )",birth_year,death_year).as_str() +
-            "}";
+        let sparql = format!("SELECT DISTINCT ?q {{ VALUES ?q {{ wd:{} }} . ?q wdt:P569 ?born ; wdt:P570 ?died. FILTER ( year(?born)={}).FILTER ( year(?died)={} ) }}",&item_str,birth_year,death_year);
         let results = match mw_api.sparql_query(&sparql).await {
             Ok(result) => result,
             _ => return Ok(vec![]) // Ignore error

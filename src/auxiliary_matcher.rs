@@ -15,23 +15,23 @@ use crate::issue::*;
 use crate::app_state::*;
 use crate::wikidata_commands::*;
 
-const AUX_BLACKLISTED_CATALOGS: &'static [usize] = &[
+pub const AUX_BLACKLISTED_CATALOGS: &'static [usize] = &[
     506
 ];
-const AUX_BLACKLISTED_CATALOGS_PROPERTIES: &'static [(usize,usize)] = &[
+pub const AUX_BLACKLISTED_CATALOGS_PROPERTIES: &'static [(usize,usize)] = &[
     (2099,428)
 ];
-const AUX_BLACKLISTED_PROPERTIES: &'static [usize] = &[
+pub const AUX_BLACKLISTED_PROPERTIES: &'static [usize] = &[
     233 ,
     235 , // See https://www.wikidata.org/wiki/Topic:Ue8t23abchlw716q
     846 ,
     2528 ,
     4511
 ];
-const AUX_DO_NOT_SYNC_CATALOG_TO_WIKIDATA: &'static [usize] = &[
+pub const AUX_DO_NOT_SYNC_CATALOG_TO_WIKIDATA: &'static [usize] = &[
     655
 ];
-const AUX_PROPERTIES_ALSO_USING_LOWERCASE: &'static [usize] = &[
+pub const AUX_PROPERTIES_ALSO_USING_LOWERCASE: &'static [usize] = &[
     2002
 ];
 
