@@ -812,14 +812,15 @@ impl Autoscrape {
 
     async fn add_batch(&mut self) -> Result<(),GenericError> {
         if self.entry_batch.is_empty() {
+            let _ = self.remember_state().await;
             return Ok(())
         }
         let ext_ids: Vec<String> = self.entry_batch.iter().map(|e|e.entry.ext_id.to_owned()).collect();
         let placeholders = MixNMatch::sql_placeholders(ext_ids.len());
         let sql = format!("SELECT `ext_id`,`id` FROM entry WHERE `ext_id` IN ({}) AND `catalog`={}",&placeholders,self.catalog_id);
         let existing_ext_ids: Vec<(String,usize)> = sql.with(ext_ids.clone())
-        .map(self.mnm.app.get_mnm_conn().await?, |(id,ext_id)|(id,ext_id))
-        .await?;
+            .map(self.mnm.app.get_mnm_conn().await?, |(id,ext_id)|(id,ext_id))
+            .await?;
         let existing_ext_ids: HashMap<String,usize> = existing_ext_ids.into_iter().collect();
         for ex in &mut self.entry_batch {
             match existing_ext_ids.get(&ex.entry.ext_id) {
