@@ -1,3 +1,4 @@
+use std::fs::File;
 use std::collections::HashMap;
 use serde_json::Value;
 use mysql_async::prelude::*;
@@ -115,7 +116,7 @@ impl Microsync {
 
     async fn update_wiki_page(&mut self, catalog_id: usize, wikitext: &str) -> Result<(),GenericError> {
         let page_title = format!("User:Magnus Manske/Mix'n'match report/{}",catalog_id);
-        let day = &MixNMatch::get_timestamp()[0..7];
+        let day = &MixNMatch::get_timestamp()[0..8];
         let comment = format!("Update {}",day);
         self.mnm.set_wikipage_text(&page_title,&wikitext,&comment).await?;
         Ok(())
@@ -314,27 +315,27 @@ impl Microsync {
     async fn get_multiple_extid_in_wikidata(&self, property: usize) -> Result<Vec<MultipleExtIdInWikidata>,GenericError> {
         let mw_api = self.mnm.get_mw_api().await.unwrap();
         // TODO: lcase?
-        // TODO: What to do if there are large results? Stream into tmp file, or paginate?
-        let sparql = format!("SELECT ?extid (count(?q) AS ?cnt) (GROUP_CONCAT(?q; SEPARATOR = '|') AS ?items) {{ ?q wdt:P{} ?extid }} GROUP BY ?extid HAVING (?cnt>1)",property);
-        let sparql_result = mw_api.sparql_query(&sparql).await?;
-        let mut results = vec![];
-        if let Some(bindings) = sparql_result["results"]["bindings"].as_array() {
-            for b in bindings {
-                match (b["extid"]["value"].as_str(),b["cnt"]["value"].as_str(),b["items"]["value"].as_str()) {
-                    (Some(ext_id),Some(_cnt),Some(items)) => {
-                        let items: Vec<String> = items.split("|").filter_map(|s|mw_api.extract_entity_from_uri(s).ok()).collect();
-                        results.push(MultipleExtIdInWikidata{ext_id:ext_id.to_string(),items});
-                    }
-                    _ => {}
-                }
-            }
-        }
-        results.sort();
-        Ok(results)
+        let sparql = format!("SELECT ?extid (count(?q) AS ?cnt) (GROUP_CONCAT(?q; SEPARATOR = '|') AS ?items) 
+            {{ ?q wdt:P{} ?extid }} 
+            GROUP BY ?extid HAVING (?cnt>1)
+            ORDER BY ?extid",property);
+        Ok(self.mnm
+            .load_sparql_csv(&sparql)
+            .await?
+            .records()
+            .filter_map(|r|r.ok())
+            .filter(|r|r.len()==3)
+            .take(MAX_WIKI_ROWS+1) // limit to max results, not point in collecting more
+            .map(|r|{
+                let ext_id = r.get(0).unwrap(); // Safe
+                let items: Vec<String> = r.get(2).unwrap().split("|").filter_map(|s|mw_api.extract_entity_from_uri(s).ok()).collect();
+                MultipleExtIdInWikidata{ext_id:ext_id.to_string(),items}
+            })
+            .collect())
     }
 
     async fn get_multiple_q_in_mnm(&self, catalog_id: usize) -> Result<Vec<ExtIdWithMutipleQ>,GenericError> {
-        let sql = format!("SELECT q,group_concat(id) AS ids,group_concat(ext_id SEPARATOR '{}') AS ext_ids FROM entry WHERE catalog=:catalog_id AND q IS NOT NULL and q>0 AND user>0 GROUP BY q HAVING count(id)>1",EXT_URL_UNIQUE_SEPARATOR);
+        let sql = format!("SELECT q,group_concat(id) AS ids,group_concat(ext_id SEPARATOR '{}') AS ext_ids FROM entry WHERE catalog=:catalog_id AND q IS NOT NULL and q>0 AND user>0 GROUP BY q HAVING count(id)>1 ORDER BY q",EXT_URL_UNIQUE_SEPARATOR);
         let results = self.mnm.app.get_mnm_conn().await?
             .exec_iter(sql, params!{catalog_id}).await?
             .map_and_drop(from_row::<(isize,String,String)>).await?;
@@ -343,7 +344,7 @@ impl Microsync {
             .map(|r|{
                 let entry_ids: Vec<&str> = r.1.split(",").collect();
                 let ext_ids: Vec<&str> = r.2.split(EXT_URL_UNIQUE_SEPARATOR).collect();
-                let entry2ext_id = entry_ids
+                let mut entry2ext_id:Vec<(usize,String)> = entry_ids
                     .iter()
                     .zip(ext_ids.iter())
                     .filter_map(|(entry_id,ext_id)|{
@@ -353,6 +354,7 @@ impl Microsync {
                         }
                     })
                     .collect();
+                    entry2ext_id.sort();
                 ExtIdWithMutipleQ{q:r.0,entry2ext_id}
             })
             .collect();
@@ -372,14 +374,34 @@ impl Microsync {
         Ok(ret)
     }
 
+    async fn get_q2ext_id_chunk(&self, reader: &mut csv::Reader<File>,case_insensitive: bool, batch_size: usize) -> Result<Vec<(isize,String)>,GenericError> {
+        let mw_api = self.mnm.get_mw_api().await.unwrap();
+        Ok(reader
+            .records()
+            .filter_map(|r|r.ok())
+            .filter_map(|r|{
+                let q = mw_api.extract_entity_from_uri(r.get(0)?).ok()?;
+                let q_numeric = self.mnm.item2numeric(&q)?;
+                let value = r.get(1)?;
+                let value = if case_insensitive { value.to_lowercase().to_string() } else { value.to_string() } ;
+                Some((q_numeric,value))
+            })
+            .take(batch_size)
+            .collect())
+    }
+
     async fn get_differences_mnm_wd(&self, catalog_id: usize, property: usize) -> Result<(Vec<ExtIdNoMnM>,Vec<MatchDiffers>),GenericError> {
-        let q2ext_id = self.get_item_and_external_id_for_property_from_sparql(property).await?;
+        let case_insensitive = AUX_PROPERTIES_ALSO_USING_LOWERCASE.contains(&property);
+        let sparql = format!("SELECT ?item ?value {{ ?item wdt:P{property} ?value }} ORDER BY ?item");
+        let mut reader = self.mnm.load_sparql_csv(&sparql).await?;
         let mut extid_not_in_mnm: Vec<ExtIdNoMnM> = vec![];
         let mut match_differs = vec![];
-        for chunk in q2ext_id.chunks(5000) {
+        let batch_size: usize = 5000;
+        loop {
+            let chunk = self.get_q2ext_id_chunk(&mut reader,case_insensitive,batch_size).await?;
             let ext_ids: Vec<&String> = chunk.iter().map(|x|&x.1).collect();
             let ext_id2entry = self.get_entries_for_ext_ids(catalog_id, property, &ext_ids).await?;
-            for (q,ext_id) in chunk {
+            for (q,ext_id) in &chunk {
                 match ext_id2entry.get(ext_id) {
                     Some(entry) => {
                         if entry.user.is_none() || entry.user==Some(0) || entry.q.is_none() { // Found a match but not in MnM yet
@@ -396,20 +418,28 @@ impl Microsync {
                                         entry_id: entry.id,
                                         ext_url: entry.ext_url.to_owned()
                                     };
-                                    match_differs.push(md);
+                                    if match_differs.len()<=MAX_WIKI_ROWS {
+                                        match_differs.push(md);
+                                    }
                                 }
                                 
                             }
                         }
                     }
                     None => {
-                        extid_not_in_mnm.push(ExtIdNoMnM{q:*q,ext_id:ext_id.to_owned()});
+                        if extid_not_in_mnm.len()<=MAX_WIKI_ROWS {
+                            extid_not_in_mnm.push(ExtIdNoMnM{q:*q,ext_id:ext_id.to_owned()});
+                        }
                     }
                 }
+            }
+            if chunk.len()<batch_size {
+                break;
             }
         }
         extid_not_in_mnm.sort();
         match_differs.sort();
+
         Ok((extid_not_in_mnm,match_differs))
     }
 
@@ -428,28 +458,6 @@ impl Microsync {
             })
             .collect();
         Ok(ret)
-    }
-
-    async fn get_item_and_external_id_for_property_from_sparql(&self, property: usize) -> Result<Vec<(isize,String)>,GenericError> {
-        let mw_api = self.mnm.get_mw_api().await.unwrap();
-        let case_insensitive = AUX_PROPERTIES_ALSO_USING_LOWERCASE.contains(&property);
-        // TODO what if the result set is large?
-        let sparql = format!("SELECT ?item ?value {{ ?item wdt:P{property} ?value }}");
-        let sparql_result = mw_api.sparql_query(&sparql).await?;
-        let mut results: Vec<(isize,String)> = vec![];
-        if let Some(bindings) = sparql_result["results"]["bindings"].as_array() {
-            for b in bindings {
-                if let (Some(item_url),Some(value)) = (b["item"]["value"].as_str(),b["value"]["value"].as_str()) {
-                    if let Some(q) = mw_api.extract_entity_from_uri(item_url).ok() {
-                        if let Some(q_numeric) = self.mnm.item2numeric(&q) {
-                            let value = if case_insensitive { value.to_lowercase().to_string() } else { value.to_string() } ;
-                            results.push((q_numeric,value));
-                        }
-                    }
-                }
-            }
-        }
-        Ok(results)
     }
 
 }

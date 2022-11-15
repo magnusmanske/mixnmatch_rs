@@ -1,3 +1,6 @@
+use tempfile::tempfile;
+use std::fs::File;
+use std::io::prelude::*;
 use std::sync::Mutex;
 use std::collections::{HashMap, HashSet};
 use lazy_static::lazy_static;
@@ -340,6 +343,35 @@ impl MixNMatch {
         Ok(())
     }
 
+    /// Queries SPARQL and returns a filename with the result as CSV.
+    pub async fn load_sparql_csv(&self, sparql: &str) -> Result<csv::Reader<File>,GenericError> {
+        let url = format!("https://query.wikidata.org/sparql?query={}",sparql);
+        let client = reqwest::Client::builder()
+            .user_agent(WIKIDATA_USER_AGENT)
+            .build()?;
+        let mut f = tempfile()?;
+        let mut res = client
+            .get(url)
+            .header(reqwest::header::ACCEPT, reqwest::header::HeaderValue::from_str("text/csv").unwrap())
+            .send()
+            .await?;
+        while let Some(chunk) = res.chunk().await? {
+            f.write_all(chunk.as_ref())?;
+        }
+        f.seek(std::io::SeekFrom::Start(0))?;
+        Ok(csv::ReaderBuilder::new()
+            .flexible(true)
+            .has_headers(true)
+            .delimiter(b',')
+            .from_reader(f))
+
+        /*
+        let mut reader = self.mnm.load_sparql_csv(&sparql).await?;
+        for result in reader.records() {
+            let record = result.unwrap();
+        }*/
+    }
+
     pub async fn execute_commands(&mut self, commands: Vec<WikidataCommand> ) -> Result<(),GenericError> {
         if self.testing {
             println!("SKIPPING COMMANDS {:?}",commands);
@@ -426,6 +458,14 @@ mod tests {
         assert_eq!(mnm.get_overview_column_name_for_user_and_q(&Some(2),&None),"noq");
         assert_eq!(mnm.get_overview_column_name_for_user_and_q(&None,&None),"noq");
         assert_eq!(mnm.get_overview_column_name_for_user_and_q(&None,&Some(1)),"noq");
+    }
+
+    #[tokio::test]
+    async fn test_load_sparql_csv() {
+        let mnm = get_test_mnm();
+        let sparql = "SELECT ?item ?itemLabel WHERE {?item wdt:P31 wd:Q146. SERVICE wikibase:label { bd:serviceParam wikibase:language \"[AUTO_LANGUAGE],en\". } }";
+        let mut reader = mnm.load_sparql_csv(sparql).await.unwrap();
+        assert!(reader.records().filter_map(|r|r.ok()).filter_map(|x|x.get(1).map(|x|x.to_string())).any(|s|s=="Dusty the Klepto Kitty"));
     }
 
     #[test]
