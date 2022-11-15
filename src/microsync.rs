@@ -538,7 +538,8 @@ mod tests {
     async fn test_format_ext_id() {
         let mnm = get_test_mnm();
         let ms = Microsync::new(&mnm);
-        assert_eq!(ms.format_ext_id("gazebo", "http://foo.bar", "http://foo.baz/$1"),"[http://foo.bar gazebo]".to_string());
+        assert_eq!(ms.format_ext_id("gazebo", "http://foo.bar", "http://foo.baz/$1"),"[http://foo.baz/gazebo gazebo]".to_string());
+        assert_eq!(ms.format_ext_id("gazebo", "http://foo.bar", ""),"[http://foo.bar gazebo]".to_string());
         assert_eq!(ms.format_ext_id("gazebo", "", "http://foo.baz/$1"),"[http://foo.baz/gazebo gazebo]".to_string());
         assert_eq!(ms.format_ext_id("gazebo", "", ""),"gazebo".to_string());
     }
