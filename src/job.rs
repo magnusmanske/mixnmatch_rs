@@ -37,7 +37,7 @@ lazy_static!{
         "automatch_by_sitelink",
         "auxiliary_matcher",
         "aux2wd",
-        "microsync",
+        //"microsync",
     )};
 }
 
