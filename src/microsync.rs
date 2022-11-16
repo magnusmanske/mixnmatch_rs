@@ -105,7 +105,7 @@ impl Microsync {
         };
         self.fix_redirects(catalog_id).await?;
         self.fix_deleted_items(catalog_id).await?;
-
+        
         let multiple_extid_in_wikidata = self.get_multiple_extid_in_wikidata(property).await?;
         let multiple_q_in_mnm = self.get_multiple_q_in_mnm(catalog_id).await?;
         let (extid_not_in_mnm,match_differs) = self.get_differences_mnm_wd(catalog_id,property).await?;
@@ -444,6 +444,9 @@ impl Microsync {
     }
 
     async fn get_entries_for_ext_ids(&self, catalog_id: usize, property: usize, ext_ids:&Vec<&String> ) -> Result<HashMap<String,SmallEntry>,GenericError> {
+        if ext_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
         let case_insensitive = AUX_PROPERTIES_ALSO_USING_LOWERCASE.contains(&property);
         let placeholders = MixNMatch::sql_placeholders(ext_ids.len());
         let sql = format!("SELECT `id`,`q`,`user`,`ext_id`,`ext_url` FROM `entry` WHERE `catalog`={} AND `ext_id` IN ({})",catalog_id,placeholders);

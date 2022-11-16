@@ -203,11 +203,11 @@ impl Job {
         match self.run_this_job().await {
             Ok(_) => {
                 self.set_status(STATUS_DONE).await?;
-                println!("Job {}:{} completed.",catalog_id,action);
+                println!("Job {} catalog {}:{} completed.",self.get_id()?,catalog_id,action);
             }
             Err(e) => {
                 self.set_status(STATUS_FAILED).await?;
-                println!("Job {}:{} FAILED: {:?}",catalog_id,action,&e);
+                println!("Job {} catalog {}:{} FAILED: {:?}",self.get_id()?,catalog_id,action,&e);
             }
         }
         self.update_next_ts().await
