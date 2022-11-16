@@ -37,27 +37,17 @@ fn hold_on() {
 #[tokio::main]
 async fn main() -> Result<(),app_state::GenericError> {
     let app = app_state::AppState::from_config_file("config.json")?;
-    let mnm = mixnmatch::MixNMatch::new(app.clone());
 
     let argv: Vec<String> = env::args_os().map(|s|s.into_string().unwrap()).collect();
     match argv.get(1).map(|s|s.as_str()) {
         Some("job") => {
             let job_id = argv.get(2).unwrap().parse::<usize>().unwrap();
-            let mut job = Job::new(&mnm);
-            job.set_from_id(job_id).await?;
-            match job.set_status(STATUS_RUNNING).await {
-                Ok(_) => {
-                    println!("Finished successfully");
-                }
-                Err(e) => {
-                    println!("ERROR: {}",e);
-                }
-            }
-            return job.run().await;
+            app.run_single_job(job_id).await?;
         }
         _ => {} // Any other will start the bot
     }
 
+    let mnm = mixnmatch::MixNMatch::new(app.clone());
     let concurrent:Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
 
     // Reset old running&failed jobs
@@ -77,6 +67,7 @@ async fn main() -> Result<(),app_state::GenericError> {
                 let concurrent = concurrent.clone();
                 tokio::spawn(async move {
                     *concurrent.lock().unwrap() += 1;
+                    println!("Now {} jobs running",concurrent.lock().unwrap());
                     let _ = job.run().await;
                     *concurrent.lock().unwrap() -= 1;
                 });

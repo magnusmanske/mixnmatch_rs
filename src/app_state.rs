@@ -3,6 +3,8 @@ use std::fs::File;
 use serde_json::Value;
 use mysql_async::{PoolOpts, PoolConstraints, Opts, OptsBuilder, Conn};
 use core::time::Duration;
+use crate::mixnmatch::*;
+use crate::job::*;
 
 pub type GenericError = Box<dyn std::error::Error + Send + Sync>;
 
@@ -69,6 +71,21 @@ impl AppState {
         self.wd_pool.clone().disconnect().await?;
         self.mnm_pool.clone().disconnect().await?;
         Ok(())
+    }
+
+    pub async fn run_single_job(&self, job_id: usize) -> Result<(),GenericError> {
+        let mnm = MixNMatch::new(self.clone());
+        let mut job = Job::new(&mnm);
+        job.set_from_id(job_id).await?;
+        match job.set_status(STATUS_RUNNING).await {
+            Ok(_) => {
+                println!("Finished successfully");
+            }
+            Err(e) => {
+                println!("ERROR: {}",e);
+            }
+        }
+        job.run().await
     }
 
 }
