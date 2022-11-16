@@ -1,3 +1,5 @@
+use std::{thread, time};
+use std::sync::{Arc, Mutex};
 use std::env;
 use std::fs::File;
 use serde_json::Value;
@@ -88,6 +90,48 @@ impl AppState {
         job.run().await
     }
 
+    pub async fn forever_loop(&self, max_concurrent: usize) -> Result<(),GenericError> {
+        let mnm = MixNMatch::new(self.clone());
+        let concurrent:Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
+    
+        // Reset old running&failed jobs
+        Job::new(&mnm).reset_running_jobs(&Some(JOB_SUPPORTED_ACTIONS.clone())).await?;
+        Job::new(&mnm).reset_failed_jobs(&Some(JOB_SUPPORTED_ACTIONS.clone())).await?;
+        println!("Old {} jobs reset, starting bot",&JOB_SUPPORTED_ACTIONS.join(","));
+    
+        loop {
+            if *concurrent.lock().unwrap()>=max_concurrent {
+                self.hold_on();
+                continue;
+            }
+            let mut job = Job::new(&mnm);
+            match job.set_next(&Some(JOB_SUPPORTED_ACTIONS.clone())).await {
+                Ok(true) => {
+                    let _ = job.set_status(STATUS_RUNNING).await;
+                    let concurrent = concurrent.clone();
+                    tokio::spawn(async move {
+                        *concurrent.lock().unwrap() += 1;
+                        println!("Now {} jobs running",concurrent.lock().unwrap());
+                        let _ = job.run().await;
+                        *concurrent.lock().unwrap() -= 1;
+                    });
+                }
+                Ok(false) => {
+                    self.hold_on();
+                }
+                _ => {
+                    println!("MAIN LOOP: Something went wrong");
+                    self.hold_on();
+                }
+            }
+        }    
+        // self.disconnect().await?; // Never happens
+    }
+
+    fn hold_on(&self) {
+        thread::sleep(time::Duration::from_secs(5));
+    }
+        
 }
 
 unsafe impl Send for AppState {}
