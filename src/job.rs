@@ -43,6 +43,12 @@ lazy_static!{
         "fix_disambig",
         "fix_redirected_items_in_catalog",
         "update_person_dates",
+        "generate_aux_from_description",
+        "bespoke_scraper",
+        "import_aux_from_url",
+        "update_descriptions_from_url",
+        "automatch",
+        "match_by_coordinates",
     )};
 }
 
@@ -374,8 +380,27 @@ impl Job {
             },
             "update_person_dates" => {
                 PhpWrapper::update_person_dates(catalog_id)
-            }
-            
+            },
+            "generate_aux_from_description" => {
+                PhpWrapper::generate_aux_from_description(catalog_id)
+            },
+            "bespoke_scraper" => {
+                PhpWrapper::bespoke_scraper(catalog_id)
+            },
+
+            "import_aux_from_url" => {
+                PhpWrapper::import_aux_from_url(catalog_id)
+            },
+            "update_descriptions_from_url" => {
+                PhpWrapper::update_descriptions_from_url(catalog_id)
+            },
+            "automatch" => { // TODO native
+                PhpWrapper::automatch(catalog_id)
+            },
+            "match_by_coordinates" => { // TODO native
+                PhpWrapper::match_by_coordinates(catalog_id)
+            },
+    
             other => {
                 return Err(Box::new(JobError::S(format!("Job::run_this_job: Unknown action '{}'",other))))
             }
