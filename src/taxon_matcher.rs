@@ -28,9 +28,11 @@ lazy_static! {
 }
 
 impl Jobbable for TaxonMatcher {
+    //TODO test
     fn set_current_job(&mut self, job: &Job) {
         self.job = Some(job.clone());
     }
+    //TODO test
     fn get_current_job(&self) -> Option<&Job> {
         self.job.as_ref()
     }

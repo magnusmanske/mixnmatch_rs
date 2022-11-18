@@ -49,6 +49,7 @@ struct AuxiliaryResults {
 }
 
 impl AuxiliaryResults {
+    //TODO test
     fn from_result(result: &(usize,usize,usize,usize,String)) -> Self {
         Self {
             aux_id: result.0,
@@ -59,6 +60,7 @@ impl AuxiliaryResults {
         }
     }
 
+    //TODO test
     fn value_as_item_id(&self) -> Option<WikidataCommandValue> {
         self.value
             .replace("Q","")
@@ -67,6 +69,7 @@ impl AuxiliaryResults {
             .ok()
     }
 
+    //TODO test
     fn value_as_item_location(&self) -> Option<WikidataCommandValue> {
         let captures = RE_COORDINATE_PATTERN.captures(&self.value)?;
         if captures.len()==3 {
@@ -77,18 +80,22 @@ impl AuxiliaryResults {
         None
     }
 
+    //TODO test
     fn q(&self) -> String {
         format!("Q{}",self.q_numeric)
     }
 
+    //TODO test
     fn prop(&self) -> String {
         format!("P{}",self.property)
     }
 
+    //TODO test
     fn entry_comment_link(&self) -> String {
         format!("via https://mix-n-match.toolforge.org/#/entry/{} ;",self.entry_id)
     }
 
+    //TODO test
     fn entity_has_statement(&self, entity: &wikibase::Entity) -> bool {
         entity
             .claims_with_property(self.prop())
@@ -120,6 +127,7 @@ enum AuxiliaryMatcherError {
 impl Error for AuxiliaryMatcherError {}
 
 impl fmt::Display for AuxiliaryMatcherError {
+    //TODO test
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self) // user-facing output
     }
@@ -138,15 +146,18 @@ pub struct AuxiliaryMatcher {
 }
 
 impl Jobbable for AuxiliaryMatcher {
+    //TODO test
     fn set_current_job(&mut self, job: &Job) {
         self.job = Some(job.clone());
     }
+    //TODO test
     fn get_current_job(&self) -> Option<&Job> {
         self.job.as_ref()
     }
 }
 
 impl AuxiliaryMatcher {
+    //TODO test
     pub fn new(mnm: &MixNMatch) -> Self {
         Self {
             properties_using_items: vec![],
@@ -160,6 +171,7 @@ impl AuxiliaryMatcher {
         }
     }
 
+    //TODO test
     async fn get_properties_using_items(mnm: &MixNMatch) -> Result<Vec<String>,GenericError> {
         let mw_api = mnm.get_mw_api().await.unwrap();
         let sparql = "SELECT ?p WHERE { ?p rdf:type wikibase:Property; wikibase:propertyType wikibase:WikibaseItem }";
@@ -167,6 +179,7 @@ impl AuxiliaryMatcher {
         Ok(mw_api.entities_from_sparql_result(&sparql_results,"p"))
     }
 
+    //TODO test
     async fn get_properties_that_have_external_ids(mnm: &MixNMatch) -> Result<Vec<String>,GenericError> {
         let mw_api = mnm.get_mw_api().await.unwrap();
         let sparql = "SELECT ?p WHERE { ?p rdf:type wikibase:Property; wikibase:propertyType wikibase:ExternalId }";
@@ -174,6 +187,7 @@ impl AuxiliaryMatcher {
         Ok(mw_api.entities_from_sparql_result(&sparql_results,"p"))
     }
 
+    //TODO test
     pub async fn match_via_auxiliary(&mut self, catalog_id: usize) -> Result<(),GenericError> {
         let blacklisted_catalogs: Vec<String> = AUX_BLACKLISTED_CATALOGS.iter().map(|u|format!("{}",u)).collect();
         self.properties_that_have_external_ids = Self::get_properties_that_have_external_ids(&self.mnm).await?;
@@ -245,6 +259,7 @@ impl AuxiliaryMatcher {
         Ok(())
         }
 
+    //TODO test
     pub async fn add_auxiliary_to_wikidata(&mut self, catalog_id: usize) -> Result<(),GenericError> {
         if AUX_DO_NOT_SYNC_CATALOG_TO_WIKIDATA.contains(&catalog_id) {
             return Err(Box::new(AuxiliaryMatcherError::BlacklistedCatalog));
@@ -296,6 +311,7 @@ impl AuxiliaryMatcher {
         Ok(())
     }
 
+    //TODO test
     fn is_statement_in_entity(&self, entity: &wikibase::Entity, property:&str, value: &str) -> bool {
         entity
             .claims_with_property(property)
@@ -316,6 +332,7 @@ impl AuxiliaryMatcher {
             .any(|simplified_value|value==simplified_value)
     }
 
+    //TODO test
     async fn entity_already_has_property(&self, aux: &AuxiliaryResults, entity: &wikibase::Entity) -> bool {
         if !entity.has_claims_with_property(aux.prop()) {
             return false
@@ -329,6 +346,7 @@ impl AuxiliaryMatcher {
         true
     }
 
+    //TODO test
     async fn aux2wd_process_item(&self, aux_data: &Vec<AuxiliaryResults>, sources: &HashMap<String,WikidataCommandPropertyValueGroups>, entities: &EntityContainer) -> Vec<WikidataCommand> {
         let q = match aux_data.get(0) {
             Some(aux) => aux.q(),
@@ -382,6 +400,7 @@ impl AuxiliaryMatcher {
     }
 
     /// Check if that property/value combination is on Wikidata. Returns true if something was found.
+    //TODO test
     async fn aux2wd_check_if_property_value_is_on_wikidata(&self, aux: &AuxiliaryResults) -> bool {
         if !self.properties_that_have_external_ids.contains(&aux.prop()) {
             return false;
@@ -409,6 +428,7 @@ impl AuxiliaryMatcher {
         true
     }
 
+    //TODO test
     async fn aux2wd_remap_results(&mut self, catalog_id: usize, results: &Vec<AuxiliaryResults>) -> (HashMap<usize,Vec<AuxiliaryResults>>,HashMap<String,WikidataCommandPropertyValueGroups>) {
         let mut aux: HashMap<usize,Vec<AuxiliaryResults>> = HashMap::new();
         let mut sources: HashMap<String,WikidataCommandPropertyValueGroups> = HashMap::new();
@@ -426,6 +446,7 @@ impl AuxiliaryMatcher {
         (aux,sources)
     }
 
+    //TODO test
     async fn get_source_for_entry(&mut self, entry_id: usize, catalog_id: usize, ext_id: &str) -> Option<WikidataCommandPropertyValueGroups> {
         if !self.catalogs.contains_key(&catalog_id) {
             let catalog = Catalog::from_id(catalog_id, &self.mnm).await.ok();
@@ -487,6 +508,7 @@ impl AuxiliaryMatcher {
         ]);
     }
 
+    //TODO test
     fn is_catalog_property_combination_suspect(&self,catalog_id: usize,prop: usize) -> bool {
         AUX_BLACKLISTED_CATALOGS_PROPERTIES.contains(&(catalog_id,prop))
     }

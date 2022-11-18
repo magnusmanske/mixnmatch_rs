@@ -34,12 +34,14 @@ enum AutoscrapeError {
 impl Error for AutoscrapeError {}
 
 impl fmt::Display for AutoscrapeError {
+    //TODO test
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self) // user-facing output
     }
 }
 
 trait JsonStuff {
+    //TODO test
     fn json_as_str(json: &Value, key: &str) -> Result<String,AutoscrapeError> {
         Ok(json.get(key)
             .ok_or_else(||AutoscrapeError::BadType(json.to_owned()))?
@@ -48,6 +50,7 @@ trait JsonStuff {
             .to_string())
     }
 
+    //TODO test
     fn json_as_u64(json: &Value, key: &str) -> Result<u64,AutoscrapeError> {
         let value = json.get(key).ok_or_else(||AutoscrapeError::BadType(json.to_owned()))?;
         if value.is_string() {
@@ -61,6 +64,7 @@ trait JsonStuff {
         }
     }
 
+    //TODO test
     fn fix_regex(s: &str) -> String {
         s.replace("\\/","/").to_string()
     }
@@ -68,13 +72,18 @@ trait JsonStuff {
 
 #[async_trait]
 trait Level {
+    //TODO test
     async fn init(&mut self, autoscrape: &Autoscrape);
 
     /// Returns true if this level has been completed, false if there was at least one more result.
+    //TODO test
     async fn tick(&mut self) -> bool;
 
+    //TODO test
     fn current(&self) -> String;
+    //TODO test
     fn get_state(&self) -> Value;
+    //TODO test
     fn set_state(&mut self, json: &Value);
 }
 
@@ -86,15 +95,18 @@ struct AutoscrapeKeys {
 
 #[async_trait]
 impl Level for AutoscrapeKeys {
+    //TODO test
     async fn init(&mut self, _autoscrape: &Autoscrape) {
         self.position = 0;
     }
 
+    //TODO test
     async fn tick(&mut self) -> bool {
         self.position += 1 ;
         self.position >= self.keys.len()
     }
 
+    //TODO test
     fn current(&self) -> String {
         match self.keys.get(self.position) {
             Some(v) => v.to_owned(),
@@ -102,10 +114,12 @@ impl Level for AutoscrapeKeys {
         }
     }
 
+    //TODO test
     fn get_state(&self) -> Value {
         json!({"position":self.position})
     }
 
+    //TODO test
     fn set_state(&mut self, json: &Value) {
         if let Some(position) = json.get("position") {
             if let Some(position) = position.as_u64() { self.position = position as usize}
@@ -114,6 +128,7 @@ impl Level for AutoscrapeKeys {
 }
 
 impl AutoscrapeKeys {
+    //TODO test
     fn from_json(json: &Value) -> Result<Self,AutoscrapeError> {
         let keys = json
             .get("keys")
@@ -140,23 +155,28 @@ impl JsonStuff for AutoscrapeRange {}
 
 #[async_trait]
 impl Level for AutoscrapeRange {
+    //TODO test
     async fn init(&mut self, _autoscrape: &Autoscrape) {
         self.current_value = self.start;
     }
 
+    //TODO test
     async fn tick(&mut self) -> bool {
         self.current_value += self.step ;
         self.current_value > self.end
     }
 
+    //TODO test
     fn current(&self) -> String {
         format!("{}",self.current_value)
     }
 
+    //TODO test
     fn get_state(&self) -> Value {
         json!({"current_value":self.current_value})
     }
 
+    //TODO test
     fn set_state(&mut self, json: &Value) {
         if let Some(current_value) = json.get("current_value") {
             if let Some(current_value) = current_value.as_u64() { self.current_value = current_value}
@@ -165,6 +185,7 @@ impl Level for AutoscrapeRange {
 }
 
 impl AutoscrapeRange {
+    //TODO test
     fn from_json(json: &Value) -> Result<Self,AutoscrapeError> {
         Ok(Self{
             start: Self::json_as_u64(json,"start")?,
@@ -188,10 +209,12 @@ impl JsonStuff for AutoscrapeFollow {}
 
 #[async_trait]
 impl Level for AutoscrapeFollow {
+    //TODO test
     async fn init(&mut self, autoscrape: &Autoscrape) {
         let _ = self.refill_cache(autoscrape).await;
     }
 
+    //TODO test
     async fn tick(&mut self) -> bool {
         match self.cache.pop() {
             Some(key) => {
@@ -202,14 +225,17 @@ impl Level for AutoscrapeFollow {
         }
     }
 
+    //TODO test
     fn current(&self) -> String {
         self.current_key.to_owned()
     }
 
+    //TODO test
     fn get_state(&self) -> Value {
         json!({"url":self.url.to_owned(),"regex":self.regex.to_owned()})
     }
 
+    //TODO test
     fn set_state(&mut self, json: &Value) {
         if let Some(url) = json.get("url") {
             if let Some(url) = url.as_str() { self.url = url.to_string()}
@@ -221,6 +247,7 @@ impl Level for AutoscrapeFollow {
 }
 
 impl AutoscrapeFollow {
+    //TODO test
     fn from_json(json: &Value) -> Result<Self,AutoscrapeError> {
         Ok(Self{
             url: Self::json_as_str(json,"url")?,
@@ -232,6 +259,7 @@ impl AutoscrapeFollow {
 
 
     /// Follows the next URL
+    //TODO test
     async fn refill_cache(&mut self, autoscrape: &Autoscrape) -> Result<(),GenericError> {
         // Construct URL with level values
         let mut url = self.url.clone();
@@ -275,10 +303,12 @@ impl JsonStuff for AutoscrapeMediaWiki {}
 
 #[async_trait]
 impl Level for AutoscrapeMediaWiki {
+    //TODO test
     async fn init(&mut self, _autoscrape: &Autoscrape) {
         self.title_cache.clear();
     }
 
+    //TODO test
     async fn tick(&mut self) -> bool {
         if self.title_cache.is_empty() {
             if let Err(_) = self.refill_cache().await {
@@ -294,14 +324,17 @@ impl Level for AutoscrapeMediaWiki {
         }
     }
 
+    //TODO test
     fn current(&self) -> String {
         self.apfrom.to_owned()
     }
 
+    //TODO test
     fn get_state(&self) -> Value {
         json!({"url":self.url.to_owned(),"apfrom":self.apfrom.to_owned()})
     }
 
+    //TODO test
     fn set_state(&mut self, json: &Value) {
         self.title_cache.clear();
         if let Some(url) = json.get("url") {
@@ -315,11 +348,13 @@ impl Level for AutoscrapeMediaWiki {
 
 
 impl AutoscrapeMediaWiki {
+    //TODO test
     fn from_json(json: &Value) -> Result<Self,AutoscrapeError> {
         Ok(Self{url: Self::json_as_str(json,"url")?,apfrom:String::new(),title_cache:vec![],last_url:None})
     }
 
     /// Returns an allpages query result. Order is reversed so A->Z works via pop().
+    //TODO test
     async fn refill_cache(&mut self) -> Result<(),GenericError> {
         let url = format!("{}?action=query&format=json&list=allpages&apnamespace=0&aplimit=500&apfilterredir=nonredirects&apfrom={}",&self.url,&self.apfrom) ;
         if Some(url.to_owned())==self.last_url {
@@ -362,6 +397,7 @@ enum AutoscrapeLevelType {
 }
 
 impl AutoscrapeLevelType {
+    //TODO test
     async fn init(&mut self, autoscrape: &Autoscrape) {
         match self {
             AutoscrapeLevelType::Keys(x) => x.init(autoscrape).await,
@@ -371,6 +407,7 @@ impl AutoscrapeLevelType {
         }
     }
 
+    //TODO test
     async fn tick(&mut self) -> bool {
         match self {
             AutoscrapeLevelType::Keys(x) => x.tick().await,
@@ -380,6 +417,7 @@ impl AutoscrapeLevelType {
         }
     }
 
+    //TODO test
     fn current(&self) -> String {
         match self {
             AutoscrapeLevelType::Keys(x) => x.current(),
@@ -389,6 +427,7 @@ impl AutoscrapeLevelType {
         }
     }
 
+    //TODO test
     fn get_state(&self) -> Value {
         match self {
             AutoscrapeLevelType::Keys(x) => x.get_state(),
@@ -398,6 +437,7 @@ impl AutoscrapeLevelType {
         }
     }
 
+    //TODO test
     fn set_state(&mut self, json: &Value) {
         match self {
             AutoscrapeLevelType::Keys(x) => x.set_state(json),
@@ -414,6 +454,7 @@ pub struct AutoscrapeLevel {
 }
 
 impl AutoscrapeLevel {
+    //TODO test
     fn from_json(json: &Value) -> Result<Self,AutoscrapeError> {
         let level_type = match json.get("mode").ok_or_else(||AutoscrapeError::UnknownLevelType(json.to_owned()))?.as_str().unwrap_or("") {
             "keys" => AutoscrapeLevelType::Keys(AutoscrapeKeys::from_json(json)?),
@@ -427,14 +468,17 @@ impl AutoscrapeLevel {
         })
     }
 
+    //TODO test
     async fn init(&mut self, autoscrape: &Autoscrape) {
         self.level_type.init(autoscrape).await
     }
 
+    //TODO test
     async fn tick(&mut self) -> bool {
         self.level_type.tick().await
     }
 
+    //TODO test
     fn current(&self) -> String {
         self.level_type.current()
     }
@@ -449,6 +493,7 @@ pub struct AutoscrapeResolve {
 impl JsonStuff for AutoscrapeResolve {}
 
 impl AutoscrapeResolve {
+    //TODO test
     fn from_json(json: &Value, key: &str) -> Result<Self,AutoscrapeError> {
         let json = json
             .get(key)
@@ -486,6 +531,7 @@ impl AutoscrapeResolve {
         })
     }
 
+    //TODO test
     fn replace_vars(&self, map: &HashMap<String,String>) -> String {
         let mut ret = self.use_pattern.to_owned();
         for (key,value) in map {
@@ -497,6 +543,7 @@ impl AutoscrapeResolve {
         Self::fix_html(&ret).trim().into()
     }
 
+    //TODO test
     fn fix_html(s: &str) -> String {
         let ret = html_escape::decode_html_entities(s);
         let ret = RE_HTML.replace_all(&ret, " ");
@@ -513,6 +560,7 @@ pub struct AutoscrapeResolveAux {
 impl JsonStuff for AutoscrapeResolveAux {}
 
 impl AutoscrapeResolveAux {
+    //TODO test
     fn from_json(json: &Value) -> Result<Self,AutoscrapeError> {
         let property = Self::json_as_str(json, "prop")?.replace("P","");
         let property = match property.parse::<usize>() {
@@ -523,6 +571,7 @@ impl AutoscrapeResolveAux {
         Ok(Self{property,id})
     }
 
+    //TODO test
     fn replace_vars(&self, map: &HashMap<String,String>) -> (usize,String) {
         let mut ret = self.id.to_owned();
         for (key,value) in map {
@@ -549,6 +598,7 @@ pub struct AutoscrapeScraper {
 impl JsonStuff for AutoscrapeScraper {}
 
 impl AutoscrapeScraper {
+    //TODO test
     fn from_json(json: &Value) -> Result<Self,GenericError> {
         let resolve = json.get("resolve").ok_or_else(||AutoscrapeError::BadType(json.to_owned()))?;
         Ok(Self{
@@ -564,6 +614,7 @@ impl AutoscrapeScraper {
         })
     }
 
+    //TODO test
     fn resolve_aux_from_json(json: &Value) -> Result<Vec<AutoscrapeResolveAux>,GenericError> {
         Ok(
             json // TODO test aux, eg catalog 287
@@ -579,6 +630,7 @@ impl AutoscrapeScraper {
         )
     }
 
+    //TODO test
     fn regex_entry_from_json(json: &Value) -> Result<Vec<Regex>,GenericError> {
         let rx_entry = json.get("rx_entry").ok_or_else(||AutoscrapeError::BadType(json.to_owned()))?;
         if rx_entry.is_string() {
@@ -598,6 +650,7 @@ impl AutoscrapeScraper {
         
     }
 
+    //TODO test
     fn regex_block_from_json(json: &Value) -> Result<Option<Regex>,GenericError> {
         Ok( // TODO test
         if let Some(v) = json.get("rx_block") {
@@ -618,6 +671,7 @@ impl AutoscrapeScraper {
         })
     }
 
+    //TODO test
     fn process_html_page(&self, html: &str, autoscrape: &Autoscrape) -> Vec<ExtendedEntry> {
         match &self.regex_block {
             Some(regex_block) => {
@@ -634,6 +688,7 @@ impl AutoscrapeScraper {
         }
     }
 
+    //TODO test
     fn process_html_block(&self, html: &str, autoscrape: &Autoscrape) -> Vec<ExtendedEntry> {
         let mut ret = vec![];
         for regex_entry in &self.regex_entry {
@@ -696,15 +751,18 @@ pub struct Autoscrape {
 }
 
 impl Jobbable for Autoscrape {
+    //TODO test
     fn set_current_job(&mut self, job: &Job) {
         self.job = Some(job.clone());
     }
+    //TODO test
     fn get_current_job(&self) -> Option<&Job> {
         self.job.as_ref()
     }
 }
 
 impl Autoscrape {
+    //TODO test
     pub async fn new(catalog_id: usize, mnm: &MixNMatch) -> Result<Self,GenericError> {
         let results = mnm.app.get_mnm_conn().await?
             .exec_iter("SELECT `id`,`json` FROM `autoscrape` WHERE `catalog`=:catalog_id",params! {catalog_id}).await?
@@ -740,12 +798,14 @@ impl Autoscrape {
         Ok(ret)
     }
 
+    //TODO test
     fn options_from_json(&mut self, json: &Value) {
         self.simple_space = json.get("simple_space").map(|x|x.as_u64().unwrap_or(0)).unwrap_or(0)==1;
         self.skip_failed = json.get("skip_failed").map(|x|x.as_u64().unwrap_or(0)).unwrap_or(0)==1;
         self.utf8_encode = json.get("utf8_encode").map(|x|x.as_u64().unwrap_or(0)).unwrap_or(0)==1;
     }
 
+    //TODO test
     pub async fn init(&mut self) {
         let mut levels = self.levels.clone();
         for level in &mut levels {
@@ -755,6 +815,7 @@ impl Autoscrape {
     }
 
     /// Iterates one permutation. Returns true if all possible permutations have been done.
+    //TODO test
     pub async fn tick(&mut self) -> bool {
         let mut l = self.levels.len() ; // start with deepest level; level numbers starting at 1
         while l>0 {
@@ -772,10 +833,12 @@ impl Autoscrape {
     }
 
     /// Returns the current values of all levels.
+    //TODO test
     fn current(&self) -> Vec<String> {
         self.levels.iter().map(|level|level.current()).collect()
     }
 
+    //TODO test
     async fn load_url(&mut self, url: &str) -> Option<String> {
         self.urls_loaded += 1;
         // TODO POST
@@ -788,6 +851,7 @@ impl Autoscrape {
             .ok()
     }
 
+    //TODO test
     async fn iterate_one(&mut self) -> bool {
         // Run current permutation
         let current = self.current();
@@ -810,6 +874,7 @@ impl Autoscrape {
         self.tick().await
     }
 
+    //TODO test
     async fn add_batch(&mut self) -> Result<(),GenericError> {
         if self.entry_batch.is_empty() {
             let _ = self.remember_state().await;
@@ -838,6 +903,7 @@ impl Autoscrape {
         Ok(())
     }
 
+    //TODO test
     pub async fn remember_state(&self) -> Result<(),GenericError> {
         let json: Vec<Value> = self.levels.iter().map(|level|level.level_type.get_state()).collect();
         let json = json!(json);
@@ -845,6 +911,7 @@ impl Autoscrape {
         Ok(())
     }
 
+    //TODO test
     pub async fn run(&mut self) -> Result<(),GenericError> {
         self.init().await;
         let _ = self.start().await;
@@ -853,6 +920,7 @@ impl Autoscrape {
         Ok(())
     }
 
+    //TODO test
     pub async fn start(&mut self) -> Result<(),GenericError> {
         let autoscrape_id = self.autoscrape_id;
         let sql = "UPDATE `autoscrape` SET `status`='RUNNING'`last_run_min`=NULL,`last_run_urls`=NULL WHERE `id`=:autoscrape_id" ;
@@ -872,6 +940,7 @@ impl Autoscrape {
         Ok(())
     }
 
+    //TODO test
     pub async fn finish(&mut self) -> Result<(),GenericError> {
         let _ = self.add_batch().await; // Flush
         let autoscrape_id = self.autoscrape_id;
@@ -885,8 +954,6 @@ impl Autoscrape {
         Ok(())
     }
 }
-
-// JOB IDs 6, 22442
 
 #[cfg(test)]
 mod tests {

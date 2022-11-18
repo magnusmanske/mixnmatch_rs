@@ -32,6 +32,7 @@ pub enum WikidataCommandRank {
 }
 
 impl WikidataCommandRank {
+    //TODO test
     pub fn as_str(&self) -> &str {
         match self {
             WikidataCommandRank::Normal => "normal",
@@ -59,6 +60,7 @@ pub struct WikidataCommand {
 }
 
 impl WikidataCommand {
+    //TODO test
     pub fn edit_entity(&self, json: &mut Value) {
         // Assiuming "create"
         match &self.what {
@@ -104,15 +106,18 @@ impl WikidataCommand {
         }
     }
 
+    //TODO test
     fn datavalue_as_snak(&self, property: usize, datavalue: Value) -> Value {
         json!({"snaktype":"value","property":format!("P{}",property),"datavalue":datavalue})
     }
 
+    //TODO test
     fn value_as_snak(&self, property: usize, value: &WikidataCommandValue) -> Value {
         let datavalue = self.as_datavalue(value);
         self.datavalue_as_snak(property, datavalue)
     }
 
+    //TODO test
     fn rank_as_str(&self) -> &str {
         match &self.rank {
             Some(rank) => rank.as_str(),
@@ -120,6 +125,7 @@ impl WikidataCommand {
         }
     }
 
+    //TODO test
     fn as_datavalue(&self, value: &WikidataCommandValue) -> Value {
         match value {
             WikidataCommandValue::String(s) => json!({"value":s.to_owned(),"type":"string"}),

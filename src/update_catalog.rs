@@ -43,6 +43,7 @@ enum UpdateCatalogError {
 impl Error for UpdateCatalogError {}
 
 impl fmt::Display for UpdateCatalogError {
+    //TODO test
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self) // user-facing output
     }
@@ -59,6 +60,7 @@ struct UpdateInfo {
 }
 
 impl UpdateInfo {
+    //TODO test
     pub fn json(&self) -> Result<serde_json::Value,serde_json::Error> {
         serde_json::from_str(&self.json)
     }
@@ -73,6 +75,7 @@ struct LineCounter {
 }
 
 impl LineCounter {
+    //TODO test
     pub fn new() -> Self {
         Self { all: 0, added: 0, updates: 0 , offset: 0 }
     }
@@ -86,6 +89,7 @@ enum DataSourceType {
 }
 
 impl DataSourceType {
+    //TODO test
     fn from_str(s: &str) ->DataSourceType {
         match s.to_string().to_uppercase().as_str() {
             "CSV" => Self::CSV,
@@ -114,6 +118,7 @@ pub struct ExtendedEntry {
 }
 
 impl ExtendedEntry {
+    //TODO test
     pub fn from_row(row: &csv::StringRecord, datasource: &mut DataSource) -> Result<Self,GenericError> {
         let ext_id = row.get(datasource.ext_id_column).ok_or(format!("No external ID for entry"))?;
         let mut ret = Self {
@@ -157,6 +162,7 @@ impl ExtendedEntry {
         Ok(ret)
     }
 
+    //TODO test
     pub async fn update_existing(&mut self, entry: &mut Entry, mnm: &MixNMatch) -> Result<(),GenericError> {
         entry.set_mnm(mnm);
 
@@ -195,6 +201,7 @@ impl ExtendedEntry {
 
     // Adds new aliases.
     // Does NOT remove ones that don't exist anymore. Who knows how they got into the database.
+    //TODO test
     pub async fn sync_aliases(&self, entry: &Entry)  -> Result<(),GenericError> {
         let existing = entry.get_aliases().await?;
         for alias in &self.aliases {
@@ -207,6 +214,7 @@ impl ExtendedEntry {
 
     // Adds/replaces new aux values.
     // Does NOT remove ones that don't exist anymore. Who knows how they got into the database.
+    //TODO test
     pub async fn sync_auxiliary(&self, entry: &Entry)  -> Result<(),GenericError> {
         let existing: HashMap<usize,String> = entry.get_aux().await?.iter().map(|a|(a.prop_numeric,a.value.to_owned())).collect();
         for (prop,value) in &self.aux {
@@ -219,6 +227,7 @@ impl ExtendedEntry {
 
     // Adds/replaces new language descriptions.
     // Does NOT remove ones that don't exist anymore. Who knows how they got into the database.
+    //TODO test
     pub async fn sync_descriptions(&self, entry: &Entry)  -> Result<(),GenericError> {
         let existing = entry.get_language_descriptions().await?;
         for (language,value) in &self.descriptions {
@@ -230,6 +239,7 @@ impl ExtendedEntry {
     }
 
     /// Inserts a new entry and its associated data into the database
+    //TODO test
     pub async fn insert_new(&mut self, mnm: &MixNMatch) -> Result<(),GenericError> {
         self.entry.set_mnm(mnm);
         self.entry.insert_as_new().await?;
@@ -258,6 +268,7 @@ impl ExtendedEntry {
     }
 
     /// Processes a key-value pair, with keys from table columns, or matched patterns
+    //TODO test
     fn process_cell(&mut self, label: &str, cell: &str) -> Result<(),GenericError> {
         if !self.parse_alias(&label,cell) && !self.parse_description(&label,cell) && !self.parse_property(&label,cell)? {
             match label {
@@ -274,14 +285,17 @@ impl ExtendedEntry {
         Ok(())
     }
 
+    //TODO test
     fn parse_type(type_name: &str) -> Option<String> {
         Self::get_capture(&RE_TYPE, type_name)
     }
 
+    //TODO test
     fn parse_date(date: &str) -> Option<String> {
         Self::get_capture(&RE_DATE, date)
     }
 
+    //TODO test
     fn parse_alias(&mut self, label: &str, cell: &str) -> bool {
         if let Some(s) = Self::get_capture(&RE_ALIAS, label) {
             self.aliases.push(LocaleString::new(s, cell.to_string()));
@@ -291,6 +305,7 @@ impl ExtendedEntry {
         }
     }
 
+    //TODO test
     fn parse_description(&mut self, label: &str, cell: &str) -> bool {
         if let Some(s) = Self::get_capture(&RE_DESCRIPTION, label) {
             self.descriptions.insert(s, cell.to_string());
@@ -300,6 +315,7 @@ impl ExtendedEntry {
         }
     }
 
+    //TODO test
     fn parse_property(&mut self, label: &str, cell: &str) -> Result<bool,GenericError> {
         let property_num = match Self::get_capture(&RE_PROPERTY, label) {
             Some(s) => s.parse::<usize>()?,
@@ -339,6 +355,7 @@ impl ExtendedEntry {
         Ok(true)
     }
 
+    //TODO test
     fn get_capture(regexp: &Regex, text: &str) -> Option<String> {
         regexp.captures(text)?.get(1).map(|s|s.as_str().to_string())
     }
@@ -352,6 +369,7 @@ struct Pattern {
 }
 
 impl Pattern {
+    //TODO test
     fn from_json(use_column_label: &str, data: &serde_json::Value) -> Result<Self,GenericError> {
         let pattern = match data.get("pattern") {
             Some(col) => col.as_str().ok_or(UpdateCatalogError::BadPattern)?,
@@ -394,6 +412,7 @@ pub struct DataSource {
 }
 
 impl DataSource {
+    //TODO test
     fn new(catalog_id: usize, json: &serde_json::Value) -> Result<Self,GenericError> {
         let columns: Vec<String> = match json.get("columns") {
             Some(c) => c.as_array().unwrap_or(&vec!()).to_owned(),
@@ -447,6 +466,7 @@ impl DataSource {
         })
     }
 
+    //TODO test
     async fn fetch_url(&self, url: &String, file_name: &Path) -> Result<(),GenericError> {
         let response = reqwest::get(url).await?;
         let mut file = std::fs::File::create(file_name)?;
@@ -455,12 +475,14 @@ impl DataSource {
         Ok(())
     }
 
+    //TODO test
     fn clear_tmp_file(&self) {
         if let Some(path) = &self.tmp_file {
             let _ = fs::remove_file(path);
         };
     }
 
+    //TODO test
     async fn get_reader(&mut self, mnm: &MixNMatch) -> Result<csv::Reader<File>,GenericError> {
         let mut builder = csv::ReaderBuilder::new();
         let builder = builder.flexible(true).has_headers(false);
@@ -502,6 +524,7 @@ impl DataSource {
         Err(Box::new(UpdateCatalogError::MissingDataSourceLocation))
     }
 
+    //TODO test
     async fn get_source_type(&self, mnm: &MixNMatch) -> Result<DataSourceType,GenericError> {
         if let Some(s) = self.json.get("data_format") {
             return Ok(DataSourceType::from_str(s.as_str().unwrap_or("")));
@@ -523,9 +546,11 @@ impl DataSource {
 
 
 impl Jobbable for UpdateCatalog {
+    //TODO test
     fn set_current_job(&mut self, job: &Job) {
         self.job = Some(job.clone());
     }
+    //TODO test
     fn get_current_job(&self) -> Option<&Job> {
         self.job.as_ref()
     }
@@ -545,6 +570,7 @@ impl UpdateCatalog {
         }
     }
 
+    /// Updates a catalog by reading a tabbed file.
     pub async fn update_from_tabbed_file(&self, catalog_id: usize) -> Result<(),GenericError> {
         let update_info = self.get_update_info(catalog_id).await?;
         let json = update_info.json()?;
@@ -609,6 +635,7 @@ impl UpdateCatalog {
         Ok(())
     }
 
+    //TODO test
     async fn process_rows(&self, rows: &mut Vec<csv::StringRecord>, datasource: &mut DataSource) -> Result<(),GenericError> {
         let mut existing_ext_ids = HashSet::new();
         if datasource.just_add {
@@ -634,6 +661,7 @@ impl UpdateCatalog {
         Ok(())
     }
     
+    //TODO test
     async fn process_row(&self, row: &csv::StringRecord, datasource: &mut DataSource) -> Result<(),GenericError> {
         let ext_id = row.get(datasource.ext_id_column).unwrap();
         match Entry::from_ext_id(datasource.catalog_id,ext_id, &self.mnm).await {
@@ -651,6 +679,7 @@ impl UpdateCatalog {
         Ok(())
     }
 
+    //TODO test
     async fn get_existing_ext_ids(&self, catalog_id: usize, ext_ids: &Vec<String>) -> Result<HashSet<String>,GenericError> {
         let mut ret = HashSet::new();
         if ext_ids.is_empty() {
@@ -676,6 +705,7 @@ impl UpdateCatalog {
         results.pop().ok_or(Box::new(UpdateCatalogError::NoUpdateInfoForCatalog))
     }
 
+    //TODO test
     async fn number_of_entries_in_catalog(&self, catalog_id: usize) -> Result<usize,GenericError> {
         let mut results: Vec<usize> = "SELECT count(*) AS cnt FROM `entry` WHERE `catalog`=:catalog_id"
             .with(params!{catalog_id})

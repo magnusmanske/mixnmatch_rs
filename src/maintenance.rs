@@ -14,6 +14,7 @@ impl Maintenance {
         }
     }
 
+    /// Iterates over blocks of (fully or partially) matched Wikidata items, and replaces redirects with their targets.
     pub async fn fix_redirects(&self, catalog_id: usize, state: &MatchState) -> Result<(),GenericError> {
         let mut offset = 0;
         loop {
@@ -26,6 +27,7 @@ impl Maintenance {
         }
     }
 
+    /// Iterates over blocks of (fully or partially) matched Wikidata items, and unlinks meta items, such as disambiguation pages.
     pub async fn unlink_meta_items(&self, catalog_id: usize, state: &MatchState) -> Result<(),GenericError> {
         let mut offset = 0;
         loop {
@@ -38,6 +40,7 @@ impl Maintenance {
         }
     }
 
+    /// Iterates over blocks of (fully or partially) matched Wikidata items, and unlinks deleted pages
     pub async fn unlink_deleted_items(&self, catalog_id: usize, state: &MatchState) -> Result<(),GenericError> {
         let mut offset = 0;
         loop {
@@ -66,6 +69,7 @@ impl Maintenance {
         }
     }
 
+    /// Finds redirects in a batch of items, and changes MnM matches to their respective targets.
     async fn fix_redirected_items_batch(&self,unique_qs: &Vec<String>) -> Result<(),GenericError> {
         let placeholders = MixNMatch::sql_placeholders(unique_qs.len());
         let sql = format!("SELECT page_title,rd_title FROM `page`,`redirect` 
@@ -85,6 +89,7 @@ impl Maintenance {
         Ok(())
     }
 
+    /// Finds deleted items in a batch of items, and unlinks MnM matches to them.
     async fn unlink_deleted_items_batch(&self,unique_qs: &Vec<String>) -> Result<(),GenericError> {
         let placeholders = MixNMatch::sql_placeholders(unique_qs.len());
         let sql = format!("SELECT page_title FROM `page` WHERE `page_namespace`=0 AND `page_title` IN ({})",placeholders);
@@ -100,6 +105,7 @@ impl Maintenance {
         Ok(())
     }
 
+    /// Finds meta items (disambig etc) in a batch of items, and unlinks MnM matches to them.
     async fn unlink_meta_items_batch(&self,unique_qs: &Vec<String>) -> Result<(),GenericError> {
         let placeholders = MixNMatch::sql_placeholders(unique_qs.len());
         let sql = format!("SELECT DISTINCT page_title FROM page,pagelinks WHERE page_namespace=0 AND page_title IN ({}) AND pl_from=page_id AND pl_title IN ('{}')",&placeholders,&META_ITEMS.join("','"));
@@ -110,6 +116,7 @@ impl Maintenance {
         Ok(())
     }
 
+    /// Unlinks MnM matches to items in a list.
     pub async fn unlink_item_matches(&self, items: &Vec<String>) -> Result<(),GenericError> {
         let items: Vec<isize> = items
             .iter()
@@ -124,6 +131,7 @@ impl Maintenance {
         Ok(())
     }
 
+    /// Retrieves a batch of (unique) Wikidata items, in a given matching state.
     async fn get_items(&self, catalog_id: usize, offset: usize, state: &MatchState) -> Result<Vec<String>,GenericError> {
         let batch_size = 5000;
         let sql = format!("SELECT DISTINCT `q` FROM `entry` WHERE `catalog`=:catalog_id {} LIMIT :batch_size OFFSET :offset",

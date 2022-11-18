@@ -26,6 +26,7 @@ pub struct AuxiliaryRow {
 }
 
 impl AuxiliaryRow {
+    //TODO test
     pub fn from_row(row: &Row) -> Self {
         Self {
             row_id: row.get(0).unwrap(),
@@ -47,6 +48,7 @@ pub enum EntryError {
 impl Error for EntryError {}
 
 impl fmt::Display for EntryError {
+    //TODO test
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self) // user-facing output
     }
@@ -70,6 +72,7 @@ pub struct Entry {
 
 impl Entry {
 
+    //TODO test
     pub fn new_from_catalog_and_ext_id(catalog_id: usize, ext_id: &str) -> Self {
         Self {
             id: ENTRY_NEW_ID,
@@ -88,6 +91,7 @@ impl Entry {
     }
 
     /// Returns an Entry object for a given entry ID.
+    //TODO test
     pub async fn from_id(entry_id: usize, mnm: &MixNMatch) -> Result<Self,GenericError> {
         let sql = r"SELECT id,catalog,ext_id,ext_url,ext_name,ext_desc,q,user,timestamp,random,`type` FROM `entry` WHERE `id`=:entry_id";
         let mut rows: Vec<Self> = mnm.app.get_mnm_conn().await?
@@ -100,6 +104,7 @@ impl Entry {
     }
 
     /// Returns an Entry object for a given external ID in a catalog.
+    //TODO test
     pub async fn from_ext_id(catalog_id: usize, ext_id: &str, mnm: &MixNMatch) -> Result<Entry,GenericError> {
         let sql = r"SELECT id,catalog,ext_id,ext_url,ext_name,ext_desc,q,user,timestamp,random,`type` FROM `entry` WHERE `catalog`=:catalog_id AND `ext_id`=:ext_id";
         let mut conn = mnm.app.get_mnm_conn().await? ;
@@ -112,6 +117,7 @@ impl Entry {
         Ok(ret)
     }
     
+    //TODO test
     pub fn from_row(row: &Row) -> Self {
         Entry {
             id: row.get(0).unwrap(),
@@ -130,6 +136,7 @@ impl Entry {
     }
 
     /// Inserts the current entry into the database. id must be ENTRY_NEW_ID.
+    //TODO test
     pub async fn insert_as_new(&mut self) -> Result<(),GenericError> {
         if self.id!=ENTRY_NEW_ID {
             return Err(Box::new(EntryError::TryingToInsertExistingEntry));
@@ -154,6 +161,7 @@ impl Entry {
     }
 
     /// Deletes the entry and all of its associated data in the database. Resets the local ID to 0
+    //TODO test
     pub async fn delete(&mut self) -> Result<(),GenericError> {
         self.check_valid_id()?;
         let entry_id = self.id;
@@ -170,6 +178,7 @@ impl Entry {
     }
 
     /// Helper function for from_row().
+    //TODO test
     fn value2opt_string(value: mysql_async::Value) -> Result<Option<String>,GenericError> {
         match value {
             Value::Bytes(s) => Ok(Some(std::str::from_utf8(&s)?.to_owned())),
@@ -178,6 +187,7 @@ impl Entry {
     }
 
     /// Helper function for from_row().
+    //TODO test
     fn value2opt_isize(value: mysql_async::Value) -> Result<Option<isize>,GenericError> {
         match value {
             Value::Int(i) => Ok(Some(i.try_into()?)),
@@ -186,6 +196,7 @@ impl Entry {
     }
 
     /// Helper function for from_row().
+    //TODO test
     fn value2opt_usize(value: mysql_async::Value) -> Result<Option<usize>,GenericError> {
         match value {
             Value::Int(i) => Ok(Some(i.try_into()?)),
@@ -193,6 +204,7 @@ impl Entry {
         }
     }
 
+    //TODO test
     pub fn get_entry_url(&self) -> Option<String> {
         if self.id==ENTRY_NEW_ID {
             None
@@ -202,17 +214,20 @@ impl Entry {
     }
 
     /// Sets the MixNMatch object. Automatically done when created via from_id().
+    //TODO test
     pub fn set_mnm(&mut self, mnm: &MixNMatch) {
         self.mnm = Some(mnm.clone());
     }
 
     /// Returns the MixNMatch object reference.
+    //TODO test
     pub fn mnm(&self) -> Result<&MixNMatch,GenericError> {
         let mnm = self.mnm.as_ref().ok_or("Entry: No mnm set")?;
         Ok(mnm)
     }
 
     /// Updates ext_name locally and in the database
+    //TODO test
     pub async fn set_ext_name(&mut self, ext_name: &str) -> Result<(),GenericError> {
         if self.ext_name!=ext_name {
             self.check_valid_id()?;
@@ -224,6 +239,7 @@ impl Entry {
         Ok(())
     }
 
+    //TODO test
     pub async fn set_auxiliary_in_wikidata(&self, aux_id: usize, in_wikidata: bool) -> Result<(),GenericError> {
         let sql = "UPDATE auxiliary SET in_wikidata=:in_wikidata WHERE id=:aux_id AND in_wikidata!=:in_wikidata";
         self.mnm()?.app.get_mnm_conn().await?.exec_drop(sql, params! {in_wikidata,aux_id}).await?;
@@ -231,6 +247,7 @@ impl Entry {
     }
 
     /// Updates ext_desc locally and in the database
+    //TODO test
     pub async fn set_ext_desc(&mut self, ext_desc: &str) -> Result<(),GenericError> {
         if self.ext_desc!=ext_desc {
             self.check_valid_id()?;
@@ -243,6 +260,7 @@ impl Entry {
     }
 
     /// Updates ext_id locally and in the database
+    //TODO test
     pub async fn set_ext_id(&mut self, ext_id: &str) -> Result<(),GenericError> {
         if self.ext_id!=ext_id {
             self.check_valid_id()?;
@@ -255,6 +273,7 @@ impl Entry {
     }
 
     /// Updates ext_url locally and in the database
+    //TODO test
     pub async fn set_ext_url(&mut self, ext_url: &str) -> Result<(),GenericError> {
         if self.ext_url!=ext_url {
             self.check_valid_id()?;
@@ -267,6 +286,7 @@ impl Entry {
     }
     
     /// Updates type_name locally and in the database
+    //TODO test
     pub async fn set_type_name(&mut self, type_name: Option<String>) -> Result<(),GenericError> {
         if self.type_name!=type_name {
             self.check_valid_id()?;
@@ -315,6 +335,7 @@ impl Entry {
         }
     }
 
+    //TODO test
     pub async fn set_language_description(&self, language: &str, text: Option<String>) -> Result<(),GenericError> {
         self.check_valid_id()?;
         let entry_id = self.id;
@@ -332,6 +353,7 @@ impl Entry {
     }
 
     /// Returns a LocaleString Vec of all aliases of the entry
+    //TODO test
     pub async fn get_aliases(&self) -> Result<Vec<LocaleString>,GenericError> {
         self.check_valid_id()?;
         let entry_id = self.id;
@@ -344,6 +366,7 @@ impl Entry {
         Ok(ret)
     }
 
+    //TODO test
     pub async fn add_alias(&self, s: &LocaleString) -> Result<(),GenericError> {
         self.check_valid_id()?;
         let entry_id = self.id;
@@ -355,6 +378,7 @@ impl Entry {
     }
 
     /// Returns a language:text HashMap of all language descriptions of the entry
+    //TODO test
     pub async fn get_language_descriptions(&self) -> Result<HashMap<String,String>,GenericError> {
         self.check_valid_id()?;
         let entry_id = self.id;
@@ -367,6 +391,7 @@ impl Entry {
         Ok(map)
     }
 
+    //TODO test
     pub async fn set_auxiliary(&self, prop_numeric: usize, value: Option<String>) -> Result<(),GenericError> {
         self.check_valid_id()?;
         let entry_id = self.id;
@@ -417,6 +442,7 @@ impl Entry {
     }
 
     /// Returns auxiliary data for the entry
+    //TODO test
     pub async fn get_aux(&self) -> Result<Vec<AuxiliaryRow>,GenericError> {
         self.check_valid_id()?;
         let entry_id = self.id;
@@ -427,6 +453,7 @@ impl Entry {
     }
 
     /// Before q query or an update to the entry in the database, checks if this is a valid entry ID (eg not a new entry)
+    //TODO test
     pub fn check_valid_id(&self) -> Result<(),GenericError> {
         match self.id {
             ENTRY_NEW_ID => Err(Box::new(EntryError::TryingToUpdateNewEntry)),
@@ -489,6 +516,7 @@ impl Entry {
     }
 
     /// Updates the entry matching status in multiple tables.
+    //TODO test
     pub async fn set_match_status(&self, status: &str, is_matched: bool) -> Result<(),GenericError>{
         let mnm = self.mnm()?;
         let entry_id = self.id;
@@ -504,6 +532,7 @@ impl Entry {
 
 
     /// Retrieves the multi-matches for an entry
+    //TODO test
     pub async fn get_multi_match(&self) ->  Result<Vec<String>,GenericError> {
         let mnm = self.mnm()?;
         let entry_id = self.id;
@@ -542,14 +571,17 @@ impl Entry {
         Ok(())
     }
 
+    //TODO test
     pub fn is_unmatched(&self) -> bool {
         self.q.is_none()
     }
 
+    //TODO test
     pub fn is_partially_matched(&self) -> bool {
         self.user==Some(0)
     }
 
+    //TODO test
     pub fn is_fully_matched(&self) -> bool {
         match self.user {
             Some(user_id) => user_id>0,

@@ -78,9 +78,11 @@ pub struct Microsync {
 }
 
 impl Jobbable for Microsync {
+    //TODO test
     fn set_current_job(&mut self, job: &Job) {
         self.job = Some(job.clone());
     }
+    //TODO test
     fn get_current_job(&self) -> Option<&Job> {
         self.job.as_ref()
     }
@@ -115,6 +117,7 @@ impl Microsync {
         Ok(())
     }
 
+    //TODO test
     async fn update_wiki_page(&mut self, catalog_id: usize, wikitext: &str) -> Result<(),GenericError> {
         let page_title = format!("User:Magnus Manske/Mix'n'match report/{}",catalog_id);
         let day = &MixNMatch::get_timestamp()[0..8];
@@ -124,6 +127,7 @@ impl Microsync {
         //mw_api.
     }
 
+    //TODO test
     async fn wikitext_from_issues(&self,
         catalog: &Catalog,
         multiple_extid_in_wikidata: Vec<MultipleExtIdInWikidata>,
@@ -312,6 +316,7 @@ impl Microsync {
         Ok(results)
     }
 
+    //TODO test
     async fn get_q2ext_id_chunk(&self, reader: &mut csv::Reader<File>,case_insensitive: bool, batch_size: usize) -> Result<Vec<(isize,String)>,GenericError> {
         let mw_api = self.mnm.get_mw_api().await.unwrap();
         Ok(reader
@@ -328,6 +333,7 @@ impl Microsync {
             .collect())
     }
 
+    //TODO test
     async fn get_differences_mnm_wd(&self, catalog_id: usize, property: usize) -> Result<(Vec<ExtIdNoMnM>,Vec<MatchDiffers>),GenericError> {
         let case_insensitive = AUX_PROPERTIES_ALSO_USING_LOWERCASE.contains(&property);
         let sparql = format!("SELECT ?item ?value {{ ?item wdt:P{property} ?value }} ORDER BY ?item");
@@ -381,6 +387,7 @@ impl Microsync {
         Ok((extid_not_in_mnm,match_differs))
     }
 
+    //TODO test
     async fn get_entries_for_ext_ids(&self, catalog_id: usize, property: usize, ext_ids:&Vec<&String> ) -> Result<HashMap<String,SmallEntry>,GenericError> {
         if ext_ids.is_empty() {
             return Ok(HashMap::new());

@@ -23,6 +23,7 @@ pub struct Catalog {
 }
 
 impl Catalog {
+    //TODO test
     fn from_row(row: &Row) -> Self {
         Self {
             id: row.get(0).unwrap(),
@@ -56,6 +57,7 @@ impl Catalog {
     }
 
     /// Sets the MixNMatch object. Automatically done when created via from_id().
+    //TODO test
     pub fn set_mnm(&mut self, mnm: &MixNMatch) {
         self.mnm = Some(mnm.clone());
     }

@@ -26,6 +26,7 @@ struct CandidateDates {
 }
 
 impl CandidateDates {
+    //TODO test
     fn from_row(r: &(usize,String,String,String)) -> Self {
         Self {
             entry_id: r.0,
@@ -43,9 +44,11 @@ pub struct AutoMatch {
 }
 
 impl Jobbable for AutoMatch {
+    //TODO test
     fn set_current_job(&mut self, job: &Job) {
         self.job = Some(job.clone());
     }
+    //TODO test
     fn get_current_job(&self) -> Option<&Job> {
         self.job.as_ref()
     }
@@ -172,6 +175,7 @@ impl AutoMatch {
         Ok(())
     }
 
+    //TODO test
     pub async fn automatch_from_other_catalogs(&self, catalog_id: usize) -> Result<(),GenericError> {
         let sql1 = "SELECT `id`,`ext_name`,`type` FROM entry WHERE catalog=:catalog_id AND q IS NULL LIMIT :batch_size OFFSET :offset" ;
         let mut offset = self.get_last_job_offset() ;
@@ -382,12 +386,14 @@ impl AutoMatch {
         Ok(())
     }
 
+    //TODO test
     async fn search_person(&self, name: &str) -> Result<Vec<String>,GenericError> {
         let name = MixNMatch::sanitize_person_name(&name);
         let name = MixNMatch::simplify_person_name(&name);
         self.mnm.wd_search_with_type(&name,"Q5").await
     }
 
+    //TODO test
     async fn subset_items_by_birth_death_year(&self, items: &Vec<String>, birth_year: i32, death_year: i32, mw_api: &mediawiki::api::Api) -> Result<Vec<String>,GenericError> {
         if items.len()>100 { // TODO chunks but that's a nightly feature
             return Ok(vec![]) ;
@@ -403,6 +409,7 @@ impl AutoMatch {
     }
 
 
+    //TODO test
     fn extract_sane_year_from_date(date: &str) -> Option<i32> {
         let captures = RE_YEAR.captures(date)?;
         if captures.len()!=2 {

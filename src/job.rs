@@ -59,10 +59,12 @@ pub trait Jobbable {
     fn set_current_job(&mut self, job: &Job) ;
     fn get_current_job(&self) -> Option<&Job> ;
 
+    //TODO test
     fn get_last_job_data(&self) -> Option<serde_json::Value> {
         self.get_current_job()?.get_json_value()
     }
 
+    //TODO test
     async fn remember_job_data(&self, json: &serde_json::Value) -> Result<(),GenericError> {
         let job = match self.get_current_job() {
             Some(job) => job,
@@ -71,6 +73,7 @@ pub trait Jobbable {
         job.set_json(Some(json.to_owned())).await
     }
 
+    //TODO test
     fn get_last_job_offset(&self) -> usize {
         let job = match self.get_current_job() {
             Some(job) => job,
@@ -91,6 +94,7 @@ pub trait Jobbable {
         }
     }
 
+    //TODO test
     async fn remember_offset(&self, offset: usize) -> Result<(),GenericError> {
         let job = match self.get_current_job() {
             Some(job) => job,
@@ -100,6 +104,7 @@ pub trait Jobbable {
         Ok(())
     }
 
+    //TODO test
     async fn clear_offset(&self) -> Result<(),GenericError> {
         let job = match self.get_current_job() {
             Some(job) => job,
@@ -120,6 +125,7 @@ enum JobError {
 impl Error for JobError {}
 
 impl fmt::Display for JobError {
+    //TODO test
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self) // user-facing output
     }
@@ -142,6 +148,7 @@ pub struct JobRow {
 }
 
 impl JobRow {
+    //TODO test
     pub fn from_row(x: (usize,String,usize,Option<String>,Option<usize>,String,String,Option<String>,Option<usize>,String,usize)) -> Self {
             Self {
                 id: x.0,
@@ -158,6 +165,7 @@ impl JobRow {
             }
         }
 
+        //TODO test
         pub fn new(action: &str, catalog_id: usize) -> JobRow {
             Self {
                 id: 0,
@@ -183,6 +191,7 @@ pub struct Job {
 }
 
 impl Job {
+    //TODO test
     pub fn new(mnm: &MixNMatch) -> Self {
         Self {
             data: None,
@@ -190,6 +199,7 @@ impl Job {
         }
     }
 
+    //TODO test
     pub async fn set_next(&mut self, actions: &Option<Vec<&str>>) -> Result<bool,GenericError> {
         match self.get_next_job_id(actions).await {
             Some(job_id) => self.set_from_id(job_id).await,
@@ -197,6 +207,7 @@ impl Job {
         }
     }
 
+    //TODO test
     pub async fn set_from_id(&mut self, job_id: usize) -> Result<bool,GenericError> {
         self.data = None;
         let sql = r"SELECT id,action,catalog,json,depends_on,status,last_ts,note,repeat_after_sec,next_ts,user_id FROM `jobs` WHERE `id`=:job_id";
@@ -208,6 +219,7 @@ impl Job {
         self.data = Some(Arc::new(Mutex::new(result)));
         Ok(true)
     }
+    //TODO test
     pub async fn run(&mut self) -> Result<(),GenericError> {
         let catalog_id = self.get_catalog()?;
         let action = self.get_action()?;
@@ -224,6 +236,7 @@ impl Job {
         self.update_next_ts().await
     }
 
+    //TODO test
     pub async fn set_status(&mut self, status: &str) -> Result<(),GenericError> {
         let job_id = self.get_id()?;
         let timestamp = MixNMatch::get_timestamp();
@@ -233,6 +246,7 @@ impl Job {
         Ok(())
     }
 
+    //TODO test
     pub async fn get_next_job_id(&self, actions: &Option<Vec<&str>>) -> Option<usize> {
         if let Some(job_id) = self.get_next_high_priority_job(actions).await {
             return Some(job_id) ;
@@ -253,6 +267,7 @@ impl Job {
     }
 
     /// Resets all RUNNING jobs of certain types to TODO. Used when bot restarts.
+    //TODO test
     pub async fn reset_running_jobs(&self, actions: &Option<Vec<&str>>) -> Result<(),GenericError> {
         let conditions = self.get_action_conditions(actions) ;
         let sql = format!("UPDATE `jobs` SET `status`='{}' WHERE `status`='{}' {}",STATUS_TODO,STATUS_RUNNING,&conditions) ;
@@ -261,6 +276,7 @@ impl Job {
     }
 
     /// Resets all FAILED jobs of certain types to TODO. Used when bot restarts.
+    //TODO test
     pub async fn reset_failed_jobs(&self, actions: &Option<Vec<&str>>) -> Result<(),GenericError> {
         let conditions = self.get_action_conditions(actions) ;
         let sql = format!("UPDATE `jobs` SET `status`='{}' WHERE `status`='{}' {}",STATUS_TODO,STATUS_FAILED,&conditions) ;
@@ -269,10 +285,12 @@ impl Job {
     }
     
     /// Returns the current `json` as an Option<serde_json::Value>
+    //TODO test
     pub fn get_json_value(&self) ->  Option<serde_json::Value> {
         serde_json::from_str(self.get_json().ok()?.as_ref()?).ok()
     }
 
+    //TODO test
     pub async fn queue_simple_job(mnm: &MixNMatch, catalog_id: usize, action: &str, depends_on: Option<usize>) -> Result<usize,GenericError> {
         let timestamp = MixNMatch::get_timestamp();
         let status = "TODO";
@@ -285,6 +303,7 @@ impl Job {
     }
 
     /// Sets the value for `json` locally and in database, from a serde_json::Value
+    //TODO test
     pub async fn set_json(&self, json: Option<serde_json::Value> ) ->  Result<(),GenericError> {
         let job_id = self.get_id()?;
         match json {
@@ -305,6 +324,7 @@ impl Job {
 
     // PRIVATE METHODS
 
+    //TODO test
     async fn run_this_job(&mut self) -> Result<(),GenericError> {
         let json = self.get_json();
         println!("STARTING {:?} with option {:?}", &self.data()?,&json);
@@ -408,30 +428,38 @@ impl Job {
     }
 
 
+    //TODO test
     fn data(&self) -> Result<JobRow,JobError> {
         Ok(self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().map_err(|_|JobError::PoisonedJobRowMutex)?.clone())
     }
+    //TODO test
     fn get_id(&self) -> Result<usize,JobError> {
         Ok(self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().map_err(|_|JobError::PoisonedJobRowMutex)?.id)
     }
+    //TODO test
     fn get_action(&self) -> Result<String,JobError> {
         Ok(self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().map_err(|_|JobError::PoisonedJobRowMutex)?.action.clone())
     }
+    //TODO test
     fn get_catalog(&self) -> Result<usize,JobError> {
         Ok(self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().map_err(|_|JobError::PoisonedJobRowMutex)?.catalog)
     }
+    //TODO test
     fn get_json(&self) -> Result<Option<String>,JobError> {
         Ok(self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().map_err(|_|JobError::PoisonedJobRowMutex)?.json.clone())
     }
 
+    //TODO test
     fn put_status(&self, status: &str) -> Result<(),JobError> {
         (*self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().map_err(|_|JobError::PoisonedJobRowMutex)?).status = status.to_string();
         Ok(())
     }
+    //TODO test
     fn put_json(&self, json: Option<String>) -> Result<(),JobError> {
         (*self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().map_err(|_|JobError::PoisonedJobRowMutex)?).json = json;
         Ok(())
     }
+    //TODO test
     fn put_next_ts(&self, next_ts: &str) -> Result<(),JobError> {
         (*self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().map_err(|_|JobError::PoisonedJobRowMutex)?).next_ts = next_ts.to_string();
         Ok(())
@@ -448,6 +476,7 @@ impl Job {
         Ok(next_ts)
     }
 
+    //TODO test
     async fn update_next_ts(&mut self) -> Result<(),GenericError> {
         let next_ts = self.get_next_ts()?;
 
@@ -457,30 +486,35 @@ impl Job {
         Ok(())
     }
 
+    //TODO test
     async fn get_next_high_priority_job(&self, actions: &Option<Vec<&str>>) -> Option<usize> {
         let conditions = self.get_action_conditions(actions) ;
         let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NULL {}",STATUS_HIGH_PRIORITY,&conditions) ;
         self.get_next_job_generic(&sql).await
     }
     
+    //TODO test
     async fn get_next_low_priority_job(&self, actions: &Option<Vec<&str>>) -> Option<usize> {
         let conditions = self.get_action_conditions(actions) ;
         let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NULL {}",STATUS_LOW_PRIORITY,&conditions) ;
         self.get_next_job_generic(&sql).await
     }
     
+    //TODO test
     async fn get_next_dependent_job(&self, actions: &Option<Vec<&str>>) -> Option<usize> {
         let conditions = self.get_action_conditions(actions) ;
         let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NOT NULL AND `depends_on` IN (SELECT `id` FROM `jobs` WHERE `status`='{}') {}",STATUS_TODO,STATUS_DONE,&conditions) ;
         self.get_next_job_generic(&sql).await
     }
     
+    //TODO test
     async fn get_next_initial_job(&self, actions: &Option<Vec<&str>>) -> Option<usize> {
         let conditions = self.get_action_conditions(actions) ;
         let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NULL {}",STATUS_TODO,&conditions) ;
         self.get_next_job_generic(&sql).await
     }
     
+    //TODO test
     async fn get_next_scheduled_job(&self, actions: &Option<Vec<&str>>) -> Option<usize> {
         let conditions = self.get_action_conditions(actions) ;
         let timestamp =  MixNMatch::get_timestamp();
@@ -488,6 +522,7 @@ impl Job {
         self.get_next_job_generic(&sql).await
     }
     
+    //TODO test
     async fn get_next_job_generic(&self, sql: &str) -> Option<usize> {
         let sql = if sql.contains(" ORDER BY ") {
             sql.to_string()
@@ -499,6 +534,7 @@ impl Job {
             .map_and_drop(from_row::<usize>).await.ok()?.pop()
     }
 
+    //TODO test
     fn get_action_conditions(&self, actions: &Option<Vec<&str>>) -> String {
         let actions = match actions {
             Some(a) => a,
@@ -532,13 +568,5 @@ mod tests {
         let next_ts = job.get_next_ts().unwrap();
         assert_eq!(next_ts,"20221027000101");
     }
- 
-    #[tokio::test]
-    async fn test_job_find() {
-        let mnm = get_test_mnm();
-        let mut job = Job::new(&mnm);
-        // THIS IS NOT A GOOD TEST
-        let _success = job.set_next(&Some(vec!("automatch_by_search"))).await.unwrap();
-        //println!("{:?}", &job);
-    }
+
 }

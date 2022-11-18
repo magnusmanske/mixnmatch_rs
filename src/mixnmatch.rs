@@ -90,22 +90,27 @@ pub struct MatchState {
 }
 
 impl MatchState {
+    //TODO test
     pub fn unmatched() -> Self {
         Self { unmatched:true , partially_matched:false , fully_matched:false }
     }
 
+    //TODO test
     pub fn fully_matched() -> Self {
         Self { unmatched:false , partially_matched:false , fully_matched:true }
     }
 
+    //TODO test
     pub fn not_fully_matched() -> Self {
         Self { unmatched:true , partially_matched:true , fully_matched:false }
     }
 
+    //TODO test
     pub fn any_matched() -> Self {
         Self { unmatched:false , partially_matched:true , fully_matched:true }
     }
 
+    //TODO test
     pub fn get_sql(&self) -> String {
         let mut parts = vec![] ;
         if self.unmatched {
@@ -133,6 +138,7 @@ pub struct MixNMatch {
 }
 
 impl MixNMatch {
+    //TODO test
     pub fn new(app: AppState) -> Self {
         Self {
             app,
@@ -141,6 +147,7 @@ impl MixNMatch {
         }
     }
 
+    //TODO test
     pub async fn get_mw_api(&self) -> Result<mediawiki::api::Api,mediawiki::media_wiki_error::MediaWikiError> {
         /*if self.mw_api.lock().unwrap().is_none() {
             let new_api = mediawiki::api::Api::new(WIKIDATA_API_URL).await?;
@@ -166,6 +173,7 @@ impl MixNMatch {
     }
 
     /// Updates the overview table for a catalog, given the old Entry object, and the user ID and new item.
+    //TODO test
     pub async fn update_overview_table(&self, old_entry: &Entry, user_id: Option<usize>, q: Option<isize>) -> Result<(),GenericError> {
         let add_column = self.get_overview_column_name_for_user_and_q(&user_id,&q);
         let reduce_column = self.get_overview_column_name_for_user_and_q(&old_entry.user,&old_entry.q);
@@ -175,6 +183,7 @@ impl MixNMatch {
         Ok(())
     }
 
+    //TODO test
     pub async fn refresh_overview_table(&self, catalog_id: usize) -> Result<(),GenericError> {
         let sql = r"REPLACE INTO `overview` (catalog,total,noq,autoq,na,manual,nowd,multi_match,types) VALUES (
             :catalog_id,
@@ -192,6 +201,7 @@ impl MixNMatch {
     }
 
     /// Adds the item into a queue for reference fixer. Possibly deprecated.
+    //TODO test
     pub async fn queue_reference_fixer(&self, q_numeric: isize) -> Result<(),GenericError>{
         self.app.get_mnm_conn().await?
             .exec_drop(r"INSERT INTO `reference_fixer` (`q`,`done`) VALUES (:q_numeric,0) ON DUPLICATE KEY UPDATE `done`=0",params! {q_numeric}).await?;
@@ -231,6 +241,7 @@ impl MixNMatch {
 
     /// Checks if the log already has a removed match for this entry.
     /// If a q_numeric item is given, and a specific one is in the log entry, it will only trigger on this combination.
+    //TODO test
     pub async fn avoid_auto_match(&self, entry_id: usize, q_numeric: Option<isize>) -> Result<bool,GenericError> {
         let mut sql = r"SELECT id FROM `log` WHERE `entry_id`=:entry_id".to_string() ;
         match q_numeric {
@@ -244,6 +255,7 @@ impl MixNMatch {
     }
 
     /// Converts a string like "Q12345" to the numeric 12334
+    //TODO test
     pub fn item2numeric(&self, q: &str) -> Option<isize> {
         let re = Regex::new(r"(-{0,1}\d+)").unwrap();
         for cap in re.captures_iter(q) {
@@ -252,6 +264,7 @@ impl MixNMatch {
         None
     }
 
+    //TODO test
     pub fn sql_placeholders(num: usize) -> String {
         let mut placeholders: Vec<String> = Vec::new();
         placeholders.resize(num,"?".to_string());
@@ -262,6 +275,7 @@ impl MixNMatch {
     /// This value can be blank, in which case a normal search is performed.
     /// "Scholarly article" items are excluded from results, unless specifically asked for with Q13442814
     /// Common "meta items" such as disambiguation items are excluded as well
+    //TODO test
     pub async fn wd_search_with_type(&self, name: &str, type_q: &str) -> Result<Vec<String>,GenericError> {
         if name.is_empty() {
             return Ok(vec![]) ;
@@ -279,6 +293,7 @@ impl MixNMatch {
     }
 
     /// Performs a Wikidata API search for the query string. Returns item IDs matching the query.
+    //TODO test
     pub async fn wd_search(&self, query: &str) -> Result<Vec<String>,GenericError> {    
         // TODO via mw_api?
         if query.is_empty() {
@@ -310,6 +325,7 @@ impl MixNMatch {
     }
 
 
+    //TODO test
     pub fn sanitize_person_name(name: &str) -> String {
         let mut name = name.to_string();
         for re in SANITIZE_PERSON_NAME_RES.iter() {
@@ -318,6 +334,7 @@ impl MixNMatch {
         name.trim().to_string()
     }
 
+    //TODO test
     pub fn simplify_person_name(name: &str) -> String {
         let mut name = name.to_string();
         for re in SIMPLIFY_PERSON_NAME_RES.iter() {
@@ -327,10 +344,12 @@ impl MixNMatch {
         name.trim().to_string()
     }
 
+    //TODO test
     pub fn import_file_path(&self) -> String {
         self.app.import_file_path.to_owned()
     }
 
+    //TODO test
     pub async fn set_wikipage_text(&mut self, title: &str, wikitext: &str, summary: &str) -> Result<(),GenericError> {
         self.api_log_in().await?;
         if let Some(mw_api) = self.mw_api.as_mut() {
@@ -369,13 +388,14 @@ impl MixNMatch {
             .delimiter(b',')
             .from_reader(f))
 
-        /*
+        /* HOWTO use:
         let mut reader = self.mnm.load_sparql_csv(&sparql).await?;
         for result in reader.records() {
             let record = result.unwrap();
         }*/
     }
 
+    //TODO test
     pub async fn execute_commands(&mut self, commands: Vec<WikidataCommand> ) -> Result<(),GenericError> {
         if self.testing {
             println!("SKIPPING COMMANDS {:?}",commands);
@@ -419,6 +439,7 @@ impl MixNMatch {
         Ok(())
     }
 
+    //TODO test
     async fn api_log_in(&mut self) -> Result<(),GenericError> {
         if self.mw_api.is_none() {
             self.mw_api = Some(self.get_mw_api().await?);
@@ -441,9 +462,6 @@ mod tests {
     const _TEST_CATALOG_ID: usize = 5526 ;
     const _TEST_ENTRY_ID: usize = 143962196 ;
 
-    // TODO test sanitize_person_name
-    // TODO test simplify_person_name
-
     #[tokio::test]
     async fn test_remove_meta_items() {
         let mnm = get_test_mnm();
@@ -465,6 +483,7 @@ mod tests {
     }
 
     #[tokio::test]
+    //TODO test
     async fn test_load_sparql_csv() {
         let mnm = get_test_mnm();
         let sparql = "SELECT ?item ?itemLabel WHERE {?item wdt:P31 wd:Q146. SERVICE wikibase:label { bd:serviceParam wikibase:language \"[AUTO_LANGUAGE],en\". } }";
