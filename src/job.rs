@@ -16,6 +16,7 @@ use crate::taxon_matcher::*;
 use crate::update_catalog::*;
 use crate::autoscrape::*;
 use crate::microsync::*;
+use crate::php_wrapper::*;
 
 pub const STATUS_TODO: &'static str = "TODO";
 pub const STATUS_DONE: &'static str = "DONE";
@@ -38,6 +39,7 @@ lazy_static!{
         "auxiliary_matcher",
         "aux2wd",
         "microsync",
+        "update_person_dates",
     )};
 }
 
@@ -359,6 +361,9 @@ impl Job {
                 ms.set_current_job(self);
                 ms.check_catalog(catalog_id).await
             },
+            "update_person_dates" => {
+                PhpWrapper::update_person_dates(catalog_id)
+            }
             
             other => {
                 return Err(Box::new(JobError::S(format!("Job::run_this_job: Unknown action '{}'",other))))
