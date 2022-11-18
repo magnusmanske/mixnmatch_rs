@@ -20,7 +20,7 @@ pub const MNM_SITE_URL: &'static str = "https://mix-n-match.toolforge.org";
 
 /// Global function for tests.
 pub fn get_test_mnm() -> MixNMatch {
-    let mut ret = MixNMatch::new(AppState::from_config_file("config.json").unwrap());
+    let mut ret = MixNMatch::new(AppState::from_config_file("config.json").expect("Cannot create test MnM"));
     ret.testing = true;
     ret
 }
@@ -48,6 +48,7 @@ lazy_static! {
         Regex::new(r"\s+").unwrap(),
     ];
     static ref SIMPLIFY_PERSON_NAME_TWO_RE : Regex = Regex::new(r"^(\S+) .*?(\S+)$").unwrap();
+    static ref RE_ITEM2NUMERIC : Regex = Regex::new(r"(-{0,1}\d+)").unwrap();
 }
 
 pub const Q_NA: isize = 0;
@@ -236,7 +237,7 @@ impl MixNMatch {
     }
 
     pub fn parse_timestamp(ts: &str) -> Option<DateTime<Utc>> {
-        Some(NaiveDateTime::parse_from_str(ts,"%Y%m%d%H%M%S").ok()?.and_local_timezone(Utc).unwrap()) // This unwrap() is OK!
+        Some(NaiveDateTime::parse_from_str(ts,"%Y%m%d%H%M%S").ok()?.and_local_timezone(Utc).unwrap())
     }
 
     /// Checks if the log already has a removed match for this entry.
@@ -257,8 +258,7 @@ impl MixNMatch {
     /// Converts a string like "Q12345" to the numeric 12334
     //TODO test
     pub fn item2numeric(&self, q: &str) -> Option<isize> {
-        let re = Regex::new(r"(-{0,1}\d+)").unwrap();
-        for cap in re.captures_iter(q) {
+        for cap in RE_ITEM2NUMERIC.captures_iter(q) {
             return cap[1].parse::<isize>().ok()
         }
         None
@@ -375,7 +375,7 @@ impl MixNMatch {
         let mut f = tempfile()?;
         let mut res = client
             .get(url)
-            .header(reqwest::header::ACCEPT, reqwest::header::HeaderValue::from_str("text/csv").unwrap())
+            .header(reqwest::header::ACCEPT, reqwest::header::HeaderValue::from_str("text/csv")?)
             .send()
             .await?;
         while let Some(chunk) = res.chunk().await? {

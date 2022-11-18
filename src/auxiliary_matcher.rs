@@ -36,7 +36,7 @@ pub const AUX_PROPERTIES_ALSO_USING_LOWERCASE: &'static [usize] = &[
 ];
 
 lazy_static!{
-    static ref RE_COORDINATE_PATTERN : Regex = Regex::new(r"^\@{0,1}([0-9\.\-]+)[,/]([0-9\.\-]+)$").unwrap();
+    static ref RE_COORDINATE_PATTERN : Regex = Regex::new(r"^\@{0,1}([0-9\.\-]+)[,/]([0-9\.\-]+)$").expect("Regex error");
 }
 
 #[derive(Debug, Clone)]
@@ -127,7 +127,6 @@ enum AuxiliaryMatcherError {
 impl Error for AuxiliaryMatcherError {}
 
 impl fmt::Display for AuxiliaryMatcherError {
-    //TODO test
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self) // user-facing output
     }
@@ -173,7 +172,7 @@ impl AuxiliaryMatcher {
 
     //TODO test
     async fn get_properties_using_items(mnm: &MixNMatch) -> Result<Vec<String>,GenericError> {
-        let mw_api = mnm.get_mw_api().await.unwrap();
+        let mw_api = mnm.get_mw_api().await?;
         let sparql = "SELECT ?p WHERE { ?p rdf:type wikibase:Property; wikibase:propertyType wikibase:WikibaseItem }";
         let sparql_results = mw_api.sparql_query(sparql).await?;
         Ok(mw_api.entities_from_sparql_result(&sparql_results,"p"))
@@ -181,7 +180,7 @@ impl AuxiliaryMatcher {
 
     //TODO test
     async fn get_properties_that_have_external_ids(mnm: &MixNMatch) -> Result<Vec<String>,GenericError> {
-        let mw_api = mnm.get_mw_api().await.unwrap();
+        let mw_api = mnm.get_mw_api().await?;
         let sparql = "SELECT ?p WHERE { ?p rdf:type wikibase:Property; wikibase:propertyType wikibase:ExternalId }";
         let sparql_results = mw_api.sparql_query(sparql).await?;
         Ok(mw_api.entities_from_sparql_result(&sparql_results,"p"))
@@ -227,8 +226,9 @@ impl AuxiliaryMatcher {
                     Err(_) => continue // Something went wrong, just skip this one
                 };
                 if search_results.len()==1 {
-                    let q = search_results.get(0).unwrap(); // Safe
-                    items_to_check.push((q.to_owned(),aux.to_owned()));
+                    if let Some(q) = search_results.get(0) {
+                        items_to_check.push((q.to_owned(),aux.to_owned()));
+                    }
                 } else if search_results.len()>1 {
                     Issue::new(aux.entry_id,IssueType::WdDuplicate,json!(search_results),&self.mnm).await?.insert().await?;
                 }
@@ -452,7 +452,11 @@ impl AuxiliaryMatcher {
             let catalog = Catalog::from_id(catalog_id, &self.mnm).await.ok();
             self.catalogs.insert(catalog_id,catalog);
         }
-        let catalog = match self.catalogs.get(&catalog_id).unwrap() {
+        let catalog = match self.catalogs.get(&catalog_id) {
+            Some(catalog) => catalog,
+            None => return None // No catalog, no source
+        };
+        let catalog = match catalog {
             Some(catalog) => catalog,
             None => { return None } // No catalog, no source
         };
@@ -469,7 +473,7 @@ impl AuxiliaryMatcher {
             if stated_in.is_empty() {
                 let prop = format!("P{}",wd_prop);
                 if !self.properties.has_entity(prop.to_owned()) {
-                    let mw_api = self.mnm.get_mw_api().await.unwrap();
+                    let mw_api = self.mnm.get_mw_api().await.ok()?;
                     let _ = self.properties.load_entity(&mw_api, prop.to_owned()).await;
                 }
                 if let Some(prop_entity) = self.properties.get_entity(prop) {
