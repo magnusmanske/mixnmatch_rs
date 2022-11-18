@@ -7,6 +7,7 @@ use mysql_async::from_row;
 use chrono::Duration;
 use std::fmt;
 use async_trait::async_trait;
+use crate::maintenance::*;
 use crate::app_state::*;
 use crate::entry::*;
 use crate::mixnmatch::*;
@@ -39,6 +40,8 @@ lazy_static!{
         "auxiliary_matcher",
         "aux2wd",
         "microsync",
+        "fix_disambig",
+        "fix_redirected_items_in_catalog",
         "update_person_dates",
     )};
 }
@@ -360,6 +363,14 @@ impl Job {
                 let mut ms = Microsync::new(&self.mnm);
                 ms.set_current_job(self);
                 ms.check_catalog(catalog_id).await
+            },
+            "fix_disambig" => {
+                let maintenance = Maintenance::new(&self.mnm);
+                maintenance.unlink_meta_items(catalog_id,&MatchState::any_matched()).await
+            },
+            "fix_redirected_items_in_catalog" => {
+                let maintenance = Maintenance::new(&self.mnm);
+                maintenance.fix_redirects(catalog_id,&MatchState::any_matched()).await
             },
             "update_person_dates" => {
                 PhpWrapper::update_person_dates(catalog_id)
