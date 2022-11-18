@@ -102,6 +102,10 @@ impl MatchState {
         Self { unmatched:true , partially_matched:true , fully_matched:false }
     }
 
+    pub fn any_matched() -> Self {
+        Self { unmatched:false , partially_matched:true , fully_matched:true }
+    }
+
     pub fn get_sql(&self) -> String {
         let mut parts = vec![] ;
         if self.unmatched {

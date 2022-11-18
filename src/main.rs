@@ -12,6 +12,7 @@ pub mod job ;
 pub mod issue ;
 pub mod wikidata_commands;
 pub mod php_wrapper;
+pub mod maintenance;
 use std::env;
 
 const MAX_CONCURRENT_JOBS: usize = 20 ; // Runs fine with >40 in <500MB but might stress the APIs. Use usize::MAX for unlimited
