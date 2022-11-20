@@ -100,9 +100,10 @@ impl WikidataCommand {
                 if json.get("claims").is_none() {
                     json["claims"] = json!([]);
                 }
-                json["claims"].as_array_mut().unwrap().push(claim);
+                if let Some(claims) = json["claims"].as_array_mut() {
+                    claims.push(claim)
+                }
             }
-            //_ => {panic!("WikidataCommand::edit_entity: not implemented: {:?}",&self)}
         }
     }
 

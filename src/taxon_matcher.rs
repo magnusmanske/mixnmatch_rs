@@ -24,7 +24,7 @@ lazy_static! {
         m
     };
     static ref USE_DESCRIPTIONS_FOR_TAXON_NAME_CATALOGS: Vec<usize> = vec!(169,827);
-    static ref RE_CATALOG_169 : Regex = RegexBuilder::new(r"^.*\[([a-z ]+).*$").case_insensitive(true).build().unwrap();
+    static ref RE_CATALOG_169 : Regex = RegexBuilder::new(r"^.*\[([a-z ]+).*$").case_insensitive(true).build().expect("Regex error");
 }
 
 impl Jobbable for TaxonMatcher {

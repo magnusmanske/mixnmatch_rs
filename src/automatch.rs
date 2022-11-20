@@ -14,7 +14,7 @@ use crate::job::*;
 use crate::issue::*;
 
 lazy_static!{
-    static ref RE_YEAR : Regex = Regex::new(r"(\d{3,4})").unwrap();
+    static ref RE_YEAR : Regex = Regex::new(r"(\d{3,4})").expect("Regexp error");
 }
 
 #[derive(Debug, Clone)]
@@ -258,7 +258,7 @@ impl AutoMatch {
     }
 
     pub async fn match_person_by_dates(&self, catalog_id: usize) -> Result<(),GenericError> {
-        let mw_api = self.mnm.get_mw_api().await.unwrap();
+        let mw_api = self.mnm.get_mw_api().await?;
         let sql = "SELECT entry_id,ext_name,born,died 
             FROM (`entry` join `person_dates`)
             WHERE `person_dates`.`entry_id` = `entry`.`id`
@@ -317,7 +317,7 @@ impl AutoMatch {
         let precision = 10; // 2022-xx-xx=10; use 4 for just the year
         let match_field = "born" ;
         let match_prop = if match_field=="born" { "P569" }  else { "P570" } ;
-        let mw_api = self.mnm.get_mw_api().await.unwrap();
+        let mw_api = self.mnm.get_mw_api().await?;
         // CAUTION: Do NOT use views in the SQL statement, it will/might throw an "Prepared statement needs to be re-prepared" error
         let sql = format!("(
                 SELECT multi_match.entry_id AS entry_id,born,died,candidates AS qs FROM person_dates,multi_match,entry
@@ -371,8 +371,9 @@ impl AutoMatch {
                     }
                 }
                 if candidates.len()==1 { // TODO >1
-                    let q = candidates.get(0).unwrap(); // Safe
-                    let _ = Entry::from_id(result.entry_id, &self.mnm).await?.set_match(&q,USER_DATE_MATCH).await;
+                    if let Some(q) = candidates.get(0) {
+                        let _ = Entry::from_id(result.entry_id, &self.mnm).await?.set_match(&q,USER_DATE_MATCH).await;
+                    }
                 }
             }
 

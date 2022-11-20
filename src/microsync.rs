@@ -267,7 +267,7 @@ impl Microsync {
     }
 
     async fn get_multiple_extid_in_wikidata(&self, property: usize) -> Result<Vec<MultipleExtIdInWikidata>,GenericError> {
-        let mw_api = self.mnm.get_mw_api().await.unwrap();
+        let mw_api = self.mnm.get_mw_api().await?;
         // TODO: lcase?
         let sparql = format!("SELECT ?extid (count(?q) AS ?cnt) (GROUP_CONCAT(?q; SEPARATOR = '|') AS ?items) 
             {{ ?q wdt:P{} ?extid }} 
@@ -280,10 +280,20 @@ impl Microsync {
             .filter_map(|r|r.ok())
             .filter(|r|r.len()==3)
             .take(MAX_WIKI_ROWS+1) // limit to max results, not point in collecting more
-            .map(|r|{
-                let ext_id = r.get(0).unwrap(); // Safe
-                let items: Vec<String> = r.get(2).unwrap().split("|").filter_map(|s|mw_api.extract_entity_from_uri(s).ok()).collect();
-                MultipleExtIdInWikidata{ext_id:ext_id.to_string(),items}
+            .filter_map(|r|{
+                match r.get(0) {
+                    Some(ext_id) => {
+                        match r.get(2) {
+                            Some(item_str) => {
+                                let items: Vec<String> = item_str.split("|").filter_map(|s|mw_api.extract_entity_from_uri(s).ok()).collect();
+                                Some(MultipleExtIdInWikidata{ext_id:ext_id.to_string(),items})        
+                            }
+                            None => None
+                        }
+
+                    }
+                    None => None
+                }
             })
             .collect())
     }
@@ -318,7 +328,7 @@ impl Microsync {
 
     //TODO test
     async fn get_q2ext_id_chunk(&self, reader: &mut csv::Reader<File>,case_insensitive: bool, batch_size: usize) -> Result<Vec<(isize,String)>,GenericError> {
-        let mw_api = self.mnm.get_mw_api().await.unwrap();
+        let mw_api = self.mnm.get_mw_api().await?;
         Ok(reader
             .records()
             .filter_map(|r|r.ok())

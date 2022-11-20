@@ -19,8 +19,8 @@ const AUTOSCRAPER_USER_AGENT: &str = "Mozilla/5.0 (platform; rv:geckoversion) Ge
 const AUTOSCRAPE_ENTRY_BATCH_SIZE: usize = 100;
 
 lazy_static!{
-    static ref RE_SIMPLE_SPACE : Regex = RegexBuilder::new(r"\s+").multi_line(true).ignore_whitespace(true).build().unwrap() ;
-    static ref RE_HTML: Regex = Regex::new(r"(<.*?>)").unwrap();
+    static ref RE_SIMPLE_SPACE : Regex = RegexBuilder::new(r"\s+").multi_line(true).ignore_whitespace(true).build().expect("Regex error") ;
+    static ref RE_HTML: Regex = Regex::new(r"(<.*?>)").expect("Regex error");
 }
 
 #[derive(Debug, Clone)]

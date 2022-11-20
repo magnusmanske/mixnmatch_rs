@@ -1,3 +1,5 @@
+use std::error::Error;
+use std::fmt;
 use tempfile::tempfile;
 use std::fs::File;
 use std::io::prelude::*;
@@ -17,6 +19,21 @@ use crate::entry::*;
 use crate::wikidata_commands::WikidataCommand;
 
 pub const MNM_SITE_URL: &'static str = "https://mix-n-match.toolforge.org";
+
+
+#[derive(Debug)]
+pub enum MnMError {
+    ApiUnreachable,
+}
+
+impl Error for MnMError {}
+
+impl fmt::Display for MnMError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self) // user-facing output
+    }
+}
+
 
 /// Global function for tests.
 pub fn get_test_mnm() -> MixNMatch {
@@ -237,7 +254,10 @@ impl MixNMatch {
     }
 
     pub fn parse_timestamp(ts: &str) -> Option<DateTime<Utc>> {
-        Some(NaiveDateTime::parse_from_str(ts,"%Y%m%d%H%M%S").ok()?.and_local_timezone(Utc).unwrap())
+        match NaiveDateTime::parse_from_str(ts,"%Y%m%d%H%M%S").ok()?.and_local_timezone(Utc) {
+            chrono::offset::LocalResult::Single(d) => Some(d),
+            _ => None
+        }
     }
 
     /// Checks if the log already has a removed match for this entry.
@@ -444,7 +464,10 @@ impl MixNMatch {
         if self.mw_api.is_none() {
             self.mw_api = Some(self.get_mw_api().await?);
         }
-        let mw_api = self.mw_api.as_mut().unwrap();
+        let mw_api = match self.mw_api.as_mut() {
+            Some(api) => api,
+            None => return Err(Box::new(MnMError::ApiUnreachable))
+        };
         if mw_api.user().logged_in() { // Already logged in
             return Ok(());
         }

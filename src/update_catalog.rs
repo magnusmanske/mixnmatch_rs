@@ -325,9 +325,11 @@ impl ExtendedEntry {
         // Convert from POINT
         let value = match RE_POINT.captures(cell) {
             Some(captures) => {
-                let lon = captures.get(1).unwrap();
-                let lat = captures.get(2).unwrap();
-                format!("{},{}",lat.as_str(),lon.as_str())
+                if let (Some(lat),Some(lon)) = (captures.get(1),captures.get(2)) {
+                    format!("{},{}",lat.as_str(),lon.as_str())
+                } else {
+                    cell.to_string()
+                }
             }
             None => cell.to_string()
         };
@@ -375,6 +377,7 @@ impl Pattern {
             Some(col) => col.as_str().ok_or(UpdateCatalogError::BadPattern)?,
             None => return Err(Box::new(UpdateCatalogError::BadPattern))
         };
+        // TODO unwrap
         let pattern = match RE_PATTERN_WRAP_REMOVAL.captures(pattern).unwrap().get(1).map(|s|s.as_str()) {
             Some(s) => s,
             None => pattern
@@ -646,7 +649,10 @@ impl UpdateCatalog {
             }
         }
         for row in rows.iter() {
-            let ext_id = row.get(datasource.ext_id_column).unwrap();
+            let ext_id = match row.get(datasource.ext_id_column) {
+                Some(ext_id) => ext_id,
+                None => continue
+            };
             if existing_ext_ids.contains(ext_id) {
                 // An entry with this ext_id already exists, and we only know that because just_add==true, so skip this
             } else {
@@ -663,7 +669,10 @@ impl UpdateCatalog {
     
     //TODO test
     async fn process_row(&self, row: &csv::StringRecord, datasource: &mut DataSource) -> Result<(),GenericError> {
-        let ext_id = row.get(datasource.ext_id_column).unwrap();
+        let ext_id = match row.get(datasource.ext_id_column) {
+            Some(ext_id) => ext_id,
+            None => return Ok(()) // TODO ???
+        };
         match Entry::from_ext_id(datasource.catalog_id,ext_id, &self.mnm).await {
             Ok(mut entry) => {
                 if !datasource.just_add {
