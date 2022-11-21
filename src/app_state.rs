@@ -42,7 +42,7 @@ impl AppState {
             import_file_path: config["import_file_path"].as_str().unwrap().to_string(),
             bot_name: config["bot_name"].as_str().unwrap().to_string(),
             bot_password: config["bot_password"].as_str().unwrap().to_string(),
-            max_concurrent_jobs: config["bot_password"].as_u64().unwrap_or(10) as usize,
+            max_concurrent_jobs: config["max_concurrent_jobs"].as_u64().unwrap_or(10) as usize,
         };
         ret
     }
