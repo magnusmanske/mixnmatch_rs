@@ -15,8 +15,6 @@ pub mod php_wrapper;
 pub mod maintenance;
 use std::env;
 
-const MAX_CONCURRENT_JOBS: usize = 20 ; // Runs fine with >40 in <500MB but might stress the APIs. Use usize::MAX for unlimited
-
 #[tokio::main]
 async fn main() -> Result<(),app_state::GenericError> {
     let app = app_state::AppState::from_config_file("config.json")?;
@@ -30,7 +28,7 @@ async fn main() -> Result<(),app_state::GenericError> {
             println!("{:?}",id_opt);
             Ok(())
         }
-        _ => app.forever_loop(MAX_CONCURRENT_JOBS).await
+        _ => app.forever_loop().await
     }
 }
 

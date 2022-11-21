@@ -20,7 +20,8 @@ pub struct AppState {
     mnm_pool: mysql_async::Pool,
     pub import_file_path: String,
     pub bot_name: String,
-    pub bot_password: String
+    pub bot_password: String,
+    max_concurrent_jobs: usize,
 }
 
 impl AppState {
@@ -41,6 +42,7 @@ impl AppState {
             import_file_path: config["import_file_path"].as_str().unwrap().to_string(),
             bot_name: config["bot_name"].as_str().unwrap().to_string(),
             bot_password: config["bot_password"].as_str().unwrap().to_string(),
+            max_concurrent_jobs: config["bot_password"].as_u64().unwrap_or(10) as usize,
         };
         ret
     }
@@ -90,7 +92,7 @@ impl AppState {
         job.run().await
     }
 
-    pub async fn forever_loop(&self, max_concurrent: usize) -> Result<(),GenericError> {
+    pub async fn forever_loop(&self) -> Result<(),GenericError> {
         let mnm = MixNMatch::new(self.clone());
         let concurrent:Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
     
@@ -100,7 +102,7 @@ impl AppState {
         println!("Old jobs reset, starting bot");
     
         loop {
-            if *concurrent.lock().unwrap()>=max_concurrent {
+            if *concurrent.lock().unwrap()>=self.max_concurrent_jobs {
                 println!("Too many");
                 self.hold_on();
                 continue;
