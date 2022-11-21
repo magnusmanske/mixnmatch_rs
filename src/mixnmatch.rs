@@ -108,27 +108,22 @@ pub struct MatchState {
 }
 
 impl MatchState {
-    //TODO test
     pub fn unmatched() -> Self {
         Self { unmatched:true , partially_matched:false , fully_matched:false }
     }
 
-    //TODO test
     pub fn fully_matched() -> Self {
         Self { unmatched:false , partially_matched:false , fully_matched:true }
     }
 
-    //TODO test
     pub fn not_fully_matched() -> Self {
         Self { unmatched:true , partially_matched:true , fully_matched:false }
     }
 
-    //TODO test
     pub fn any_matched() -> Self {
         Self { unmatched:false , partially_matched:true , fully_matched:true }
     }
 
-    //TODO test
     pub fn get_sql(&self) -> String {
         let mut parts = vec![] ;
         if self.unmatched {
@@ -484,6 +479,33 @@ mod tests {
 
     const _TEST_CATALOG_ID: usize = 5526 ;
     const _TEST_ENTRY_ID: usize = 143962196 ;
+
+    /*t_sql(&self) -> String {
+        let mut parts = vec![] ;
+        if self.unmatched {
+            parts.push("(`q` IS NULL)")
+        }
+        if self.partially_matched {
+            parts.push("(`q`>0 AND `user`=0)")
+        }
+        if self.fully_matched {
+            parts.push("(`q`>0 AND `user`>0)")
+        }
+        if parts.is_empty() {
+            return "".to_string() ;
+            
+        return format!(" AND ({}) ",parts.join(" OR ")) ;
+        
+        */
+    #[test]
+    fn test_get_sql() {
+        let ms = MatchState{unmatched:false,fully_matched:false,partially_matched:false};
+        assert_eq!(ms.get_sql().as_str(),"");
+        assert_eq!(MatchState::unmatched().get_sql().as_str()," AND ((`q` IS NULL)) ");
+        assert_eq!(MatchState::fully_matched().get_sql().as_str()," AND ((`q`>0 AND `user`>0)) ");
+        assert_eq!(MatchState::not_fully_matched().get_sql().as_str()," AND ((`q` IS NULL) OR (`q`>0 AND `user`=0)) ");
+        assert_eq!(MatchState::any_matched().get_sql().as_str()," AND ((`q`>0 AND `user`=0) OR (`q`>0 AND `user`>0)) ");
+    }
 
     #[tokio::test]
     async fn test_remove_meta_items() {
