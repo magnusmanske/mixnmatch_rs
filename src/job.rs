@@ -1,4 +1,3 @@
-use lazy_static::lazy_static;
 use std::error::Error;
 use std::sync::{Arc, Mutex};
 use serde_json::json;
@@ -25,33 +24,6 @@ pub const STATUS_FAILED: &'static str = "FAILED";
 pub const STATUS_RUNNING: &'static str = "RUNNING";
 pub const STATUS_HIGH_PRIORITY: &'static str = "HIGH_PRIORITY";
 pub const STATUS_LOW_PRIORITY: &'static str = "LOW_PRIORITY";
-
-lazy_static!{
-    pub static ref JOB_SUPPORTED_ACTIONS: Vec<&'static str> = {vec!(
-        "autoscrape",
-        "automatch_by_search",
-        "automatch_from_other_catalogs",
-        "taxon_matcher",
-        "purge_automatches",
-        "match_person_dates",
-        "match_on_birthdate",
-        "update_from_tabbed_file",
-        "automatch_by_sitelink",
-        "auxiliary_matcher",
-        "aux2wd",
-        "microsync",
-        "fix_disambig",
-        "fix_redirected_items_in_catalog",
-        "update_person_dates",
-        "generate_aux_from_description",
-        "bespoke_scraper",
-        "import_aux_from_url",
-        "update_descriptions_from_url",
-        "automatch",
-        "match_by_coordinates",
-    )};
-}
-
 
 /// A trait that allows to manage temporary job data (eg offset)
 #[async_trait]
@@ -200,8 +172,8 @@ impl Job {
     }
 
     //TODO test
-    pub async fn set_next(&mut self, actions: &Option<Vec<&str>>) -> Result<bool,GenericError> {
-        match self.get_next_job_id(actions).await {
+    pub async fn set_next(&mut self) -> Result<bool,GenericError> {
+        match self.get_next_job_id().await {
             Some(job_id) => self.set_from_id(job_id).await,
             None => Ok(false)
         }
@@ -247,20 +219,20 @@ impl Job {
     }
 
     //TODO test
-    pub async fn get_next_job_id(&self, actions: &Option<Vec<&str>>) -> Option<usize> {
-        if let Some(job_id) = self.get_next_high_priority_job(actions).await {
+    pub async fn get_next_job_id(&self) -> Option<usize> {
+        if let Some(job_id) = self.get_next_high_priority_job().await {
             return Some(job_id) ;
         }
-        if let Some(job_id) = self.get_next_dependent_job(actions).await {
+        if let Some(job_id) = self.get_next_dependent_job().await {
             return Some(job_id) ;
         }
-        if let Some(job_id) = self.get_next_initial_job(actions).await {
+        if let Some(job_id) = self.get_next_initial_job().await {
             return Some(job_id) ;
         }
-        if let Some(job_id) = self.get_next_low_priority_job(actions).await {
+        if let Some(job_id) = self.get_next_low_priority_job().await {
             return Some(job_id) ;
         }
-        if let Some(job_id) = self.get_next_scheduled_job(actions).await {
+        if let Some(job_id) = self.get_next_scheduled_job().await {
             return Some(job_id) ;
         }
         None
@@ -268,18 +240,16 @@ impl Job {
 
     /// Resets all RUNNING jobs of certain types to TODO. Used when bot restarts.
     //TODO test
-    pub async fn reset_running_jobs(&self, actions: &Option<Vec<&str>>) -> Result<(),GenericError> {
-        let conditions = self.get_action_conditions(actions) ;
-        let sql = format!("UPDATE `jobs` SET `status`='{}' WHERE `status`='{}' {}",STATUS_TODO,STATUS_RUNNING,&conditions) ;
+    pub async fn reset_running_jobs(&self) -> Result<(),GenericError> {
+        let sql = format!("UPDATE `jobs` SET `status`='{}' WHERE `status`='{}'",STATUS_TODO,STATUS_RUNNING) ;
         self.mnm.app.get_mnm_conn().await?.exec_drop(sql, ()).await?;
         Ok(())
     }
 
     /// Resets all FAILED jobs of certain types to TODO. Used when bot restarts.
     //TODO test
-    pub async fn reset_failed_jobs(&self, actions: &Option<Vec<&str>>) -> Result<(),GenericError> {
-        let conditions = self.get_action_conditions(actions) ;
-        let sql = format!("UPDATE `jobs` SET `status`='{}' WHERE `status`='{}' {}",STATUS_TODO,STATUS_FAILED,&conditions) ;
+    pub async fn reset_failed_jobs(&self) -> Result<(),GenericError> {
+        let sql = format!("UPDATE `jobs` SET `status`='{}' WHERE `status`='{}'",STATUS_TODO,STATUS_FAILED) ;
         self.mnm.app.get_mnm_conn().await?.exec_drop(sql, ()).await?;
         Ok(())
     }
@@ -487,38 +457,33 @@ impl Job {
     }
 
     //TODO test
-    async fn get_next_high_priority_job(&self, actions: &Option<Vec<&str>>) -> Option<usize> {
-        let conditions = self.get_action_conditions(actions) ;
-        let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NULL {}",STATUS_HIGH_PRIORITY,&conditions) ;
+    async fn get_next_high_priority_job(&self) -> Option<usize> {
+        let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NULL",STATUS_HIGH_PRIORITY) ;
         self.get_next_job_generic(&sql).await
     }
     
     //TODO test
-    async fn get_next_low_priority_job(&self, actions: &Option<Vec<&str>>) -> Option<usize> {
-        let conditions = self.get_action_conditions(actions) ;
-        let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NULL {}",STATUS_LOW_PRIORITY,&conditions) ;
+    async fn get_next_low_priority_job(&self) -> Option<usize> {
+        let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NULL",STATUS_LOW_PRIORITY) ;
         self.get_next_job_generic(&sql).await
     }
     
     //TODO test
-    async fn get_next_dependent_job(&self, actions: &Option<Vec<&str>>) -> Option<usize> {
-        let conditions = self.get_action_conditions(actions) ;
-        let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NOT NULL AND `depends_on` IN (SELECT `id` FROM `jobs` WHERE `status`='{}') {}",STATUS_TODO,STATUS_DONE,&conditions) ;
+    async fn get_next_dependent_job(&self) -> Option<usize> {
+        let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NOT NULL AND `depends_on` IN (SELECT `id` FROM `jobs` WHERE `status`='{}')",STATUS_TODO,STATUS_DONE) ;
         self.get_next_job_generic(&sql).await
     }
     
     //TODO test
-    async fn get_next_initial_job(&self, actions: &Option<Vec<&str>>) -> Option<usize> {
-        let conditions = self.get_action_conditions(actions) ;
-        let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NULL {}",STATUS_TODO,&conditions) ;
+    async fn get_next_initial_job(&self) -> Option<usize> {
+        let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NULL",STATUS_TODO) ;
         self.get_next_job_generic(&sql).await
     }
     
     //TODO test
-    async fn get_next_scheduled_job(&self, actions: &Option<Vec<&str>>) -> Option<usize> {
-        let conditions = self.get_action_conditions(actions) ;
+    async fn get_next_scheduled_job(&self) -> Option<usize> {
         let timestamp =  MixNMatch::get_timestamp();
-        let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `next_ts`!='' AND `next_ts`<='{}' {} ORDER BY `next_ts` LIMIT 1",STATUS_DONE,&timestamp,&conditions) ;
+        let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `next_ts`!='' AND `next_ts`<='{}' ORDER BY `next_ts` LIMIT 1",STATUS_DONE,&timestamp) ;
         self.get_next_job_generic(&sql).await
     }
     
@@ -534,17 +499,6 @@ impl Job {
             .map_and_drop(from_row::<usize>).await.ok()?.pop()
     }
 
-    //TODO test
-    fn get_action_conditions(&self, actions: &Option<Vec<&str>>) -> String {
-        let actions = match actions {
-            Some(a) => a,
-            None => return "".to_string()
-        };
-        if actions.is_empty() {
-            return "".to_string() ;
-        }
-        return format!(" AND `action` IN ('{}') ",actions.join("','"));
-    }
 }
 
 

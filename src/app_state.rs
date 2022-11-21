@@ -95,9 +95,9 @@ impl AppState {
         let concurrent:Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
     
         // Reset old running&failed jobs
-        Job::new(&mnm).reset_running_jobs(&Some(JOB_SUPPORTED_ACTIONS.clone())).await?;
-        Job::new(&mnm).reset_failed_jobs(&Some(JOB_SUPPORTED_ACTIONS.clone())).await?;
-        println!("Old {} jobs reset, starting bot",&JOB_SUPPORTED_ACTIONS.join(","));
+        Job::new(&mnm).reset_running_jobs().await?;
+        Job::new(&mnm).reset_failed_jobs().await?;
+        println!("Old jobs reset, starting bot");
     
         loop {
             if *concurrent.lock().unwrap()>=max_concurrent {
@@ -105,7 +105,7 @@ impl AppState {
                 continue;
             }
             let mut job = Job::new(&mnm);
-            match job.set_next(&Some(JOB_SUPPORTED_ACTIONS.clone())).await {
+            match job.set_next().await {
                 Ok(true) => {
                     let _ = job.set_status(STATUS_RUNNING).await;
                     let concurrent = concurrent.clone();

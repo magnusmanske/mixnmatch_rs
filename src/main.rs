@@ -23,6 +23,13 @@ async fn main() -> Result<(),app_state::GenericError> {
     let argv: Vec<String> = env::args_os().map(|s|s.into_string().unwrap()).collect();
     match argv.get(1).map(|s|s.as_str()) {
         Some("job") => app.run_single_job(argv.get(2).unwrap().parse::<usize>().unwrap()).await,
+        Some("test") => {
+            let mnm = crate::mixnmatch::MixNMatch::new(app.clone());
+            let j = crate::job::Job::new(&mnm);
+            let id_opt = j.get_next_job_id().await;
+            println!("{:?}",id_opt);
+            Ok(())
+        }
         _ => app.forever_loop(MAX_CONCURRENT_JOBS).await
     }
 }
