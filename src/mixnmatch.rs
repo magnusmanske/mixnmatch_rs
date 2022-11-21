@@ -288,7 +288,6 @@ impl MixNMatch {
     /// This value can be blank, in which case a normal search is performed.
     /// "Scholarly article" items are excluded from results, unless specifically asked for with Q13442814
     /// Common "meta items" such as disambiguation items are excluded as well
-    //TODO test
     pub async fn wd_search_with_type(&self, name: &str, type_q: &str) -> Result<Vec<String>,GenericError> {
         if name.is_empty() {
             return Ok(vec![]) ;
@@ -306,7 +305,6 @@ impl MixNMatch {
     }
 
     /// Performs a Wikidata API search for the query string. Returns item IDs matching the query.
-    //TODO test
     pub async fn wd_search(&self, query: &str) -> Result<Vec<String>,GenericError> {    
         // TODO via mw_api?
         if query.is_empty() {
@@ -515,7 +513,6 @@ mod tests {
     }
 
     #[tokio::test]
-    //TODO test
     async fn test_load_sparql_csv() {
         let mnm = get_test_mnm();
         let sparql = "SELECT ?item ?itemLabel WHERE {?item wdt:P31 wd:Q146. SERVICE wikibase:label { bd:serviceParam wikibase:language \"[AUTO_LANGUAGE],en\". } }";
@@ -523,6 +520,14 @@ mod tests {
         assert!(reader.records().filter_map(|r|r.ok()).filter_map(|x|x.get(1).map(|x|x.to_string())).any(|s|s=="Dusty the Klepto Kitty"));
     }
 
+    #[tokio::test]
+    async fn test_wd_search() {
+        let mnm = get_test_mnm();
+        assert!(mnm.wd_search("").await.unwrap().is_empty());
+        assert_eq!(mnm.wd_search("Magnus Manske haswbstatement:P31=Q5").await.unwrap(),vec!["Q13520818".to_string()]);
+        assert_eq!(mnm.wd_search_with_type("Magnus Manske","Q5").await.unwrap(),vec!["Q13520818".to_string()]);
+    }
+    
     #[test]
     fn test_get_timestamp() {
         let ts = MixNMatch::get_timestamp();
