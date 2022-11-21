@@ -101,6 +101,7 @@ impl AppState {
     
         loop {
             if *concurrent.lock().unwrap()>=max_concurrent {
+                println!("Too many");
                 self.hold_on();
                 continue;
             }
@@ -117,6 +118,7 @@ impl AppState {
                     });
                 }
                 Ok(false) => {
+                    println!("Wait 5");
                     self.hold_on();
                 }
                 _ => {
