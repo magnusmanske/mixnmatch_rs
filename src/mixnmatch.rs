@@ -452,7 +452,6 @@ impl MixNMatch {
         Ok(())
     }
 
-    //TODO test
     async fn api_log_in(&mut self) -> Result<(),GenericError> {
         if self.mw_api.is_none() {
             self.mw_api = Some(self.get_mw_api().await?);
@@ -478,23 +477,6 @@ mod tests {
     const _TEST_CATALOG_ID: usize = 5526 ;
     const _TEST_ENTRY_ID: usize = 143962196 ;
 
-    /*t_sql(&self) -> String {
-        let mut parts = vec![] ;
-        if self.unmatched {
-            parts.push("(`q` IS NULL)")
-        }
-        if self.partially_matched {
-            parts.push("(`q`>0 AND `user`=0)")
-        }
-        if self.fully_matched {
-            parts.push("(`q`>0 AND `user`>0)")
-        }
-        if parts.is_empty() {
-            return "".to_string() ;
-            
-        return format!(" AND ({}) ",parts.join(" OR ")) ;
-        
-        */
     #[test]
     fn test_get_sql() {
         let ms = MatchState{unmatched:false,fully_matched:false,partially_matched:false};
@@ -505,6 +487,13 @@ mod tests {
         assert_eq!(MatchState::any_matched().get_sql().as_str()," AND ((`q`>0 AND `user`=0) OR (`q`>0 AND `user`>0)) ");
     }
 
+    #[tokio::test]
+    async fn test_api_log_in() {
+        let mut mnm = get_test_mnm();
+        mnm.api_log_in().await.unwrap();
+        assert!(mnm.mw_api.unwrap().user().logged_in());
+    }
+    
     #[tokio::test]
     async fn test_remove_meta_items() {
         let mnm = get_test_mnm();
