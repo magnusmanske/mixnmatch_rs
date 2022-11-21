@@ -163,7 +163,6 @@ pub struct Job {
 }
 
 impl Job {
-    //TODO test
     pub fn new(mnm: &MixNMatch) -> Self {
         Self {
             data: None,
@@ -510,6 +509,16 @@ mod tests {
 
     const _TEST_CATALOG_ID: usize = 5526 ;
     const _TEST_ENTRY_ID: usize = 143962196 ;
+
+    #[tokio::test]
+    async fn test_set_from_id() {
+        let mnm = get_test_mnm();
+        let mut job = Job::new(&mnm);
+        job.set_from_id(1).await.unwrap();
+        assert_eq!(job.get_id().unwrap(),1);
+        assert_eq!(job.get_catalog().unwrap(),2930);
+        assert_eq!(job.get_action().unwrap(),"automatch_by_search");
+    }
 
     #[tokio::test]
     async fn test_get_next_ts() {
