@@ -103,7 +103,7 @@ impl AppState {
     
         loop {
             if *concurrent.lock().unwrap()>=self.max_concurrent_jobs {
-                println!("Too many");
+                //println!("Too many");
                 self.hold_on();
                 continue;
             }
@@ -120,7 +120,7 @@ impl AppState {
                     });
                 }
                 Ok(false) => {
-                    println!("Wait 5");
+                    //println!("Wait 5");
                     self.hold_on();
                 }
                 _ => {
