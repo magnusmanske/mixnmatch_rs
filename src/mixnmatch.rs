@@ -151,7 +151,6 @@ pub struct MixNMatch {
 }
 
 impl MixNMatch {
-    //TODO test
     pub fn new(app: AppState) -> Self {
         Self {
             app,
@@ -160,7 +159,6 @@ impl MixNMatch {
         }
     }
 
-    //TODO test
     pub async fn get_mw_api(&self) -> Result<mediawiki::api::Api,mediawiki::media_wiki_error::MediaWikiError> {
         /*if self.mw_api.lock().unwrap().is_none() {
             let new_api = mediawiki::api::Api::new(WIKIDATA_API_URL).await?;

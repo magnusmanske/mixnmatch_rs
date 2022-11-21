@@ -841,6 +841,9 @@ impl Autoscrape {
     //TODO test
     async fn load_url(&mut self, url: &str) -> Option<String> {
         self.urls_loaded += 1;
+        if self.urls_loaded % 1000 == 0 {
+            let _ = self.remember_state().await;
+        }
         // TODO POST
         self.client.get(url)
             .send()
