@@ -96,7 +96,6 @@ pub struct Issue {
 
 impl Issue {
     pub async fn new(entry_id: usize, issue_type: IssueType, json: Value, mnm: &MixNMatch) -> Result<Self,GenericError> {
-        //let entry = Entry::from_id(entry_id, mnm).await?;
         Ok(Self {
             mnm: mnm.clone(),
             entry_id,

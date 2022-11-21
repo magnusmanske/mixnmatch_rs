@@ -79,7 +79,7 @@ impl AppState {
         let mnm = MixNMatch::new(self.clone());
         let mut job = Job::new(&mnm);
         job.set_from_id(job_id).await?;
-        match job.set_status(STATUS_RUNNING).await {
+        match job.set_status(JobStatus::Running).await {
             Ok(_) => {
                 println!("Finished successfully");
             }
@@ -108,7 +108,7 @@ impl AppState {
             let mut job = Job::new(&mnm);
             match job.set_next().await {
                 Ok(true) => {
-                    let _ = job.set_status(STATUS_RUNNING).await;
+                    let _ = job.set_status(JobStatus::Running).await;
                     let concurrent = concurrent.clone();
                     tokio::spawn(async move {
                         *concurrent.lock().unwrap() += 1;

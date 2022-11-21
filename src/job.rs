@@ -18,12 +18,40 @@ use crate::autoscrape::*;
 use crate::microsync::*;
 use crate::php_wrapper::*;
 
-pub const STATUS_TODO: &'static str = "TODO";
-pub const STATUS_DONE: &'static str = "DONE";
-pub const STATUS_FAILED: &'static str = "FAILED";
-pub const STATUS_RUNNING: &'static str = "RUNNING";
-pub const STATUS_HIGH_PRIORITY: &'static str = "HIGH_PRIORITY";
-pub const STATUS_LOW_PRIORITY: &'static str = "LOW_PRIORITY";
+#[derive(Debug, Clone)]
+pub enum JobStatus {
+    Todo,
+    Done,
+    Failed,
+    Running,
+    HighPriority,
+    LowPriority,
+}
+
+impl JobStatus {
+    pub fn new(s: &str) -> Option<Self> {
+        match s {
+            "TODO" => Some(JobStatus::Todo),
+            "DONE" => Some(JobStatus::Done),
+            "FAILED" => Some(JobStatus::Failed),
+            "RUNNING" => Some(JobStatus::Running),
+            "HIGH_PRIORITY" => Some(JobStatus::HighPriority),
+            "LOW_PRIORITY" => Some(JobStatus::LowPriority),
+            _ => None
+        }
+    }
+    pub fn as_str(&self) -> &str {
+        match *self {
+            JobStatus::Todo => "TODO",
+            JobStatus::Done => "DONE",
+            JobStatus::Failed => "FAILED",
+            JobStatus::Running => "RUNNING",
+            JobStatus::HighPriority => "HIGH_PRIORITY",
+            JobStatus::LowPriority => "LOW_PRIORITY",
+        }
+    }
+}
+
 
 /// A trait that allows to manage temporary job data (eg offset)
 #[async_trait]
@@ -111,7 +139,7 @@ pub struct JobRow {
     pub catalog: usize,
     pub json: Option<String>,
     pub depends_on: Option<usize>,
-    pub status: String,
+    pub status: JobStatus,
     pub last_ts: String,
     pub note: Option<String>,
     pub repeat_after_sec: Option<usize>,
@@ -128,7 +156,7 @@ impl JobRow {
                 catalog: x.2,
                 json: x.3,
                 depends_on: x.4,
-                status: x.5,
+                status: JobStatus::new(&x.5).unwrap(), // TODO
                 last_ts: x.6,
                 note: x.7,
                 repeat_after_sec: x.8,
@@ -145,7 +173,7 @@ impl JobRow {
                 catalog: catalog_id,
                 json: None,
                 depends_on: None,
-                status: STATUS_TODO.to_string(),
+                status: JobStatus::Todo,
                 last_ts: MixNMatch::get_timestamp(),
                 note: None,
                 repeat_after_sec: None,
@@ -178,7 +206,6 @@ impl Job {
         }
     }
 
-    //TODO test
     pub async fn set_from_id(&mut self, job_id: usize) -> Result<bool,GenericError> {
         self.data = None;
         let sql = r"SELECT id,action,catalog,json,depends_on,status,last_ts,note,repeat_after_sec,next_ts,user_id FROM `jobs` WHERE `id`=:job_id";
@@ -196,11 +223,11 @@ impl Job {
         let action = self.get_action()?;
         match self.run_this_job().await {
             Ok(_) => {
-                self.set_status(STATUS_DONE).await?;
+                self.set_status(JobStatus::Done).await?;
                 println!("Job {} catalog {}:{} completed.",self.get_id()?,catalog_id,action);
             }
             Err(e) => {
-                self.set_status(STATUS_FAILED).await?;
+                self.set_status(JobStatus::Failed).await?;
                 println!("Job {} catalog {}:{} FAILED: {:?}",self.get_id()?,catalog_id,action,&e);
             }
         }
@@ -208,11 +235,12 @@ impl Job {
     }
 
     //TODO test
-    pub async fn set_status(&mut self, status: &str) -> Result<(),GenericError> {
+    pub async fn set_status(&mut self, status: JobStatus) -> Result<(),GenericError> {
         let job_id = self.get_id()?;
         let timestamp = MixNMatch::get_timestamp();
-        let sql = "UPDATE `jobs` SET `status`=:status,`last_ts`=:timestamp WHERE `id`=:job_id";
-        self.mnm.app.get_mnm_conn().await?.exec_drop(sql, params! {job_id,timestamp,status}).await?;
+        let status_str = status.as_str();
+        let sql = "UPDATE `jobs` SET `status`=:status_str,`last_ts`=:timestamp WHERE `id`=:job_id";
+        self.mnm.app.get_mnm_conn().await?.exec_drop(sql, params! {job_id,timestamp,status_str}).await?;
         self.put_status(status)?;
         Ok(())
     }
@@ -240,7 +268,7 @@ impl Job {
     /// Resets all RUNNING jobs of certain types to TODO. Used when bot restarts.
     //TODO test
     pub async fn reset_running_jobs(&self) -> Result<(),GenericError> {
-        let sql = format!("UPDATE `jobs` SET `status`='{}' WHERE `status`='{}'",STATUS_TODO,STATUS_RUNNING) ;
+        let sql = format!("UPDATE `jobs` SET `status`='{}' WHERE `status`='{}'",JobStatus::Todo.as_str(),JobStatus::Running.as_str()) ;
         self.mnm.app.get_mnm_conn().await?.exec_drop(sql, ()).await?;
         Ok(())
     }
@@ -248,7 +276,7 @@ impl Job {
     /// Resets all FAILED jobs of certain types to TODO. Used when bot restarts.
     //TODO test
     pub async fn reset_failed_jobs(&self) -> Result<(),GenericError> {
-        let sql = format!("UPDATE `jobs` SET `status`='{}' WHERE `status`='{}'",STATUS_TODO,STATUS_FAILED) ;
+        let sql = format!("UPDATE `jobs` SET `status`='{}' WHERE `status`='{}'",JobStatus::Todo.as_str(),JobStatus::Failed.as_str()) ;
         self.mnm.app.get_mnm_conn().await?.exec_drop(sql, ()).await?;
         Ok(())
     }
@@ -419,8 +447,8 @@ impl Job {
     }
 
     //TODO test
-    fn put_status(&self, status: &str) -> Result<(),JobError> {
-        (*self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().map_err(|_|JobError::PoisonedJobRowMutex)?).status = status.to_string();
+    fn put_status(&self, status: JobStatus) -> Result<(),JobError> {
+        (*self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().map_err(|_|JobError::PoisonedJobRowMutex)?).status = status;
         Ok(())
     }
     //TODO test
@@ -457,32 +485,32 @@ impl Job {
 
     //TODO test
     async fn get_next_high_priority_job(&self) -> Option<usize> {
-        let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NULL",STATUS_HIGH_PRIORITY) ;
+        let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NULL",JobStatus::HighPriority.as_str()) ;
         self.get_next_job_generic(&sql).await
     }
     
     //TODO test
     async fn get_next_low_priority_job(&self) -> Option<usize> {
-        let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NULL",STATUS_LOW_PRIORITY) ;
+        let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NULL",JobStatus::LowPriority.as_str()) ;
         self.get_next_job_generic(&sql).await
     }
     
     //TODO test
     async fn get_next_dependent_job(&self) -> Option<usize> {
-        let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NOT NULL AND `depends_on` IN (SELECT `id` FROM `jobs` WHERE `status`='{}')",STATUS_TODO,STATUS_DONE) ;
+        let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NOT NULL AND `depends_on` IN (SELECT `id` FROM `jobs` WHERE `status`='{}')",JobStatus::Todo.as_str(),JobStatus::Done.as_str()) ;
         self.get_next_job_generic(&sql).await
     }
     
     //TODO test
     async fn get_next_initial_job(&self) -> Option<usize> {
-        let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NULL",STATUS_TODO) ;
+        let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NULL",JobStatus::Todo.as_str()) ;
         self.get_next_job_generic(&sql).await
     }
     
     //TODO test
     async fn get_next_scheduled_job(&self) -> Option<usize> {
         let timestamp =  MixNMatch::get_timestamp();
-        let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `next_ts`!='' AND `next_ts`<='{}' ORDER BY `next_ts` LIMIT 1",STATUS_DONE,&timestamp) ;
+        let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `next_ts`!='' AND `next_ts`<='{}' ORDER BY `next_ts` LIMIT 1",JobStatus::Done.as_str(),&timestamp) ;
         self.get_next_job_generic(&sql).await
     }
     
