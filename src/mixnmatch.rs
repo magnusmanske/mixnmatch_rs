@@ -269,7 +269,6 @@ impl MixNMatch {
     }
 
     /// Converts a string like "Q12345" to the numeric 12334
-    //TODO test
     pub fn item2numeric(&self, q: &str) -> Option<isize> {
         for cap in RE_ITEM2NUMERIC.captures_iter(q) {
             return cap[1].parse::<isize>().ok()
@@ -541,6 +540,16 @@ mod tests {
         let dt = MixNMatch::parse_timestamp(ts).unwrap();
         let ts2 = dt.format("%Y%m%d%H%M%S").to_string();
         assert_eq!(ts,ts2)
+    }
+
+    #[test]
+    fn test_item2numeric() {
+        let mnm = get_test_mnm();
+        assert_eq!(mnm.item2numeric("foobar"),None);
+        assert_eq!(mnm.item2numeric("12345"),Some(12345));
+        assert_eq!(mnm.item2numeric("Q12345"),Some(12345));
+        assert_eq!(mnm.item2numeric("Q12345X"),Some(12345));
+        assert_eq!(mnm.item2numeric("Q12345X6"),Some(12345));
     }
     
 }
