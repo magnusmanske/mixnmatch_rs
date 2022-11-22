@@ -18,6 +18,16 @@ use crate::autoscrape::*;
 use crate::microsync::*;
 use crate::php_wrapper::*;
 
+pub const SLOW_TASKS: &'static [&'static str] = &[
+    "automatch_by_search",
+    "generate_aux_from_description",
+    "bespoke_scraper",
+    "import_aux_from_url",
+    "update_descriptions_from_url",
+    "automatch",
+    "match_by_coordinates",
+];
+
 #[derive(Debug, Clone)]
 pub enum JobStatus {
     Todo,
@@ -148,7 +158,6 @@ pub struct JobRow {
 }
 
 impl JobRow {
-    //TODO test
     pub fn from_row(x: (usize,String,usize,Option<String>,Option<usize>,String,String,Option<String>,Option<usize>,String,usize)) -> Self {
             Self {
                 id: x.0,
@@ -156,7 +165,7 @@ impl JobRow {
                 catalog: x.2,
                 json: x.3,
                 depends_on: x.4,
-                status: JobStatus::new(&x.5).unwrap(), // TODO
+                status: JobStatus::new(&x.5).unwrap_or(JobStatus::Todo),
                 last_ts: x.6,
                 note: x.7,
                 repeat_after_sec: x.8,
@@ -165,7 +174,6 @@ impl JobRow {
             }
         }
 
-        //TODO test
         pub fn new(action: &str, catalog_id: usize) -> JobRow {
             Self {
                 id: 0,
@@ -251,6 +259,9 @@ impl Job {
             return Some(job_id) ;
         }
         if let Some(job_id) = self.get_next_dependent_job().await {
+            return Some(job_id) ;
+        }
+        if let Some(job_id) = self.get_next_initial_fast_job().await {
             return Some(job_id) ;
         }
         if let Some(job_id) = self.get_next_initial_job().await {
@@ -498,6 +509,13 @@ impl Job {
     //TODO test
     async fn get_next_dependent_job(&self) -> Option<usize> {
         let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NOT NULL AND `depends_on` IN (SELECT `id` FROM `jobs` WHERE `status`='{}')",JobStatus::Todo.as_str(),JobStatus::Done.as_str()) ;
+        self.get_next_job_generic(&sql).await
+    }
+    
+    //TODO test
+    async fn get_next_initial_fast_job(&self) -> Option<usize> {
+        let not_in = SLOW_TASKS.join("','");
+        let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NULL AND `action` NOT IN ('{}')",JobStatus::Todo.as_str(),&not_in) ;
         self.get_next_job_generic(&sql).await
     }
     
