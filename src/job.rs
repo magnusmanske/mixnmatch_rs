@@ -415,7 +415,6 @@ impl Job {
             "bespoke_scraper" => {
                 PhpWrapper::bespoke_scraper(catalog_id)
             },
-
             "import_aux_from_url" => {
                 PhpWrapper::import_aux_from_url(catalog_id)
             },
