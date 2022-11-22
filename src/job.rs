@@ -19,7 +19,6 @@ use crate::microsync::*;
 use crate::php_wrapper::*;
 
 pub const SLOW_TASKS: &'static [&'static str] = &[
-    "automatch_by_search",
     "generate_aux_from_description",
     "bespoke_scraper",
     "import_aux_from_url",
