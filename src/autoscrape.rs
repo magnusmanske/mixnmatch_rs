@@ -955,6 +955,7 @@ impl Autoscrape {
         let _ = self.mnm.refresh_overview_table(self.catalog_id).await;
         let _ = self.clear_offset().await;
         let _ = Job::queue_simple_job(&self.mnm,self.catalog_id,"automatch_by_search",None).await;
+        let _ = Job::queue_simple_job(&self.mnm,self.catalog_id,"microsync",None).await;
         Ok(())
     }
 }
