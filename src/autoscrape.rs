@@ -495,9 +495,11 @@ impl JsonStuff for AutoscrapeResolve {}
 impl AutoscrapeResolve {
     //TODO test
     fn from_json(json: &Value, key: &str) -> Result<Self,AutoscrapeError> {
-        let json = json
-            .get(key)
-            .ok_or_else(||AutoscrapeError::UnknownLevelType(json.to_owned()))?;
+        let json = match json.get(key) {
+            Some(json) => json,
+            None => return Ok(Self{use_pattern:String::new(),regexs:vec![]})
+        };
+        //.ok_or_else(||AutoscrapeError::UnknownLevelType(json.to_owned()))?;
         let regexs_str = json
             .get("rx")
             .map(|x|x.to_owned())
