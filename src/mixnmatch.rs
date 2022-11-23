@@ -303,6 +303,22 @@ impl MixNMatch {
         self.wd_search(&query).await
     }
 
+    pub async fn wd_search_with_type_db(&self, name: &str, type_q: &str) -> Result<Vec<String>,GenericError> {
+        if name.is_empty() {
+            return Ok(vec![]) ;
+        }
+        let items = if type_q.is_empty() {
+            let sql = "SELECT concat('Q',wbit_item_id) AS q FROM wbt_text,wbt_item_terms,wbt_term_in_lang,wbt_text_in_lang WHERE wbit_term_in_lang_id=wbtl_id AND wbtl_text_in_lang_id=wbxl_id AND wbxl_text_id=wbx_id  AND wbx_text=:name GROUP BY name,q";
+            self.app.get_wd_conn().await?.exec_iter(sql, params!{name}).await?.map_and_drop(from_row::<String>).await?
+            } else {
+            let sql = "SELECT concat('Q',wbit_item_id) AS q FROM wbt_text,wbt_item_terms,wbt_term_in_lang,wbt_text_in_lang WHERE wbit_term_in_lang_id=wbtl_id AND wbtl_text_in_lang_id=wbxl_id AND wbxl_text_id=wbx_id  AND wbx_text=:name
+            AND EXISTS (SELECT * FROM page,pagelinks WHERE page_title=concat('Q',wbit_item_id) AND page_namespace=0 AND pl_from=page_id AND pl_namespace=0 AND pl_title=:type_q)
+            GROUP BY name,q";
+            self.app.get_wd_conn().await?.exec_iter(sql, params!{name}).await?.map_and_drop(from_row::<String>).await?
+        };
+        Ok(items)
+    }
+
     /// Performs a Wikidata API search for the query string. Returns item IDs matching the query.
     pub async fn wd_search(&self, query: &str) -> Result<Vec<String>,GenericError> {    
         // TODO via mw_api?

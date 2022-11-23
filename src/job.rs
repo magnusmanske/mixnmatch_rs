@@ -19,7 +19,7 @@ use crate::microsync::*;
 use crate::php_wrapper::*;
 
 pub const TASK_SIZE: &'static [(&'static str,u8)] = &[
-    ("automatch",5),
+    ("automatch",1),
     ("automatch_by_search",2),
     ("automatch_by_sitelink",2),
     ("automatch_from_other_catalogs",2),
@@ -363,6 +363,11 @@ impl Job {
         println!("STARTING {:?} with option {:?}", &self.data()?,&json);
         let catalog_id = self.get_catalog()?;
         match self.get_action()?.as_str() {
+            "automatch" => {
+                let mut am = AutoMatch::new(&self.mnm);
+                am.set_current_job(self);
+                am.automatch_simple(catalog_id).await
+            },
             "automatch_by_search" => {
                 let mut am = AutoMatch::new(&self.mnm);
                 am.set_current_job(self);
@@ -452,9 +457,9 @@ impl Job {
             "update_descriptions_from_url" => {
                 PhpWrapper::update_descriptions_from_url(catalog_id)
             },
-            "automatch" => { // TODO native
+            /*"automatch" => { // TODO native
                 PhpWrapper::automatch(catalog_id)
-            },
+            },*/
             "match_by_coordinates" => { // TODO native
                 PhpWrapper::match_by_coordinates(catalog_id)
             },
