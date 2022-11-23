@@ -18,13 +18,26 @@ use crate::autoscrape::*;
 use crate::microsync::*;
 use crate::php_wrapper::*;
 
-pub const SLOW_TASKS: &'static [&'static str] = &[
-    "generate_aux_from_description",
-    "bespoke_scraper",
-    "import_aux_from_url",
-    "update_descriptions_from_url",
-    "automatch",
-    "match_by_coordinates",
+pub const TASK_SIZE: &'static [(&'static str,u8)] = &[
+    ("automatch",5),
+    ("automatch_by_search",2),
+    ("automatch_by_sitelink",2),
+    ("automatch_from_other_catalogs",2),
+    ("autoscrape",4),
+    ("aux2wd",2),
+    ("auxiliary_matcher",2),
+    ("bespoke_scraper",5),
+    ("generate_aux_from_description",5),
+    ("import_aux_from_url",5),
+    ("match_by_coordinates",5),
+    ("match_on_birthdate",1),
+    ("match_person_dates",1),
+    ("microsync",1),
+    ("purge_automatches",1),
+    ("taxon_matcher",2),
+    ("update_descriptions_from_url",5),
+    ("update_from_tabbed_file",3),
+    ("update_person_dates",2),
 ];
 
 #[derive(Debug, Clone)]
@@ -260,9 +273,22 @@ impl Job {
         if let Some(job_id) = self.get_next_dependent_job().await {
             return Some(job_id) ;
         }
+
+        let mut tasks = Vec::from(TASK_SIZE);
+        let mut level: u8 = 0;
+        while !tasks.is_empty() {
+            tasks.retain(|v|v.1>level);
+            let avoid: Vec<String> = tasks.iter().map(|v|v.0.to_string()).collect();
+            if let Some(job_id) = self.get_next_initial_allowed_job(&avoid).await {
+                return Some(job_id) ;
+            }
+                level += 1;
+        }
+
+        /*
         if let Some(job_id) = self.get_next_initial_fast_job().await {
             return Some(job_id) ;
-        }
+        } */
         if let Some(job_id) = self.get_next_initial_job().await {
             return Some(job_id) ;
         }
@@ -515,10 +541,14 @@ impl Job {
         let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NOT NULL AND `depends_on` IN (SELECT `id` FROM `jobs` WHERE `status`='{}')",JobStatus::Todo.as_str(),JobStatus::Done.as_str()) ;
         self.get_next_job_generic(&sql).await
     }
+
     
     //TODO test
-    async fn get_next_initial_fast_job(&self) -> Option<usize> {
-        let not_in = SLOW_TASKS.join("','");
+    async fn get_next_initial_allowed_job(&self, avoid: &Vec<String>) -> Option<usize> {
+        if avoid.is_empty() {
+            return None;
+        }
+        let not_in = avoid.join("','");
         let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NULL AND `action` NOT IN ('{}')",JobStatus::Todo.as_str(),&not_in) ;
         self.get_next_job_generic(&sql).await
     }
@@ -528,7 +558,7 @@ impl Job {
         let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NULL",JobStatus::Todo.as_str()) ;
         self.get_next_job_generic(&sql).await
     }
-    
+     
     //TODO test
     async fn get_next_scheduled_job(&self) -> Option<usize> {
         let timestamp =  MixNMatch::get_timestamp();
