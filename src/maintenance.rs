@@ -131,6 +131,26 @@ impl Maintenance {
         Ok(())
     }
 
+    pub async fn maintenance_automatch(&self) -> Result<(),GenericError> {
+        let sql = "SELECT e1.id,
+            (SELECT group_concat(DISTINCT e2.q) FROM entry e2 WHERE e1.ext_name=e2.ext_name AND e2.user>0 AND e2.type='Q5' AND e2.q>0 AND e2.q IS NOT NULL HAVING count(distinct e2.q)=1) AS new_q
+            FROM entry e1
+            WHERE e1.q IS NULL AND `user` IS NULL AND `type`='Q5'
+            HAVING new_q!='' AND NOT EXISTS (SELECT * FROM `log` WHERE entry_id=e1.id AND log.q IN (NULL,new_q))
+            LIMIT 500";
+        let new_automatches = self.mnm.app.get_mnm_conn().await?
+            .exec_iter(sql, ()).await?
+            .map_and_drop(from_row::<(usize,usize)>).await?;
+        let sql = "UPDATE `entry` SET `q`=:q,`user`=0,`timestamp`=:timestamp WHERE `id`=:entry_id AND `q` IS NULL" ;
+        let mut conn = self.mnm.app.get_mnm_conn().await?;
+        for (entry_id,q) in &new_automatches {
+            let timestamp = MixNMatch::get_timestamp();
+            conn.exec_drop(sql,params!{entry_id,q,timestamp}).await?;
+        }
+        drop(conn);
+        Ok(())
+    }
+
     /// Retrieves a batch of (unique) Wikidata items, in a given matching state.
     async fn get_items(&self, catalog_id: usize, offset: usize, state: &MatchState) -> Result<Vec<String>,GenericError> {
         let batch_size = 5000;

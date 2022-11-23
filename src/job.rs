@@ -405,6 +405,12 @@ impl Job {
                 let maintenance = Maintenance::new(&self.mnm);
                 maintenance.fix_redirects(catalog_id,&MatchState::any_matched()).await
             },
+
+            "maintenance_automatch" => {
+                let maintenance = Maintenance::new(&self.mnm);
+                maintenance.maintenance_automatch().await
+            },
+
             "update_person_dates" => {
                 PhpWrapper::update_person_dates(catalog_id)
             },
