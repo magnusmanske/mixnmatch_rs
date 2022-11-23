@@ -19,7 +19,7 @@ use crate::microsync::*;
 use crate::php_wrapper::*;
 
 pub const TASK_SIZE: &'static [(&'static str,u8)] = &[
-    ("automatch",1),
+    ("automatch",2),
     ("automatch_by_search",2),
     ("automatch_by_sitelink",2),
     ("automatch_from_other_catalogs",2),
@@ -248,6 +248,7 @@ impl Job {
             }
             Err(e) => {
                 self.set_status(JobStatus::Failed).await?;
+                self.set_note(Some(e.to_string())).await?;
                 println!("Job {} catalog {}:{} FAILED: {:?}",self.get_id()?,catalog_id,action,&e);
             }
         }
@@ -259,12 +260,22 @@ impl Job {
         let job_id = self.get_id()?;
         let timestamp = MixNMatch::get_timestamp();
         let status_str = status.as_str();
-        let sql = "UPDATE `jobs` SET `status`=:status_str,`last_ts`=:timestamp WHERE `id`=:job_id";
+        let sql = "UPDATE `jobs` SET `status`=:status_str,`last_ts`=:timestamp,`note`=NULL WHERE `id`=:job_id";
         self.mnm.app.get_mnm_conn().await?.exec_drop(sql, params! {job_id,timestamp,status_str}).await?;
         self.put_status(status)?;
         Ok(())
     }
 
+    //TODO test
+    pub async fn set_note(&mut self, note: Option<String>) -> Result<(),GenericError> {
+        let job_id = self.get_id()?;
+        let note_cloned = note.clone();
+        let sql = "UPDATE `jobs` SET `note`=:note WHERE `id`=:job_id";
+        self.mnm.app.get_mnm_conn().await?.exec_drop(sql, params! {job_id,note}).await?;
+        self.put_note(note_cloned)?;
+        Ok(())
+    }
+    
     //TODO test
     pub async fn get_next_job_id(&self) -> Option<usize> {
         if let Some(job_id) = self.get_next_high_priority_job().await {
@@ -497,11 +508,19 @@ impl Job {
         (*self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().map_err(|_|JobError::PoisonedJobRowMutex)?).status = status;
         Ok(())
     }
+
     //TODO test
     fn put_json(&self, json: Option<String>) -> Result<(),JobError> {
         (*self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().map_err(|_|JobError::PoisonedJobRowMutex)?).json = json;
         Ok(())
     }
+
+    //TODO test
+    fn put_note(&self, note: Option<String>) -> Result<(),JobError> {
+        (*self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().map_err(|_|JobError::PoisonedJobRowMutex)?).note = note;
+        Ok(())
+    }
+
     //TODO test
     fn put_next_ts(&self, next_ts: &str) -> Result<(),JobError> {
         (*self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().map_err(|_|JobError::PoisonedJobRowMutex)?).next_ts = next_ts.to_string();

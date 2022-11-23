@@ -104,7 +104,8 @@ impl Microsync {
         let catalog = Catalog::from_id(catalog_id,&self.mnm).await?;
         let property = match (catalog.wd_prop,catalog.wd_qual) {
             (Some(prop),None) => prop,
-            _ => return Err(Box::new(MicrosyncError::UnsuitableCatalogProperty))
+            //_ => return Err(Box::new(MicrosyncError::UnsuitableCatalogProperty))
+            _ => return Ok(()) // Don't fail this job, just silently close it
         };
         let maintenance = Maintenance::new(&self.mnm);
         maintenance.fix_matched_items(catalog_id,&MatchState::fully_matched()).await?;
