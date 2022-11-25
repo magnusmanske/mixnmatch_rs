@@ -132,11 +132,13 @@ impl Maintenance {
     }
 
     pub async fn maintenance_automatch(&self) -> Result<(),GenericError> {
-        let sql = "SELECT e1.id,
-            (SELECT group_concat(DISTINCT e2.q) FROM entry e2 WHERE e1.ext_name=e2.ext_name AND e2.user>0 AND e2.type='Q5' AND e2.q>0 AND e2.q IS NOT NULL HAVING count(distinct e2.q)=1) AS new_q
-            FROM entry e1
-            WHERE e1.q IS NULL AND `user` IS NULL AND `type`='Q5'
-            HAVING new_q!='' AND NOT EXISTS (SELECT * FROM `log` WHERE entry_id=e1.id AND log.q IN (NULL,new_q))
+        let sql = "SELECT e1.id,e2.q FROM entry e1,entry e2 
+            WHERE e1.ext_name=e2.ext_name AND e1.id!=e2.id
+            AND e1.type='Q5' AND e2.type='Q5'
+            AND e1.q IS NULL
+            AND e2.type IS NOT NULL AND e2.user>0
+            HAVING
+            (SELECT count(DISTINCT q) FROM entry e3 WHERE e3.ext_name=e2.ext_name AND e3.type=e2.type AND e3.q IS NOT NULL AND e3.user>0)=1
             LIMIT 500";
         let new_automatches = self.mnm.app.get_mnm_conn().await?
             .exec_iter(sql, ()).await?
