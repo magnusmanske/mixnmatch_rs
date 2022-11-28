@@ -378,7 +378,7 @@ impl MixNMatch {
     //TODO test
     pub async fn get_random_active_catalog_id_with_property(&self) -> Option<usize> {
         let sql = "SELECT id FROM catalog WHERE active=1 AND wd_prop IS NOT NULL and wd_qual IS NULL ORDER by rand() LIMIT 1" ;
-        let ids = self.app.get_wd_conn().await.ok()?.exec_iter(sql, ()).await.ok()?.map_and_drop(from_row::<usize>).await.ok()?;
+        let ids = self.app.get_mnm_conn().await.ok()?.exec_iter(sql, ()).await.ok()?.map_and_drop(from_row::<usize>).await.ok()?;
         ids.get(0).map(|x|x.to_owned())
     }
 
