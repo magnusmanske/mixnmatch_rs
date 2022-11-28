@@ -131,6 +131,8 @@ impl Maintenance {
         Ok(())
     }
 
+    /// Finds some unmatched (Q5) entries where there is a (unique) full match for that name,
+    /// and uses it as an auto-match
     pub async fn maintenance_automatch(&self) -> Result<(),GenericError> {
         let sql = "SELECT e1.id,e2.q FROM entry e1,entry e2 
             WHERE e1.ext_name=e2.ext_name AND e1.id!=e2.id

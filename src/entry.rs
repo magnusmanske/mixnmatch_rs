@@ -241,7 +241,7 @@ impl Entry {
 
     //TODO test
     pub async fn set_auxiliary_in_wikidata(&self, aux_id: usize, in_wikidata: bool) -> Result<(),GenericError> {
-        let sql = "UPDATE auxiliary SET in_wikidata=:in_wikidata WHERE id=:aux_id AND in_wikidata!=:in_wikidata";
+        let sql = "UPDATE `auxiliary` SET `in_wikidata`=:in_wikidata WHERE `id`=:aux_id AND `in_wikidata`!=:in_wikidata";
         self.mnm()?.app.get_mnm_conn().await?.exec_drop(sql, params! {in_wikidata,aux_id}).await?;
         Ok(())
     }
@@ -397,8 +397,10 @@ impl Entry {
         let entry_id = self.id;
         match value {
             Some(value) => {
-                let sql = "REPLACE INTO `auxiliary` (`entry_id`,`aux_p`,`aux_name`) VALUES (:entry_id,:prop_numeric,:value)";
-                self.mnm()?.app.get_mnm_conn().await?.exec_drop(sql, params! {entry_id,prop_numeric,value}).await?;
+                if !value.is_empty() {
+                    let sql = "REPLACE INTO `auxiliary` (`entry_id`,`aux_p`,`aux_name`) VALUES (:entry_id,:prop_numeric,:value)";
+                    self.mnm()?.app.get_mnm_conn().await?.exec_drop(sql, params! {entry_id,prop_numeric,value}).await?;
+                }
             }
             None => {
                 let sql = "DELETE FROM `auxiliary` WHERE `entry_id`=:entry_id AND `aux_p`=:prop_numeric";
@@ -524,9 +526,9 @@ impl Entry {
         let timestamp = MixNMatch::get_timestamp();
         let mut conn = mnm.app.get_mnm_conn().await?;
         conn.exec_drop(r"INSERT INTO `wd_matches` (`entry_id`,`status`,`timestamp`,`catalog`) VALUES (:entry_id,:status,:timestamp,(SELECT entry.catalog FROM entry WHERE entry.id=:entry_id)) ON DUPLICATE KEY UPDATE `status`=:status,`timestamp`=:timestamp",params! {entry_id,status,timestamp}).await?;
-        conn.exec_drop(r"UPDATE person_dates SET is_matched=:is_matched WHERE entry_id=:entry_id",params! {is_matched,entry_id}).await?;
-        conn.exec_drop(r"UPDATE auxiliary SET entry_is_matched=:is_matched WHERE entry_id=:entry_id",params! {is_matched,entry_id}).await?;
-        conn.exec_drop(r"UPDATE statement_text SET entry_is_matched=:is_matched WHERE entry_id=:entry_id",params! {is_matched,entry_id}).await?;
+        conn.exec_drop(r"UPDATE `person_dates` SET is_matched=:is_matched WHERE entry_id=:entry_id",params! {is_matched,entry_id}).await?;
+        conn.exec_drop(r"UPDATE `auxiliary` SET entry_is_matched=:is_matched WHERE entry_id=:entry_id",params! {is_matched,entry_id}).await?;
+        conn.exec_drop(r"UPDATE `statement_text` SET entry_is_matched=:is_matched WHERE entry_id=:entry_id",params! {is_matched,entry_id}).await?;
         Ok(())
     }
 
