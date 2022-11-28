@@ -376,6 +376,13 @@ impl MixNMatch {
     }
 
     //TODO test
+    pub async fn get_random_active_catalog_id_with_property(&self) -> Option<usize> {
+        let sql = "SELECT id FROM catalog WHERE active=1 AND wd_prop IS NOT NULL and wd_qual IS NULL ORDER by rand() LIMIT 1" ;
+        let ids = self.app.get_wd_conn().await.ok()?.exec_iter(sql, ()).await.ok()?.map_and_drop(from_row::<usize>).await.ok()?;
+        ids.get(0).map(|x|x.to_owned())
+    }
+
+    //TODO test
     pub async fn set_wikipage_text(&mut self, title: &str, wikitext: &str, summary: &str) -> Result<(),GenericError> {
         self.api_log_in().await?;
         if let Some(mw_api) = self.mw_api.as_mut() {

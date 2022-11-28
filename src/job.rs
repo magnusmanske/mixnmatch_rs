@@ -437,6 +437,15 @@ impl Job {
             "microsync" => {
                 let mut ms = Microsync::new(&self.mnm);
                 ms.set_current_job(self);
+                let catalog_id = match catalog_id {
+                    0 => {
+                        match self.mnm.get_random_active_catalog_id_with_property().await {
+                            Some(id) => id,
+                            None => return Ok(()) // Ignore, very unlikely
+                        }
+                    }
+                    other => other
+                };
                 ms.check_catalog(catalog_id).await
             },
             "fix_disambig" => {
