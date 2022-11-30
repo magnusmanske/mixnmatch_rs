@@ -247,7 +247,14 @@ impl Job {
                 println!("Job {} catalog {}:{} completed.",self.get_id()?,catalog_id,action);
             }
             Err(e) => {
-                self.set_status(JobStatus::Failed).await?;
+                match catalog_id {
+                    0 => {
+                        self.set_status(JobStatus::Done).await?; // Don't fail'
+                    }
+                    _ => {
+                        self.set_status(JobStatus::Failed).await?;
+                    }
+                }
                 self.set_note(Some(e.to_string())).await?;
                 println!("Job {} catalog {}:{} FAILED: {:?}",self.get_id()?,catalog_id,action,&e);
             }
