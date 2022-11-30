@@ -144,7 +144,7 @@ impl Maintenance {
             LIMIT 500";
         let new_automatches = self.mnm.app.get_mnm_conn().await?
             .exec_iter(sql, ()).await?
-            .map_and_drop(from_row::<(usize,usize)>).await?;
+            .map_and_drop(from_row::<(usize,isize)>).await?;
         let sql = "UPDATE `entry` SET `q`=:q,`user`=0,`timestamp`=:timestamp WHERE `id`=:entry_id AND `q` IS NULL" ;
         let mut conn = self.mnm.app.get_mnm_conn().await?;
         for (entry_id,q) in &new_automatches {
