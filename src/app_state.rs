@@ -92,14 +92,16 @@ impl AppState {
         job.run().await
     }
 
-    pub async fn forever_loop(&self) -> Result<(),GenericError> {
+    pub async fn forever_loop(&self, reset_jobs: bool) -> Result<(),GenericError> {
         let mnm = MixNMatch::new(self.clone());
         let concurrent:Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
     
         // Reset old running&failed jobs
-        Job::new(&mnm).reset_running_jobs().await?;
-        Job::new(&mnm).reset_failed_jobs().await?;
-        println!("Old jobs reset, starting bot");
+        if reset_jobs {
+            Job::new(&mnm).reset_running_jobs().await?;
+            Job::new(&mnm).reset_failed_jobs().await?;
+            println!("Old jobs reset, starting bot");
+        }
     
         loop {
             if *concurrent.lock().unwrap()>=self.max_concurrent_jobs {
