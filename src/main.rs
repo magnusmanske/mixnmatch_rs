@@ -14,9 +14,11 @@ pub mod wikidata_commands;
 pub mod php_wrapper;
 pub mod maintenance;
 use std::env;
+use tokio::runtime;
 
-#[tokio::main]
-async fn main() -> Result<(),app_state::GenericError> {
+const THREADS: usize = 4;
+
+async fn run() -> Result<(),app_state::GenericError> {
     let app = app_state::AppState::from_config_file("config.json")?;
     let argv: Vec<String> = env::args_os().map(|s|s.into_string().unwrap()).collect();
     match argv.get(1).map(|s|s.as_str()) {
@@ -31,6 +33,20 @@ async fn main() -> Result<(),app_state::GenericError> {
         Some("second") => app.forever_loop(false).await,
         _ => app.forever_loop(true).await
     }
+}
+
+fn main() -> Result<(),app_state::GenericError> {
+    let threaded_rt = runtime::Builder::new_multi_thread()
+        .enable_all()
+        .worker_threads(THREADS)
+        .thread_name("listeria")
+        .thread_stack_size(THREADS * 1024 * 1024)
+        .build()?;
+
+    threaded_rt.block_on(async move {
+        let _ = run().await;
+    });
+    Ok(())
 }
 
 /*
