@@ -71,6 +71,7 @@ impl WikidataCommand {
                     "type":"statement",
                     "rank":self.rank_as_str()
                 });
+                
                 if !self.references.is_empty() {
                     let mut reference_groups = vec![];
                     for reference_group in &self.references {
@@ -88,6 +89,7 @@ impl WikidataCommand {
                     }
                     claim["references"] = json!(reference_groups);
                 }
+                
                 if !self.qualifiers.is_empty() {
                     let mut snaks: HashMap<String,Vec<Value>> = HashMap::new();
                     for qualifier in &self.qualifiers {
@@ -97,6 +99,7 @@ impl WikidataCommand {
                     }
                     claim["qualifiers"] = json!(snaks);
                 }
+                
                 if json.get("claims").is_none() {
                     json["claims"] = json!([]);
                 }

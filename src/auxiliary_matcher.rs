@@ -352,7 +352,7 @@ impl AuxiliaryMatcher {
             Some(aux) => aux.q(),
             None => {return vec![];} // Empty input
         };
-        let source: WikidataCommandPropertyValueGroups = sources.get(&q).unwrap_or(&vec![]).to_owned();
+        let _source: WikidataCommandPropertyValueGroups = sources.get(&q).unwrap_or(&vec![]).to_owned();
         let mut commands: Vec<WikidataCommand> = vec![];
         for aux in aux_data {
             if AUX_BLACKLISTED_PROPERTIES.contains(&aux.property) { // No blacklisted properties
@@ -389,7 +389,7 @@ impl AuxiliaryMatcher {
                     item_id: aux.q_numeric,
                     what: WikidataCommandWhat::Property(aux.property),
                     value: value.to_owned(),
-                    references: source.clone(),
+                    references: vec![],// source.clone(), // Deactivated as per https://www.wikidata.org/wiki/Topic:X81el8w2pb6aqsn6
                     qualifiers: vec![],
                     comment: Some(aux.entry_comment_link()),
                     rank: None
