@@ -17,7 +17,7 @@ mediawiki = "*"
 wikibase = { git = "https://gitlab.com/tobias47n9e/wikibase_rs" }
 tokio = { version = "^1", features = ["full","rt-multi-thread"] }
 futures = "*"
-mysql_async = "^0.30.0"
+mysql_async = "*"
 md5 = "*"
 reqwest = "*"
 async-trait = "*"
