@@ -14,7 +14,7 @@ pub enum WikidataCommandWhat {
     //Sitelink(String), // wiki
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum WikidataCommandValue {
     String(String),
     Item(usize),
@@ -42,7 +42,7 @@ impl WikidataCommandRank {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct WikidataCommandPropertyValue {
     pub property: usize,
     pub value: WikidataCommandValue

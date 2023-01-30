@@ -297,7 +297,6 @@ impl AuxiliaryMatcher {
             let mut commands: Vec<WikidataCommand> = vec![];
             for (_,data) in &aux {
                 commands.append(&mut self.aux2wd_process_item(data, &sources, &entities).await);
-
             }
             let _ = self.mnm.execute_commands(commands).await;
 
@@ -347,12 +346,12 @@ impl AuxiliaryMatcher {
     }
 
     //TODO test
-    async fn aux2wd_process_item(&self, aux_data: &Vec<AuxiliaryResults>, sources: &HashMap<String,WikidataCommandPropertyValueGroups>, entities: &EntityContainer) -> Vec<WikidataCommand> {
+    async fn aux2wd_process_item(&self, aux_data: &Vec<AuxiliaryResults>, sources: &HashMap<String,WikidataCommandPropertyValueGroup>, entities: &EntityContainer) -> Vec<WikidataCommand> {
         let q = match aux_data.get(0) {
             Some(aux) => aux.q(),
             None => {return vec![];} // Empty input
         };
-        let _source: WikidataCommandPropertyValueGroups = sources.get(&q).unwrap_or(&vec![]).to_owned();
+        let source: WikidataCommandPropertyValueGroup = sources.get(&q).unwrap_or(&vec![]).to_owned();
         let mut commands: Vec<WikidataCommand> = vec![];
         for aux in aux_data {
             if AUX_BLACKLISTED_PROPERTIES.contains(&aux.property) { // No blacklisted properties
@@ -389,7 +388,7 @@ impl AuxiliaryMatcher {
                     item_id: aux.q_numeric,
                     what: WikidataCommandWhat::Property(aux.property),
                     value: value.to_owned(),
-                    references: vec![],// source.clone(), // Deactivated as per https://www.wikidata.org/wiki/Topic:X81el8w2pb6aqsn6
+                    references: vec![source.clone()],
                     qualifiers: vec![],
                     comment: Some(aux.entry_comment_link()),
                     rank: None
@@ -429,9 +428,9 @@ impl AuxiliaryMatcher {
     }
 
     //TODO test
-    async fn aux2wd_remap_results(&mut self, catalog_id: usize, results: &Vec<AuxiliaryResults>) -> (HashMap<usize,Vec<AuxiliaryResults>>,HashMap<String,WikidataCommandPropertyValueGroups>) {
+    async fn aux2wd_remap_results(&mut self, catalog_id: usize, results: &Vec<AuxiliaryResults>) -> (HashMap<usize,Vec<AuxiliaryResults>>,HashMap<String,WikidataCommandPropertyValueGroup>) {
         let mut aux: HashMap<usize,Vec<AuxiliaryResults>> = HashMap::new();
-        let mut sources: HashMap<String,WikidataCommandPropertyValueGroups> = HashMap::new();
+        let mut sources: HashMap<String,WikidataCommandPropertyValueGroup> = HashMap::new();
         for result in results {
             if self.is_catalog_property_combination_suspect(catalog_id,result.property) {
                 continue
@@ -447,7 +446,7 @@ impl AuxiliaryMatcher {
     }
 
     //TODO test
-    async fn get_source_for_entry(&mut self, entry_id: usize, catalog_id: usize, ext_id: &str) -> Option<WikidataCommandPropertyValueGroups> {
+    async fn get_source_for_entry(&mut self, entry_id: usize, catalog_id: usize, ext_id: &str) -> Option<WikidataCommandPropertyValueGroup> {
         if !self.catalogs.contains_key(&catalog_id) {
             let catalog = Catalog::from_id(catalog_id, &self.mnm).await.ok();
             self.catalogs.insert(catalog_id,catalog);
@@ -488,28 +487,22 @@ impl AuxiliaryMatcher {
                 }
             }
 
-            return Some(vec![
-                stated_in,
-                vec![WikidataCommandPropertyValue{property:wd_prop,value:WikidataCommandValue::String(ext_id.to_string())}]
-            ]);
+            stated_in.push(WikidataCommandPropertyValue{property:wd_prop,value:WikidataCommandValue::String(ext_id.to_string())});
+            return Some(stated_in);
         }
 
         // Source via external URL of the entry
         if let Ok(entry) = Entry::from_id(entry_id, &self.mnm).await {
             if !entry.ext_url.is_empty() {
-                return Some(vec![
-                    stated_in,
-                    vec![WikidataCommandPropertyValue{property:854,value:WikidataCommandValue::String(entry.ext_url.to_string())}]
-                ]);
+                stated_in.push(WikidataCommandPropertyValue{property:854,value:WikidataCommandValue::String(entry.ext_url.to_string())});
+                return Some(stated_in);
             }
         }
 
         // Fallback: Source via Mix'n'match entry URL
         let mnm_entry_url = format!("https://mix-n-match.toolforge.org/#/entry/{}",entry_id);
-        return Some(vec![
-            stated_in,
-            vec![WikidataCommandPropertyValue{property:854,value:WikidataCommandValue::String(mnm_entry_url)}]
-        ]);
+        stated_in.push(WikidataCommandPropertyValue{property:854,value:WikidataCommandValue::String(mnm_entry_url)});
+        Some(stated_in)
     }
 
     //TODO test
@@ -601,5 +594,17 @@ mod tests {
         entry.unmatch().await.unwrap();
         let catalog_id = TEST_CATALOG_ID;
         mnm.app.get_mnm_conn().await.unwrap().exec_drop("DELETE FROM `jobs` WHERE `action`='aux2wd' AND `catalog`=:catalog_id", params!{catalog_id}).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_get_source_for_entry() {
+        let _test_lock = TEST_MUTEX.lock();
+        let mnm = get_test_mnm();
+        let mut am = AuxiliaryMatcher::new(&mnm);
+
+        let res = am.get_source_for_entry(144507016,5535,"38084").await;
+        let x1 = WikidataCommandPropertyValue { property: 248, value: WikidataCommandValue::Item(97032597) };
+        let x2 = WikidataCommandPropertyValue { property: 3124, value: WikidataCommandValue::String("38084".to_string()) };
+        assert_eq!(res,Some(vec![x1, x2]));
     }
 }
