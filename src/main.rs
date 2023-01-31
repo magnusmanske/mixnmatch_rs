@@ -39,7 +39,7 @@ fn main() -> Result<(),app_state::GenericError> {
     let threaded_rt = runtime::Builder::new_multi_thread()
         .enable_all()
         .worker_threads(THREADS)
-        .thread_name("listeria")
+        .thread_name("mixnmatch")
         .thread_stack_size(THREADS * 1024 * 1024)
         .build()?;
 
@@ -57,6 +57,6 @@ cargo test  -- --nocapture
 git pull && ./build.sh && toolforge-jobs delete rustbot && \rm ~/rustbot.* && \
 toolforge-jobs run --image tf-php74 --mem 1000Mi --continuous --command '/data/project/mix-n-match/mixnmatch_rs/run.sh' rustbot
 
-toolforge-jobs delete rustbot2 && \
+toolforge-jobs delete rustbot2 && \rm ~/rustbot2.* && \
 toolforge-jobs run --image tf-php74 --mem 1000Mi --continuous --command '/data/project/mix-n-match/mixnmatch_rs/run.sh second' rustbot2
 */

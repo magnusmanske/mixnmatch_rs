@@ -64,9 +64,8 @@ trait JsonStuff {
         }
     }
 
-    //TODO test
     fn fix_regex(s: &str) -> String {
-        s.replace("\\/","/").to_string()
+        s.replace("\\/","/").replace("\\\"","\"").to_string()
     }
 }
 
@@ -971,6 +970,13 @@ mod tests {
     const TEST_CATALOG_ID: usize = 91;//5526 ;
     const _TEST_ENTRY_ID: usize = 143962196 ;
     const _TEST_ITEM_ID: usize = 13520818 ; // Q13520818
+
+    #[test]
+    fn test_fix_regex() {
+        let s = r#"<input type=\"checkbox\" name=\"genre\" id=\"(|sub)genreid\\:D[+]+([\\d]+)\" aria-label=\"Filter by (genre|style): (.+?)\" value=\"(.+?)\">"#;
+        let s = AutoscrapeRange::fix_regex(s); // impl of JsonStuff
+        let _r = Regex::new(&s).expect("fix regex fail");
+    }
 
     #[tokio::test]
     async fn test_autoscrape() {
