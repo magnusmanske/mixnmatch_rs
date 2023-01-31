@@ -56,5 +56,7 @@ cargo test  -- --nocapture
 
 git pull && ./build.sh && toolforge-jobs delete rustbot && \rm ~/rustbot.* && \
 toolforge-jobs run --image tf-php74 --mem 1000Mi --continuous --command '/data/project/mix-n-match/mixnmatch_rs/run.sh' rustbot
+
+toolforge-jobs delete rustbot2 && \
 toolforge-jobs run --image tf-php74 --mem 1000Mi --continuous --command '/data/project/mix-n-match/mixnmatch_rs/run.sh second' rustbot2
 */

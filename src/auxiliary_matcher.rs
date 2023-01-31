@@ -438,7 +438,11 @@ impl AuxiliaryMatcher {
             aux.entry(result.q_numeric)
                 .and_modify(|v| v.push(result.to_owned()))
                 .or_insert(vec![result.to_owned()]);
-            if let Some(s) = self.get_source_for_entry(result.entry_id,catalog_id,&result.value).await {
+            let entry = match Entry::from_id(result.entry_id, &self.mnm).await {
+                Ok(entry) => entry,
+                _ => continue
+            };
+            if let Some(s) = self.get_source_for_entry(result.entry_id,catalog_id,&entry.ext_id).await {
                 sources.insert(result.q(),s.to_owned());
             }
         }
@@ -598,7 +602,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_source_for_entry() {
-        let _test_lock = TEST_MUTEX.lock();
         let mnm = get_test_mnm();
         let mut am = AuxiliaryMatcher::new(&mnm);
 
@@ -607,4 +610,5 @@ mod tests {
         let x2 = WikidataCommandPropertyValue { property: 3124, value: WikidataCommandValue::String("38084".to_string()) };
         assert_eq!(res,Some(vec![x1, x2]));
     }
+
 }
