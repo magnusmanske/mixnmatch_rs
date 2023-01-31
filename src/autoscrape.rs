@@ -65,7 +65,7 @@ trait JsonStuff {
     }
 
     fn fix_regex(s: &str) -> String {
-        s.replace("\\/","/").replace("\\\"","\"").to_string()
+        s.replace("\\/","/").replace("\\\"","\"").replace("\\:",":").to_string()
     }
 }
 
