@@ -110,6 +110,14 @@ impl AppState {
                 continue;
             }
             let mut job = Job::new(&mnm);
+            if !reset_jobs {
+                job.skip_actions = Some(vec![
+                    "autoscrape".into(),
+                    "bespoke_scraper".into(),
+                    "import_aux_from_url".into(),
+                    "update_descriptions_from_url".into(),
+                ]);
+            }
             match job.set_next().await {
                 Ok(true) => {
                     let _ = job.set_status(JobStatus::Running).await;

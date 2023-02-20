@@ -166,7 +166,7 @@ pub struct JobRow {
     pub note: Option<String>,
     pub repeat_after_sec: Option<usize>,
     pub next_ts: String,
-    pub user_id: usize
+    pub user_id: usize,
 }
 
 impl JobRow {
@@ -182,7 +182,7 @@ impl JobRow {
                 note: x.7,
                 repeat_after_sec: x.8,
                 next_ts: x.9,
-                user_id: x.10
+                user_id: x.10,
             }
         }
 
@@ -198,7 +198,7 @@ impl JobRow {
                 note: None,
                 repeat_after_sec: None,
                 next_ts: "".to_string(),
-                user_id: 0
+                user_id: 0,
             }
         }
     
@@ -207,14 +207,16 @@ impl JobRow {
 #[derive(Debug, Clone)]
 pub struct Job {
     pub data: Option<Arc<Mutex<JobRow>>>,
-    pub mnm: Arc<MixNMatch>
+    pub mnm: Arc<MixNMatch>,
+    pub skip_actions: Option<Vec<String>>,
 }
 
 impl Job {
     pub fn new(mnm: &MixNMatch) -> Self {
         Self {
             data: None,
-            mnm: Arc::new(mnm.clone())
+            mnm: Arc::new(mnm.clone()),
+            skip_actions: None,
         }
     }
 
@@ -564,21 +566,34 @@ impl Job {
         Ok(())
     }
 
+    fn add_sql_action_filter(&self, sql: String) -> String {
+        match &self.skip_actions {
+            Some(actions) => {
+                let actions = actions.join("','");
+                format!("{sql} AND `action` NOT IN ('{actions}')")
+            }
+            None => sql
+        }
+    }
+
     //TODO test
     async fn get_next_high_priority_job(&self) -> Option<usize> {
         let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NULL",JobStatus::HighPriority.as_str()) ;
+        let sql = self.add_sql_action_filter(sql);
         self.get_next_job_generic(&sql).await
     }
     
     //TODO test
     async fn get_next_low_priority_job(&self) -> Option<usize> {
         let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NULL",JobStatus::LowPriority.as_str()) ;
+        let sql = self.add_sql_action_filter(sql);
         self.get_next_job_generic(&sql).await
     }
     
     //TODO test
     async fn get_next_dependent_job(&self) -> Option<usize> {
         let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NOT NULL AND `depends_on` IN (SELECT `id` FROM `jobs` WHERE `status`='{}')",JobStatus::Todo.as_str(),JobStatus::Done.as_str()) ;
+        let sql = self.add_sql_action_filter(sql);
         self.get_next_job_generic(&sql).await
     }
 
@@ -590,27 +605,32 @@ impl Job {
         }
         let not_in = avoid.join("','");
         let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NULL AND `action` NOT IN ('{}')",JobStatus::Todo.as_str(),&not_in) ;
+        let sql = self.add_sql_action_filter(sql);
         self.get_next_job_generic(&sql).await
     }
     
     //TODO test
     async fn get_next_initial_job(&self) -> Option<usize> {
         let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NULL",JobStatus::Todo.as_str()) ;
+        let sql = self.add_sql_action_filter(sql);
         self.get_next_job_generic(&sql).await
     }
      
     //TODO test
     async fn get_next_scheduled_job(&self) -> Option<usize> {
         let timestamp =  MixNMatch::get_timestamp();
-        let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `next_ts`!='' AND `next_ts`<='{}' ORDER BY `next_ts` LIMIT 1",JobStatus::Done.as_str(),&timestamp) ;
+        let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `next_ts`!='' AND `next_ts`<='{}'",JobStatus::Done.as_str(),&timestamp) ;
+        let sql = self.add_sql_action_filter(sql);
+        let sql = format!("{sql} ORDER BY `next_ts` LIMIT 1");
         self.get_next_job_generic(&sql).await
     }
     
     //TODO test
     async fn get_next_job_generic(&self, sql: &str) -> Option<usize> {
         let sql = if sql.contains(" ORDER BY ") {
-            sql.to_string()
+            self.add_sql_action_filter(sql.to_string())
         } else {
+            let sql = self.add_sql_action_filter(sql.to_string());
             format!("{} ORDER BY `last_ts` LIMIT 1", sql)
         };
         self.mnm.app.get_mnm_conn().await.ok()?

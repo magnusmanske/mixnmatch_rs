@@ -30,7 +30,7 @@ async fn run() -> Result<(),app_state::GenericError> {
             println!("{:?}",id_opt);
             Ok(())
         }
-        Some("second") => app.forever_loop(false).await,
+        Some("second") => app.forever_loop(false).await, // Won't do long-running actions, so as to not block in autoscrape etc
         _ => app.forever_loop(true).await
     }
 }
