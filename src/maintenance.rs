@@ -69,6 +69,14 @@ impl Maintenance {
         }
     }
 
+    /// Removes P17 auxiliary values for entryies of type Q5 (human)
+    pub async fn remove_p17_for_humans(&self) -> Result<(),GenericError> {
+        let dummy = 0;
+        let sql = r#"DELETE FROM auxiliary WHERE aux_p=17 AND EXISTS (SELECT * FROM entry WHERE entry_id=entry.id AND `type`="Q5") AND id>:dummy"# ;
+        self.mnm.app.get_mnm_conn().await?.exec_drop(sql, params! {dummy}).await?;
+        Ok(())
+    }
+
     /// Finds redirects in a batch of items, and changes MnM matches to their respective targets.
     async fn fix_redirected_items_batch(&self,unique_qs: &Vec<String>) -> Result<(),GenericError> {
         let placeholders = MixNMatch::sql_placeholders(unique_qs.len());

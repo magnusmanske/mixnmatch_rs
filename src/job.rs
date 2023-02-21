@@ -471,6 +471,11 @@ impl Job {
                 maintenance.maintenance_automatch().await
             },
 
+            "remove_p17_for_humans" => {
+                let maintenance = Maintenance::new(&self.mnm);
+                maintenance.remove_p17_for_humans().await
+            }
+
             "update_person_dates" => {
                 PhpWrapper::update_person_dates(catalog_id)
             },
