@@ -272,6 +272,7 @@ impl AuxiliaryMatcher {
             {}
             AND in_wikidata=0 
             AND aux_p NOT IN ({})
+            AND (aux_p!=17 OR `type`!='Q5')
             ORDER BY auxiliary.id LIMIT :batch_size OFFSET :offset"
             ,MatchState::fully_matched().get_sql()
             ,blacklisted_properties.join(","));
