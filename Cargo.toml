@@ -19,7 +19,7 @@ tokio = { version = "^1", features = ["full","rt-multi-thread"] }
 futures = "*"
 mysql_async = "*"
 md5 = "*"
-reqwest = "*"
+reqwest = { version="*" , features=["gzip","deflate","brotli"] }
 async-trait = "*"
 csv = "*"
 rand = "*"

@@ -15,8 +15,9 @@ use crate::job::*;
 use crate::app_state::*;
 use crate::mixnmatch::MixNMatch;
 
-const AUTOSCRAPER_USER_AGENT: &str = "Mozilla/5.0 (platform; rv:geckoversion) Gecko/geckotrail Firefox/firefoxversion";
+const AUTOSCRAPER_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.12; rv:56.0) Gecko/20100101 Firefox/56.0";
 const AUTOSCRAPE_ENTRY_BATCH_SIZE: usize = 100;
+const AUTOSCRAPE_URL_LOAD_TIMEOUT_SEC: u64 = 60*2;
 
 lazy_static!{
     static ref RE_SIMPLE_SPACE : Regex = RegexBuilder::new(r"\s+").multi_line(true).ignore_whitespace(true).build().expect("Regex error") ;
@@ -780,7 +781,14 @@ impl Autoscrape {
             levels:vec![],
             scraper: AutoscrapeScraper::from_json(json.get("scraper").ok_or_else(||AutoscrapeError::NoAutoscrapeForCatalog)?)?,
             job: None,
-            client : reqwest::Client::builder().user_agent(AUTOSCRAPER_USER_AGENT).build()?,
+            client : reqwest::Client::builder()
+                .user_agent(AUTOSCRAPER_USER_AGENT)
+                .timeout(core::time::Duration::from_secs(AUTOSCRAPE_URL_LOAD_TIMEOUT_SEC))
+                .connection_verbose(true)
+                .gzip(true)
+                .deflate(true)
+                .brotli(true)
+                .build()?,
             urls_loaded: 0,
             entry_batch: vec![],
         };
