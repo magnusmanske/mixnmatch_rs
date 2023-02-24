@@ -1,9 +1,8 @@
 use async_trait::async_trait;
 use lazy_static::lazy_static;
 use rand::prelude::*;
-use regex::RegexBuilder;
+use regex::{Regex, RegexBuilder};
 use serde_json::{json, Value};
-use regex::Regex;
 use std::collections::HashMap;
 use mysql_async::from_row;
 use std::error::Error;
