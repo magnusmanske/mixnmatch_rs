@@ -359,17 +359,18 @@ impl Job {
     //TODO test
     pub async fn set_json(&self, json: Option<serde_json::Value> ) ->  Result<(),GenericError> {
         let job_id = self.get_id()?;
+        let timestamp = MixNMatch::get_timestamp();
         match json {
             Some(json) => {
                 let json_string = json.to_string();
                 self.put_json(Some(json_string.clone()))?;
-                let sql = "UPDATE `jobs` SET `json`=:json_string WHERE `id`=:job_id";
-                self.mnm.app.get_mnm_conn().await?.exec_drop(sql, params!{job_id, json_string}).await?;
+                let sql = "UPDATE `jobs` SET `json`=:json_string,last_ts=:timestamp WHERE `id`=:job_id";
+                self.mnm.app.get_mnm_conn().await?.exec_drop(sql, params!{job_id, json_string, timestamp}).await?;
             }
             None => {
                 self.put_json(None)?;
-                let sql = "UPDATE `jobs` SET `json`=NULL WHERE `id`=:job_id";
-                self.mnm.app.get_mnm_conn().await?.exec_drop(sql, params!{job_id}).await?;
+                let sql = "UPDATE `jobs` SET `json`=NULL,last_ts=:timestamp WHERE `id`=:job_id";
+                self.mnm.app.get_mnm_conn().await?.exec_drop(sql, params!{job_id, timestamp}).await?;
             }
         }
         Ok(())
