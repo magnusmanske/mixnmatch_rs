@@ -377,8 +377,11 @@ impl Pattern {
             Some(col) => col.as_str().ok_or(UpdateCatalogError::BadPattern)?,
             None => return Err(Box::new(UpdateCatalogError::BadPattern))
         };
-        // TODO unwrap
-        let pattern = match RE_PATTERN_WRAP_REMOVAL.captures(pattern).unwrap().get(1).map(|s|s.as_str()) {
+        let patterns = match RE_PATTERN_WRAP_REMOVAL.captures(pattern) {
+            Some(patterns) => patterns,
+            None => return Err(Box::new(UpdateCatalogError::BadPattern))
+        };
+        let pattern = match patterns.get(1).map(|s|s.as_str()) {
             Some(s) => s,
             None => pattern
         } ;

@@ -24,32 +24,33 @@ pub struct Catalog {
 
 impl Catalog {
     //TODO test
-    fn from_row(row: &Row) -> Self {
-        Self {
-            id: row.get(0).unwrap(),
-            name: row.get(1).unwrap(),
-            url: row.get(2).unwrap(),
-            desc: row.get(3).unwrap(),
-            type_name: row.get(4).unwrap(),
-            wd_prop: row.get(5).unwrap(),
-            wd_qual: row.get(6).unwrap(),
-            search_wp: row.get(7).unwrap(),
-            active: row.get(8).unwrap(),
-            owner: row.get(9).unwrap(),
-            note: row.get(10).unwrap(),
-            source_item: row.get(11).unwrap(),
-            has_person_date: row.get(12).unwrap(),
-            taxon_run: row.get(13).unwrap(),
+    fn from_row(row: &Row) -> Option<Self> {
+        Some(Self {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            url: row.get(2)?,
+            desc: row.get(3)?,
+            type_name: row.get(4)?,
+            wd_prop: row.get(5)?,
+            wd_qual: row.get(6)?,
+            search_wp: row.get(7)?,
+            active: row.get(8)?,
+            owner: row.get(9)?,
+            note: row.get(10)?,
+            source_item: row.get(11)?,
+            has_person_date: row.get(12)?,
+            taxon_run: row.get(13)?,
             mnm: None
-        }
+        })
     }
 
     /// Returns a Catalog object for a given entry ID.
     pub async fn from_id(catalog_id: usize, mnm: &MixNMatch) -> Result<Self,GenericError> {
         let sql = r"SELECT id,`name`,url,`desc`,`type`,wd_prop,wd_qual,search_wp,active,owner,note,source_item,has_person_date,taxon_run FROM `catalog` WHERE `id`=:catalog_id";
-        let mut rows: Vec<Self> = mnm.app.get_mnm_conn().await?
+        let mut rows: Vec<Catalog> = mnm.app.get_mnm_conn().await?
             .exec_iter(sql,params! {catalog_id}).await?
-            .map_and_drop(|row| Self::from_row(&row)).await?;
+            .map_and_drop(|row| Self::from_row(&row)).await?
+            .iter().filter_map(|row|row.to_owned()).collect();
         // `id` is a unique index, so there can be only zero or one row in rows.
         let mut ret = rows.pop().ok_or(format!("No catalog #{}",catalog_id))?.to_owned() ;
         ret.set_mnm(mnm);

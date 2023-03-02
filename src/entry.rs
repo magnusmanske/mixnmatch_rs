@@ -27,14 +27,14 @@ pub struct AuxiliaryRow {
 
 impl AuxiliaryRow {
     //TODO test
-    pub fn from_row(row: &Row) -> Self {
-        Self {
-            row_id: row.get(0).unwrap(),
-            prop_numeric: row.get(1).unwrap(),
-            value: row.get(2).unwrap(),
-            in_wikidata: row.get(3).unwrap(),
-            entry_is_matched: row.get(4).unwrap(),
-        }
+    pub fn from_row(row: &Row) -> Option<Self> {
+        Some(Self {
+            row_id: row.get(0)?,
+            prop_numeric: row.get(1)?,
+            value: row.get(2)?,
+            in_wikidata: row.get(3)?,
+            entry_is_matched: row.get(4)?,
+        })
     }
 }
 
@@ -96,7 +96,8 @@ impl Entry {
         let sql = r"SELECT id,catalog,ext_id,ext_url,ext_name,ext_desc,q,user,timestamp,random,`type` FROM `entry` WHERE `id`=:entry_id";
         let mut rows: Vec<Self> = mnm.app.get_mnm_conn().await?
             .exec_iter(sql,params! {entry_id}).await?
-            .map_and_drop(|row| Self::from_row(&row)).await?;
+            .map_and_drop(|row| Self::from_row(&row)).await?
+            .iter().filter_map(|row|row.to_owned()).collect();
         // `id` is a unique index, so there can be only zero or one row in rows.
         let mut ret = rows.pop().ok_or(format!("No entry #{}",entry_id))?.to_owned() ;
         ret.set_mnm(mnm);
@@ -110,7 +111,8 @@ impl Entry {
         let mut conn = mnm.app.get_mnm_conn().await? ;
         let mut rows: Vec<Entry> = conn
             .exec_iter(sql,params! {catalog_id,ext_id}).await?
-            .map_and_drop(|row| Self::from_row(&row)).await?;
+            .map_and_drop(|row| Self::from_row(&row)).await?
+            .iter().filter_map(|row|row.to_owned()).collect();
         // `catalog`/`ext_id` comprises a unique index, so there can be only zero or one row in rows.
         let mut ret = rows.pop().ok_or(format!("No entry '{}' in catalog #{}",ext_id,catalog_id))?.to_owned() ;
         ret.set_mnm(mnm);
@@ -118,21 +120,21 @@ impl Entry {
     }
     
     //TODO test
-    pub fn from_row(row: &Row) -> Self {
-        Entry {
-            id: row.get(0).unwrap(),
-            catalog: row.get(1).unwrap(),
-            ext_id: row.get(2).unwrap(),
-            ext_url: row.get(3).unwrap(),
-            ext_name: row.get(4).unwrap(),
-            ext_desc: row.get(5).unwrap(),
-            q: Self::value2opt_isize(row.get(6).unwrap()).unwrap(),
-            user: Self::value2opt_usize(row.get(7).unwrap()).unwrap(),
-            timestamp: Self::value2opt_string(row.get(8).unwrap()).unwrap(),
+    pub fn from_row(row: &Row) -> Option<Self> {
+        Some(Entry {
+            id: row.get(0)?,
+            catalog: row.get(1)?,
+            ext_id: row.get(2)?,
+            ext_url: row.get(3)?,
+            ext_name: row.get(4)?,
+            ext_desc: row.get(5)?,
+            q: Self::value2opt_isize(row.get(6)?).ok()?,
+            user: Self::value2opt_usize(row.get(7)?).ok()?,
+            timestamp: Self::value2opt_string(row.get(8)?).ok()?,
             random: row.get(9).unwrap_or_else(||0.0), // random might be null, who cares
-            type_name: Self::value2opt_string(row.get(10).unwrap()).unwrap(),
+            type_name: Self::value2opt_string(row.get(10)?).ok()?,
             mnm: None
-        }
+        })
     }
 
     /// Inserts the current entry into the database. id must be ENTRY_NEW_ID.
@@ -451,7 +453,8 @@ impl Entry {
         let mnm = self.mnm()?;
         Ok(mnm.app.get_mnm_conn().await?
             .exec_iter(r"SELECT `id`,`aux_p`,`aux_name`,`in_wikidata`,`entry_is_matched` FROM `auxiliary` WHERE `entry_id`=:entry_id",params! {entry_id}).await?
-            .map_and_drop(|row| AuxiliaryRow::from_row(&row)).await?)
+            .map_and_drop(|row| AuxiliaryRow::from_row(&row)).await?
+            .iter().filter_map(|row|row.to_owned()).collect())
     }
 
     /// Before q query or an update to the entry in the database, checks if this is a valid entry ID (eg not a new entry)
