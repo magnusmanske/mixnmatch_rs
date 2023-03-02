@@ -129,7 +129,7 @@ impl Entry {
             q: Self::value2opt_isize(row.get(6).unwrap()).unwrap(),
             user: Self::value2opt_usize(row.get(7).unwrap()).unwrap(),
             timestamp: Self::value2opt_string(row.get(8).unwrap()).unwrap(),
-            random: row.get(9).unwrap(),
+            random: row.get(9).unwrap_or_else(||0.0), // random might be null, who cares
             type_name: Self::value2opt_string(row.get(10).unwrap()).unwrap(),
             mnm: None
         }
