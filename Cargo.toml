@@ -27,6 +27,7 @@ uuid = { version="*", features=["v4"] }
 itertools = "*"
 html-escape = "*"
 tempfile = "*"
+fancy-regex = "*"
 
 [profile.release]
 lto = 'thin'
