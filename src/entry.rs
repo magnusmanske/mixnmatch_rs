@@ -437,10 +437,10 @@ impl Entry {
         self.check_valid_id()?;
         let entry_id = self.id;
         let mnm = self.mnm()?;
-        let mut rows: Vec<(f64,f64)> = mnm.app.get_mnm_conn().await?
+        Ok(mnm.app.get_mnm_conn().await?
             .exec_iter(r"SELECT `lat`,`lon` FROM `location` WHERE `entry_id`=:entry_id LIMIT 1",params! {entry_id}).await?
-            .map_and_drop(from_row::<(f64,f64)>).await?;
-        Ok(rows.pop().map(|cl|CoordinateLocation{lat:cl.0,lon:cl.1}))
+            .map_and_drop(from_row::<(f64,f64)>).await?
+            .pop().map(|(lat,lon)|CoordinateLocation{lat,lon}))
     }
 
     /// Returns auxiliary data for the entry
