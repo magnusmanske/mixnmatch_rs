@@ -186,23 +186,23 @@ impl JobRow {
             }
         }
 
-        pub fn new(action: &str, catalog_id: usize) -> JobRow {
-            Self {
-                id: 0,
-                action: action.to_string(),
-                catalog: catalog_id,
-                json: None,
-                depends_on: None,
-                status: JobStatus::Todo,
-                last_ts: MixNMatch::get_timestamp(),
-                note: None,
-                repeat_after_sec: None,
-                next_ts: "".to_string(),
-                user_id: 0,
-            }
+    pub fn new(action: &str, catalog_id: usize) -> JobRow {
+        Self {
+            id: 0,
+            action: action.to_string(),
+            catalog: catalog_id,
+            json: None,
+            depends_on: None,
+            status: JobStatus::Todo,
+            last_ts: MixNMatch::get_timestamp(),
+            note: None,
+            repeat_after_sec: None,
+            next_ts: "".to_string(),
+            user_id: 0,
         }
-    
     }
+
+}
 
 #[derive(Debug, Clone)]
 pub struct Job {
@@ -583,7 +583,7 @@ impl Job {
     }
 
     //TODO test
-    async fn get_next_high_priority_job(&self) -> Option<usize> {
+    pub async fn get_next_high_priority_job(&self) -> Option<usize> {
         let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NULL",JobStatus::HighPriority.as_str()) ;
         let sql = self.add_sql_action_filter(sql);
         self.get_next_job_generic(&sql).await

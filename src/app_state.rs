@@ -77,6 +77,17 @@ impl AppState {
         Ok(())
     }
 
+    pub async fn run_single_hp_job(&self) -> Result<(),GenericError> {
+        let mnm = MixNMatch::new(self.clone());
+        let mut job = Job::new(&mnm);
+        if let Some(job_id) = job.get_next_high_priority_job().await {
+            job.set_from_id(job_id).await?;
+            job.set_status(JobStatus::Running).await?;
+            job.run().await?;
+        }
+        Ok(())
+    }
+
     pub async fn run_single_job(&self, job_id: usize) -> Result<(),GenericError> {
         let mnm = MixNMatch::new(self.clone());
         let mut job = Job::new(&mnm);

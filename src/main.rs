@@ -23,6 +23,7 @@ async fn run() -> Result<(),app_state::GenericError> {
     let argv: Vec<String> = env::args_os().map(|s|s.into_string().unwrap()).collect();
     match argv.get(1).map(|s|s.as_str()) {
         Some("job") => app.run_single_job(argv.get(2).unwrap().parse::<usize>().unwrap()).await,
+        Some("hpjob") => app.run_single_hp_job().await,
         Some("test") => {
             let mnm = crate::mixnmatch::MixNMatch::new(app.clone());
             let mut j = crate::job::Job::new(&mnm);
