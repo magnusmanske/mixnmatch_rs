@@ -14,6 +14,12 @@ use crate::job::*;
 use crate::app_state::*;
 use crate::mixnmatch::MixNMatch;
 
+//type AutoscrapeRegex = fancy_regex::Regex;
+//type AutoscrapeRegexBuilder = fancy_regex::RegexBuilder;
+
+type AutoscrapeRegex = regex::Regex;
+type AutoscrapeRegexBuilder = regex::RegexBuilder;
+
 const AUTOSCRAPER_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.12; rv:56.0) Gecko/20100101 Firefox/56.0";
 const AUTOSCRAPE_ENTRY_BATCH_SIZE: usize = 100;
 const AUTOSCRAPE_URL_LOAD_TIMEOUT_SEC: u64 = 60*2;
@@ -278,10 +284,10 @@ impl AutoscrapeFollow {
         .ok_or_else(||AutoscrapeError::MediawikiFailure(url.clone()))?;
 
         // Find new URLs to follow
-        let regex = fancy_regex::Regex::new(&self.regex)?;
+        let regex = AutoscrapeRegex::new(&self.regex)?;
         self.cache = regex
             .captures_iter(&text)
-            .filter_map(|caps|caps.ok())
+            //.filter_map(|caps|caps.ok())
             .map(|cap|cap.get(1))
             .filter_map(|url|url)
             .map(|url|url.as_str().to_string())
@@ -487,7 +493,7 @@ impl AutoscrapeLevel {
 #[derive(Debug, Clone)]
 pub struct AutoscrapeResolve {
     use_pattern: String,
-    regexs: Vec<(fancy_regex::Regex,String)>,
+    regexs: Vec<(AutoscrapeRegex,String)>,
 }
 
 impl JsonStuff for AutoscrapeResolve {}
@@ -523,7 +529,7 @@ impl AutoscrapeResolve {
                 .as_str()
                 .ok_or_else(||AutoscrapeError::UnknownLevelType(json.to_owned()))?;
             regexs.push((
-                fancy_regex::Regex::new(&Self::fix_regex(pattern)).ok().ok_or_else(||AutoscrapeError::UnknownLevelType(json.to_owned()))?,
+                AutoscrapeRegex::new(&Self::fix_regex(pattern)).ok().ok_or_else(||AutoscrapeError::UnknownLevelType(json.to_owned()))?,
                 replacement.to_string()
             ));
         }
@@ -587,8 +593,8 @@ impl AutoscrapeResolveAux {
 #[derive(Debug, Clone)]
 pub struct AutoscrapeScraper {
     url: String,
-    regex_block: Option<fancy_regex::Regex>,
-    regex_entry: Vec<fancy_regex::Regex>,
+    regex_block: Option<AutoscrapeRegex>,
+    regex_entry: Vec<AutoscrapeRegex>,
     resolve_id: AutoscrapeResolve,
     resolve_name: AutoscrapeResolve,
     resolve_desc: AutoscrapeResolve,
@@ -633,34 +639,33 @@ impl AutoscrapeScraper {
     }
 
     //TODO test
-    fn regex_entry_from_json(json: &Value) -> Result<Vec<fancy_regex::Regex>,GenericError> {
+    fn regex_entry_from_json(json: &Value) -> Result<Vec<AutoscrapeRegex>,GenericError> {
         let rx_entry = json.get("rx_entry").ok_or_else(||AutoscrapeError::BadType(json.to_owned()))?;
         if rx_entry.is_string() {
             let s = rx_entry.as_str().ok_or_else(||AutoscrapeError::BadType(json.to_owned()))?;
-            Ok(vec![fancy_regex::RegexBuilder::new(&Self::fix_regex(s)).build()?])
+            Ok(vec![AutoscrapeRegexBuilder::new(&Self::fix_regex(s)).multi_line(true).build()?])
         } else { // Assuming array
             let arr = rx_entry.as_array().ok_or_else(||AutoscrapeError::BadType(json.to_owned()))?;
             let mut ret = vec![];
             for x in arr {
                 if let Some(s) = x.as_str() {
-                    ret.push(fancy_regex::RegexBuilder::new(&Self::fix_regex(s)).build()?)
+                    ret.push(AutoscrapeRegexBuilder::new(&Self::fix_regex(s)).multi_line(true).build()?)
                 }
             }
             Ok(ret)
         }
-        //RegexBuilder::new(&Self::json_as_str(json,"rx_entry")?).multi_line(true).build()?
-        
     }
 
     //TODO test
-    fn regex_block_from_json(json: &Value) -> Result<Option<fancy_regex::Regex>,GenericError> {
+    fn regex_block_from_json(json: &Value) -> Result<Option<AutoscrapeRegex>,GenericError> {
         Ok( // TODO test
         if let Some(v) = json.get("rx_block") {
             if let Some(s) = v.as_str() {
                 if s.is_empty() {
                     None
                 } else {
-                    let r = fancy_regex::RegexBuilder::new(&Self::fix_regex(s))
+                    let r = AutoscrapeRegexBuilder::new(&Self::fix_regex(s))
+                        .multi_line(true)
                         .build()?;
                     Some(r)
                 }
@@ -678,7 +683,7 @@ impl AutoscrapeScraper {
             Some(regex_block) => {
                 regex_block
                     .captures_iter(html)
-                    .filter_map(|caps|caps.ok())
+                    //.filter_map(|caps|caps.ok())
                     .filter_map(|cap|cap.get(1))
                     .map(|s|s.as_str().to_string())
                     .flat_map(|s|self.process_html_block(&s, autoscrape))
@@ -694,14 +699,14 @@ impl AutoscrapeScraper {
     fn process_html_block(&self, html: &str, autoscrape: &Autoscrape) -> Vec<ExtendedEntry> {
         let mut ret = vec![];
         for regex_entry in &self.regex_entry {
-            if !regex_entry.is_match(html).unwrap_or(false) {
+            if !regex_entry.is_match(html) {
                 continue;
             }            
             for cap in regex_entry.captures_iter(html) {
-                let cap = match cap {
-                    Ok(cap) => cap,
-                    Err(_) => continue,
-                };
+                // let cap = match cap {
+                //     Ok(cap) => cap,
+                //     Err(_) => continue,
+                // };
                 let values: Vec<String> = cap.iter().map(|v|v.map(|x|x.as_str().to_string()).unwrap_or(String::new())).collect();
                 let mut map: HashMap<String,String> = values.iter().enumerate().skip(1).map(|(num,value)|(format!("${}",num),value.to_owned())).collect();
                 for (num,level) in autoscrape.levels.iter().enumerate() {
@@ -987,7 +992,7 @@ mod tests {
     fn test_fix_regex() {
         let s = r#"<input type=\"checkbox\" name=\"genre\" id=\"(|sub)genreid\\:D[+]+([\\d]+)\" aria-label=\"Filter by (genre|style): (.+?)\" value=\"(.+?)\">"#;
         let s = AutoscrapeRange::fix_regex(s); // impl of JsonStuff
-        let _r = fancy_regex::Regex::new(&s).expect("fix regex fail");
+        let _r = AutoscrapeRegex::new(&s).expect("fix regex fail");
     }
 
     #[tokio::test]
