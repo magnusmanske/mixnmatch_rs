@@ -19,14 +19,14 @@ use crate::entry::*;
 use crate::job::*;
 
 lazy_static!{
-    static ref RE_PATTERN_WRAP_REMOVAL : Regex = Regex::new(r"^\|(.+)\|$").unwrap();
-    static ref RE_TYPE : Regex = Regex::new(r"^(Q\d+)$").unwrap();
-    static ref RE_DATE : Regex = Regex::new(r"^(\d{3,}|\d{3,4}-\d{2}|\d{3,4}-\d{2}-\d{2})$").unwrap();
-    static ref RE_PROPERTY : Regex = Regex::new(r"^P(\d+)$").unwrap();
-    static ref RE_ALIAS : Regex = Regex::new(r"^A([a-z]+)$").unwrap();
-    static ref RE_DESCRIPTION : Regex = Regex::new(r"^D([a-z]+)$").unwrap();
-    static ref RE_POINT : Regex = Regex::new(r"^\s*POINT\s*\(\s*(\S+?)[, ](\S+?)\s*\)\s*$").unwrap();
-    static ref RE_LAT_LON : Regex = Regex::new(r"^(\S+)/(\S+)$").unwrap();
+    static ref RE_PATTERN_WRAP_REMOVAL : Regex = Regex::new(r"^\|(.+)\|$").expect("Regexp construction");
+    static ref RE_TYPE : Regex = Regex::new(r"^(Q\d+)$").expect("Regexp construction");
+    static ref RE_DATE : Regex = Regex::new(r"^(\d{3,}|\d{3,4}-\d{2}|\d{3,4}-\d{2}-\d{2})$").expect("Regexp construction");
+    static ref RE_PROPERTY : Regex = Regex::new(r"^P(\d+)$").expect("Regexp construction");
+    static ref RE_ALIAS : Regex = Regex::new(r"^A([a-z]+)$").expect("Regexp construction");
+    static ref RE_DESCRIPTION : Regex = Regex::new(r"^D([a-z]+)$").expect("Regexp construction");
+    static ref RE_POINT : Regex = Regex::new(r"^\s*POINT\s*\(\s*(\S+?)[, ](\S+?)\s*\)\s*$").expect("Regexp construction");
+    static ref RE_LAT_LON : Regex = Regex::new(r"^(\S+)/(\S+)$").expect("Regexp construction");
 }
 
 #[derive(Debug)]

@@ -33,23 +33,23 @@ lazy_static! {
 
 lazy_static! {
     static ref SANITIZE_PERSON_NAME_RES : Vec<Regex> = vec![
-        Regex::new(r"^(Sir|Mme|Dr|Mother|Father)\.{0,1} ").unwrap(),
-        Regex::new(r"\b[A-Z]\. /").unwrap(),
-        Regex::new(r" (\&) ").unwrap(),
-        Regex::new(r"\(.+?\)").unwrap(),
-        Regex::new(r"\s+").unwrap(),
+        Regex::new(r"^(Sir|Mme|Dr|Mother|Father)\.{0,1} ").expect("Regex failure"),
+        Regex::new(r"\b[A-Z]\. /").expect("Regex failure"),
+        Regex::new(r" (\&) ").expect("Regex failure"),
+        Regex::new(r"\(.+?\)").expect("Regex failure"),
+        Regex::new(r"\s+").expect("Regex failure"),
     ];
     static ref SIMPLIFY_PERSON_NAME_RES : Vec<Regex> = vec![
-        Regex::new(r"\s*\(.*?\)\s*").unwrap(),
-        Regex::new(r"[, ]+(Jr\.{0,1}|Sr\.{0,1}|PhD\.{0,1}|MD|M\.D\.)$").unwrap(),
-        Regex::new(r"^(Sir|Baron|Baronesse{0,1}|Graf|Gräfin|Prince|Princess|Dr\.|Prof\.|Rev\.)\s+").unwrap(),
-        Regex::new(r"^(Sir|Baron|Baronesse{0,1}|Graf|Gräfin|Prince|Princess|Dr\.|Prof\.|Rev\.)\s+").unwrap(),
-        Regex::new(r"^(Sir|Baron|Baronesse{0,1}|Graf|Gräfin|Prince|Princess|Dr\.|Prof\.|Rev\.)\s+").unwrap(),
-        Regex::new(r"\s*(Ritter|Freiherr)\s+").unwrap(),
-        Regex::new(r"\s+").unwrap(),
+        Regex::new(r"\s*\(.*?\)\s*").expect("Regex failure"),
+        Regex::new(r"[, ]+(Jr\.{0,1}|Sr\.{0,1}|PhD\.{0,1}|MD|M\.D\.)$").expect("Regex failure"),
+        Regex::new(r"^(Sir|Baron|Baronesse{0,1}|Graf|Gräfin|Prince|Princess|Dr\.|Prof\.|Rev\.)\s+").expect("Regex failure"),
+        Regex::new(r"^(Sir|Baron|Baronesse{0,1}|Graf|Gräfin|Prince|Princess|Dr\.|Prof\.|Rev\.)\s+").expect("Regex failure"),
+        Regex::new(r"^(Sir|Baron|Baronesse{0,1}|Graf|Gräfin|Prince|Princess|Dr\.|Prof\.|Rev\.)\s+").expect("Regex failure"),
+        Regex::new(r"\s*(Ritter|Freiherr)\s+").expect("Regex failure"),
+        Regex::new(r"\s+").expect("Regex failure"),
     ];
-    static ref SIMPLIFY_PERSON_NAME_TWO_RE : Regex = Regex::new(r"^(\S+) .*?(\S+)$").unwrap();
-    static ref RE_ITEM2NUMERIC : Regex = Regex::new(r"(-{0,1}\d+)").unwrap();
+    static ref SIMPLIFY_PERSON_NAME_TWO_RE : Regex = Regex::new(r"^(\S+) .*?(\S+)$").expect("Regex failure");
+    static ref RE_ITEM2NUMERIC : Regex = Regex::new(r"(-{0,1}\d+)").expect("Regex failure");
 }
 
 pub const Q_NA: isize = 0;
