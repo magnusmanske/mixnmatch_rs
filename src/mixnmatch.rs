@@ -1,5 +1,3 @@
-use std::error::Error;
-use std::fmt;
 use tempfile::tempfile;
 use std::fs::File;
 use std::io::prelude::*;
@@ -14,26 +12,12 @@ use serde_json::{Value,json};
 use mysql_async::prelude::*;
 use mysql_async::from_row;
 use itertools::Itertools;
+use crate::error::MnMError;
 use crate::app_state::*;
 use crate::entry::*;
 use crate::wikidata_commands::WikidataCommand;
 
 pub const MNM_SITE_URL: &'static str = "https://mix-n-match.toolforge.org";
-
-
-#[derive(Debug)]
-pub enum MnMError {
-    ApiUnreachable,
-}
-
-impl Error for MnMError {}
-
-impl fmt::Display for MnMError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self) // user-facing output
-    }
-}
-
 
 /// Global function for tests.
 pub fn get_test_mnm() -> MixNMatch {

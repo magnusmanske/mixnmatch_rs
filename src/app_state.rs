@@ -25,7 +25,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// Creatre an AppState object from a config JSION file
+    /// Creatre an AppState object from a config JSON file
     pub fn from_config_file(filename: &str) -> Result<Self,GenericError> {
         let mut path = env::current_dir().expect("Can't get CWD");
         path.push(filename);
@@ -93,12 +93,8 @@ impl AppState {
         let mut job = Job::new(&mnm);
         job.set_from_id(job_id).await?;
         match job.set_status(JobStatus::Running).await {
-            Ok(_) => {
-                println!("Finished successfully");
-            }
-            Err(e) => {
-                println!("ERROR: {}",e);
-            }
+            Ok(_) => println!("Finished successfully"),
+            Err(e) => println!("ERROR: {}",e),
         }
         job.run().await
     }

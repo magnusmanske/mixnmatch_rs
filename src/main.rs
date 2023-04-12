@@ -1,4 +1,5 @@
 pub mod app_state;
+pub mod error;
 pub mod mixnmatch;
 pub mod automatch ;
 pub mod taxon_matcher ;
@@ -13,6 +14,7 @@ pub mod issue ;
 pub mod wikidata_commands;
 pub mod php_wrapper;
 pub mod maintenance;
+
 use std::env;
 use tokio::runtime;
 
