@@ -45,7 +45,10 @@ fn main() -> Result<(),app_state::GenericError> {
         .build()?;
 
     threaded_rt.block_on(async move {
-        let _ = run().await;
+        match run().await {
+            Ok(_) => {},
+            Err(e) => println!("CATASTROPHIC FAILURE: {e}"),
+        }
     });
     Ok(())
 }
