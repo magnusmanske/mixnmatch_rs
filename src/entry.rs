@@ -512,7 +512,7 @@ impl Entry {
         let entry_id = self.id;
         let mnm = self.mnm()?;
         mnm.app.get_mnm_conn().await?
-        .exec_drop(r"UPDATE `entry` SET `q`=NULL,`user`=NULL,`timestamp`=NULL WHERE `id`=:entry_id",params! {entry_id}).await?;
+            .exec_drop(r"UPDATE `entry` SET `q`=NULL,`user`=NULL,`timestamp`=NULL WHERE `id`=:entry_id",params! {entry_id}).await?;
         self.set_match_status("UNKNOWN",false).await?;
         self.user = None;
         self.timestamp = None;
