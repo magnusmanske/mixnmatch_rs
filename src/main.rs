@@ -18,7 +18,7 @@ pub mod maintenance;
 use std::env;
 use tokio::runtime;
 
-const THREADS: usize = 4;
+const DEFAULT_THREADS: usize = 4;
 
 async fn run() -> Result<(),app_state::GenericError> {
     let app = app_state::AppState::from_config_file("config.json")?;
@@ -39,11 +39,16 @@ async fn run() -> Result<(),app_state::GenericError> {
 }
 
 fn main() -> Result<(),app_state::GenericError> {
+    let threads = match env::var("MNM_THREADS") {
+        Ok(s) => s.parse::<usize>().unwrap_or(DEFAULT_THREADS),
+        Err(_) => DEFAULT_THREADS,
+    };
+    println!("Using {threads} threads");
     let threaded_rt = runtime::Builder::new_multi_thread()
         .enable_all()
-        .worker_threads(THREADS)
+        .worker_threads(threads)
         .thread_name("mixnmatch")
-        .thread_stack_size(16*THREADS * 1024 * 1024)
+        .thread_stack_size(16*threads * 1024 * 1024)
         .build()?;
 
     threaded_rt.block_on(async move {
