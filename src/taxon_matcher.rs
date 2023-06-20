@@ -97,10 +97,7 @@ impl TaxonMatcher {
                     0 => {} // No matches
                     1 => {
                         let q = &items[0];
-                        match Entry::from_id(entry_id, &self.mnm).await?.set_match(q,USER_AUX_MATCH).await {
-                            Ok(_) => {}
-                            _ => {} // Ignore error
-                        }        
+                        let _ = Entry::from_id(entry_id, &self.mnm).await?.set_match(q,USER_AUX_MATCH).await ;
                     }
                     _ => {} // TODO log multiple potential matches
                 }

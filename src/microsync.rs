@@ -175,7 +175,7 @@ impl Microsync {
                     let ext_name=entry2name.get(&e.entry_id).unwrap_or(&e.ext_id);
                     let ext_id = self.format_ext_id(&e.ext_id,&e.ext_url,&formatter_url);
                     let mnm_url = format!("https://mix-n-match.toolforge.org/#/entry/{}",e.entry_id);
-                    let s = format!("|-\n| {ext_id} || {ext_name} || {{{{Q|{}}}}} || {{Q|{}}}}} || [{mnm_url} {}]\n",e.q_wd,e.q_mnm,e.entry_id);
+                    let s = format!("|-\n| {ext_id} || {ext_name} || {{{{Q|{}}}}} || {{{{Q|{}}}}} || [{mnm_url} {}]\n",e.q_wd,e.q_mnm,e.entry_id);
                     ret += &s;
                 }
                 ret += "|}\n\n";
