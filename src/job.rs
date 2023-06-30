@@ -243,22 +243,21 @@ impl Job {
     pub async fn run(&mut self) -> Result<(),GenericError> {
         let catalog_id = self.get_catalog()?;
         let action = self.get_action()?;
-        match self.run_this_job().await {
+        let res = self.run_this_job().await;
+        match res {
             Ok(_) => {
                 self.set_status(JobStatus::Done).await?;
                 println!("Job {} catalog {}:{} completed.",self.get_id()?,catalog_id,action);
             }
             Err(e) => {
                 match catalog_id {
-                    0 => {
-                        self.set_status(JobStatus::Done).await?; // Don't fail'
-                    }
-                    _ => {
-                        self.set_status(JobStatus::Failed).await?;
-                    }
+                    0 => self.set_status(JobStatus::Done).await?, // Don't fail'
+                    _ => self.set_status(JobStatus::Failed).await?,
                 }
-                self.set_note(Some(e.to_string())).await?;
-                println!("Job {} catalog {}:{} FAILED: {:?}",self.get_id()?,catalog_id,action,&e);
+                let e = e.to_string();
+                let note = Some(e.to_owned());
+                self.set_note(note).await?;
+                println!("Job {} catalog {}:{} FAILED: {:?}",self.get_id()?,catalog_id,action,e);
             }
         }
         self.update_next_ts().await

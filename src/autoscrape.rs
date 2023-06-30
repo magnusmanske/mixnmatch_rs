@@ -32,7 +32,7 @@ lazy_static!{
 #[derive(Debug, Clone)]
 enum AutoscrapeError {
     NoAutoscrapeForCatalog,
-    UnknownLevelType(Value),
+    UnknownLevelType(String),
     BadType(Value),
     MediawikiFailure(String)
 }
@@ -42,7 +42,10 @@ impl Error for AutoscrapeError {}
 impl fmt::Display for AutoscrapeError {
     //TODO test
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self) // user-facing output
+        match self {
+            AutoscrapeError::UnknownLevelType(s) => write!(f, "{}", s), // user-facing output
+            _ => write!(f, "{}", self) // user-facing output
+        }
     }
 }
 
@@ -462,12 +465,12 @@ pub struct AutoscrapeLevel {
 impl AutoscrapeLevel {
     //TODO test
     fn from_json(json: &Value) -> Result<Self,AutoscrapeError> {
-        let level_type = match json.get("mode").ok_or_else(||AutoscrapeError::UnknownLevelType(json.to_owned()))?.as_str().unwrap_or("") {
+        let level_type = match json.get("mode").ok_or_else(||AutoscrapeError::UnknownLevelType(json.to_string()))?.as_str().unwrap_or("") {
             "keys" => AutoscrapeLevelType::Keys(AutoscrapeKeys::from_json(json)?),
             "range" => AutoscrapeLevelType::Range(AutoscrapeRange::from_json(json)?),
             "follow" => AutoscrapeLevelType::Follow(AutoscrapeFollow::from_json(json)?),
             "mediawiki" => AutoscrapeLevelType::MediaWiki(AutoscrapeMediaWiki::from_json(json)?),
-            _ => return Err(AutoscrapeError::UnknownLevelType(json.to_owned()))
+            _ => return Err(AutoscrapeError::UnknownLevelType(json.to_string()))
         };
         Ok(Self {
             level_type,
@@ -517,24 +520,29 @@ impl AutoscrapeResolve {
         for regex in regexs_str {
             let arr = regex
                 .as_array()
-                .ok_or_else(||AutoscrapeError::UnknownLevelType(json.to_owned()))?;
+                .ok_or_else(||AutoscrapeError::UnknownLevelType(json.to_string()))?;
             let pattern = arr
                 .get(0)
-                .ok_or_else(||AutoscrapeError::UnknownLevelType(json.to_owned()))?
+                .ok_or_else(||AutoscrapeError::UnknownLevelType(json.to_string()))?
                 .as_str()
-                .ok_or_else(||AutoscrapeError::UnknownLevelType(json.to_owned()))?;
+                .ok_or_else(||AutoscrapeError::UnknownLevelType(json.to_string()))?;
             let replacement = arr
                 .get(1)
-                .ok_or_else(||AutoscrapeError::UnknownLevelType(json.to_owned()))?
+                .ok_or_else(||AutoscrapeError::UnknownLevelType(json.to_string()))?
                 .as_str()
-                .ok_or_else(||AutoscrapeError::UnknownLevelType(json.to_owned()))?;
+                .ok_or_else(||AutoscrapeError::UnknownLevelType(json.to_string()))?;
+            let re_pattern = &Self::fix_regex(pattern);
+            let regex = AutoscrapeRegex::new(re_pattern).ok();
+            let err = AutoscrapeError::UnknownLevelType(json.to_string());
+            let regex = regex.ok_or_else(||err)?;
             regexs.push((
-                AutoscrapeRegex::new(&Self::fix_regex(pattern)).ok().ok_or_else(||AutoscrapeError::UnknownLevelType(json.to_owned()))?,
+                regex,
                 replacement.to_string()
             ));
         }
+        let use_pattern= Self::json_as_str(&json,"use")?;
         Ok(Self{
-            use_pattern: Self::json_as_str(&json,"use")?,
+            use_pattern,
             regexs,
         })
     }
@@ -626,15 +634,15 @@ impl AutoscrapeScraper {
     fn resolve_aux_from_json(json: &Value) -> Result<Vec<AutoscrapeResolveAux>,GenericError> {
         Ok(
             json // TODO test aux, eg catalog 287
-            .get("aux")
-            .map(|x|x.to_owned())
-            .unwrap_or_else(||json!([]))
-            .as_array()
-            .map(|x|x.to_owned())
-            .unwrap_or_else(||vec![])
-            .iter()
-            .filter_map(|x|AutoscrapeResolveAux::from_json(x).ok())
-            .collect()
+                .get("aux")
+                .map(|x|x.to_owned())
+                .unwrap_or_else(||json!([]))
+                .as_array()
+                .map(|x|x.to_owned())
+                .unwrap_or_else(||vec![])
+                .iter()
+                .filter_map(|x|AutoscrapeResolveAux::from_json(x).ok())
+                .collect()
         )
     }
 
@@ -780,6 +788,14 @@ impl Autoscrape {
             .map_and_drop(from_row::<(usize,String)>).await?;
         let (id,json) = results.get(0).ok_or_else(||AutoscrapeError::NoAutoscrapeForCatalog)?;
         let json: Value = serde_json::from_str(json)?;
+        let client =  reqwest::Client::builder()
+            .user_agent(AUTOSCRAPER_USER_AGENT)
+            .timeout(core::time::Duration::from_secs(AUTOSCRAPE_URL_LOAD_TIMEOUT_SEC))
+            .connection_verbose(true)
+            .gzip(true)
+            .deflate(true)
+            .brotli(true)
+            .build()?;
         let mut ret = Self {
             autoscrape_id:*id,
             catalog_id,
@@ -790,14 +806,7 @@ impl Autoscrape {
             levels:vec![],
             scraper: AutoscrapeScraper::from_json(json.get("scraper").ok_or_else(||AutoscrapeError::NoAutoscrapeForCatalog)?)?,
             job: None,
-            client : reqwest::Client::builder()
-                .user_agent(AUTOSCRAPER_USER_AGENT)
-                .timeout(core::time::Duration::from_secs(AUTOSCRAPE_URL_LOAD_TIMEOUT_SEC))
-                .connection_verbose(true)
-                .gzip(true)
-                .deflate(true)
-                .brotli(true)
-                .build()?,
+            client,
             urls_loaded: 0,
             entry_batch: vec![],
         };
