@@ -91,7 +91,7 @@ enum DataSourceType {
 impl DataSourceType {
     //TODO test
     fn from_str(s: &str) ->DataSourceType {
-        match s.to_string().to_uppercase().as_str() {
+        match s.to_string().trim().to_uppercase().as_str() {
             "CSV" => Self::CSV,
             "TSV" => Self::TSV,
             _ => Self::Unknown
@@ -276,6 +276,7 @@ impl ExtendedEntry {
                 "name" => { self.entry.ext_name = cell.to_owned() }
                 "desc" => { self.entry.ext_desc = cell.to_owned() }
                 "url" => { self.entry.ext_url = cell.to_owned() }
+                "autoq" => { self.entry.q = cell.to_string().replace('Q',"").parse::<isize>().ok() }
                 "type" => { self.entry.type_name = Self::parse_type(cell) }
                 "born" => { self.born = Self::parse_date(cell) }
                 "died" => { self.died = Self::parse_date(cell) }
