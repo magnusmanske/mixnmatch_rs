@@ -276,7 +276,18 @@ impl ExtendedEntry {
                 "name" => { self.entry.ext_name = cell.to_owned() }
                 "desc" => { self.entry.ext_desc = cell.to_owned() }
                 "url" => { self.entry.ext_url = cell.to_owned() }
-                "autoq" => { self.entry.q = cell.to_string().replace('Q',"").parse::<isize>().ok() }
+                "autoq" => {
+                    self.entry.q = cell.to_string().replace('Q',"").parse::<isize>().ok();
+                    if let Some(i) = self.entry.q { // Don't accept invalid or N/A item IDs
+                        if i<=0 {
+                            self.entry.q = None;
+                        }
+                    }
+                    if self.entry.q.is_some() { // q is set, also set user and timestamp
+                        self.entry.user = Some(4); // Auxiliary data matcher
+                        self.entry.timestamp = Some(MixNMatch::get_timestamp());
+                    }
+                }
                 "type" => { self.entry.type_name = Self::parse_type(cell) }
                 "born" => { self.born = Self::parse_date(cell) }
                 "died" => { self.died = Self::parse_date(cell) }
