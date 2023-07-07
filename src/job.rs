@@ -18,26 +18,36 @@ use crate::autoscrape::*;
 use crate::microsync::*;
 use crate::php_wrapper::*;
 
+pub const TASK_TINY: u8 = 1;
+pub const TASK_SMALL: u8 = TASK_TINY+1;
+pub const TASK_MEDIUM: u8 = TASK_SMALL+1;
+pub const TASK_BIG: u8 = TASK_MEDIUM+1;
+pub const TASK_GINORMOUS: u8 = TASK_BIG+1;
 pub const TASK_SIZE: &'static [(&'static str,u8)] = &[
-    ("automatch",2),
-    ("automatch_by_search",2),
-    ("automatch_by_sitelink",2),
-    ("automatch_from_other_catalogs",2),
-    ("autoscrape",4),
-    ("aux2wd",2),
-    ("auxiliary_matcher",2),
-    ("bespoke_scraper",5),
-    ("generate_aux_from_description",5),
-    ("import_aux_from_url",5),
-    ("match_by_coordinates",5),
-    ("match_on_birthdate",1),
-    ("match_person_dates",1),
-    ("microsync",1),
-    ("purge_automatches",1),
-    ("taxon_matcher",2),
-    ("update_descriptions_from_url",5),
-    ("update_from_tabbed_file",3),
-    ("update_person_dates",2),
+    ("match_on_birthdate",TASK_TINY),
+    ("match_person_dates",TASK_TINY),
+    ("microsync",TASK_TINY),
+    ("purge_automatches",TASK_TINY),
+
+    ("automatch",TASK_SMALL),
+    ("automatch_by_search",TASK_SMALL),
+    ("automatch_by_sitelink",TASK_SMALL),
+    ("automatch_from_other_catalogs",TASK_SMALL),
+    ("aux2wd",TASK_SMALL),
+    ("auxiliary_matcher",TASK_SMALL),
+    ("taxon_matcher",TASK_SMALL),
+    ("update_person_dates",TASK_SMALL),
+
+    ("update_from_tabbed_file",TASK_MEDIUM),
+
+    ("autoscrape",TASK_BIG),
+    
+    ("bespoke_scraper",TASK_GINORMOUS),
+    ("generate_aux_from_description",TASK_GINORMOUS),
+    ("import_aux_from_url",TASK_GINORMOUS),
+    ("match_by_coordinates",TASK_GINORMOUS),
+    ("update_descriptions_from_url",TASK_GINORMOUS),
+
 ];
 
 #[derive(Debug, Clone)]
@@ -301,7 +311,7 @@ impl Job {
             if let Some(job_id) = self.get_next_initial_allowed_job(&avoid).await {
                 return Some(job_id) ;
             }
-                level += 1;
+            level += 1;
         }
 
         /*
