@@ -79,7 +79,7 @@ impl TaxonMatcher {
                 .map_and_drop(from_row::<(usize,String,String)>).await?;
             for result in &results {
                 let entry_id = result.0 ;
-                let taxon_name = match self.rewrite_taxon_name(catalog_id,&result.1) {
+                let mut taxon_name = match self.rewrite_taxon_name(catalog_id,&result.1) {
                     Some(s) => s,
                     None => continue
                 };
@@ -88,7 +88,17 @@ impl TaxonMatcher {
                     Some(rank) => format!(" haswbstatement:P105={}",rank),
                     None => "".to_string()
                 };
-                let query = format!("haswbstatement:P31=Q16521 haswbstatement:\"P225={}|P1420={}\" {}",&taxon_name,&taxon_name,&rank);
+
+                // Remove space from leading "×"
+                if taxon_name.starts_with("× ") {
+                    taxon_name = taxon_name.replacen("× ","×",1);
+                };
+                taxon_name = taxon_name
+                    .replace(" subsp "," subsp. ")
+                    .replace(" var "," var. ");
+
+                // Q4886 is "cultivar"
+                let query = format!("haswbstatement:\"P31=Q16521|P31=Q4886\" haswbstatement:\"P225={}|P1420={}\" {}",&taxon_name,&taxon_name,&rank);
                 let items = match self.mnm.wd_search(&query).await {
                     Ok(v) => v,
                     _ => continue // Ignore error
