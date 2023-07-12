@@ -230,6 +230,12 @@ impl MixNMatch {
         return ts ;
     }
 
+    /// Returns the given UTF time as a timestamp, 14 char format
+    pub fn get_timestamp_relative(utc: &DateTime<Utc>) -> String {
+        let ts = utc.format("%Y%m%d%H%M%S").to_string();
+        return ts ;
+    }
+    
     pub fn parse_timestamp(ts: &str) -> Option<DateTime<Utc>> {
         match NaiveDateTime::parse_from_str(ts,"%Y%m%d%H%M%S").ok()?.and_local_timezone(Utc) {
             chrono::offset::LocalResult::Single(d) => Some(d),
@@ -468,6 +474,17 @@ impl MixNMatch {
             return Ok(());
         }
         mw_api.login(self.app.bot_name.to_owned(), self.app.bot_password.to_owned()).await?;
+        Ok(())
+    }
+
+    pub async fn get_kv_value(&self, key: &str) -> Result<Option<String>,GenericError> {
+        let sql = r"SELECT `kv_value` FROM `kv` WHERE `kv_key`=:key";
+        Ok(self.app.get_mnm_conn().await?.exec_iter(sql,params! {key}).await?.map_and_drop(from_row::<String>).await?.pop())
+    }
+
+    pub async fn set_kv_value(&self, key: &str, value: &str) -> Result<(),GenericError> {
+        let sql = r"INSERT INTO `kv` (`kv_key`,`kv_value`) VALUES (:key,:value) ON DUPLICATE KEY UPDATE `kv_value`=:value";
+        self.app.get_mnm_conn().await?.exec_drop(sql,params! {key,value}).await?;
         Ok(())
     }
 

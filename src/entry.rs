@@ -215,6 +215,14 @@ impl Entry {
         }
     }
 
+    //TODO test
+    pub fn get_item_url(&self) -> Option<String> {
+        match self.q {
+            Some(q) => Some(format!("https://www.wikidata.org/wiki/Q{q}")),
+            None => None,
+        }
+    }
+
     /// Sets the MixNMatch object. Automatically done when created via from_id().
     //TODO test
     pub fn set_mnm(&mut self, mnm: &MixNMatch) {

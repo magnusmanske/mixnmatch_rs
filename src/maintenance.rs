@@ -1,6 +1,11 @@
+use std::collections::HashMap;
+use futures::future::join_all;
+// use futures::future::join_all;
+use itertools::Itertools;
 use mysql_async::prelude::*;
 use mysql_async::from_row;
 use crate::app_state::*;
+use crate::entry::Entry;
 use crate::mixnmatch::*;
 
 pub struct Maintenance {
@@ -76,6 +81,215 @@ impl Maintenance {
         self.mnm.app.get_mnm_conn().await?.exec_drop(sql, params! {dummy}).await?;
         Ok(())
     }
+
+
+    // WDRC sync stuff
+
+    async fn get_wrdc_api_responses(&self, query: &str) -> Result<Vec<serde_json::Value>,GenericError> {
+        let rand = rand::random::<u32>();
+        let url = format!("https://wdrc.toolforge.org/api.php?format=jsonl&{query}&random={rand}");
+        let client = reqwest::Client::builder().user_agent(WIKIDATA_USER_AGENT).timeout(std::time::Duration::from_secs(30)).build()?;
+        let mut text;
+        loop {
+            text = client.get(&url).send().await?.text().await?;
+            if !text.contains("<head><title>429 Too Many Requests</title></head>") {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+        Ok(text.split("\n").filter_map(|line|serde_json::from_str::<serde_json::Value>(line).ok()).collect())
+    }
+
+    fn yesterday(&self) -> String {
+        let yesterday = chrono::Utc::now() - chrono::Duration::days(1);
+        MixNMatch::get_timestamp_relative(&yesterday)
+    }
+
+    async fn wdrc_sync_redirects(&self) -> Result<(),GenericError> {
+        let last_ts = self.mnm.get_kv_value("wdrc_sync_redirects").await?.unwrap_or_else(||self.yesterday());
+        let mut new_ts = last_ts.to_owned();
+        let mut redirects = HashMap::new();
+        for j in self.get_wrdc_api_responses(&format!("action=redirects&since={last_ts}")).await? {
+            let from = j["item"].as_str().map(|s|self.mnm.item2numeric(s)).and_then(|i|i).unwrap_or(0);
+            let to = j["target"].as_str().map(|s|self.mnm.item2numeric(s)).and_then(|i|i).unwrap_or(0);
+            let ts = j["timestamp"].as_str().unwrap_or_else(||&new_ts).to_string();
+            redirects.insert(from,to);
+            if new_ts < ts {
+                new_ts = ts;
+            }
+        }
+        redirects.retain(|old_q,new_q|*old_q>0 && *new_q>0 && *old_q!=*new_q); // Paranoia
+        let mut conn = self.mnm.app.get_mnm_conn().await?;
+        for (old_q,new_q) in redirects {
+            let sql = "UPDATE `entry` SET `q`=:new_q WHERE `q`=:old_q";
+            conn.exec_drop(sql, params! {old_q,new_q}).await?;
+        }
+        drop(conn);
+        self.mnm.set_kv_value("wdrc_sync_redirects", &new_ts).await?;
+        Ok(())
+    }
+    
+    async fn wdrc_apply_deletions(&self) -> Result<(),GenericError> {
+        let last_ts = self.mnm.get_kv_value("wdrc_apply_deletions").await?.unwrap_or_else(||self.yesterday());
+        let mut new_ts = last_ts.to_owned();
+        let mut deletions = vec![];
+        for j in self.get_wrdc_api_responses(&format!("action=deletions&since={last_ts}")).await? {
+            let item = j["item"].as_str().map(|s|self.mnm.item2numeric(s)).and_then(|i|i).unwrap_or(0);
+            let ts = j["timestamp"].as_str().unwrap_or_else(||&new_ts).to_string();
+            deletions.push(item);
+            if new_ts < ts {
+                new_ts = ts;
+            }
+        }
+        deletions.sort();
+        deletions.dedup();
+        deletions.retain(|q|*q>0);
+        if !deletions.is_empty() {
+            let mut conn = self.mnm.app.get_mnm_conn().await?;
+            let deletions_string = deletions.iter().map(|i|format!("{}",*i)).collect::<Vec<String>>().join(",");
+
+            let sql = format!("SELECT DISTINCT `catalog` FROM `entry` WHERE `q` IN ({deletions_string})") ;
+            let catalog_ids = conn.exec_iter(sql,()).await?.map_and_drop(from_row::<usize>).await?;
+            
+            let sql = format!("UPDATE `entry` SET `q`=NULL,`user`=NULL,`timestamp`=NULL WHERE `q` IN ({deletions_string})");
+            conn.exec_drop(sql,()).await?;
+            drop(conn);
+
+            for catalog_id in catalog_ids {
+               let _ = self.mnm.refresh_overview_table(catalog_id).await;
+            }
+        }
+        self.mnm.set_kv_value("wdrc_apply_deletions", &new_ts).await?;
+        Ok(())
+    }
+
+    async fn wdrc_get_prop2catalog_ids(&self) -> Result<HashMap<usize,Vec<usize>>,GenericError> {
+        let mut ret: HashMap<usize,Vec<usize>> = HashMap::new();
+        let sql = r"SELECT `id`,`wd_prop` FROM `catalog` WHERE `wd_prop` IS NOT NULL AND `wd_qual` IS NULL AND `active`=1";
+        let results = self.mnm.app.get_mnm_conn().await?
+            .exec_iter(sql,()).await?.map_and_drop(from_row::<(usize,usize)>).await?;
+        for (catalog_id,property) in results {
+            ret.entry(property).or_default().push(catalog_id);
+        }
+        Ok(ret)
+    }
+
+    async fn wdrc_sync_property_propval2item(&self, property: usize, entity_ids: Vec<String>) -> Option<HashMap<String, isize>> {
+        let api = self.mnm.get_mw_api().await.ok()?;
+        let entities = wikibase::entity_container::EntityContainer::new();
+        entities.load_entities(&api, &entity_ids).await.ok()?;
+        let mut propval2item: HashMap<String,Vec<isize>> = HashMap::new();
+        for q in entity_ids {
+            let q_num = match self.mnm.item2numeric(&q) {
+                Some(q_num) => q_num,
+                None => continue,
+            };
+            let i = match entities.get_entity(q) {
+                Some(i) => i,
+                None => continue,
+            };
+            let prop_values: Vec<String> = i.claims_with_property(format!("P{property}")).iter()
+                .map(|statement|statement.main_snak())
+                .filter_map(|snak|snak.data_value().to_owned())
+                .map(|datavalue|datavalue.value().to_owned())
+                .filter_map(|value|{
+                    match value {
+                        wikibase::Value::StringValue(v) => Some(v),
+                        _ => None
+                    }
+                })
+                .collect();
+            for prop_value in prop_values {
+                propval2item.entry(prop_value).or_default().push(q_num);
+            }
+        }
+
+        Some(propval2item.iter_mut()
+            .map(|(prop_value,items)|{
+                items.sort();
+                items.dedup();
+                (prop_value,items)
+            })
+            .filter(|(_prop_value,items)|items.len()==1)
+            .map(|(prop_value,items)|(prop_value.to_owned(),*items.get(0).unwrap()))
+            .collect())
+    }
+
+    async fn wdrc_sync_property(&self, property: usize, results: &Vec<(usize,usize)>, prop2catalog_ids: &HashMap<usize,Vec<usize>>) -> Result<(),GenericError> {
+        let entity_ids = results.iter().filter(|(_item,prop)|*prop==property).map(|(item,_prop)|format!("Q{item}")).collect_vec();
+        let propval2item = match self.wdrc_sync_property_propval2item(property, entity_ids).await {
+            Some(x) => x,
+            None => return Ok(()),
+        };
+        if propval2item.is_empty() {
+            return Ok(());
+        }
+        let catalogs_str = match prop2catalog_ids.get(&property) {
+            Some(ids) => ids.iter().map(|id|format!("{id}")).join(","),
+            None => return Ok(()),
+        };
+        let qm_propvals = MixNMatch::sql_placeholders(propval2item.len());
+        let params: Vec<String> = propval2item.iter().map(|(propval,_item)|format!("{propval}")).collect();
+        let sql = format!(r"SELECT `id`,`ext_id`,`user`,`q` FROM `entry` WHERE `catalog` IN ({catalogs_str}) AND `ext_id` IN ({qm_propvals})");
+        let results = self.mnm.app.get_mnm_conn().await?
+            .exec_iter(sql,params).await?
+            .map_and_drop(from_row::<(usize,String,Option<usize>,Option<usize>)>).await?;
+        for (id,ext_id,user,_mnm_q) in results {
+            let wd_item_q = match propval2item.get(&ext_id) {
+                Some(wd_item_q) => wd_item_q,
+                None => continue,
+            };
+            if user.is_none() || user==Some(0) {
+                match Entry::from_id(id, &self.mnm).await {
+                    Ok(mut entry) => {
+                        if entry.q!=Some(*wd_item_q) || !entry.is_fully_matched() { // Only if something is different
+                            let _ = entry.set_match(&format!("Q{wd_item_q}"), USER_AUX_MATCH).await;
+                            // println!("P{property}: {} => {}",entry.get_entry_url().unwrap_or("".into()),entry.get_item_url().unwrap_or("".into()));
+                        }
+                    },
+                    Err(_) => continue, // Ignore error
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn wdrc_sync_properties(&self) -> Result<(),GenericError> {
+        let last_ts = self.mnm.get_kv_value("wdrc_sync_properties").await?.unwrap_or_else(||self.yesterday());
+        let prop2catalog_ids = self.wdrc_get_prop2catalog_ids().await?;
+        let properties = prop2catalog_ids.keys().cloned().collect_vec();
+        let props_str = properties.iter().map(|p|format!("{p}")).join(",");
+        let sql = format!("SELECT DISTINCT `item`,`property`,`timestamp` FROM `statements` WHERE `property` IN ({props_str}) AND `timestamp`>='{last_ts}'") ;
+        let results = self.mnm.app.get_wdrc_conn().await? // (item,property)
+            .exec_iter(sql,()).await?.map_and_drop(from_row::<(usize,usize,String)>).await?;
+        let new_ts = match results.iter().map(|(_item,_property,ts)|ts).max() {
+            Some(ts) => ts.to_owned(),
+            None => return Ok(()), // No results
+        };
+        let results = results.into_iter().map(|(item,property,_ts)|(item,property)).collect_vec();
+        let properties = results.iter().map(|(_item,property)|*property).sorted().dedup().collect_vec();
+        let futures = properties.iter()
+            .map(|property|self.wdrc_sync_property(*property, &results, &prop2catalog_ids))
+            .collect_vec();
+        let results = join_all(futures).await;
+        let failed = results.iter().filter(|r|r.is_err()).collect_vec();
+        if let Some(result) = failed.get(0) {
+            if let Err(err) = result {
+                return Err(err.to_string().into());
+            }
+        }
+        self.mnm.set_kv_value("wdrc_sync_properties", &new_ts).await?;
+        Ok(())
+    }
+
+    pub async fn wdrc_sync(&self) -> Result<(),GenericError> {
+        self.wdrc_sync_redirects().await?;
+        self.wdrc_apply_deletions().await?;
+        self.wdrc_sync_properties().await?;
+        Ok(())
+    }
+
+    // END WDRC STUFF
 
     /// Finds redirects in a batch of items, and changes MnM matches to their respective targets.
     async fn fix_redirected_items_batch(&self,unique_qs: &Vec<String>) -> Result<(),GenericError> {

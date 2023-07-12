@@ -486,6 +486,10 @@ impl Job {
                 maintenance.remove_p17_for_humans().await
             }
 
+            "wdrc_sync" => {
+                Maintenance::new(&self.mnm).wdrc_sync().await
+            }
+
             "update_person_dates" => {
                 PhpWrapper::update_person_dates(catalog_id)
             },

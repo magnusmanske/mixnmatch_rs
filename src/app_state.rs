@@ -19,6 +19,7 @@ pub const DB_POOL_KEEP_SEC: u64 = 120;
 pub struct AppState {
     wd_pool: mysql_async::Pool,
     mnm_pool: mysql_async::Pool,
+    wdrc_pool: mysql_async::Pool,
     pub import_file_path: String,
     pub bot_name: String,
     pub bot_password: String,
@@ -40,6 +41,7 @@ impl AppState {
         let ret = Self {
             wd_pool: Self::create_pool(&config["wikidata"]),
             mnm_pool: Self::create_pool(&config["mixnmatch"]),
+            wdrc_pool: Self::create_pool(&config["wdrc"]),
             import_file_path: config["import_file_path"].as_str().unwrap().to_string(),
             bot_name: config["bot_name"].as_str().unwrap().to_string(),
             bot_password: config["bot_password"].as_str().unwrap().to_string(),
@@ -70,6 +72,11 @@ impl AppState {
     /// Returns a connection to the Wikidata DB replica
     pub async fn get_wd_conn(&self) -> Result<Conn, mysql_async::Error> {
         self.wd_pool.get_conn().await
+    }
+
+    /// Returns a connection to the WDRC tool database
+    pub async fn get_wdrc_conn(&self) -> Result<Conn, mysql_async::Error> {
+        self.wdrc_pool.get_conn().await
     }
 
     pub async fn disconnect(&self) -> Result<(),GenericError> {
