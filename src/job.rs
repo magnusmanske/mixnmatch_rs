@@ -30,12 +30,14 @@ pub const TASK_SIZE: &'static [(&'static str,u8)] = &[
     ("purge_automatches",TASK_TINY),
 
     ("automatch",TASK_SMALL),
+    ("maintenance_automatch",TASK_SMALL),
     ("automatch_by_sitelink",TASK_SMALL),
     ("automatch_from_other_catalogs",TASK_SMALL),
     ("aux2wd",TASK_SMALL),
     ("auxiliary_matcher",TASK_SMALL),
     ("taxon_matcher",TASK_SMALL),
     ("update_person_dates",TASK_SMALL),
+    ("wdrc_sync",TASK_SMALL),
 
     ("automatch_by_search",TASK_MEDIUM),
     ("update_from_tabbed_file",TASK_MEDIUM),
