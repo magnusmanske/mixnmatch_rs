@@ -654,6 +654,7 @@ impl Job {
             let sql = self.add_sql_action_filter(sql.to_string());
             format!("{} ORDER BY `last_ts` LIMIT 1", sql)
         };
+        println!("{sql}");
         self.mnm.app.get_mnm_conn().await.ok()?
             .exec_iter(sql,()).await.ok()?
             .map_and_drop(from_row::<usize>).await.ok()?.pop()
