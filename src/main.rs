@@ -65,6 +65,9 @@ ssh magnus@tools-login.wmflabs.org -L 3309:wikidatawiki.web.db.svc.eqiad.wmflabs
 ssh magnus@tools-login.wmflabs.org -L 3308:tools-db:3306 -N &
 cargo test  -- --nocapture
 
+git pull && ./build.sh && \rm ~/rustbot.* ; toolforge jobs restart rustbot
+
+
 git pull && ./build.sh && toolforge jobs delete rustbot ; \rm ~/rustbot.* ; \
 toolforge jobs run --image tf-php74 --mem 3Gi --cpu 2 --continuous --command '/data/project/mix-n-match/mixnmatch_rs/run.sh' rustbot
 

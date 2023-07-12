@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::{thread, time};
 use std::sync::Arc;
 use std::env;
@@ -110,6 +111,7 @@ impl AppState {
     pub async fn forever_loop(&self, reset_jobs: bool) -> Result<(),GenericError> {
         let mnm = MixNMatch::new(self.clone());
         let concurrent:Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
+        let current_job_sizes: Arc<Mutex<HashMap<usize,u8>>> = Arc::new(Mutex::new(HashMap::new()));
     
         // Reset old running&failed jobs
         if reset_jobs {
@@ -125,18 +127,31 @@ impl AppState {
                 continue;
             }
             let mut job = Job::new(&mnm);
-            if !reset_jobs {
-                job.skip_actions = Some(TASK_SIZE.iter().filter(|(_s,num)|*num>=TASK_BIG).map(|(s,_num)|s.to_string()).collect());
-            }
+            let big_jobs_running = current_job_sizes.lock().await.iter()
+                .map(|(_job_id,size)|*size)
+                .filter(|size|*size>=TASK_MEDIUM)
+                .count();
+            let max_job_size = if big_jobs_running>=self.max_concurrent_jobs/2 { TASK_SMALL } else { TASK_GINORMOUS };
+            job.skip_actions = Some(TASK_SIZE.iter().filter(|(_s,num)|*num>max_job_size).map(|(s,_num)|s.to_string()).collect());
             match job.set_next().await {
                 Ok(true) => {
                     let _ = job.set_status(JobStatus::Running).await;
                     let concurrent = concurrent.clone();
+                    let current_job_sizes = current_job_sizes.clone();
                     tokio::spawn(async move {
+                        let job_id = job.get_id().unwrap_or(0);
+                        let job_action = job.get_action().unwrap_or(String::new());
+                        let job_size = TASK_SIZE.iter()
+                            .filter(|(s,_num)|*s==job_action)
+                            .map(|(_s,num)|*num)
+                            .nth(0)
+                            .unwrap_or(TASK_SMALL);
                         *concurrent.lock().await += 1;
+                        current_job_sizes.lock().await.insert(job_id,job_size);
                         println!("Now {} jobs running",concurrent.lock().await);
                         let _ = job.run().await;
                         *concurrent.lock().await -= 1;
+                        current_job_sizes.lock().await.remove(&job_id);
                     });
                 }
                 Ok(false) => {

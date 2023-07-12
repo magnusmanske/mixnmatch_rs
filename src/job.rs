@@ -30,7 +30,6 @@ pub const TASK_SIZE: &'static [(&'static str,u8)] = &[
     ("purge_automatches",TASK_TINY),
 
     ("automatch",TASK_SMALL),
-    ("automatch_by_search",TASK_SMALL),
     ("automatch_by_sitelink",TASK_SMALL),
     ("automatch_from_other_catalogs",TASK_SMALL),
     ("aux2wd",TASK_SMALL),
@@ -38,6 +37,7 @@ pub const TASK_SIZE: &'static [(&'static str,u8)] = &[
     ("taxon_matcher",TASK_SMALL),
     ("update_person_dates",TASK_SMALL),
 
+    ("automatch_by_search",TASK_MEDIUM),
     ("update_from_tabbed_file",TASK_MEDIUM),
 
     ("autoscrape",TASK_BIG),
@@ -147,7 +147,7 @@ pub trait Jobbable {
 }
 
 #[derive(Debug)]
-enum JobError {
+pub enum JobError {
     S(String),
     DataNotSet,
     PoisonedJobRowMutex,
@@ -524,11 +524,11 @@ impl Job {
         Ok(self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().map_err(|_|JobError::PoisonedJobRowMutex)?.clone())
     }
     //TODO test
-    fn get_id(&self) -> Result<usize,JobError> {
+    pub fn get_id(&self) -> Result<usize,JobError> {
         Ok(self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().map_err(|_|JobError::PoisonedJobRowMutex)?.id)
     }
     //TODO test
-    fn get_action(&self) -> Result<String,JobError> {
+    pub fn get_action(&self) -> Result<String,JobError> {
         Ok(self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().map_err(|_|JobError::PoisonedJobRowMutex)?.action.clone())
     }
     //TODO test
