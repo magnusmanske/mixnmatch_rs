@@ -131,7 +131,7 @@ impl AppState {
                 .map(|(_job_id,size)|*size)
                 .filter(|size|*size>=TASK_MEDIUM)
                 .count();
-            let max_job_size = if big_jobs_running>=self.max_concurrent_jobs/2 { TASK_SMALL } else { TASK_GINORMOUS };
+            let max_job_size = if big_jobs_running>=self.max_concurrent_jobs*2/3 { TASK_SMALL } else { TASK_GINORMOUS };
             job.skip_actions = Some(TASK_SIZE.iter().filter(|(_s,num)|*num>max_job_size).map(|(s,_num)|s.to_string()).collect());
             match job.set_next().await {
                 Ok(true) => {
