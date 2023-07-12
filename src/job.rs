@@ -649,7 +649,7 @@ impl Job {
     //TODO test
     async fn get_next_job_generic(&self, sql: &str) -> Option<usize> {
         let sql = if sql.contains(" ORDER BY ") {
-            self.add_sql_action_filter(sql.to_string())
+            // self.add_sql_action_filter(sql.to_string())
         } else {
             let sql = self.add_sql_action_filter(sql.to_string());
             format!("{} ORDER BY `last_ts` LIMIT 1", sql)
