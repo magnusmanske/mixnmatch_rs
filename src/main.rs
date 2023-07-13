@@ -28,13 +28,14 @@ async fn run() -> Result<(),app_state::GenericError> {
         Some("hpjob") => app.run_single_hp_job().await,
         Some("test") => {
             let mnm = crate::mixnmatch::MixNMatch::new(app.clone());
-            let mut j = crate::job::Job::new(&mnm);
-            let id_opt = j.set_next().await;
-            println!("{:?}",id_opt);
+            let mut job = crate::job::Job::new(&mnm);
+            job.set_next().await?;
+            // let job_id = job.get_next_job_id().await;
+            // let id_opt = j.set_next().await;
+            println!("{job:?}");
             Ok(())
         }
-        Some("second") => app.forever_loop(false).await, // Won't do long-running actions, so as to not block in autoscrape etc
-        _ => app.forever_loop(true).await
+        _ => app.forever_loop().await
     }
 }
 

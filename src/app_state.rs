@@ -108,17 +108,15 @@ impl AppState {
         job.run().await
     }
 
-    pub async fn forever_loop(&self, reset_jobs: bool) -> Result<(),GenericError> {
+    pub async fn forever_loop(&self) -> Result<(),GenericError> {
         let mnm = MixNMatch::new(self.clone());
         let concurrent:Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
         let current_job_sizes: Arc<Mutex<HashMap<usize,u8>>> = Arc::new(Mutex::new(HashMap::new()));
     
         // Reset old running&failed jobs
-        if reset_jobs {
-            Job::new(&mnm).reset_running_jobs().await?;
-            Job::new(&mnm).reset_failed_jobs().await?;
-            println!("Old jobs reset, starting bot");
-        }
+        Job::new(&mnm).reset_running_jobs().await?;
+        Job::new(&mnm).reset_failed_jobs().await?;
+        println!("Old jobs reset, starting bot");
     
         loop {
             if *concurrent.lock().await>=self.max_concurrent_jobs {
@@ -132,7 +130,10 @@ impl AppState {
                 .filter(|size|*size>=TASK_MEDIUM)
                 .count();
             let max_job_size = if big_jobs_running>=self.max_concurrent_jobs*2/3 { TASK_SMALL } else { TASK_GINORMOUS };
-            job.skip_actions = Some(TASK_SIZE.iter().filter(|(_s,job_size)|*job_size>max_job_size).map(|(s,_job_size)|s.to_string()).collect());
+            job.skip_actions = Some(TASK_SIZE.iter()
+                .filter(|(_s,job_size)|*job_size>max_job_size)
+                .map(|(s,_job_size)|s.to_string())
+                .collect());
             match job.set_next().await {
                 Ok(true) => {
                     let _ = job.set_status(JobStatus::Running).await;
@@ -155,11 +156,11 @@ impl AppState {
                     });
                 }
                 Ok(false) => {
-                    //println!("Wait 5");
+                    println!("No jobs available, waiting... (not using: {:?})",job.skip_actions);
                     self.hold_on();
                 }
-                _ => {
-                    println!("MAIN LOOP: Something went wrong");
+                Err(e) => {
+                    println!("MAIN LOOP: Something went wrong: {e}");
                     self.hold_on();
                 }
             }
