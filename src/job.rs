@@ -289,7 +289,7 @@ impl Job {
     //TODO test
     pub async fn set_note(&mut self, note: Option<String>) -> Result<(),GenericError> {
         let job_id = self.get_id()?;
-        let note_cloned = note.clone();
+        let note_cloned = note.clone().map(|s|s.get(..127).unwrap_or(&s).to_string());
         let sql = "UPDATE `jobs` SET `note`=:note WHERE `id`=:job_id";
         self.mnm.app.get_mnm_conn().await?.exec_drop(sql, params! {job_id,note}).await?;
         self.put_note(note_cloned)?;
