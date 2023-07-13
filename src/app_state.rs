@@ -156,7 +156,7 @@ impl AppState {
                     });
                 }
                 Ok(false) => {
-                    println!("No jobs available, waiting... (not using: {:?})",job.skip_actions);
+                    // println!("No jobs available, waiting... (not using: {:?})",job.skip_actions);
                     self.hold_on();
                 }
                 Err(e) => {
