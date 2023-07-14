@@ -1,3 +1,5 @@
+use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::error::Error;
 use std::sync::{Arc, Mutex};
 use serde_json::json;
@@ -18,39 +20,56 @@ use crate::autoscrape::*;
 use crate::microsync::*;
 use crate::php_wrapper::*;
 
-pub const TASK_TINY: u8 = 1;
-pub const TASK_SMALL: u8 = TASK_TINY+1;
-pub const TASK_MEDIUM: u8 = TASK_SMALL+1;
-pub const TASK_BIG: u8 = TASK_MEDIUM+1;
-pub const TASK_GINORMOUS: u8 = TASK_BIG+1;
-pub const TASK_SIZE: &'static [(&'static str,u8)] = &[
-    ("match_on_birthdate",TASK_TINY),
-    ("match_person_dates",TASK_TINY),
-    ("microsync",TASK_TINY),
-    ("purge_automatches",TASK_TINY),
+#[derive(Eq,Clone,Debug)]
+pub enum TaskSize {
+    TINY,
+    SMALL,
+    MEDIUM,
+    LARGE,
+    GINORMOUS,
+}
 
-    ("automatch",TASK_SMALL),
-    ("maintenance_automatch",TASK_SMALL),
-    ("automatch_by_sitelink",TASK_SMALL),
-    ("automatch_from_other_catalogs",TASK_SMALL),
-    ("aux2wd",TASK_SMALL),
-    ("auxiliary_matcher",TASK_SMALL),
-    ("taxon_matcher",TASK_SMALL),
-    ("update_person_dates",TASK_SMALL),
-    ("wdrc_sync",TASK_SMALL),
+impl Ord for TaskSize {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.value().cmp(&other.value())
+    }
+}
 
-    ("automatch_by_search",TASK_MEDIUM),
-    ("update_from_tabbed_file",TASK_MEDIUM),
+impl PartialOrd for TaskSize {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
 
-    ("autoscrape",TASK_BIG),
-    
-    ("bespoke_scraper",TASK_GINORMOUS),
-    ("generate_aux_from_description",TASK_GINORMOUS),
-    ("import_aux_from_url",TASK_GINORMOUS),
-    ("match_by_coordinates",TASK_GINORMOUS),
-    ("update_descriptions_from_url",TASK_GINORMOUS),
+impl PartialEq for TaskSize {
+    fn eq(&self, other: &Self) -> bool {
+        self.value() == other.value()
+    }
+}
 
-];
+impl TaskSize {
+    pub fn value(&self) -> u8 {
+        match self {
+            TaskSize::TINY => 1,
+            TaskSize::SMALL => 2,
+            TaskSize::MEDIUM => 3,
+            TaskSize::LARGE => 4,
+            TaskSize::GINORMOUS => 5,
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s.trim().to_lowercase().as_str() {
+            "tiny" => Some(Self::TINY),
+            "small" => Some(Self::SMALL),
+            "medium" => Some(Self::MEDIUM),
+            "large" => Some(Self::LARGE),
+            "ginormous" => Some(Self::GINORMOUS),
+            _ => None,
+        }
+    }
+}
+
 
 #[derive(Debug, Clone)]
 pub enum JobStatus {
@@ -232,6 +251,19 @@ impl Job {
         }
     }
 
+    pub async fn get_tasks(&self) -> Result<HashMap<String,TaskSize>,GenericError> {
+        let sql = "SELECT `action`,`size` FROM `job_sizes`";
+        let ret = self.mnm.app.get_mnm_conn().await?
+            .exec_iter(sql, ()).await?
+            .map_and_drop(from_row::<(String,String)>).await?
+            .into_iter()
+            .map(|(name,size)| (name,TaskSize::from_str(&size)))
+            .filter(|(_name,size)| size.is_some())
+            .map(|(name,size)| (name,size.unwrap()))
+            .collect();
+        Ok(ret)
+    }
+
     //TODO test
     pub async fn set_next(&mut self) -> Result<bool,GenericError> {
         match self.get_next_job_id().await {
@@ -305,21 +337,17 @@ impl Job {
             return Some(job_id) ;
         }
 
-        let mut tasks = Vec::from(TASK_SIZE);
+        let mut tasks = self.get_tasks().await.ok()?;
         let mut level: u8 = 0;
         while !tasks.is_empty() {
-            tasks.retain(|v|v.1>level);
-            let avoid: Vec<String> = tasks.iter().map(|v|v.0.to_string()).collect();
+            tasks.retain(|_action,size|size.value()>level);
+            let avoid: Vec<String> = tasks.iter().map(|(action,_size)|action.to_owned()).collect();
             if let Some(job_id) = self.get_next_initial_allowed_job(&avoid).await {
                 return Some(job_id) ;
             }
             level += 1;
         }
 
-        /*
-        if let Some(job_id) = self.get_next_initial_fast_job().await {
-            return Some(job_id) ;
-        } */
         if let Some(job_id) = self.get_next_initial_job().await {
             return Some(job_id) ;
         }
@@ -693,6 +721,14 @@ mod tests {
         job.data = Some(Arc::new(Mutex::new(job_row)));
         let next_ts = job.get_next_ts().unwrap();
         assert_eq!(next_ts,"20221027000101");
+    }
+
+    #[test]
+    fn test_task_size() {
+        assert!(TaskSize::TINY<TaskSize::SMALL);
+        assert!(TaskSize::SMALL<TaskSize::MEDIUM);
+        assert!(TaskSize::MEDIUM<TaskSize::LARGE);
+        assert!(TaskSize::LARGE<TaskSize::GINORMOUS);
     }
 
 }

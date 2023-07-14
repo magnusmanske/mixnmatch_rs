@@ -111,7 +111,7 @@ impl AppState {
     pub async fn forever_loop(&self) -> Result<(),GenericError> {
         let mnm = MixNMatch::new(self.clone());
         let concurrent:Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
-        let current_job_sizes: Arc<Mutex<HashMap<usize,u8>>> = Arc::new(Mutex::new(HashMap::new()));
+        let current_job_sizes: Arc<Mutex<HashMap<usize,TaskSize>>> = Arc::new(Mutex::new(HashMap::new()));
     
         // Reset old running&failed jobs
         Job::new(&mnm).reset_running_jobs().await?;
@@ -120,33 +120,34 @@ impl AppState {
     
         loop {
             if *concurrent.lock().await>=self.max_concurrent_jobs {
-                //println!("Too many");
                 self.hold_on();
                 continue;
             }
             let mut job = Job::new(&mnm);
+            let task_size = job.get_tasks().await?;
             let big_jobs_running = current_job_sizes.lock().await.iter()
-                .map(|(_job_id,size)|*size)
-                .filter(|size|*size>=TASK_MEDIUM)
+                .map(|(_job_id,size)|size.to_owned())
+                .filter(|size|*size>=TaskSize::MEDIUM)
                 .count();
-            let max_job_size = if big_jobs_running>=self.max_concurrent_jobs*2/3 { TASK_SMALL } else { TASK_GINORMOUS };
-            job.skip_actions = Some(TASK_SIZE.iter()
-                .filter(|(_s,job_size)|*job_size>max_job_size)
-                .map(|(s,_job_size)|s.to_string())
-                .collect());
+            let max_job_size = if big_jobs_running>=self.max_concurrent_jobs*2/3 { TaskSize::SMALL } else { TaskSize::GINORMOUS };
+            job.skip_actions = Some(
+                task_size.iter()
+                    .filter(|(_action,size)| **size>max_job_size)
+                    .map(|(action,_size)| action.to_string())
+                    .collect()
+            );
             match job.set_next().await {
                 Ok(true) => {
                     let _ = job.set_status(JobStatus::Running).await;
                     let concurrent = concurrent.clone();
                     let current_job_sizes = current_job_sizes.clone();
+                    let action = match job.get_action() {
+                        Ok(action) => action,
+                        Err(_) => continue,
+                    };
+                    let job_size = task_size.get(&action).unwrap_or(&TaskSize::SMALL).to_owned();
+                    let job_id = job.get_id().unwrap_or(0);
                     tokio::spawn(async move {
-                        let job_id = job.get_id().unwrap_or(0);
-                        let job_action = job.get_action().unwrap_or(String::new());
-                        let job_size = TASK_SIZE.iter()
-                            .filter(|(s,_num)|*s==job_action)
-                            .map(|(_s,num)|*num)
-                            .nth(0)
-                            .unwrap_or(TASK_SMALL);
                         *concurrent.lock().await += 1;
                         current_job_sizes.lock().await.insert(job_id,job_size);
                         println!("Now {} jobs running",concurrent.lock().await);
