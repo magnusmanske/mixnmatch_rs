@@ -151,7 +151,10 @@ impl AppState {
                         *concurrent.lock().await += 1;
                         current_job_sizes.lock().await.insert(job_id,job_size);
                         println!("Now {} jobs running",concurrent.lock().await);
-                        let _ = job.run().await;
+                        match job.run().await {
+                            Ok(_) => {},
+                            Err(_e) => println!("Job {job_id} failed with error"),
+                        }
                         *concurrent.lock().await -= 1;
                         current_job_sizes.lock().await.remove(&job_id);
                     });
