@@ -129,7 +129,7 @@ impl AppState {
                 .map(|(_job_id,size)|size.to_owned())
                 .filter(|size|*size>=TaskSize::MEDIUM)
                 .count();
-            let max_job_size = if big_jobs_running>=self.max_concurrent_jobs*2/3 { TaskSize::SMALL } else { TaskSize::GINORMOUS };
+            let max_job_size = if big_jobs_running>=self.max_concurrent_jobs*3/4 { TaskSize::SMALL } else { TaskSize::GINORMOUS };
             job.skip_actions = Some(
                 task_size.iter()
                     .filter(|(_action,size)| **size>max_job_size)
@@ -155,8 +155,8 @@ impl AppState {
                             Ok(_) => {},
                             Err(_e) => println!("Job {job_id} failed with error"),
                         }
-                        *concurrent.lock().await -= 1;
                         current_job_sizes.lock().await.remove(&job_id);
+                        *concurrent.lock().await -= 1;
                     });
                 }
                 Ok(false) => {
