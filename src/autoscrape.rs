@@ -3,7 +3,9 @@ use lazy_static::lazy_static;
 use rand::prelude::*;
 use regex::{Regex, RegexBuilder};
 use serde_json::{json, Value};
+use tokio::sync::Mutex;
 use std::collections::HashMap;
+use std::sync::Arc;
 use mysql_async::from_row;
 use std::error::Error;
 use std::fmt;
@@ -752,7 +754,7 @@ impl AutoscrapeScraper {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Autoscrape {
     autoscrape_id: usize,
     catalog_id: usize,
@@ -765,8 +767,8 @@ pub struct Autoscrape {
     mnm: MixNMatch,
     job: Option<Job>,
     client: reqwest::Client,
-    urls_loaded: usize,
-    entry_batch: Vec<ExtendedEntry>,
+    urls_loaded: Arc<Mutex<usize>>,
+    entry_batch: Arc<Mutex<Vec<ExtendedEntry>>>,
 }
 
 impl Jobbable for Autoscrape {
@@ -807,8 +809,8 @@ impl Autoscrape {
             scraper: AutoscrapeScraper::from_json(json.get("scraper").ok_or_else(||AutoscrapeError::NoAutoscrapeForCatalog)?)?,
             job: None,
             client,
-            urls_loaded: 0,
-            entry_batch: vec![],
+            urls_loaded: Arc::new(Mutex::new(0)),
+            entry_batch: Arc::new(Mutex::new(vec![])),
         };
         if let Some(options) = json.get("options") { // Options in main JSON
             ret.options_from_json(options);
@@ -866,9 +868,12 @@ impl Autoscrape {
     }
 
     //TODO test
-    async fn load_url(&mut self, url: &str) -> Option<String> {
-        self.urls_loaded += 1;
-        if self.urls_loaded % 1000 == 0 {
+    async fn load_url(&self, url: &str) -> Option<String> {
+        let mut urls_loaded = self.urls_loaded.lock().await;
+        *urls_loaded += 1;
+        let crosses_threshold = *urls_loaded % 1000 == 0;
+        drop(urls_loaded);
+        if crosses_threshold {
             let _ = self.remember_state().await;
         }
         // TODO POST
@@ -881,43 +886,73 @@ impl Autoscrape {
             .ok()
     }
 
-    //TODO test
-    async fn iterate_one(&mut self) -> bool {
-        // Run current permutation
+    async fn get_current_url(&self) -> String {
         let current = self.current();
         let mut url = self.scraper.url.to_owned();
         current.iter().enumerate().for_each(|(l0,s)| url = url.replace(&format!("${}",l0+1),s));
-        if let Some(mut html) = self.load_url(&url).await {
-            if self.simple_space {
-                html = RE_SIMPLE_SPACE.replace_all(&html," ").to_string();
-            }
-            if self.utf8_encode {
-                // TODO
-            }
-            self.entry_batch.append(&mut self.scraper.process_html_page(&html,&self));
-            if self.entry_batch.len()>= AUTOSCRAPE_ENTRY_BATCH_SIZE {
-                let _ = self.add_batch().await;
-            }
-        }
+        url
+    }
 
-        // Next permutation
-        self.tick().await
+    async fn get_patched_html(&self, url: String) -> Option<String> {
+        let mut html = self.load_url(&url).await?;
+        if self.simple_space {
+            html = RE_SIMPLE_SPACE.replace_all(&html," ").to_string();
+        }
+        if self.utf8_encode {
+            // TODO
+        }
+        Some(html)
     }
 
     //TODO test
-    async fn add_batch(&mut self) -> Result<(),GenericError> {
-        if self.entry_batch.is_empty() {
+    async fn iterate_one(&self) {
+        // Run current permutation
+        let url = self.get_current_url().await;
+        if let Some(html) = self.get_patched_html(url).await {
+            self.entry_batch.lock().await.append(&mut self.scraper.process_html_page(&html,&self));
+            if self.entry_batch.lock().await.len()>= AUTOSCRAPE_ENTRY_BATCH_SIZE {
+                let _ = self.add_batch().await;
+            }
+        }
+    }
+
+    //TODO test
+    // async fn iterate_batch(&mut self, batch_size: usize) -> bool {
+    //     let mut futures = vec![];
+    //     let mut ret = true;
+    //     for i in 1..batch_size {
+    //         let url = self.get_current_url().await;
+    //         let future = self.get_patched_html(url);
+    //         futures.push(future);
+    //         ret = self.tick().await;
+    //         if !ret {
+    //             break;
+    //         }
+    //     }
+    //     let htmls: Vec<ExtendedEntry> = join_all(futures).await
+    //         .into_iter()
+    //         .filter_map(|html|html)
+    //         .map(|html| self.scraper.process_html_page(&html,&self))
+    //         .flatten()
+    //         .collect();
+    //     ret
+    // }
+
+    //TODO test
+    async fn add_batch(&self) -> Result<(),GenericError> {
+        let mut entry_batch = self.entry_batch.lock().await;
+        if entry_batch.is_empty() {
             let _ = self.remember_state().await;
             return Ok(())
         }
-        let ext_ids: Vec<String> = self.entry_batch.iter().map(|e|e.entry.ext_id.to_owned()).collect();
+        let ext_ids: Vec<String> = entry_batch.iter().map(|e|e.entry.ext_id.to_owned()).collect();
         let placeholders = MixNMatch::sql_placeholders(ext_ids.len());
         let sql = format!("SELECT `ext_id`,`id` FROM entry WHERE `ext_id` IN ({}) AND `catalog`={}",&placeholders,self.catalog_id);
         let existing_ext_ids: Vec<(String,usize)> = sql.with(ext_ids.clone())
             .map(self.mnm.app.get_mnm_conn().await?, |(id,ext_id)|(id,ext_id))
             .await?;
         let existing_ext_ids: HashMap<String,usize> = existing_ext_ids.into_iter().collect();
-        for ex in &mut self.entry_batch {
+        for ex in &mut *entry_batch {
             match existing_ext_ids.get(&ex.entry.ext_id) {
                 Some(entry_id) => { // Entry already exists
                     ex.entry.id = *entry_id;
@@ -928,7 +963,7 @@ impl Autoscrape {
                 }
             }
         }
-        self.entry_batch.clear();
+        entry_batch.clear();
         let _ = self.remember_state().await;
         Ok(())
     }
@@ -945,7 +980,13 @@ impl Autoscrape {
     pub async fn run(&mut self) -> Result<(),GenericError> {
         self.init().await;
         let _ = self.start().await;
-        while !self.iterate_one().await {}
+        loop {
+            self.iterate_one().await;
+            if !self.tick().await {
+                break
+            }
+        }
+        // while !self.iterate_one().await {}
         let _ = self.finish().await;
         Ok(())
     }
@@ -971,10 +1012,10 @@ impl Autoscrape {
     }
 
     //TODO test
-    pub async fn finish(&mut self) -> Result<(),GenericError> {
+    pub async fn finish(&self) -> Result<(),GenericError> {
         let _ = self.add_batch().await; // Flush
         let autoscrape_id = self.autoscrape_id;
-        let last_run_urls = self.urls_loaded;
+        let last_run_urls = *self.urls_loaded.lock().await;
         let sql = "UPDATE `autoscrape` SET `status`='OK',`last_run_min`=NULL,`last_run_urls`=:last_run_urls WHERE `id`=:autoscrape_id" ;
         if let Ok(mut conn) = self.mnm.app.get_mnm_conn().await {
             let _ = conn.exec_drop(sql, params! {autoscrape_id,last_run_urls}).await;
