@@ -1,5 +1,6 @@
 use std::fs::File;
 use std::collections::HashMap;
+use itertools::Itertools;
 use serde_json::Value;
 use mysql_async::prelude::*;
 use mysql_async::from_row;
@@ -404,11 +405,11 @@ impl Microsync {
             return Ok(HashMap::new());
         }
         let case_insensitive = AUX_PROPERTIES_ALSO_USING_LOWERCASE.contains(&property);
-        let placeholders = MixNMatch::sql_placeholders(ext_ids.len());
-        let sql = format!("SELECT `id`,`q`,`user`,`ext_id`,`ext_url` FROM `entry` WHERE `catalog`={} AND `ext_id` IN ({})",catalog_id,placeholders);
+        let placeholders = ext_ids.iter().map(|_|format!("BINARY ?")).join(",");
+        let sql = format!("SELECT `id`,`q`,`user`,`ext_id`,`ext_url` FROM `entry` WHERE `catalog`={catalog_id} AND `ext_id` IN ({placeholders})");
         let results = self.mnm.app.get_mnm_conn().await?
-                .exec_iter(sql,ext_ids).await?
-                .map_and_drop(from_row::<(usize,Option<isize>,Option<usize>,String,String)>).await?;
+            .exec_iter(sql,ext_ids).await?
+            .map_and_drop(from_row::<(usize,Option<isize>,Option<usize>,String,String)>).await?;
         let ret: HashMap<String,SmallEntry> = results
             .iter()
             .map(|(id,q,user, ext_id,ext_url)|{
