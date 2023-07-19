@@ -1,3 +1,4 @@
+use futures::future::join_all;
 use serde_json::json;
 use lazy_static::lazy_static;
 use regex::Regex;
@@ -186,6 +187,14 @@ impl AuxiliaryMatcher {
         Ok(mw_api.entities_from_sparql_result(&sparql_results,"p"))
     }
 
+    async fn search_property_value(&self, aux: AuxiliaryResults) -> Option<(AuxiliaryResults,Vec<String>)> {
+        let query = format!("haswbstatement:\"{}={}\"",aux.prop(),aux.value);
+        match self.mnm.wd_search(&query).await {
+            Ok(results) => Some((aux,results)),
+            Err(_) => None,
+        }
+    }
+
     //TODO test
     pub async fn match_via_auxiliary(&mut self, catalog_id: usize) -> Result<(),GenericError> {
         let blacklisted_catalogs: Vec<String> = AUX_BLACKLISTED_CATALOGS.iter().map(|u|format!("{}",u)).collect();
@@ -208,6 +217,7 @@ impl AuxiliaryMatcher {
             ,blacklisted_catalogs.join(","));
         let mut offset = self.get_last_job_offset() ;
         let batch_size = 500 ;
+        let search_batch_size = 50;
         let mw_api = self.mnm.get_mw_api().await?;
         loop {
             let results = self.mnm.app.get_mnm_conn().await?
@@ -216,47 +226,68 @@ impl AuxiliaryMatcher {
             let results: Vec<AuxiliaryResults> = results.iter().map(|r|AuxiliaryResults::from_result(r)).collect();
             let mut items_to_check: Vec<(String,AuxiliaryResults)> = vec![];
 
-            for aux in &results {
-                if self.is_catalog_property_combination_suspect(catalog_id,aux.property) {
-                    continue
-                }
-                let query = format!("haswbstatement:\"{}={}\"",aux.prop(),aux.value);
-                let search_results = match self.mnm.wd_search(&query).await {
-                    Ok(result) => result,
-                    Err(_) => continue // Something went wrong, just skip this one
-                };
-                if search_results.len()==1 {
-                    if let Some(q) = search_results.get(0) {
-                        items_to_check.push((q.to_owned(),aux.to_owned()));
+            if true { // async parallel
+                for results_chunk in results.chunks(search_batch_size) {
+                    let mut futures = vec![];
+                    for aux in results_chunk {
+                        if !self.is_catalog_property_combination_suspect(catalog_id,aux.property) {
+                            let future = self.search_property_value(aux.to_owned());
+                            futures.push(future);
+                        }
                     }
-                } else if search_results.len()>1 {
-                    Issue::new(aux.entry_id,IssueType::WdDuplicate,json!(search_results),&self.mnm).await?.insert().await?;
-                }
-            }
-            
-        // Load the actual entities, don't trust the search results
-        let items_to_load = items_to_check.iter().map(|(q,_aux)|q.to_owned()).collect();
-        let entities = wikibase::entity_container::EntityContainer::new();
-        let _ = entities.load_entities(&mw_api,&items_to_load).await;
-        for (q,aux) in &items_to_check {
-                if let Some(entity) = &entities.get_entity(q.to_owned()) {
-                    if aux.entity_has_statement(entity) {
-                        if let Ok(mut entry) = Entry::from_id(aux.entry_id, &self.mnm).await {
-                            let _ = entry.set_match(q,USER_AUX_MATCH).await;
+                    for (aux,items) in join_all(futures).await.into_iter().filter_map(|r|r) {
+                        if items.len()==1 {
+                            items_to_check.push((items[0].to_owned(),aux));
+                        } else if items.len() > 1 {
+                            Issue::new(aux.entry_id,IssueType::WdDuplicate,json!(items),&self.mnm).await?.insert().await?;
                         }
                     }
                 }
-            }
+                
+            } else { // Remove eventually
 
-            if results.len()<batch_size {
-                break;
+                for aux in &results {
+                    if self.is_catalog_property_combination_suspect(catalog_id,aux.property) {
+                        continue
+                    }
+                    let query = format!("haswbstatement:\"{}={}\"",aux.prop(),aux.value);
+                    let search_results = match self.mnm.wd_search(&query).await {
+                        Ok(result) => result,
+                        Err(_) => continue // Something went wrong, just skip this one
+                    };
+                    if search_results.len()==1 {
+                        if let Some(q) = search_results.get(0) {
+                            items_to_check.push((q.to_owned(),aux.to_owned()));
+                        }
+                    } else if search_results.len()>1 {
+                        Issue::new(aux.entry_id,IssueType::WdDuplicate,json!(search_results),&self.mnm).await?.insert().await?;
+                    }
+                }
             }
-            offset += results.len();
-            let _ = self.remember_offset(offset).await;
-        }
-        let _ = self.clear_offset().await;
-        let _ = Job::queue_simple_job(&self.mnm, catalog_id,"aux2wd",None).await;
-        Ok(())
+            
+            // Load the actual entities, don't trust the search results
+            let items_to_load = items_to_check.iter().map(|(q,_aux)|q.to_owned()).collect();
+            let entities = wikibase::entity_container::EntityContainer::new();
+            let _ = entities.load_entities(&mw_api,&items_to_load).await;
+            for (q,aux) in &items_to_check {
+                    if let Some(entity) = &entities.get_entity(q.to_owned()) {
+                        if aux.entity_has_statement(entity) {
+                            if let Ok(mut entry) = Entry::from_id(aux.entry_id, &self.mnm).await {
+                                let _ = entry.set_match(q,USER_AUX_MATCH).await;
+                            }
+                        }
+                    }
+                }
+
+                if results.len()<batch_size {
+                    break;
+                }
+                offset += results.len();
+                let _ = self.remember_offset(offset).await;
+            }
+            let _ = self.clear_offset().await;
+            let _ = Job::queue_simple_job(&self.mnm, catalog_id,"aux2wd",None).await;
+            Ok(())
         }
 
     //TODO test
