@@ -1,3 +1,5 @@
+use futures::future::join_all;
+use itertools::Itertools;
 use serde_json::json;
 use std::collections::HashMap;
 use regex::Regex;
@@ -117,6 +119,29 @@ impl AutoMatch {
         Ok(())
     }
 
+    async fn search_with_type_and_entity_id(&self, entry_id: usize, name: &str, type_q: &str) -> Option<(usize,Vec<String>)> {
+        let mut items = self.mnm.wd_search_with_type(name,type_q).await.ok()?;
+        if items.is_empty() {
+            return None;
+        }
+        items.sort();
+        items.dedup();
+        Some((entry_id,items))
+    }
+
+    async fn match_entry_to_items(&self, entry_id: usize, mut items: Vec<String>) -> Result<(),GenericError> {
+        items.sort();
+        items.dedup();
+        let mut entry= Entry::from_id(entry_id, &self.mnm).await?;
+        if entry.q!=self.mnm.item2numeric(&items[0]) {
+            entry.set_match(&items[0],USER_AUTO).await?;
+            if items.len()>1 { // Multi-match
+                entry.set_multi_match(&items).await?;
+            }
+        }
+        Ok(())
+    }
+
     pub async fn automatch_by_search(&self, catalog_id: usize) -> Result<(),GenericError> {
         let sql = format!("SELECT `id`,`ext_name`,`type`,
             IFNULL((SELECT group_concat(DISTINCT `label` SEPARATOR '|') FROM aliases WHERE entry_id=entry.id),'') AS `aliases` 
@@ -124,45 +149,52 @@ impl AutoMatch {
             ORDER BY `id` LIMIT :batch_size OFFSET :offset",MatchState::not_fully_matched().get_sql());
         let mut offset = self.get_last_job_offset() ;
         let batch_size = 5000 ;
+        let search_batch_size = 100;
         loop {
             let results = self.mnm.app.get_mnm_conn().await?
                 .exec_iter(sql.clone(),params! {catalog_id,offset,batch_size}).await?
                 .map_and_drop(from_row::<(usize,String,String,String)>).await?;
 
-            for result in &results {
-                let entry_id = result.0 ;
-                let label = &result.1 ;
-                let type_q = &result.2 ;
-                let aliases: Vec<&str> = result.3.split("|").collect();
-                let mut items = match self.mnm.wd_search_with_type(label,type_q).await {
-                    Ok(items) => items,
-                    _ => continue // Ignore error
-                } ;
-                for alias in &aliases {
-                    let mut tmp = match self.mnm.wd_search_with_type(alias,type_q).await {
-                        Ok(tmp) => tmp,
-                        _ => continue // Ignore error
-                    };
-                    items.append(&mut tmp);
+            for result_batch in results.chunks(search_batch_size) {
+                let mut futures = vec![];
+                for result in result_batch {
+                    let entry_id = result.0 ;
+                    let label = &result.1 ;
+                    let type_q = &result.2 ;
+                    let aliases: Vec<&str> = result.3.split("|").collect();
+                    let future = self.search_with_type_and_entity_id(entry_id,label,type_q);
+                    futures.push(future);
+                    for alias in &aliases {
+                        let future = self.search_with_type_and_entity_id(entry_id,alias,type_q);
+                        futures.push(future);
+                    }
                 }
-                items.sort();
-                items.dedup();
-                if self.mnm.remove_meta_items(&mut items).await.is_err() {
-                    continue ; // Ignore error
+                let mut search_results = join_all(futures).await.into_iter()
+                    .filter_map(|r|r)
+                    .map(|(entry_id,items)| items.into_iter().map(move |q|(entry_id,q.to_string())))
+                    .flatten()
+                    .collect_vec();
+
+                // Remove meta items
+                let mut no_meta_items = search_results.iter().map(|(_entry_id,q)|q).cloned().collect_vec();
+                no_meta_items.sort();
+                no_meta_items.dedup();
+                let _ = self.mnm.remove_meta_items(&mut no_meta_items).await;
+                search_results.retain(|(_entry_id,q)| no_meta_items.contains(q));
+
+
+                // Build entry ID to item IDs Hashmap
+                let mut entry_id2items: HashMap<usize,Vec<String>> = HashMap::new();
+                for (entry_id,q) in search_results {
+                    entry_id2items.entry(entry_id).or_default().push(q);
                 }
-                if items.is_empty() {
-                    continue ;
+
+                let mut futures = vec![];
+                for (entry_id,items) in entry_id2items {
+                    let future = self.match_entry_to_items(entry_id,items);
+                    futures.push(future);
                 }
-                let mut entry= match Entry::from_id(entry_id, &self.mnm).await {
-                    Ok(entry) => entry,
-                    _ => continue // Ignore error
-                };
-                if entry.set_match(&items[0],USER_AUTO).await.is_err() {
-                    continue // Ignore error
-                }
-                if items.len()>1 { // Multi-match
-                    let _ = entry.set_multi_match(&items).await.is_err(); // Ignore error
-                }
+                let _ = join_all(futures).await; // Ignore errors
             }
 
             if results.len()<batch_size {
