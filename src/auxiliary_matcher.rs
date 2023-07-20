@@ -226,7 +226,7 @@ impl AuxiliaryMatcher {
             let results: Vec<AuxiliaryResults> = results.iter().map(|r|AuxiliaryResults::from_result(r)).collect();
             let mut items_to_check: Vec<(String,AuxiliaryResults)> = vec![];
 
-            if true { // async parallel
+            if false { // async parallel
                 for results_chunk in results.chunks(search_batch_size) {
                     let mut futures = vec![];
                     for aux in results_chunk {
@@ -235,7 +235,10 @@ impl AuxiliaryMatcher {
                             futures.push(future);
                         }
                     }
-                    for (aux,items) in join_all(futures).await.into_iter().filter_map(|r|r) {
+                    let futures_results = join_all(futures).await
+                        .into_iter()
+                        .filter_map(|r|r);
+                    for (aux,items) in futures_results {
                         if items.len()==1 {
                             items_to_check.push((items[0].to_owned(),aux));
                         } else if items.len() > 1 {
