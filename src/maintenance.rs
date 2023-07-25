@@ -5,6 +5,7 @@ use itertools::Itertools;
 use mysql_async::prelude::*;
 use mysql_async::from_row;
 use crate::app_state::*;
+use crate::catalog::Catalog;
 use crate::entry::Entry;
 use crate::mixnmatch::*;
 
@@ -156,7 +157,8 @@ impl Maintenance {
             drop(conn);
 
             for catalog_id in catalog_ids {
-               let _ = self.mnm.refresh_overview_table(catalog_id).await;
+                let catalog = Catalog::from_id(catalog_id,&self.mnm).await?;
+                let _ = catalog.refresh_overview_table().await;
             }
         }
         self.mnm.set_kv_value("wdrc_apply_deletions", &new_ts).await?;

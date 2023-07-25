@@ -10,6 +10,7 @@ use mysql_async::from_row;
 use std::error::Error;
 use std::fmt;
 use mysql_async::prelude::*;
+use crate::catalog::Catalog;
 use crate::update_catalog::ExtendedEntry;
 use crate::entry::*;
 use crate::job::*;
@@ -1020,7 +1021,8 @@ impl Autoscrape {
         if let Ok(mut conn) = self.mnm.app.get_mnm_conn().await {
             let _ = conn.exec_drop(sql, params! {autoscrape_id,last_run_urls}).await;
         }
-        let _ = self.mnm.refresh_overview_table(self.catalog_id).await;
+        let catalog = Catalog::from_id(self.catalog_id,&self.mnm).await?;
+        let _ = catalog.refresh_overview_table().await;
         let _ = self.clear_offset().await;
         let _ = Job::queue_simple_job(&self.mnm,self.catalog_id,"automatch_by_search",None).await;
         let _ = Job::queue_simple_job(&self.mnm,self.catalog_id,"microsync",None).await;

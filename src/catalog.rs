@@ -63,6 +63,31 @@ impl Catalog {
         self.mnm = Some(mnm.clone());
     }
 
+    fn mnm(&self) -> Result<&MixNMatch,GenericError> {
+        match &self.mnm {
+            Some(mnm) => Ok(mnm),
+            None => Err(format!("Catalog {}: MnM not set",self.id).into())
+        }
+    }
+
+    //TODO test
+    pub async fn refresh_overview_table(&self) -> Result<(),GenericError> {
+        let catalog_id = self.id;
+        let sql = r"REPLACE INTO `overview` (catalog,total,noq,autoq,na,manual,nowd,multi_match,types) VALUES (
+            :catalog_id,
+            (SELECT count(*) FROM `entry` WHERE `catalog`=:catalog_id),
+            (SELECT count(*) FROM `entry` WHERE `catalog`=:catalog_id AND `q` IS NULL),
+            (SELECT count(*) FROM `entry` WHERE `catalog`=:catalog_id AND `user`=0),
+            (SELECT count(*) FROM `entry` WHERE `catalog`=:catalog_id AND `q`=0),
+            (SELECT count(*) FROM `entry` WHERE `catalog`=:catalog_id AND `q` IS NOT NULL AND `user`>0),
+            (SELECT count(*) FROM `entry` WHERE `catalog`=:catalog_id AND `q`=-1),
+            (SELECT count(*) FROM `multi_match` WHERE `catalog`=:catalog_id),
+            (SELECT group_concat(DISTINCT `type` SEPARATOR '|') FROM `entry` WHERE `catalog`=:catalog_id)
+            )";
+        self.mnm()?.app.get_mnm_conn().await?.exec_drop(sql,params! {catalog_id}).await?;
+        Ok(())
+    }
+    
     
 }
 
