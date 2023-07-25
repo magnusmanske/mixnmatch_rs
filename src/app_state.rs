@@ -24,6 +24,7 @@ pub struct AppState {
     pub import_file_path: String,
     pub bot_name: String,
     pub bot_password: String,
+    pub task_specific_usize: HashMap<String,usize>,
     max_concurrent_jobs: usize,
 }
 
@@ -39,6 +40,10 @@ impl AppState {
 
     /// Creatre an AppState object from a config JSON object
     pub fn from_config(config: &Value) -> Self {
+        let task_specific_usize=  config["task_specific_usize"].as_object().unwrap()
+            .into_iter()
+            .map(|(k,v)|(k.to_owned(),v.as_u64().unwrap_or_default() as usize))
+            .collect();
         let ret = Self {
             wd_pool: Self::create_pool(&config["wikidata"]),
             mnm_pool: Self::create_pool(&config["mixnmatch"]),
@@ -46,6 +51,7 @@ impl AppState {
             import_file_path: config["import_file_path"].as_str().unwrap().to_string(),
             bot_name: config["bot_name"].as_str().unwrap().to_string(),
             bot_password: config["bot_password"].as_str().unwrap().to_string(),
+            task_specific_usize,
             max_concurrent_jobs: config["max_concurrent_jobs"].as_u64().unwrap_or(10) as usize,
         };
         ret

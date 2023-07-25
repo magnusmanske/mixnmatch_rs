@@ -148,8 +148,9 @@ impl AutoMatch {
             FROM `entry` WHERE `catalog`=:catalog_id {} 
             ORDER BY `id` LIMIT :batch_size OFFSET :offset",MatchState::not_fully_matched().get_sql());
         let mut offset = self.get_last_job_offset() ;
-        let batch_size = 5000 ;
-        let search_batch_size = 100;
+        let batch_size = *self.mnm.app.task_specific_usize.get("automatch_by_search_batch_size").unwrap_or(&5000) ;
+        let search_batch_size = *self.mnm.app.task_specific_usize.get("automatch_by_search_search_batch_size").unwrap_or(&100) ;
+        
         loop {
             let results = self.mnm.app.get_mnm_conn().await?
                 .exec_iter(sql.clone(),params! {catalog_id,offset,batch_size}).await?

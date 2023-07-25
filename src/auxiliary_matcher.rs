@@ -216,8 +216,8 @@ impl AuxiliaryMatcher {
             ,extid_props.join(",")
             ,blacklisted_catalogs.join(","));
         let mut offset = self.get_last_job_offset() ;
-        let batch_size = 500 ;
-        let search_batch_size = 50;
+        let batch_size = *self.mnm.app.task_specific_usize.get("auxiliary_matcher_batch_size").unwrap_or(&500) ;
+        let search_batch_size = *self.mnm.app.task_specific_usize.get("auxiliary_matcher_search_batch_size").unwrap_or(&50) ;
         let mw_api = self.mnm.get_mw_api().await?;
         loop {
             let results = self.mnm.app.get_mnm_conn().await?

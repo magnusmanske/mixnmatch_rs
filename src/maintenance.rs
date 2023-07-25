@@ -266,16 +266,20 @@ impl Maintenance {
             Some(ts) => ts.to_owned(),
             None => return Ok(()), // No results
         };
-        let results = results.into_iter().map(|(item,property,_ts)|(item,property)).collect_vec();
-        let properties = results.iter().map(|(_item,property)|*property).sorted().dedup().collect_vec();
-        let futures = properties.iter()
-            .map(|property|self.wdrc_sync_property(*property, &results, &prop2catalog_ids))
-            .collect_vec();
-        let results = join_all(futures).await;
-        let failed = results.iter().filter(|r|r.is_err()).collect_vec();
-        if let Some(result) = failed.get(0) {
-            if let Err(err) = result {
-                return Err(err.to_string().into());
+        let batch_size = *self.mnm.app.task_specific_usize.get("wdrc_sync_properties_batch_size").unwrap_or(&10) ;
+        let all_results = results.into_iter().map(|(item,property,_ts)|(item,property)).collect_vec();
+        for results in all_results.chunks(batch_size) {
+            let results = results.to_vec();
+            let properties = results.iter().map(|(_item,property)|*property).sorted().dedup().collect_vec();
+            let futures = properties.iter()
+                .map(|property|self.wdrc_sync_property(*property, &results, &prop2catalog_ids))
+                .collect_vec();
+            let results = join_all(futures).await;
+            let failed = results.iter().filter(|r|r.is_err()).collect_vec();
+            if let Some(result) = failed.get(0) {
+                if let Err(err) = result {
+                    return Err(err.to_string().into());
+                }
             }
         }
         self.mnm.set_kv_value("wdrc_sync_properties", &new_ts).await?;
