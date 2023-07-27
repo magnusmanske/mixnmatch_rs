@@ -129,18 +129,36 @@ impl AutoMatch {
         Some((entry_id,items))
     }
 
-    async fn match_entry_to_items(&self, entry_id: usize, mut items: Vec<String>) -> Result<(),GenericError> {
-        items.sort();
-        items.dedup();
-        let mut entry= Entry::from_id(entry_id, &self.mnm).await?;
-        if entry.q!=self.mnm.item2numeric(&items[0]) {
-            entry.set_match(&items[0],USER_AUTO).await?;
-            if items.len()>1 { // Multi-match
-                entry.set_multi_match(&items).await?;
-            }
+    async fn match_entries_to_items(&self ,entry_id2items: &HashMap<usize,Vec<String>>) -> Result<(),GenericError> {
+        let entry_ids = entry_id2items.keys().map(|id|*id).collect();
+        let mut entries = Entry::multiple_from_ids(&entry_ids,&self.mnm).await?;
+        let mut futures = vec![];
+
+        for (entry_id,entry) in &mut entries {
+            let items = match entry_id2items.get(&entry_id) {
+                Some(items) => items,
+                None => continue,
+            };
+            let future = entry.set_auto_and_multi_match(&items);
+            futures.push(future);
         }
+        
+        let _ = join_all(futures).await; // Ignore errors
         Ok(())
     }
+
+    // async fn match_entry_to_items(&self, entry_id: usize, mut items: Vec<String>) -> Result<(),GenericError> {
+    //     items.sort();
+    //     items.dedup();
+    //     let mut entry= Entry::from_id(entry_id, &self.mnm).await?;
+    //     if entry.q!=self.mnm.item2numeric(&items[0]) {
+    //         entry.set_match(&items[0],USER_AUTO).await?;
+    //         if items.len()>1 { // Multi-match
+    //             entry.set_multi_match(&items).await?;
+    //         }
+    //     }
+    //     Ok(())
+    // }
 
     pub async fn automatch_by_search(&self, catalog_id: usize) -> Result<(),GenericError> {
         let sql = format!("SELECT `id`,`ext_name`,`type`,
@@ -150,7 +168,7 @@ impl AutoMatch {
         let mut offset = self.get_last_job_offset() ;
         let batch_size = *self.mnm.app.task_specific_usize.get("automatch_by_search_batch_size").unwrap_or(&5000) ;
         let search_batch_size = *self.mnm.app.task_specific_usize.get("automatch_by_search_search_batch_size").unwrap_or(&100) ;
-        
+
         loop {
             let results = self.mnm.app.get_mnm_conn().await?
                 .exec_iter(sql.clone(),params! {catalog_id,offset,batch_size}).await?
@@ -190,12 +208,7 @@ impl AutoMatch {
                     entry_id2items.entry(entry_id).or_default().push(q);
                 }
 
-                let mut futures = vec![];
-                for (entry_id,items) in entry_id2items {
-                    let future = self.match_entry_to_items(entry_id,items);
-                    futures.push(future);
-                }
-                let _ = join_all(futures).await; // Ignore errors
+                let _ = self.match_entries_to_items(&entry_id2items).await;
             }
 
             if results.len()<batch_size {

@@ -9,7 +9,7 @@ use reqwest;
 use urlencoding::encode;
 use chrono::{DateTime, Utc, NaiveDateTime};
 use serde_json::{Value,json};
-use mysql_async::prelude::*;
+use mysql_async::{prelude::*, Conn};
 use mysql_async::from_row;
 use itertools::Itertools;
 use crate::error::MnMError;
@@ -170,19 +170,28 @@ impl MixNMatch {
     /// Updates the overview table for a catalog, given the old Entry object, and the user ID and new item.
     //TODO test
     pub async fn update_overview_table(&self, old_entry: &Entry, user_id: Option<usize>, q: Option<isize>) -> Result<(),GenericError> {
+        let mut conn = self.app.get_mnm_conn().await?;
+        self.update_overview_table_db(old_entry,user_id,q,&mut conn).await
+    }
+
+    pub async fn update_overview_table_db(&self, old_entry: &Entry, user_id: Option<usize>, q: Option<isize>, conn: &mut Conn) -> Result<(),GenericError> {
         let add_column = self.get_overview_column_name_for_user_and_q(&user_id,&q);
         let reduce_column = self.get_overview_column_name_for_user_and_q(&old_entry.user,&old_entry.q);
         let catalog_id = old_entry.catalog ;
         let sql = format!("UPDATE overview SET {}={}+1,{}={}-1 WHERE catalog=:catalog_id",&add_column,&add_column,&reduce_column,&reduce_column) ;
-        self.app.get_mnm_conn().await?.exec_drop(sql,params! {catalog_id}).await?;
+        conn.exec_drop(sql,params! {catalog_id}).await?;
         Ok(())
     }
 
     /// Adds the item into a queue for reference fixer. Possibly deprecated.
     //TODO test
     pub async fn queue_reference_fixer(&self, q_numeric: isize) -> Result<(),GenericError>{
-        self.app.get_mnm_conn().await?
-            .exec_drop(r"INSERT INTO `reference_fixer` (`q`,`done`) VALUES (:q_numeric,0) ON DUPLICATE KEY UPDATE `done`=0",params! {q_numeric}).await?;
+        let mut conn = self.app.get_mnm_conn().await?;
+        self.queue_reference_fixer_db(q_numeric, &mut conn).await
+    }
+
+    pub async fn queue_reference_fixer_db(&self, q_numeric: isize, conn: &mut Conn) -> Result<(),GenericError>{
+        conn.exec_drop(r"INSERT INTO `reference_fixer` (`q`,`done`) VALUES (:q_numeric,0) ON DUPLICATE KEY UPDATE `done`=0",params! {q_numeric}).await?;
         Ok(())
     }
 
@@ -230,12 +239,17 @@ impl MixNMatch {
     /// If a q_numeric item is given, and a specific one is in the log entry, it will only trigger on this combination.
     //TODO test
     pub async fn avoid_auto_match(&self, entry_id: usize, q_numeric: Option<isize>) -> Result<bool,GenericError> {
+        let mut conn = self.app.get_mnm_conn().await?;
+        self.avoid_auto_match_db(entry_id,q_numeric,&mut conn).await
+    }
+    
+    pub async fn avoid_auto_match_db(&self, entry_id: usize, q_numeric: Option<isize>, conn: &mut Conn) -> Result<bool,GenericError> {
         let mut sql = r"SELECT id FROM `log` WHERE `entry_id`=:entry_id".to_string() ;
         match q_numeric {
             Some(q) => { sql += &format!(" AND (q IS NULL OR q={})",&q) }
             None => {}
         }
-        let rows = self.app.get_mnm_conn().await?
+        let rows = conn
             .exec_iter(sql,params! {entry_id}).await?
             .map_and_drop(from_row::<usize>).await?;
         Ok(!rows.is_empty())

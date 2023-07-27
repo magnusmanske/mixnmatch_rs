@@ -2,7 +2,7 @@ use std::error::Error;
 use std::fmt;
 use rand::prelude::*;
 use std::collections::HashMap;
-use mysql_async::prelude::*;
+use mysql_async::{prelude::*, Conn};
 use mysql_async::{Row,from_row,Value};
 use wikibase::locale_string::LocaleString;
 use crate::mixnmatch::*;
@@ -93,7 +93,7 @@ impl Entry {
     /// Returns an Entry object for a given entry ID.
     //TODO test
     pub async fn from_id(entry_id: usize, mnm: &MixNMatch) -> Result<Self,GenericError> {
-        let sql = r"SELECT id,catalog,ext_id,ext_url,ext_name,ext_desc,q,user,timestamp,random,`type` FROM `entry` WHERE `id`=:entry_id";
+        let sql = format!("{} WHERE `id`=:entry_id",Self::sql_select());
         let mut rows: Vec<Self> = mnm.app.get_mnm_conn().await?
             .exec_iter(sql,params! {entry_id}).await?
             .map_and_drop(|row| Self::from_row(&row)).await?
@@ -107,7 +107,7 @@ impl Entry {
     /// Returns an Entry object for a given external ID in a catalog.
     //TODO test
     pub async fn from_ext_id(catalog_id: usize, ext_id: &str, mnm: &MixNMatch) -> Result<Entry,GenericError> {
-        let sql = r"SELECT id,catalog,ext_id,ext_url,ext_name,ext_desc,q,user,timestamp,random,`type` FROM `entry` WHERE `catalog`=:catalog_id AND `ext_id`=:ext_id";
+        let sql = format!("{} WHERE `catalog`=:catalog_id AND `ext_id`=:ext_id",Self::sql_select());
         let mut conn = mnm.app.get_mnm_conn().await? ;
         let mut rows: Vec<Entry> = conn
             .exec_iter(sql,params! {catalog_id,ext_id}).await?
@@ -117,6 +117,29 @@ impl Entry {
         let mut ret = rows.pop().ok_or(format!("No entry '{}' in catalog #{}",ext_id,catalog_id))?.to_owned() ;
         ret.set_mnm(mnm);
         Ok(ret)
+    }
+
+    pub async fn multiple_from_ids(entry_ids: &Vec<usize>, mnm: &MixNMatch) -> Result<HashMap<usize,Self>,GenericError> {
+        if entry_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let entry_ids = entry_ids.iter().map(|id|format!("{id}")).collect::<Vec<String>>().join(",");
+        let sql = format!("{} WHERE `id` IN ({})",Self::sql_select(),entry_ids);
+        let mut rows: Vec<Self> = mnm.app.get_mnm_conn().await?
+            .exec_iter(sql,()).await?
+            .map_and_drop(|row| Self::from_row(&row)).await?
+            .iter()
+            .filter_map(|row|row.to_owned())
+            .collect();
+        for row in &mut rows {
+            row.set_mnm(mnm);
+        }
+        let ret = rows.into_iter().map(|entry|(entry.id,entry)).collect();
+        Ok(ret)
+    }
+
+    fn sql_select() -> String {
+        r"SELECT id,catalog,ext_id,ext_url,ext_name,ext_desc,q,user,timestamp,random,`type` FROM `entry`".into()
     }
     
     //TODO test
@@ -476,6 +499,11 @@ impl Entry {
 
     /// Sets a match for the entry, and marks the entry as matched in other tables.
     pub async fn set_match(&mut self, q: &str, user_id: usize) -> Result<bool,GenericError> {
+        let mut conn = self.mnm()?.app.get_mnm_conn().await?;
+        self.set_match_db(q,user_id,&mut conn).await
+    }
+    
+    async fn set_match_db(&mut self, q: &str, user_id: usize, conn: &mut Conn) -> Result<bool,GenericError> {
         self.check_valid_id()?;
         let entry_id = self.id;
         let mnm = self.mnm()?;
@@ -483,30 +511,28 @@ impl Entry {
         let timestamp = MixNMatch::get_timestamp();
         let mut sql = format!("UPDATE `entry` SET `q`=:q_numeric,`user`=:user_id,`timestamp`=:timestamp WHERE `id`=:entry_id AND (`q` IS NULL OR `q`!=:q_numeric OR `user`!=:user_id)");
         if user_id==USER_AUTO {
-            if mnm.avoid_auto_match(entry_id,Some(q_numeric)).await? {
+            if mnm.avoid_auto_match_db(entry_id,Some(q_numeric),conn).await? {
                 return Ok(false) // Nothing wrong but shouldn't be matched
             }
             sql += &MatchState::not_fully_matched().get_sql() ;
         }
         let preserve = (Some(user_id.clone()),Some(timestamp.clone()),Some(q_numeric.clone()));
-        let mut conn = mnm.app.get_mnm_conn().await? ;
         conn.exec_drop(sql, params! {q_numeric,user_id,timestamp,entry_id}).await?;
         let nothing_changed = conn.affected_rows()==0 ;
-        drop(conn);
         if nothing_changed {
             return Ok(false)
         }
 
-        mnm.update_overview_table(&self, Some(user_id), Some(q_numeric)).await?;
+        mnm.update_overview_table_db(&self, Some(user_id), Some(q_numeric),conn).await?;
 
         let is_full_match = user_id>0 && q_numeric>0 ;
-        self.set_match_status("UNKNOWN",is_full_match).await?;
+        self.set_match_status_db("UNKNOWN",is_full_match,conn).await?;
 
         if user_id!=USER_AUTO {
-            self.remove_multi_match().await?;
+            self.remove_multi_match_db(conn).await?;
         }
 
-        mnm.queue_reference_fixer(q_numeric).await?;
+        mnm.queue_reference_fixer_db(q_numeric,conn).await?;
 
         self.user = preserve.0;
         self.timestamp = preserve.1;
@@ -531,11 +557,14 @@ impl Entry {
     /// Updates the entry matching status in multiple tables.
     //TODO test
     pub async fn set_match_status(&self, status: &str, is_matched: bool) -> Result<(),GenericError>{
-        let mnm = self.mnm()?;
+        let mut conn = self.mnm()?.app.get_mnm_conn().await?;
+        self.set_match_status_db(status,is_matched,&mut conn).await
+    }
+
+    async fn set_match_status_db(&self, status: &str, is_matched: bool,conn: &mut Conn) -> Result<(),GenericError>{
         let entry_id = self.id;
         let is_matched = if is_matched { 1 } else { 0 } ;
         let timestamp = MixNMatch::get_timestamp();
-        let mut conn = mnm.app.get_mnm_conn().await?;
         conn.exec_drop(r"INSERT INTO `wd_matches` (`entry_id`,`status`,`timestamp`,`catalog`) VALUES (:entry_id,:status,:timestamp,(SELECT entry.catalog FROM entry WHERE entry.id=:entry_id)) ON DUPLICATE KEY UPDATE `status`=:status,`timestamp`=:timestamp",params! {entry_id,status,timestamp}).await?;
         conn.exec_drop(r"UPDATE `person_dates` SET is_matched=:is_matched WHERE entry_id=:entry_id",params! {is_matched,entry_id}).await?;
         conn.exec_drop(r"UPDATE `auxiliary` SET entry_is_matched=:is_matched WHERE entry_id=:entry_id",params! {is_matched,entry_id}).await?;
@@ -560,27 +589,54 @@ impl Entry {
         }
     }
 
+    pub async fn set_auto_and_multi_match(&mut self, items: &Vec<String>) -> Result<(),GenericError> {
+        let mnm = self.mnm()?;
+        let mut qs_numeric: Vec<isize> = items.iter().filter_map(|q|mnm.item2numeric(q)).collect();
+        if qs_numeric.is_empty() {
+            return Ok(());
+        }
+        qs_numeric.sort();
+        qs_numeric.dedup();
+        if self.q==Some(qs_numeric[0]) {
+            return Ok(()); // Automatch exists, skipping multimatch
+        }
+        let mut conn = mnm.app.get_mnm_conn().await?;
+        self.set_match_db(&format!("Q{}",qs_numeric[0]),USER_AUTO,&mut conn).await?;
+        if qs_numeric.len()>1 {
+            self.set_multi_match_db(&items, &mut conn).await?;
+        }
+        Ok(())
+    }
+
     /// Sets multi-matches for an entry
     pub async fn set_multi_match(&self, items: &Vec<String>) -> Result<(),GenericError> {
-        let mnm = self.mnm()?;
+        let mut conn = self.mnm()?.app.get_mnm_conn().await?;
+        self.set_multi_match_db(items, &mut conn).await
+    }
+
+    async fn set_multi_match_db(&self, items: &Vec<String>,  conn: &mut Conn) -> Result<(),GenericError> {
         let entry_id = self.id;
+        let mnm = self.mnm()?;
         let qs_numeric: Vec<String> = items.iter().filter_map(|q|mnm.item2numeric(q)).map(|q|q.to_string()).collect();
         if qs_numeric.len()<1 || qs_numeric.len()>10 {
-            return self.remove_multi_match().await;
+            return self.remove_multi_match_db(conn).await;
         }
         let candidates = qs_numeric.join(",");
         let candidates_count = qs_numeric.len();
         let sql = r"REPLACE INTO `multi_match` (entry_id,catalog,candidates,candidate_count) VALUES (:entry_id,(SELECT catalog FROM entry WHERE id=:entry_id),:candidates,:candidates_count)";
-        mnm.app.get_mnm_conn().await?.exec_drop(sql,params! {entry_id,candidates,candidates_count}).await?;
+        conn.exec_drop(sql,params! {entry_id,candidates,candidates_count}).await?;
         Ok(())
     }
 
     /// Removes multi-matches for an entry, eg when the entry has been fully matched.
     pub async fn remove_multi_match(&self) -> Result<(),GenericError>{
-        let mnm = self.mnm()?;
+        let mut conn = self.mnm()?.app.get_mnm_conn().await?;
+        self.remove_multi_match_db(&mut conn).await
+    }
+
+    async fn remove_multi_match_db(&self, conn: &mut Conn) -> Result<(),GenericError>{
         let entry_id = self.id;
-        mnm.app.get_mnm_conn().await?
-            .exec_drop(r"DELETE FROM multi_match WHERE entry_id=:entry_id",params! {entry_id}).await?;
+        conn.exec_drop(r"DELETE FROM multi_match WHERE entry_id=:entry_id",params! {entry_id}).await?;
         Ok(())
     }
 
