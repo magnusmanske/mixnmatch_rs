@@ -153,6 +153,7 @@ pub trait Jobbable {
             Some(job) => job,
             None => return Ok(())
         };
+        println!("{}: {offset}",job.get_id().unwrap_or(0));
         job.set_json(Some(json!({"offset":offset}))).await?;
         Ok(())
     }
