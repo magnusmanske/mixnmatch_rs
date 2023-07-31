@@ -3,9 +3,9 @@ use std::fs::File;
 use std::io::prelude::*;
 use std::sync::Mutex;
 use std::collections::{HashMap, HashSet};
+use std::time::Duration;
 use lazy_static::lazy_static;
 use regex::Regex;
-use reqwest;
 use urlencoding::encode;
 use chrono::{DateTime, Utc, NaiveDateTime};
 use serde_json::{Value,json};
@@ -306,6 +306,13 @@ impl MixNMatch {
         Ok(items)
     }
 
+    pub fn reqwest_client_wd() -> Result<reqwest::Client,GenericError> {
+        Ok(reqwest::Client::builder()
+            .user_agent(WIKIDATA_USER_AGENT)
+            .timeout(Duration::from_secs(15))
+            .build()?)
+    }
+
     /// Performs a Wikidata API search for the query string. Returns item IDs matching the query.
     pub async fn wd_search(&self, query: &str) -> Result<Vec<String>,GenericError> {    
         // TODO via mw_api?
@@ -314,11 +321,8 @@ impl MixNMatch {
         }
         let query = encode(&query);
         let url = format!("{}?action=query&list=search&format=json&srsearch={}",WIKIDATA_API_URL,query);
-        let client = reqwest::Client::builder()
-            .user_agent(WIKIDATA_USER_AGENT)
-            .build()?;
-        let v = client.get(url)
-            //.header(reqwest::header::USER_AGENT,WIKIDATA_USER_AGENT)
+        let v = Self::reqwest_client_wd()?
+            .get(url)
             .send()
             .await?
             .json::<Value>()
@@ -389,11 +393,8 @@ impl MixNMatch {
     /// Queries SPARQL and returns a filename with the result as CSV.
     pub async fn load_sparql_csv(&self, sparql: &str) -> Result<csv::Reader<File>,GenericError> {
         let url = format!("https://query.wikidata.org/sparql?query={}",sparql);
-        let client = reqwest::Client::builder()
-            .user_agent(WIKIDATA_USER_AGENT)
-            .build()?;
         let mut f = tempfile()?;
-        let mut res = client
+        let mut res = Self::reqwest_client_wd()?
             .get(url)
             .header(reqwest::header::ACCEPT, reqwest::header::HeaderValue::from_str("text/csv")?)
             .send()

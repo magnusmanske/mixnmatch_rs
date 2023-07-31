@@ -260,7 +260,8 @@ impl Microsync {
 
     async fn get_formatter_url_for_prop(property: usize) -> Result<String,GenericError> {
         let url = format!("https://www.wikidata.org/w/api.php?action=wbgetentities&ids=P{property}&format=json") ;
-        let json = reqwest::get(&url).await?.json::<Value>().await?;
+        let client = MixNMatch::reqwest_client_wd()?;
+        let json = client.get(&url).send().await?.json::<Value>().await?;
         let url = match json["entities"][format!("P{property}")]["claims"]["P1630"][0]["mainsnak"]["datavalue"]["value"].as_str() {
             Some(url) => url.to_string(),
             None => String::new()

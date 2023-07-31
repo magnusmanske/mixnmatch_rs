@@ -14,6 +14,7 @@ use serde_json::json;
 use mysql_async::prelude::*;
 use wikibase::locale_string::LocaleString;
 use crate::app_state::*;
+use crate::autoscrape::Autoscrape;
 use crate::mixnmatch::*;
 use crate::entry::*;
 use crate::job::*;
@@ -486,7 +487,7 @@ impl DataSource {
 
     //TODO test
     async fn fetch_url(&self, url: &String, file_name: &Path) -> Result<(),GenericError> {
-        let response = reqwest::get(url).await?;
+        let response = Autoscrape::reqwest_client_external()?.get(url).send().await?;
         let mut file = std::fs::File::create(file_name)?;
         let mut content =  Cursor::new(response.bytes().await?);
         std::io::copy(&mut content, &mut file)?;

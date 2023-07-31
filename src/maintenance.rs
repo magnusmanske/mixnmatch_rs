@@ -89,7 +89,7 @@ impl Maintenance {
     async fn get_wrdc_api_responses(&self, query: &str) -> Result<Vec<serde_json::Value>,GenericError> {
         let rand = rand::random::<u32>();
         let url = format!("https://wdrc.toolforge.org/api.php?format=jsonl&{query}&random={rand}");
-        let client = reqwest::Client::builder().user_agent(WIKIDATA_USER_AGENT).timeout(std::time::Duration::from_secs(30)).build()?;
+        let client = MixNMatch::reqwest_client_wd()?;
         let mut text;
         loop {
             text = client.get(&url).send().await?.text().await?;

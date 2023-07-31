@@ -25,7 +25,7 @@ type AutoscrapeRegexBuilder = regex::RegexBuilder;
 
 const AUTOSCRAPER_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.12; rv:56.0) Gecko/20100101 Firefox/56.0";
 const AUTOSCRAPE_ENTRY_BATCH_SIZE: usize = 100;
-const AUTOSCRAPE_URL_LOAD_TIMEOUT_SEC: u64 = 60*2;
+const AUTOSCRAPE_URL_LOAD_TIMEOUT_SEC: u64 = 60;
 
 lazy_static!{
     static ref RE_SIMPLE_SPACE : Regex = RegexBuilder::new(r"\s+").multi_line(true).ignore_whitespace(true).build().expect("Regex error") ;
@@ -282,8 +282,9 @@ impl AutoscrapeFollow {
         }
 
         // Load next URL
+        let client = Autoscrape::reqwest_client_external()?;
         let text = 
-            match reqwest::get(&url).await {
+            match client.get(url.to_owned()).send().await {
                 Ok(x) => x.text().await.ok(),
                 _ => None
             }
@@ -373,18 +374,13 @@ impl AutoscrapeMediaWiki {
             return Ok(()); // Empty cache, will trigger end-of-the-line
         }
         self.last_url = Some(url.to_owned());
-        let text =
-            match reqwest::get(&url).await {
-                Ok(x) => {
-                    if let Ok(text) = x.text().await {
-                        Some(text)
-                    } else {
-                        None
-                    }
-                }
+
+        let client = Autoscrape::reqwest_client_external()?;
+        let text = match client.get(url.to_owned()).send().await {
+                Ok(x) => x.text().await.ok(),
                 _ => None
             }
-        .ok_or_else(||AutoscrapeError::MediawikiFailure(url.to_owned()))?;
+            .ok_or_else(||AutoscrapeError::MediawikiFailure(url.clone()))?;
         let json: Value = serde_json::from_str(&text)?;
         self.title_cache = json
             .get("query").ok_or_else(||AutoscrapeError::MediawikiFailure(url.to_owned()))?
@@ -767,7 +763,7 @@ pub struct Autoscrape {
     scraper: AutoscrapeScraper,
     mnm: MixNMatch,
     job: Option<Job>,
-    client: reqwest::Client,
+    // client: reqwest::Client,
     urls_loaded: Arc<Mutex<usize>>,
     entry_batch: Arc<Mutex<Vec<ExtendedEntry>>>,
 }
@@ -791,14 +787,6 @@ impl Autoscrape {
             .map_and_drop(from_row::<(usize,String)>).await?;
         let (id,json) = results.get(0).ok_or_else(||AutoscrapeError::NoAutoscrapeForCatalog)?;
         let json: Value = serde_json::from_str(json)?;
-        let client =  reqwest::Client::builder()
-            .user_agent(AUTOSCRAPER_USER_AGENT)
-            .timeout(core::time::Duration::from_secs(AUTOSCRAPE_URL_LOAD_TIMEOUT_SEC))
-            .connection_verbose(true)
-            .gzip(true)
-            .deflate(true)
-            .brotli(true)
-            .build()?;
         let mut ret = Self {
             autoscrape_id:*id,
             catalog_id,
@@ -809,7 +797,7 @@ impl Autoscrape {
             levels:vec![],
             scraper: AutoscrapeScraper::from_json(json.get("scraper").ok_or_else(||AutoscrapeError::NoAutoscrapeForCatalog)?)?,
             job: None,
-            client,
+            // client: Self::reqwest_client_external()?,
             urls_loaded: Arc::new(Mutex::new(0)),
             entry_batch: Arc::new(Mutex::new(vec![])),
         };
@@ -878,7 +866,8 @@ impl Autoscrape {
             let _ = self.remember_state().await;
         }
         // TODO POST
-        self.client.get(url)
+        Self::reqwest_client_external().ok()?
+            .get(url)
             .send()
             .await
             .ok()?
@@ -1028,6 +1017,19 @@ impl Autoscrape {
         let _ = Job::queue_simple_job(&self.mnm,self.catalog_id,"microsync",None).await;
         Ok(())
     }
+
+
+    pub fn reqwest_client_external() -> Result<reqwest::Client,GenericError> {
+        Ok(reqwest::Client::builder()
+        .user_agent(AUTOSCRAPER_USER_AGENT)
+        .timeout(core::time::Duration::from_secs(AUTOSCRAPE_URL_LOAD_TIMEOUT_SEC))
+        .connection_verbose(true)
+        .gzip(true)
+        .deflate(true)
+        .brotli(true)
+        .build()?)
+    }
+
 }
 
 #[cfg(test)]
