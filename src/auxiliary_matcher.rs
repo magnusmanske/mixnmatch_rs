@@ -220,13 +220,16 @@ impl AuxiliaryMatcher {
         let search_batch_size = *self.mnm.app.task_specific_usize.get("auxiliary_matcher_search_batch_size").unwrap_or(&50) ;
         let mw_api = self.mnm.get_mw_api().await?;
         loop {
+            println!("Running {batch_size} entries from {offset}");
             let results = self.mnm.app.get_mnm_conn().await?
                 .exec_iter(sql.clone(),params! {catalog_id,offset,batch_size}).await?
                 .map_and_drop(from_row::<(usize,usize,usize,usize,String)>).await?;
             let results: Vec<AuxiliaryResults> = results.iter().map(|r|AuxiliaryResults::from_result(r)).collect();
             let mut items_to_check: Vec<(String,AuxiliaryResults)> = vec![];
 
-            if false { // async parallel
+            println!("To check: {}",results.len());
+
+            if true { // async parallel
                 for results_chunk in results.chunks(search_batch_size) {
                     let mut futures = vec![];
                     for aux in results_chunk {

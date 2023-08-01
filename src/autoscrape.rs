@@ -755,7 +755,6 @@ impl AutoscrapeScraper {
 pub struct Autoscrape {
     autoscrape_id: usize,
     catalog_id: usize,
-    //json: Value,
     simple_space: bool,
     skip_failed: bool,
     utf8_encode: bool,
@@ -763,7 +762,6 @@ pub struct Autoscrape {
     scraper: AutoscrapeScraper,
     mnm: MixNMatch,
     job: Option<Job>,
-    // client: reqwest::Client,
     urls_loaded: Arc<Mutex<usize>>,
     entry_batch: Arc<Mutex<Vec<ExtendedEntry>>>,
 }
@@ -797,7 +795,6 @@ impl Autoscrape {
             levels:vec![],
             scraper: AutoscrapeScraper::from_json(json.get("scraper").ok_or_else(||AutoscrapeError::NoAutoscrapeForCatalog)?)?,
             job: None,
-            // client: Self::reqwest_client_external()?,
             urls_loaded: Arc::new(Mutex::new(0)),
             entry_batch: Arc::new(Mutex::new(vec![])),
         };
