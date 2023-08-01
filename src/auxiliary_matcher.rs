@@ -211,7 +211,8 @@ impl AuxiliaryMatcher {
             AND in_wikidata=0 
             AND aux_p IN ({})
             AND catalog NOT IN ({})
-            ORDER BY auxiliary.id LIMIT :batch_size OFFSET :offset"
+            /* ORDER BY auxiliary.id */
+            LIMIT :batch_size OFFSET :offset"
             ,MatchState::not_fully_matched().get_sql()
             ,extid_props.join(",")
             ,blacklisted_catalogs.join(","));
@@ -220,14 +221,16 @@ impl AuxiliaryMatcher {
         let search_batch_size = *self.mnm.app.task_specific_usize.get("auxiliary_matcher_search_batch_size").unwrap_or(&50) ;
         let mw_api = self.mnm.get_mw_api().await?;
         loop {
-            println!("Running {batch_size} entries from {offset}");
+            // println!("Catalog {catalog_id} running {batch_size} entries from {offset}");
             let results = self.mnm.app.get_mnm_conn().await?
                 .exec_iter(sql.clone(),params! {catalog_id,offset,batch_size}).await?
                 .map_and_drop(from_row::<(usize,usize,usize,usize,String)>).await?;
-            let results: Vec<AuxiliaryResults> = results.iter().map(|r|AuxiliaryResults::from_result(r)).collect();
+            let results: Vec<AuxiliaryResults> = results.iter()
+                .map(|r|AuxiliaryResults::from_result(r))
+                .collect();
             let mut items_to_check: Vec<(String,AuxiliaryResults)> = vec![];
 
-            println!("To check: {}",results.len());
+            // println!("To check: {}",results.len());
 
             if true { // async parallel
                 for results_chunk in results.chunks(search_batch_size) {

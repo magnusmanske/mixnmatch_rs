@@ -120,7 +120,13 @@ impl AutoMatch {
     }
 
     async fn search_with_type_and_entity_id(&self, entry_id: usize, name: &str, type_q: &str) -> Option<(usize,Vec<String>)> {
-        let mut items = self.mnm.wd_search_with_type(name,type_q).await.ok()?;
+        let mut items = match self.mnm.wd_search_with_type(name,type_q).await {
+            Ok(items) => items,
+            Err(_e) => {
+                // eprintln!("search_with_type_and_entity_id: {e}");
+                return None;
+            },
+        };
         if items.is_empty() {
             return None;
         }
@@ -164,23 +170,27 @@ impl AutoMatch {
         let sql = format!("SELECT `id`,`ext_name`,`type`,
             IFNULL((SELECT group_concat(DISTINCT `label` SEPARATOR '|') FROM aliases WHERE entry_id=entry.id),'') AS `aliases` 
             FROM `entry` WHERE `catalog`=:catalog_id {} 
-            ORDER BY `id` LIMIT :batch_size OFFSET :offset",MatchState::not_fully_matched().get_sql());
+            /* ORDER BY `id` */
+            LIMIT :batch_size OFFSET :offset",MatchState::not_fully_matched().get_sql());
         let mut offset = self.get_last_job_offset() ;
         let batch_size = *self.mnm.app.task_specific_usize.get("automatch_by_search_batch_size").unwrap_or(&5000) ;
         let search_batch_size = *self.mnm.app.task_specific_usize.get("automatch_by_search_search_batch_size").unwrap_or(&100) ;
 
         loop {
+            // println!("{sql}\n{catalog_id},{offset},{batch_size}");
             let results = self.mnm.app.get_mnm_conn().await?
                 .exec_iter(sql.clone(),params! {catalog_id,offset,batch_size}).await?
                 .map_and_drop(from_row::<(usize,String,String,String)>).await?;
+            // println!("Done.");
 
             for result_batch in results.chunks(search_batch_size) {
+                // println!("Starting batch of {search_batch_size}...");
                 let mut futures = vec![];
                 for result in result_batch {
                     let entry_id = result.0 ;
                     let label = &result.1 ;
                     let type_q = &result.2 ;
-                    let aliases: Vec<&str> = result.3.split("|").collect();
+                    let aliases: Vec<&str> = result.3.split("|").filter(|alias|!alias.is_empty()).collect();
                     let future = self.search_with_type_and_entity_id(entry_id,label,type_q);
                     futures.push(future);
                     for alias in &aliases {
@@ -188,11 +198,13 @@ impl AutoMatch {
                         futures.push(future);
                     }
                 }
+                // println!("Running {} futures...",futures.len());
                 let mut search_results = join_all(futures).await.into_iter()
                     .filter_map(|r|r)
                     .map(|(entry_id,items)| items.into_iter().map(move |q|(entry_id,q.to_string())))
                     .flatten()
                     .collect_vec();
+                // println!("Futures complete");
 
                 // Remove meta items
                 let mut no_meta_items = search_results.iter().map(|(_entry_id,q)|q).cloned().collect_vec();
@@ -208,7 +220,9 @@ impl AutoMatch {
                     entry_id2items.entry(entry_id).or_default().push(q);
                 }
 
+                // println!("Matching {} entries",entry_id2items.len());
                 let _ = self.match_entries_to_items(&entry_id2items).await;
+                // println!("Batch completed.");
             }
 
             if results.len()<batch_size {
@@ -226,7 +240,8 @@ impl AutoMatch {
         let sql = format!("SELECT `id`,`ext_name`,`type`,
             IFNULL((SELECT group_concat(DISTINCT `label` SEPARATOR '|') FROM aliases WHERE entry_id=entry.id),'') AS `aliases` 
             FROM `entry` WHERE `catalog`=:catalog_id {} 
-            ORDER BY `id` LIMIT :batch_size OFFSET :offset",MatchState::not_fully_matched().get_sql());
+            /* ORDER BY `id` */
+            LIMIT :batch_size OFFSET :offset",MatchState::not_fully_matched().get_sql());
         let mut offset = self.get_last_job_offset() ;
         let batch_size = 5000 ;
         loop {
