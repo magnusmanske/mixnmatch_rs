@@ -49,7 +49,7 @@ fn main() -> Result<(),app_state::GenericError> {
         .enable_all()
         .worker_threads(threads)
         .thread_name("mixnmatch")
-        .thread_stack_size(16*threads * 1024 * 1024)
+        .thread_stack_size(128*threads * 1024 * 1024)
         .build()?;
 
     threaded_rt.block_on(async move {
