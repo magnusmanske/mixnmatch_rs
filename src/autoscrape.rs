@@ -897,8 +897,11 @@ impl Autoscrape {
         let url = self.get_current_url().await;
         if let Some(html) = self.get_patched_html(url).await {
             let mut extended_entries = self.scraper.process_html_page(&html,&self);
-            self.entry_batch.lock().await.append(&mut extended_entries);
-            if self.entry_batch.lock().await.len()>= AUTOSCRAPE_ENTRY_BATCH_SIZE {
+            let mut eb = self.entry_batch.lock().await;
+            eb.append(&mut extended_entries);
+            let entry_batch_len = eb.len();
+            drop(eb);
+            if entry_batch_len >= AUTOSCRAPE_ENTRY_BATCH_SIZE {
                 let _ = self.add_batch().await;
             }
         }

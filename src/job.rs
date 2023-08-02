@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use serde_json::json;
 use mysql_async::prelude::*;
 use mysql_async::from_row;
-use chrono::Duration;
+use chrono::{Duration, Utc};
 use std::fmt;
 use async_trait::async_trait;
 use crate::maintenance::*;
@@ -153,7 +153,7 @@ pub trait Jobbable {
             Some(job) => job,
             None => return Ok(())
         };
-        // println!("{}: {offset}",job.get_id().unwrap_or(0));
+        println!("{}: {offset} [{}]",job.get_id().unwrap_or(0), Utc::now());
         job.set_json(Some(json!({"offset":offset}))).await?;
         Ok(())
     }

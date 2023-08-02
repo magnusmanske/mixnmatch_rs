@@ -116,8 +116,7 @@ impl AppState {
 
     pub async fn forever_loop(&self) -> Result<(),GenericError> {
         let mnm = MixNMatch::new(self.clone());
-        let concurrent:Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
-        let current_job_sizes: Arc<Mutex<HashMap<usize,TaskSize>>> = Arc::new(Mutex::new(HashMap::new()));
+        let current_jobs: Arc<Mutex<HashMap<usize,TaskSize>>> = Arc::new(Mutex::new(HashMap::new()));
     
         // Reset old running&failed jobs
         Job::new(&mnm).reset_running_jobs().await?;
@@ -125,13 +124,14 @@ impl AppState {
         println!("Old jobs reset, starting bot");
     
         loop {
-            if *concurrent.lock().await>=self.max_concurrent_jobs {
+            let current_jobs_len = current_jobs.lock().await.len();
+            if current_jobs_len >= self.max_concurrent_jobs {
                 self.hold_on();
                 continue;
             }
             let mut job = Job::new(&mnm);
             let task_size = job.get_tasks().await?;
-            let big_jobs_running = current_job_sizes.lock().await.iter()
+            let big_jobs_running = current_jobs.lock().await.iter()
                 .map(|(_job_id,size)|size.to_owned())
                 .filter(|size|*size>=TaskSize::MEDIUM)
                 .count();
@@ -145,8 +145,7 @@ impl AppState {
             match job.set_next().await {
                 Ok(true) => {
                     let _ = job.set_status(JobStatus::Running).await;
-                    let concurrent = concurrent.clone();
-                    let current_job_sizes = current_job_sizes.clone();
+                    let current_jobs = current_jobs.clone();
                     let action = match job.get_action() {
                         Ok(action) => action,
                         Err(_) => continue,
@@ -154,23 +153,20 @@ impl AppState {
                     let job_size = task_size.get(&action).unwrap_or(&TaskSize::SMALL).to_owned();
                     let job_id = job.get_id().unwrap_or(0);
                     tokio::spawn(async move {
-                        *concurrent.lock().await += 1;
-                        current_job_sizes.lock().await.insert(job_id,job_size);
-                        println!("Now {} jobs running",concurrent.lock().await);
-                        match job.run().await {
-                            Ok(_) => {},
-                            Err(_e) => println!("Job {job_id} failed with error"),
+                        current_jobs.lock().await.insert(job_id,job_size);
+                        println!("Now {} jobs running",current_jobs.lock().await.len());
+                        if let Err(_e) = job.run().await {
+                            println!("Job {job_id} failed with error") // Not writing error, there might be an issue that causes stack overflow
                         }
-                        current_job_sizes.lock().await.remove(&job_id);
-                        *concurrent.lock().await -= 1;
+                        current_jobs.lock().await.remove(&job_id);
                     });
                 }
                 Ok(false) => {
-                    // println!("No jobs available, waiting... (not using: {:?})",job.skip_actions);
+                    println!("No jobs available, waiting... (not using: {:?})",job.skip_actions);
                     self.hold_on();
                 }
-                Err(e) => {
-                    println!("MAIN LOOP: Something went wrong: {e}");
+                Err(_e) => { // Not writing error, there might be an issue that causes stack overflow
+                    println!("MAIN LOOP: Something went wrong!");
                     self.hold_on();
                 }
             }
