@@ -896,7 +896,8 @@ impl Autoscrape {
         // Run current permutation
         let url = self.get_current_url().await;
         if let Some(html) = self.get_patched_html(url).await {
-            self.entry_batch.lock().await.append(&mut self.scraper.process_html_page(&html,&self));
+            let mut extended_entries = self.scraper.process_html_page(&html,&self);
+            self.entry_batch.lock().await.append(&mut extended_entries);
             if self.entry_batch.lock().await.len()>= AUTOSCRAPE_ENTRY_BATCH_SIZE {
                 let _ = self.add_batch().await;
             }
@@ -927,11 +928,16 @@ impl Autoscrape {
 
     //TODO test
     async fn add_batch(&self) -> Result<(),GenericError> {
-        let mut entry_batch = self.entry_batch.lock().await;
-        if entry_batch.is_empty() {
+        let mut entry_batch_mutex = self.entry_batch.lock().await;
+        if entry_batch_mutex.is_empty() {
+            drop(entry_batch_mutex);
             let _ = self.remember_state().await;
             return Ok(())
         }
+        let mut entry_batch = entry_batch_mutex.clone();
+        entry_batch_mutex.clear();
+        drop(entry_batch_mutex);
+
         let ext_ids: Vec<String> = entry_batch.iter().map(|e|e.entry.ext_id.to_owned()).collect();
         let placeholders = MixNMatch::sql_placeholders(ext_ids.len());
         let sql = format!("SELECT `ext_id`,`id` FROM entry WHERE `ext_id` IN ({}) AND `catalog`={}",&placeholders,self.catalog_id);
@@ -939,7 +945,7 @@ impl Autoscrape {
             .map(self.mnm.app.get_mnm_conn().await?, |(id,ext_id)|(id,ext_id))
             .await?;
         let existing_ext_ids: HashMap<String,usize> = existing_ext_ids.into_iter().collect();
-        for ex in &mut *entry_batch {
+        for ex in &mut entry_batch {
             match existing_ext_ids.get(&ex.entry.ext_id) {
                 Some(entry_id) => { // Entry already exists
                     ex.entry.id = *entry_id;
@@ -950,7 +956,6 @@ impl Autoscrape {
                 }
             }
         }
-        entry_batch.clear();
         let _ = self.remember_state().await;
         Ok(())
     }
