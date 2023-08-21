@@ -1,7 +1,8 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::error::Error;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use serde_json::json;
 use mysql_async::prelude::*;
 use mysql_async::from_row;
@@ -113,8 +114,8 @@ pub trait Jobbable {
     fn get_current_job(&self) -> Option<&Job> ;
 
     //TODO test
-    fn get_last_job_data(&self) -> Option<serde_json::Value> {
-        self.get_current_job()?.get_json_value()
+    async fn get_last_job_data(&self) -> Option<serde_json::Value> {
+        self.get_current_job()?.get_json_value().await
     }
 
     //TODO test
@@ -127,12 +128,12 @@ pub trait Jobbable {
     }
 
     //TODO test
-    fn get_last_job_offset(&self) -> usize {
+    async fn get_last_job_offset(&self) -> usize {
         let job = match self.get_current_job() {
             Some(job) => job,
             None => return 0
         };
-        let json = match job.get_json_value() {
+        let json = match job.get_json_value().await {
             Some(json) => json,
             None => return 0
         };
@@ -153,7 +154,7 @@ pub trait Jobbable {
             Some(job) => job,
             None => return Ok(())
         };
-        println!("{}: {offset} [{}]",job.get_id().unwrap_or(0), Utc::now());
+        println!("{}: {offset} [{}]",job.get_id().await.unwrap_or(0), Utc::now());
         job.set_json(Some(json!({"offset":offset}))).await?;
         Ok(())
     }
@@ -286,13 +287,13 @@ impl Job {
     }
     //TODO test
     pub async fn run(&mut self) -> Result<(),GenericError> {
-        let catalog_id = self.get_catalog()?;
-        let action = self.get_action()?;
+        let catalog_id = self.get_catalog().await?;
+        let action = self.get_action().await?;
         let res = self.run_this_job().await;
         match res {
             Ok(_) => {
                 self.set_status(JobStatus::Done).await?;
-                println!("Job {} catalog {}:{} completed.",self.get_id()?,catalog_id,action);
+                println!("Job {} catalog {}:{} completed.",self.get_id().await?,catalog_id,action);
             }
             Err(e) => {
                 match catalog_id {
@@ -302,7 +303,7 @@ impl Job {
                 let e = e.to_string();
                 let note = Some(e.to_owned());
                 self.set_note(note).await?;
-                println!("Job {} catalog {}:{} FAILED: {:?}",self.get_id()?,catalog_id,action,e);
+                println!("Job {} catalog {}:{} FAILED: {:?}",self.get_id().await?,catalog_id,action,e);
             }
         }
         self.update_next_ts().await
@@ -310,22 +311,22 @@ impl Job {
 
     //TODO test
     pub async fn set_status(&mut self, status: JobStatus) -> Result<(),GenericError> {
-        let job_id = self.get_id()?;
+        let job_id = self.get_id().await?;
         let timestamp = MixNMatch::get_timestamp();
         let status_str = status.as_str();
         let sql = "UPDATE `jobs` SET `status`=:status_str,`last_ts`=:timestamp,`note`=NULL WHERE `id`=:job_id";
         self.mnm.app.get_mnm_conn().await?.exec_drop(sql, params! {job_id,timestamp,status_str}).await?;
-        self.put_status(status)?;
+        self.put_status(status).await?;
         Ok(())
     }
 
     //TODO test
     pub async fn set_note(&mut self, note: Option<String>) -> Result<(),GenericError> {
-        let job_id = self.get_id()?;
+        let job_id = self.get_id().await?;
         let note_cloned = note.clone().map(|s|s.get(..127).unwrap_or(&s).to_string());
         let sql = "UPDATE `jobs` SET `note`=:note WHERE `id`=:job_id";
         self.mnm.app.get_mnm_conn().await?.exec_drop(sql, params! {job_id,note}).await?;
-        self.put_note(note_cloned)?;
+        self.put_note(note_cloned).await?;
         Ok(())
     }
     
@@ -379,8 +380,8 @@ impl Job {
     
     /// Returns the current `json` as an Option<serde_json::Value>
     //TODO test
-    pub fn get_json_value(&self) ->  Option<serde_json::Value> {
-        serde_json::from_str(self.get_json().ok()?.as_ref()?).ok()
+    pub async fn get_json_value(&self) ->  Option<serde_json::Value> {
+        serde_json::from_str(self.get_json().await.ok()?.as_ref()?).ok()
     }
 
     //TODO test
@@ -398,17 +399,17 @@ impl Job {
     /// Sets the value for `json` locally and in database, from a serde_json::Value
     //TODO test
     pub async fn set_json(&self, json: Option<serde_json::Value> ) ->  Result<(),GenericError> {
-        let job_id = self.get_id()?;
+        let job_id = self.get_id().await?;
         let timestamp = MixNMatch::get_timestamp();
         match json {
             Some(json) => {
                 let json_string = json.to_string();
-                self.put_json(Some(json_string.clone()))?;
+                self.put_json(Some(json_string.clone())).await?;
                 let sql = "UPDATE `jobs` SET `json`=:json_string,last_ts=:timestamp WHERE `id`=:job_id";
                 self.mnm.app.get_mnm_conn().await?.exec_drop(sql, params!{job_id, json_string, timestamp}).await?;
             }
             None => {
-                self.put_json(None)?;
+                self.put_json(None).await?;
                 let sql = "UPDATE `jobs` SET `json`=NULL,last_ts=:timestamp WHERE `id`=:job_id";
                 self.mnm.app.get_mnm_conn().await?.exec_drop(sql, params!{job_id, timestamp}).await?;
             }
@@ -420,10 +421,10 @@ impl Job {
 
     //TODO test
     async fn run_this_job(&mut self) -> Result<(),GenericError> {
-        let json = self.get_json();
-        println!("STARTING {:?} with option {:?}", &self.data()?,&json);
-        let catalog_id = self.get_catalog()?;
-        match self.get_action()?.as_str() {
+        let json = self.get_json().await;
+        println!("STARTING {:?} with option {:?}", &self.data().await?,&json);
+        let catalog_id = self.get_catalog().await?;
+        match self.get_action().await?.as_str() {
             "automatch" => {
                 let mut am = AutoMatch::new(&self.mnm);
                 am.set_current_job(self);
@@ -551,56 +552,56 @@ impl Job {
 
 
     //TODO test
-    fn data(&self) -> Result<JobRow,JobError> {
-        Ok(self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().map_err(|_|JobError::PoisonedJobRowMutex)?.clone())
+    async fn data(&self) -> Result<JobRow,JobError> {
+        Ok(self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().await.clone())
     }
     //TODO test
-    pub fn get_id(&self) -> Result<usize,JobError> {
-        Ok(self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().map_err(|_|JobError::PoisonedJobRowMutex)?.id)
+    pub async fn get_id(&self) -> Result<usize,JobError> {
+        Ok(self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().await.id)
     }
     //TODO test
-    pub fn get_action(&self) -> Result<String,JobError> {
-        Ok(self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().map_err(|_|JobError::PoisonedJobRowMutex)?.action.clone())
+    pub async fn get_action(&self) -> Result<String,JobError> {
+        Ok(self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().await.action.clone())
     }
     //TODO test
-    fn get_catalog(&self) -> Result<usize,JobError> {
-        Ok(self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().map_err(|_|JobError::PoisonedJobRowMutex)?.catalog)
+    async fn get_catalog(&self) -> Result<usize,JobError> {
+        Ok(self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().await.catalog)
     }
     //TODO test
-    fn get_json(&self) -> Result<Option<String>,JobError> {
-        Ok(self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().map_err(|_|JobError::PoisonedJobRowMutex)?.json.clone())
+    async fn get_json(&self) -> Result<Option<String>,JobError> {
+        Ok(self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().await.json.clone())
     }
 
     //TODO test
-    fn put_status(&self, status: JobStatus) -> Result<(),JobError> {
-        (*self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().map_err(|_|JobError::PoisonedJobRowMutex)?).status = status;
+    async fn put_status(&self, status: JobStatus) -> Result<(),JobError> {
+        (*self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().await).status = status;
         Ok(())
     }
 
     //TODO test
-    fn put_json(&self, json: Option<String>) -> Result<(),JobError> {
-        (*self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().map_err(|_|JobError::PoisonedJobRowMutex)?).json = json;
+    async fn put_json(&self, json: Option<String>) -> Result<(),JobError> {
+        (*self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().await).json = json;
         Ok(())
     }
 
     //TODO test
-    fn put_note(&self, note: Option<String>) -> Result<(),JobError> {
-        (*self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().map_err(|_|JobError::PoisonedJobRowMutex)?).note = note;
+    async fn put_note(&self, note: Option<String>) -> Result<(),JobError> {
+        (*self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().await).note = note;
         Ok(())
     }
 
     //TODO test
-    fn put_next_ts(&self, next_ts: &str) -> Result<(),JobError> {
-        (*self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().map_err(|_|JobError::PoisonedJobRowMutex)?).next_ts = next_ts.to_string();
+    async fn put_next_ts(&self, next_ts: &str) -> Result<(),JobError> {
+        (*self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().await).next_ts = next_ts.to_string();
         Ok(())
     }
 
-    fn get_next_ts(&mut self) -> Result<String,GenericError> {
-        let seconds = match self.data()?.repeat_after_sec {
+    async fn get_next_ts(&mut self) -> Result<String,GenericError> {
+        let seconds = match self.data().await?.repeat_after_sec {
             Some(sec) => sec as i64,
             None => return Ok(String::new())
         };
-        let utc = MixNMatch::parse_timestamp(&self.data()?.last_ts.clone()).ok_or("Can't parse timestamp in last_ts")?
+        let utc = MixNMatch::parse_timestamp(&self.data().await?.last_ts.clone()).ok_or("Can't parse timestamp in last_ts")?
             .checked_add_signed(Duration::seconds(seconds)).ok_or(JobError::TimeError)?;
         let next_ts = utc.format("%Y%m%d%H%M%S").to_string();
         Ok(next_ts)
@@ -608,10 +609,10 @@ impl Job {
 
     //TODO test
     async fn update_next_ts(&mut self) -> Result<(),GenericError> {
-        let next_ts = self.get_next_ts()?;
+        let next_ts = self.get_next_ts().await?;
 
-        let job_id = self.get_id()?;
-        self.put_next_ts(&next_ts)?;
+        let job_id = self.get_id().await?;
+        self.put_next_ts(&next_ts).await?;
         self.mnm.app.get_mnm_conn().await?.exec_drop("UPDATE `jobs` SET `next_ts`=:next_ts WHERE `id`=:job_id", params! {job_id,next_ts}).await?;
         Ok(())
     }
@@ -707,9 +708,9 @@ mod tests {
         let mnm = get_test_mnm();
         let mut job = Job::new(&mnm);
         job.set_from_id(1).await.unwrap();
-        assert_eq!(job.get_id().unwrap(),1);
-        assert_eq!(job.get_catalog().unwrap(),2930);
-        assert_eq!(job.get_action().unwrap(),"automatch_by_search");
+        assert_eq!(job.get_id().await.unwrap(),1);
+        assert_eq!(job.get_catalog().await.unwrap(),2930);
+        assert_eq!(job.get_action().await.unwrap(),"automatch_by_search");
     }
 
     #[tokio::test]
@@ -720,7 +721,7 @@ mod tests {
         job_row.last_ts = "20221027000000".to_string();
         job_row.repeat_after_sec = Some(61);
         job.data = Some(Arc::new(Mutex::new(job_row)));
-        let next_ts = job.get_next_ts().unwrap();
+        let next_ts = job.get_next_ts().await.unwrap();
         assert_eq!(next_ts,"20221027000101");
     }
 

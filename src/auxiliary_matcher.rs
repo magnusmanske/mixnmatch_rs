@@ -216,7 +216,7 @@ impl AuxiliaryMatcher {
             ,MatchState::not_fully_matched().get_sql()
             ,extid_props.join(",")
             ,blacklisted_catalogs.join(","));
-        let mut offset = self.get_last_job_offset() ;
+        let mut offset = self.get_last_job_offset().await ;
         let batch_size = *self.mnm.app.task_specific_usize.get("auxiliary_matcher_batch_size").unwrap_or(&500) ;
         let search_batch_size = *self.mnm.app.task_specific_usize.get("auxiliary_matcher_search_batch_size").unwrap_or(&50) ;
         let mw_api = self.mnm.get_mw_api().await?;
@@ -316,7 +316,7 @@ impl AuxiliaryMatcher {
             ORDER BY auxiliary.id LIMIT :batch_size OFFSET :offset"
             ,MatchState::fully_matched().get_sql()
             ,blacklisted_properties.join(","));
-        let mut offset = self.get_last_job_offset() ;
+        let mut offset = self.get_last_job_offset().await ;
         let batch_size = 500 ;
         let mw_api = self.mnm.get_mw_api().await?;
         

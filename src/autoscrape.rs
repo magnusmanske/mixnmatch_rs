@@ -993,7 +993,7 @@ impl Autoscrape {
         if let Ok(mut conn) = self.mnm.app.get_mnm_conn().await {
             let _ = conn.exec_drop(sql, params! {autoscrape_id}).await;
         }
-        if let Some(json) = self.get_last_job_data() {
+        if let Some(json) = self.get_last_job_data().await {
             match json.as_array() {
                 Some(arr) => {
                     if arr.len()==self.levels.len() {

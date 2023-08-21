@@ -71,7 +71,7 @@ impl TaxonMatcher {
         let sql = format!(r"SELECT `id`,`{}` AS taxon_name,`type` FROM `entry`
             WHERE `catalog` IN (:catalog_id) AND (`q` IS NULL OR `user`=0) AND `type` IN ('{}')
             LIMIT :batch_size OFFSET :offset",taxon_name_column,ranks.join("','"));
-        let mut offset = self.get_last_job_offset() ;
+        let mut offset = self.get_last_job_offset().await ;
         let batch_size = 5000 ;
         loop {
             let results = self.mnm.app.get_mnm_conn().await?

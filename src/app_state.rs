@@ -145,7 +145,7 @@ impl AppState {
             match job.set_next().await {
                 Ok(true) => {
                     let _ = job.set_status(JobStatus::Running).await;
-                    let action = match job.get_action() {
+                    let action = match job.get_action().await {
                         Ok(action) => action,
                         Err(_) => {
                             let _ = job.set_status(JobStatus::Failed).await;
@@ -153,7 +153,13 @@ impl AppState {
                         },
                     };
                     let job_size = task_size.get(&action).unwrap_or(&TaskSize::SMALL).to_owned();
-                    let job_id = job.get_id().unwrap_or(0);
+                    let job_id = match job.get_id().await {
+                        Ok(id) => id,
+                        Err(e) => {
+                            eprintln!("No job ID:{}",e);
+                            continue;
+                        }
+                    };
                     current_jobs.lock().await.insert(job_id,job_size);
                     println!("Now {} jobs running",current_jobs.lock().await.len());
                     let current_jobs = current_jobs.clone();

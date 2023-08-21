@@ -594,7 +594,7 @@ impl UpdateCatalog {
         let update_info = self.get_update_info(catalog_id).await?;
         let json = update_info.json()?;
         let mut datasource = DataSource::new(catalog_id, &json)?;
-        let offset = self.get_last_job_offset() ;
+        let offset = self.get_last_job_offset().await ;
         let batch_size = 5000;
         let entries_already_in_catalog = self.number_of_entries_in_catalog(catalog_id).await?;
 

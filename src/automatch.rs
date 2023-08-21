@@ -71,7 +71,7 @@ impl AutoMatch {
             AND NOT EXISTS (SELECT * FROM `log` WHERE log.entry_id=entry.id AND log.action='remove_q')
             {}
             ORDER BY `id` LIMIT :batch_size OFFSET :offset",MatchState::not_fully_matched().get_sql());
-        let mut offset = self.get_last_job_offset() ;
+        let mut offset = self.get_last_job_offset().await ;
         let batch_size = 5000 ;
         loop {
             let entries = self.mnm.app.get_mnm_conn().await?
@@ -172,7 +172,7 @@ impl AutoMatch {
             FROM `entry` WHERE `catalog`=:catalog_id {} 
             /* ORDER BY `id` */
             LIMIT :batch_size OFFSET :offset",MatchState::not_fully_matched().get_sql());
-        let mut offset = self.get_last_job_offset() ;
+        let mut offset = self.get_last_job_offset().await ;
         let batch_size = *self.mnm.app.task_specific_usize.get("automatch_by_search_batch_size").unwrap_or(&5000) ;
         let search_batch_size = *self.mnm.app.task_specific_usize.get("automatch_by_search_search_batch_size").unwrap_or(&100) ;
 
@@ -242,7 +242,7 @@ impl AutoMatch {
             FROM `entry` WHERE `catalog`=:catalog_id {} 
             /* ORDER BY `id` */
             LIMIT :batch_size OFFSET :offset",MatchState::not_fully_matched().get_sql());
-        let mut offset = self.get_last_job_offset() ;
+        let mut offset = self.get_last_job_offset().await ;
         let batch_size = 5000 ;
         loop {
             // TODO make this more efficient, too many wd replica queries
@@ -299,7 +299,7 @@ impl AutoMatch {
     //TODO test
     pub async fn automatch_from_other_catalogs(&self, catalog_id: usize) -> Result<(),GenericError> {
         let sql1 = "SELECT `id`,`ext_name`,`type` FROM entry WHERE catalog=:catalog_id AND q IS NULL LIMIT :batch_size OFFSET :offset" ;
-        let mut offset = self.get_last_job_offset() ;
+        let mut offset = self.get_last_job_offset().await ;
         let batch_size = 500 ;
         loop {
             #[derive(Debug, PartialEq, Eq, Clone)]
@@ -385,7 +385,7 @@ impl AutoMatch {
             WHERE `person_dates`.`entry_id` = `entry`.`id`
             AND `catalog`=:catalog_id AND (q IS NULL or user=0) AND born!='' AND died!='' 
             LIMIT :batch_size OFFSET :offset";
-        let mut offset = self.get_last_job_offset() ;
+        let mut offset = self.get_last_job_offset().await ;
         let batch_size = 5000 ;
         loop {
             let results = self.mnm.app.get_mnm_conn().await?
@@ -449,7 +449,7 @@ impl AutoMatch {
                 WHERE (q is not null and user=0) AND catalog=:catalog_id AND length({})=:precision AND entry.id=person_dates.entry_id
             )
             ORDER BY entry_id LIMIT :batch_size OFFSET :offset",match_field,match_field);
-        let mut offset = self.get_last_job_offset() ;
+        let mut offset = self.get_last_job_offset().await ;
         let batch_size = 100 ;
         loop {
             let results = self.mnm.app.get_mnm_conn().await?
