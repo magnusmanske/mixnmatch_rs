@@ -145,16 +145,19 @@ impl AppState {
             match job.set_next().await {
                 Ok(true) => {
                     let _ = job.set_status(JobStatus::Running).await;
-                    let current_jobs = current_jobs.clone();
                     let action = match job.get_action() {
                         Ok(action) => action,
-                        Err(_) => continue,
+                        Err(_) => {
+                            let _ = job.set_status(JobStatus::Failed).await;
+                            continue;
+                        },
                     };
                     let job_size = task_size.get(&action).unwrap_or(&TaskSize::SMALL).to_owned();
                     let job_id = job.get_id().unwrap_or(0);
+                    current_jobs.lock().await.insert(job_id,job_size);
+                    println!("Now {} jobs running",current_jobs.lock().await.len());
+                    let current_jobs = current_jobs.clone();
                     tokio::spawn(async move {
-                        current_jobs.lock().await.insert(job_id,job_size);
-                        println!("Now {} jobs running",current_jobs.lock().await.len());
                         if let Err(_e) = job.run().await {
                             println!("Job {job_id} failed with error") // Not writing error, there might be an issue that causes stack overflow
                         }
