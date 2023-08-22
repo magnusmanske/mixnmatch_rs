@@ -8,64 +8,64 @@ pub struct PhpWrapper {
 impl PhpWrapper {
     pub fn update_person_dates(catalog_id: usize) -> Result<(),GenericError> {
         println!("PHP: update_person_dates {catalog_id} START [{}]", Utc::now());
-        Command::new("/data/project/mix-n-match/scripts/person_dates/update_person_dates.php")
-            .arg(format!("{}",catalog_id))
+        let output = Command::new("/data/project/mix-n-match/scripts/person_dates/update_person_dates.php")
+            .arg(format!("{catalog_id}"))
             .output()?;
-        println!("PHP: update_person_dates {catalog_id} END [{}]", Utc::now());
+        println!("PHP: update_person_dates {catalog_id} END [{}]\n{output:?}", Utc::now());
         Ok(())
     }
 
     pub fn generate_aux_from_description(catalog_id: usize) -> Result<(),GenericError> {
         println!("PHP: generate_aux_from_description {catalog_id} START [{}]", Utc::now());
-        Command::new("/data/project/mix-n-match/scripts/generate_aux_from_description.php")
-            .arg(format!("{}",catalog_id))
+        let output = Command::new("/data/project/mix-n-match/scripts/generate_aux_from_description.php")
+            .arg(format!("{catalog_id}"))
             .output()?;
-        println!("PHP: generate_aux_from_description {catalog_id} END [{}]", Utc::now());
+        println!("PHP: generate_aux_from_description {catalog_id} END [{}]\n{output:?}", Utc::now());
         Ok(())
     }
 
     pub fn bespoke_scraper(catalog_id: usize) -> Result<(),GenericError> {
         println!("PHP: bespoke_scraper {catalog_id} START [{}]", Utc::now());
-        Command::new("/data/project/mix-n-match/scripts/bespoke_scraper.php")
-            .arg(format!("{}",catalog_id))
+        let output = Command::new("/data/project/mix-n-match/scripts/bespoke_scraper.php")
+            .arg(format!("{catalog_id}"))
             .output()?;
-        println!("PHP: bespoke_scraper {catalog_id} END [{}]", Utc::now());
+        println!("PHP: bespoke_scraper {catalog_id} END [{}]\n{output:?}", Utc::now());
         Ok(())
     }
 
     pub fn automatch(catalog_id: usize) -> Result<(),GenericError> {
         println!("PHP: automatch {catalog_id} START [{}]", Utc::now());
-        Command::new("/data/project/mix-n-match/scripts/automatch.php")
-            .arg(format!("{}",catalog_id))
+        let output = Command::new("/data/project/mix-n-match/scripts/automatch.php")
+            .arg(format!("{catalog_id}"))
             .output()?;
-        println!("PHP: automatch {catalog_id} END [{}]", Utc::now());
+        println!("PHP: automatch {catalog_id} END [{}]\n{output:?}", Utc::now());
         Ok(())
     }
 
     pub fn update_descriptions_from_url(catalog_id: usize) -> Result<(),GenericError> {
         println!("PHP: update_descriptions_from_url {catalog_id} START [{}]", Utc::now());
-        Command::new("/data/project/mix-n-match/scripts/update_descriptions_from_url.php")
-            .arg(format!("{}",catalog_id))
+        let output = Command::new("/data/project/mix-n-match/scripts/update_descriptions_from_url.php")
+            .arg(format!("{catalog_id}"))
             .output()?;
-        println!("PHP: update_descriptions_from_url {catalog_id} END [{}]", Utc::now());
+        println!("PHP: update_descriptions_from_url {catalog_id} END [{}]\n{output:?}", Utc::now());
         Ok(())
     }
 
     pub fn import_aux_from_url(catalog_id: usize) -> Result<(),GenericError> {
         println!("PHP: import_aux_from_url {catalog_id} START [{}]", Utc::now());
-        Command::new("/data/project/mix-n-match/scripts/import_aux_from_url.php")
-            .arg(format!("{}",catalog_id))
+        let output = Command::new("/data/project/mix-n-match/scripts/import_aux_from_url.php")
+            .arg(format!("{catalog_id}"))
             .output()?;
-        println!("PHP: import_aux_from_url {catalog_id} END [{}]", Utc::now());
+        println!("PHP: import_aux_from_url {catalog_id} END [{}]\n{output:?}", Utc::now());
         Ok(())
     }
 
     pub fn match_by_coordinates(catalog_id: usize) -> Result<(),GenericError> {
         println!("PHP: match_by_coordinates {catalog_id} START [{}]", Utc::now());
-        Command::new("/data/project/mix-n-match/scripts/match_by_coordinates.php")
-            .arg(format!("{}",catalog_id))
+        let output = Command::new("/data/project/mix-n-match/scripts/match_by_coordinates.php")
+            .arg(format!("{catalog_id}"))
             .output()?;
-        println!("PHP: match_by_coordinates {catalog_id} END [{}]", Utc::now());
+        println!("PHP: match_by_coordinates {catalog_id} END [{}]\n{output:?}", Utc::now());
         Ok(())
     }
 
