@@ -349,7 +349,7 @@ impl Microsync {
     //TODO test
     async fn get_differences_mnm_wd(&self, catalog_id: usize, property: usize) -> Result<(Vec<ExtIdNoMnM>,Vec<MatchDiffers>),GenericError> {
         let case_insensitive = AUX_PROPERTIES_ALSO_USING_LOWERCASE.contains(&property);
-        let sparql = format!("SELECT ?item ?value {{ ?item wdt:P{property} ?value }} ORDER BY ?item");
+        let sparql = format!("SELECT ?item ?value {{ ?item wdt:P{property} ?value }}"); // "ORDER BY ?item" unnecessary?
         let mut reader = self.mnm.load_sparql_csv(&sparql).await?;
         let mut extid_not_in_mnm: Vec<ExtIdNoMnM> = vec![];
         let mut match_differs = vec![];
