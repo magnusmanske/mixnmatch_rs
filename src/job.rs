@@ -537,9 +537,6 @@ impl Job {
             "update_descriptions_from_url" => {
                 PhpWrapper::update_descriptions_from_url(catalog_id)
             },
-            /*"automatch" => { // TODO native
-                PhpWrapper::automatch(catalog_id)
-            },*/
             "match_by_coordinates" => { // TODO native
                 PhpWrapper::match_by_coordinates(catalog_id)
             },

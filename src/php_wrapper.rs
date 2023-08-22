@@ -33,15 +33,6 @@ impl PhpWrapper {
         Ok(())
     }
 
-    pub fn automatch(catalog_id: usize) -> Result<(),GenericError> {
-        println!("PHP: automatch {catalog_id} START [{}]", Utc::now());
-        let output = Command::new("/data/project/mix-n-match/scripts/automatch.php")
-            .arg(format!("{catalog_id}"))
-            .output()?;
-        println!("PHP: automatch {catalog_id} END [{}]\n{output:?}", Utc::now());
-        Ok(())
-    }
-
     pub fn update_descriptions_from_url(catalog_id: usize) -> Result<(),GenericError> {
         println!("PHP: update_descriptions_from_url {catalog_id} START [{}]", Utc::now());
         let output = Command::new("/data/project/mix-n-match/scripts/update_descriptions_from_url.php")
