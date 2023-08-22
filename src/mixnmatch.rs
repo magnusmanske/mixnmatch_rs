@@ -152,7 +152,8 @@ impl MixNMatch {
             return Ok(mw_api.clone());
         }
         panic!("No MediaWiki API created")*/
-        mediawiki::api::Api::new(WIKIDATA_API_URL).await
+        let builder = reqwest::Client::builder().timeout(Duration::from_secs(60));
+        mediawiki::api::Api::new_from_builder(WIKIDATA_API_URL,builder).await
     }
     
     /// Computes the column of the overview table that is affected, given a user ID and item ID
