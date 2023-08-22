@@ -416,13 +416,13 @@ impl AuxiliaryMatcher {
             }
 
             let command_value: Option<WikidataCommandValue> =
-            if self.properties_using_items.contains(&aux.prop()) {
-                aux.value_as_item_id()
-            } else if self.properties_with_coordinates.contains(&aux.prop()) {
-                aux.value_as_item_location()
-            } else {
-                Some(WikidataCommandValue::String(aux.value.to_owned()))
-            };
+                if self.properties_using_items.contains(&aux.prop()) {
+                    aux.value_as_item_id()
+                } else if self.properties_with_coordinates.contains(&aux.prop()) {
+                    aux.value_as_item_location()
+                } else {
+                    Some(WikidataCommandValue::String(aux.value.to_owned()))
+                };
 
             if let Some(value) = command_value {
                 commands.push(WikidataCommand {
@@ -476,7 +476,7 @@ impl AuxiliaryMatcher {
         let entry_ids = results.iter().map(|r|r.entry_id).collect();
         let entries = match Entry::multiple_from_ids(&entry_ids,&self.mnm).await {
             Ok(entries) => entries,
-            Err(_) => return(aux,sources), // Something went wrong, ignore
+            Err(_) => HashMap::new(), // Something went wrong, ignore
         };
 
         for result in results {
