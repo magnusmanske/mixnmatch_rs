@@ -3,9 +3,7 @@ use lazy_static::lazy_static;
 use rand::prelude::*;
 use regex::{Regex, RegexBuilder};
 use serde_json::{json, Value};
-use tokio::sync::Mutex;
 use std::collections::HashMap;
-use std::sync::Arc;
 use mysql_async::from_row;
 use std::error::Error;
 use std::fmt;
@@ -762,8 +760,8 @@ pub struct Autoscrape {
     scraper: AutoscrapeScraper,
     mnm: MixNMatch,
     job: Option<Job>,
-    urls_loaded: Arc<Mutex<usize>>,
-    entry_batch: Arc<Mutex<Vec<ExtendedEntry>>>,
+    urls_loaded: usize,
+    entry_batch: Vec<ExtendedEntry>,
 }
 
 impl Jobbable for Autoscrape {
@@ -799,8 +797,8 @@ impl Autoscrape {
             levels:vec![],
             scraper: AutoscrapeScraper::from_json(json.get("scraper").ok_or_else(||AutoscrapeError::NoAutoscrapeForCatalog)?)?,
             job: None,
-            urls_loaded: Arc::new(Mutex::new(0)),
-            entry_batch: Arc::new(Mutex::new(vec![])),
+            urls_loaded: 0,
+            entry_batch: vec![],
         };
         if let Some(options) = json.get("options") { // Options in main JSON
             ret.options_from_json(options);
@@ -859,10 +857,8 @@ impl Autoscrape {
 
     //TODO test
     async fn load_url(&mut self, url: &str) -> Option<String> {
-        let mut urls_loaded = self.urls_loaded.lock().await;
-        *urls_loaded += 1;
-        let crosses_threshold = *urls_loaded % 1000 == 0;
-        drop(urls_loaded);
+        self.urls_loaded += 1;
+        let crosses_threshold = self.urls_loaded % 1000 == 0;
         if crosses_threshold {
             let _ = self.remember_state().await;
         }
@@ -901,10 +897,8 @@ impl Autoscrape {
         let url = self.get_current_url().await;
         if let Some(html) = self.get_patched_html(url).await {
             let mut extended_entries = self.scraper.process_html_page(&html,&self);
-            let mut eb = self.entry_batch.lock().await;
-            eb.append(&mut extended_entries);
-            let entry_batch_len = eb.len();
-            drop(eb);
+            self.entry_batch.append(&mut extended_entries);
+            let entry_batch_len = self.entry_batch.len();
             if entry_batch_len >= AUTOSCRAPE_ENTRY_BATCH_SIZE {
                 let _ = self.add_batch().await;
             }
@@ -935,24 +929,20 @@ impl Autoscrape {
 
     //TODO test
     async fn add_batch(&mut self) -> Result<(),GenericError> {
-        let mut entry_batch_mutex = self.entry_batch.lock().await;
-        if entry_batch_mutex.is_empty() {
-            drop(entry_batch_mutex);
+        if self.entry_batch.is_empty() {
             let _ = self.remember_state().await;
             return Ok(())
         }
-        let mut entry_batch = entry_batch_mutex.clone();
-        entry_batch_mutex.clear();
-        drop(entry_batch_mutex);
+        self.entry_batch.clear();
 
-        let ext_ids: Vec<String> = entry_batch.iter().map(|e|e.entry.ext_id.to_owned()).collect();
+        let ext_ids: Vec<String> = self.entry_batch.iter().map(|e|e.entry.ext_id.to_owned()).collect();
         let placeholders = MixNMatch::sql_placeholders(ext_ids.len());
         let sql = format!("SELECT `ext_id`,`id` FROM entry WHERE `ext_id` IN ({}) AND `catalog`={}",&placeholders,self.catalog_id);
         let existing_ext_ids: Vec<(String,usize)> = sql.with(ext_ids.clone())
             .map(self.mnm.app.get_mnm_conn().await?, |(id,ext_id)|(id,ext_id))
             .await?;
         let existing_ext_ids: HashMap<String,usize> = existing_ext_ids.into_iter().collect();
-        for ex in &mut entry_batch {
+        for ex in &mut self.entry_batch {
             match existing_ext_ids.get(&ex.entry.ext_id) {
                 Some(entry_id) => { // Entry already exists
                     ex.entry.id = *entry_id;
@@ -1014,7 +1004,7 @@ impl Autoscrape {
     pub async fn finish(&mut self) -> Result<(),GenericError> {
         let _ = self.add_batch().await; // Flush
         let autoscrape_id = self.autoscrape_id;
-        let last_run_urls = *self.urls_loaded.lock().await;
+        let last_run_urls = self.urls_loaded;
         let sql = "UPDATE `autoscrape` SET `status`='OK',`last_run_min`=NULL,`last_run_urls`=:last_run_urls WHERE `id`=:autoscrape_id" ;
         if let Ok(mut conn) = self.mnm.app.get_mnm_conn().await {
             let _ = conn.exec_drop(sql, params! {autoscrape_id,last_run_urls}).await;
