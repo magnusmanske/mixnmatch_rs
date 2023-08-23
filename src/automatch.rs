@@ -181,11 +181,11 @@ impl AutoMatch {
         let search_batch_size = *self.mnm.app.task_specific_usize.get("automatch_by_search_search_batch_size").unwrap_or(&100) ;
 
         loop {
-            // println!("{sql}\n{catalog_id},{offset},{batch_size}");
+            println!("automatch_by_search [{catalog_id}]: {catalog_id},{offset},{batch_size}");
             let results = self.mnm.app.get_mnm_conn().await?
                 .exec_iter(sql.clone(),params! {catalog_id,offset,batch_size}).await?
                 .map_and_drop(from_row::<(usize,String,String,String)>).await?;
-            // println!("Done.");
+            println!("automatch_by_search [{catalog_id}]:Done.");
 
             for result_batch in results.chunks(search_batch_size) {
                 // println!("Starting batch of {search_batch_size}...");
