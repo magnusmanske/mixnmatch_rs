@@ -54,6 +54,10 @@ impl Jobbable for AutoMatch {
     fn get_current_job(&self) -> Option<&Job> {
         self.job.as_ref()
     }
+
+    fn get_current_job_mut(&mut self) -> Option<&mut Job> {
+        self.job.as_mut()
+    }
 }
 
 impl AutoMatch {
@@ -64,7 +68,7 @@ impl AutoMatch {
         }
     }
 
-    pub async fn automatch_by_sitelink(&self, catalog_id: usize) -> Result<(),GenericError> {
+    pub async fn automatch_by_sitelink(&mut self, catalog_id: usize) -> Result<(),GenericError> {
         let language = Catalog::from_id(catalog_id, &self.mnm).await?.search_wp;
         let site = format!("{}wiki",&language);
         let sql = format!("SELECT `id`,`ext_name` FROM entry WHERE catalog=:catalog_id AND q IS NULL
@@ -166,7 +170,7 @@ impl AutoMatch {
     //     Ok(())
     // }
 
-    pub async fn automatch_by_search(&self, catalog_id: usize) -> Result<(),GenericError> {
+    pub async fn automatch_by_search(&mut self, catalog_id: usize) -> Result<(),GenericError> {
         let sql = format!("SELECT `id`,`ext_name`,`type`,
             IFNULL((SELECT group_concat(DISTINCT `label` SEPARATOR '|') FROM aliases WHERE entry_id=entry.id),'') AS `aliases` 
             FROM `entry` WHERE `catalog`=:catalog_id {} 
@@ -239,7 +243,7 @@ impl AutoMatch {
     }
 
 
-    pub async fn automatch_simple(&self, catalog_id: usize) -> Result<(),GenericError> {
+    pub async fn automatch_simple(&mut self, catalog_id: usize) -> Result<(),GenericError> {
         let sql = format!("SELECT `id`,`ext_name`,`type`,
             IFNULL((SELECT group_concat(DISTINCT `label` SEPARATOR '|') FROM aliases WHERE entry_id=entry.id),'') AS `aliases` 
             FROM `entry` WHERE `catalog`=:catalog_id {} 
@@ -300,7 +304,7 @@ impl AutoMatch {
     }
 
     //TODO test
-    pub async fn automatch_from_other_catalogs(&self, catalog_id: usize) -> Result<(),GenericError> {
+    pub async fn automatch_from_other_catalogs(&mut self, catalog_id: usize) -> Result<(),GenericError> {
         let sql1 = "SELECT `id`,`ext_name`,`type` FROM entry WHERE catalog=:catalog_id AND q IS NULL LIMIT :batch_size OFFSET :offset" ;
         let mut offset = self.get_last_job_offset().await ;
         let batch_size = 500 ;
@@ -381,7 +385,7 @@ impl AutoMatch {
         Ok(())
     }
 
-    pub async fn match_person_by_dates(&self, catalog_id: usize) -> Result<(),GenericError> {
+    pub async fn match_person_by_dates(&mut self, catalog_id: usize) -> Result<(),GenericError> {
         let mw_api = self.mnm.get_mw_api().await?;
         let sql = "SELECT entry_id,ext_name,born,died 
             FROM (`entry` join `person_dates`)
@@ -437,7 +441,7 @@ impl AutoMatch {
         Ok(())
     }
 
-    pub async fn match_person_by_single_date(&self, catalog_id: usize) -> Result<(),GenericError> {
+    pub async fn match_person_by_single_date(&mut self, catalog_id: usize) -> Result<(),GenericError> {
         let precision = 10; // 2022-xx-xx=10; use 4 for just the year
         let match_field = "born" ;
         let match_prop = if match_field=="born" { "P569" }  else { "P570" } ;
@@ -569,7 +573,7 @@ mod tests {
         Entry::from_id(TEST_ENTRY_ID2, &mnm).await.unwrap().unmatch().await.unwrap();
 
         // Match by date
-        let am = AutoMatch::new(&mnm);
+        let mut am = AutoMatch::new(&mnm);
         am.match_person_by_dates(TEST_CATALOG_ID).await.unwrap();
 
         // Check if set
@@ -587,7 +591,7 @@ mod tests {
         Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap().unmatch().await.unwrap();
 
         // Run automatch
-        let am = AutoMatch::new(&mnm);
+        let mut am = AutoMatch::new(&mnm);
         am.automatch_by_search(TEST_CATALOG_ID).await.unwrap();
 
         // Check in-database changes
@@ -603,7 +607,7 @@ mod tests {
     async fn test_automatch_by_sitelink() {
         let _test_lock = TEST_MUTEX.lock();
         let mnm = get_test_mnm();
-        let am = AutoMatch::new(&mnm);
+        let mut am = AutoMatch::new(&mnm);
 
         // Clear
         am.purge_automatches(TEST_CATALOG_ID).await.unwrap();
@@ -658,7 +662,7 @@ mod tests {
     async fn test_match_person_by_single_date() {
         let _test_lock = TEST_MUTEX.lock();
         let mnm = get_test_mnm();
-        let am = AutoMatch::new(&mnm);
+        let mut am = AutoMatch::new(&mnm);
         am.purge_automatches(TEST_CATALOG_ID).await.unwrap();
 
         // Set prelim match

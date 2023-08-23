@@ -154,6 +154,10 @@ impl Jobbable for AuxiliaryMatcher {
     fn get_current_job(&self) -> Option<&Job> {
         self.job.as_ref()
     }
+
+    fn get_current_job_mut(&mut self) -> Option<&mut Job> {
+        self.job.as_mut()
+    }
 }
 
 impl AuxiliaryMatcher {

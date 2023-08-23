@@ -2,7 +2,6 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use serde_json::json;
 use mysql_async::prelude::*;
 use mysql_async::from_row;
@@ -72,8 +71,9 @@ impl TaskSize {
 }
 
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum JobStatus {
+    #[default]
     Todo,
     Done,
     Failed,
@@ -112,6 +112,7 @@ impl JobStatus {
 pub trait Jobbable {
     fn set_current_job(&mut self, job: &Job) ;
     fn get_current_job(&self) -> Option<&Job> ;
+    fn get_current_job_mut(&mut self) -> Option<&mut Job> ;
 
     //TODO test
     async fn get_last_job_data(&self) -> Option<serde_json::Value> {
@@ -119,8 +120,8 @@ pub trait Jobbable {
     }
 
     //TODO test
-    async fn remember_job_data(&self, json: &serde_json::Value) -> Result<(),GenericError> {
-        let job = match self.get_current_job() {
+    async fn remember_job_data(&mut self, json: &serde_json::Value) -> Result<(),GenericError> {
+        let job = match self.get_current_job_mut() {
             Some(job) => job,
             None => return Ok(())
         };
@@ -149,8 +150,8 @@ pub trait Jobbable {
     }
 
     //TODO test
-    async fn remember_offset(&self, offset: usize) -> Result<(),GenericError> {
-        let job = match self.get_current_job() {
+    async fn remember_offset(&mut self, offset: usize) -> Result<(),GenericError> {
+        let job = match self.get_current_job_mut() {
             Some(job) => job,
             None => return Ok(())
         };
@@ -160,8 +161,8 @@ pub trait Jobbable {
     }
 
     //TODO test
-    async fn clear_offset(&self) -> Result<(),GenericError> {
-        let job = match self.get_current_job() {
+    async fn clear_offset(&mut self) -> Result<(),GenericError> {
+        let job = match self.get_current_job_mut() {
             Some(job) => job,
             None => return Ok(())
         };
@@ -187,7 +188,7 @@ impl fmt::Display for JobError {
 }
 
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct JobRow {
     pub id: usize,
     pub action: String,
@@ -239,7 +240,7 @@ impl JobRow {
 
 #[derive(Debug, Clone)]
 pub struct Job {
-    pub data: Option<Arc<Mutex<JobRow>>>,
+    pub data: JobRow,
     pub mnm: Arc<MixNMatch>,
     pub skip_actions: Option<Vec<String>>,
 }
@@ -247,7 +248,7 @@ pub struct Job {
 impl Job {
     pub fn new(mnm: &MixNMatch) -> Self {
         Self {
-            data: None,
+            data: JobRow::default(),
             mnm: Arc::new(mnm.clone()),
             skip_actions: None,
         }
@@ -275,14 +276,13 @@ impl Job {
     }
 
     pub async fn set_from_id(&mut self, job_id: usize) -> Result<bool,GenericError> {
-        self.data = None;
         let sql = r"SELECT id,action,catalog,json,depends_on,status,last_ts,note,repeat_after_sec,next_ts,user_id FROM `jobs` WHERE `id`=:job_id";
         let row = self.mnm.app.get_mnm_conn().await?
             .exec_iter(sql, params!{job_id}).await?
             .map_and_drop(from_row::<(usize,String,usize,Option<String>,Option<usize>,String,String,Option<String>,Option<usize>,String,usize)>).await?
             .pop().ok_or(format!("No job with ID {}", job_id))?;
         let result = JobRow::from_row(row);
-        self.data = Some(Arc::new(Mutex::new(result)));
+        self.data = result;
         Ok(true)
     }
     //TODO test
@@ -398,7 +398,7 @@ impl Job {
 
     /// Sets the value for `json` locally and in database, from a serde_json::Value
     //TODO test
-    pub async fn set_json(&self, json: Option<serde_json::Value> ) ->  Result<(),GenericError> {
+    pub async fn set_json(&mut self, json: Option<serde_json::Value> ) ->  Result<(),GenericError> {
         let job_id = self.get_id().await?;
         let timestamp = MixNMatch::get_timestamp();
         match json {
@@ -550,46 +550,46 @@ impl Job {
 
     //TODO test
     async fn data(&self) -> Result<JobRow,JobError> {
-        Ok(self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().await.clone())
+        Ok(self.data.clone())
     }
     //TODO test
     pub async fn get_id(&self) -> Result<usize,JobError> {
-        Ok(self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().await.id)
+        Ok(self.data.id)
     }
     //TODO test
     pub async fn get_action(&self) -> Result<String,JobError> {
-        Ok(self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().await.action.clone())
+        Ok(self.data.action.clone())
     }
     //TODO test
     async fn get_catalog(&self) -> Result<usize,JobError> {
-        Ok(self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().await.catalog)
+        Ok(self.data.catalog)
     }
     //TODO test
     async fn get_json(&self) -> Result<Option<String>,JobError> {
-        Ok(self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().await.json.clone())
+        Ok(self.data.json.clone())
     }
 
     //TODO test
-    async fn put_status(&self, status: JobStatus) -> Result<(),JobError> {
-        (*self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().await).status = status;
+    async fn put_status(&mut self, status: JobStatus) -> Result<(),JobError> {
+        self.data.status = status;
         Ok(())
     }
 
     //TODO test
-    async fn put_json(&self, json: Option<String>) -> Result<(),JobError> {
-        (*self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().await).json = json;
+    async fn put_json(&mut self, json: Option<String>) -> Result<(),JobError> {
+        self.data.json = json;
         Ok(())
     }
 
     //TODO test
-    async fn put_note(&self, note: Option<String>) -> Result<(),JobError> {
-        (*self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().await).note = note;
+    async fn put_note(&mut self, note: Option<String>) -> Result<(),JobError> {
+        self.data.note = note;
         Ok(())
     }
 
     //TODO test
-    async fn put_next_ts(&self, next_ts: &str) -> Result<(),JobError> {
-        (*self.data.as_ref().ok_or(JobError::DataNotSet)?.lock().await).next_ts = next_ts.to_string();
+    async fn put_next_ts(&mut self, next_ts: &str) -> Result<(),JobError> {
+        self.data.next_ts = next_ts.to_string();
         Ok(())
     }
 
@@ -717,7 +717,7 @@ mod tests {
         let mut job_row = JobRow::new("test_action",0);
         job_row.last_ts = "20221027000000".to_string();
         job_row.repeat_after_sec = Some(61);
-        job.data = Some(Arc::new(Mutex::new(job_row)));
+        job.data = job_row;
         let next_ts = job.get_next_ts().await.unwrap();
         assert_eq!(next_ts,"20221027000101");
     }

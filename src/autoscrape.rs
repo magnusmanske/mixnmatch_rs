@@ -775,6 +775,10 @@ impl Jobbable for Autoscrape {
     fn get_current_job(&self) -> Option<&Job> {
         self.job.as_ref()
     }
+
+    fn get_current_job_mut(&mut self) -> Option<&mut Job> {
+        self.job.as_mut()
+    }
 }
 
 impl Autoscrape {
@@ -854,7 +858,7 @@ impl Autoscrape {
     }
 
     //TODO test
-    async fn load_url(&self, url: &str) -> Option<String> {
+    async fn load_url(&mut self, url: &str) -> Option<String> {
         let mut urls_loaded = self.urls_loaded.lock().await;
         *urls_loaded += 1;
         let crosses_threshold = *urls_loaded % 1000 == 0;
@@ -880,7 +884,7 @@ impl Autoscrape {
         url
     }
 
-    async fn get_patched_html(&self, url: String) -> Option<String> {
+    async fn get_patched_html(&mut self, url: String) -> Option<String> {
         let mut html = self.load_url(&url).await?;
         if self.simple_space {
             html = RE_SIMPLE_SPACE.replace_all(&html," ").to_string();
@@ -892,7 +896,7 @@ impl Autoscrape {
     }
 
     //TODO test
-    async fn iterate_one(&self) {
+    async fn iterate_one(&mut self) {
         // Run current permutation
         let url = self.get_current_url().await;
         if let Some(html) = self.get_patched_html(url).await {
@@ -930,7 +934,7 @@ impl Autoscrape {
     // }
 
     //TODO test
-    async fn add_batch(&self) -> Result<(),GenericError> {
+    async fn add_batch(&mut self) -> Result<(),GenericError> {
         let mut entry_batch_mutex = self.entry_batch.lock().await;
         if entry_batch_mutex.is_empty() {
             drop(entry_batch_mutex);
@@ -964,7 +968,7 @@ impl Autoscrape {
     }
 
     //TODO test
-    pub async fn remember_state(&self) -> Result<(),GenericError> {
+    pub async fn remember_state(&mut self) -> Result<(),GenericError> {
         let json: Vec<Value> = self.levels.iter().map(|level|level.level_type.get_state()).collect();
         let json = json!(json);
         self.remember_job_data(&json).await?;
@@ -1007,7 +1011,7 @@ impl Autoscrape {
     }
 
     //TODO test
-    pub async fn finish(&self) -> Result<(),GenericError> {
+    pub async fn finish(&mut self) -> Result<(),GenericError> {
         let _ = self.add_batch().await; // Flush
         let autoscrape_id = self.autoscrape_id;
         let last_run_urls = *self.urls_loaded.lock().await;

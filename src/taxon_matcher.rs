@@ -36,6 +36,10 @@ impl Jobbable for TaxonMatcher {
     fn get_current_job(&self) -> Option<&Job> {
         self.job.as_ref()
     }
+
+    fn get_current_job_mut(&mut self) -> Option<&mut Job> {
+        self.job.as_mut()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -63,7 +67,7 @@ impl TaxonMatcher {
     }
 
     /// Tries to find full matches for entries that are a taxon
-    pub async fn match_taxa(&self, catalog_id: usize) -> Result<(),GenericError> {
+    pub async fn match_taxa(&mut self, catalog_id: usize) -> Result<(),GenericError> {
         let use_desc = USE_DESCRIPTIONS_FOR_TAXON_NAME_CATALOGS.contains(&catalog_id);
         let taxon_name_column = if use_desc {"ext_desc"} else {"ext_name"};
         let mut ranks: Vec<&str> = TAXON_RANKS.clone().into_values().collect();
@@ -150,7 +154,7 @@ mod tests {
     #[tokio::test]
     async fn test_match_taxa() {
         let mnm = get_test_mnm();
-        let tm = TaxonMatcher::new(&mnm);
+        let mut tm = TaxonMatcher::new(&mnm);
 
         // Clear entry
         let mut entry= Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();

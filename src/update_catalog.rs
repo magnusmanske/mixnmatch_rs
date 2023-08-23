@@ -573,6 +573,10 @@ impl Jobbable for UpdateCatalog {
     fn get_current_job(&self) -> Option<&Job> {
         self.job.as_ref()
     }
+
+    fn get_current_job_mut(&mut self) -> Option<&mut Job> {
+        self.job.as_mut()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -590,7 +594,7 @@ impl UpdateCatalog {
     }
 
     /// Updates a catalog by reading a tabbed file.
-    pub async fn update_from_tabbed_file(&self, catalog_id: usize) -> Result<(),GenericError> {
+    pub async fn update_from_tabbed_file(&mut self, catalog_id: usize) -> Result<(),GenericError> {
         let update_info = self.get_update_info(catalog_id).await?;
         let json = update_info.json()?;
         let mut datasource = DataSource::new(catalog_id, &json)?;
@@ -798,7 +802,7 @@ mod tests {
         if let Ok(mut entry) = Entry::from_ext_id(TEST_CATALOG_ID,"n2014191777",&mnm).await { entry.delete().await.unwrap(); }
 
         // Import single entry
-        let uc = UpdateCatalog::new(&mnm);
+        let mut uc = UpdateCatalog::new(&mnm);
         uc.update_from_tabbed_file(TEST_CATALOG_ID).await.unwrap();
 
         // Get new entry
