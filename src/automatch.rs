@@ -198,7 +198,7 @@ impl AutoMatch {
                         futures.push(future);
                     }
                 }
-                println!("automatch_by_search: Running {} futures...",futures.len());
+                println!("automatch_by_search [{catalog_id}]: Running {} futures...",futures.len());
                 let mut search_results = join_all(futures).await.into_iter()
                     .filter_map(|r|r)
                     .map(|(entry_id,items)| items.into_iter().map(move |q|(entry_id,q.to_string())))
@@ -206,7 +206,7 @@ impl AutoMatch {
                     .collect_vec();
                 search_results.sort();
                 search_results.dedup();
-                println!("automatch_by_search: Futures complete, {} results",search_results.len());
+                println!("automatch_by_search [{catalog_id}]: Futures complete, {} results",search_results.len());
                 if search_results.is_empty() {
                     continue;
                 }
