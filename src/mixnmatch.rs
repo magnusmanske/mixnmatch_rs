@@ -202,6 +202,8 @@ impl MixNMatch {
         if items.is_empty() {
             return Ok(());
         }
+        items.sort();
+        items.dedup();
         let mut sql = "SELECT DISTINCT page_title FROM page,pagelinks WHERE page_namespace=0 AND page_title IN ('".to_string() ;
         sql += &items.join("','");
         sql += "') AND pl_from=page_id AND pl_title IN ('" ;

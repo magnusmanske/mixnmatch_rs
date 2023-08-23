@@ -213,8 +213,6 @@ impl AutoMatch {
 
                 // Remove meta items
                 let mut no_meta_items = search_results.iter().map(|(_entry_id,q)|q).cloned().collect_vec();
-                no_meta_items.sort();
-                no_meta_items.dedup();
                 let _ = self.mnm.remove_meta_items(&mut no_meta_items).await;
                 search_results.retain(|(_entry_id,q)| no_meta_items.contains(q));
 
