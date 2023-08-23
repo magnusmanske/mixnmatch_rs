@@ -1,11 +1,10 @@
 use std::collections::HashMap;
 use std::{thread, time};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::env;
 use std::fs::File;
 use serde_json::Value;
 use mysql_async::{PoolOpts, PoolConstraints, Opts, OptsBuilder, Conn};
-use tokio::sync::Mutex;
 use core::time::Duration;
 use crate::mixnmatch::*;
 use crate::job::*;
@@ -124,14 +123,14 @@ impl AppState {
         println!("Old jobs reset, starting bot");
     
         loop {
-            let current_jobs_len = current_jobs.lock().await.len();
+            let current_jobs_len = current_jobs.lock().unwrap().len();
             if current_jobs_len >= self.max_concurrent_jobs {
                 self.hold_on();
                 continue;
             }
             let mut job = Job::new(&mnm);
             let task_size = job.get_tasks().await?;
-            let big_jobs_running = current_jobs.lock().await.iter()
+            let big_jobs_running = current_jobs.lock().unwrap().iter()
                 .map(|(_job_id,size)|size.to_owned())
                 .filter(|size|*size>=TaskSize::MEDIUM)
                 .count();
@@ -160,14 +159,14 @@ impl AppState {
                             continue;
                         }
                     };
-                    current_jobs.lock().await.insert(job_id,job_size);
-                    println!("Now {} jobs running",current_jobs.lock().await.len());
+                    current_jobs.lock().unwrap().insert(job_id,job_size);
+                    println!("Now {} jobs running",current_jobs.lock().unwrap().len());
                     let current_jobs = current_jobs.clone();
                     tokio::spawn(async move {
                         if let Err(_e) = job.run().await {
                             println!("Job {job_id} failed with error") // Not writing error, there might be an issue that causes stack overflow
                         }
-                        current_jobs.lock().await.remove(&job_id);
+                        current_jobs.lock().unwrap().remove(&job_id);
                     });
                 }
                 Ok(false) => {

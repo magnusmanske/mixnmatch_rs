@@ -173,8 +173,6 @@ pub trait Jobbable {
 #[derive(Debug)]
 pub enum JobError {
     S(String),
-    DataNotSet,
-    PoisonedJobRowMutex,
     TimeError
 }
 
