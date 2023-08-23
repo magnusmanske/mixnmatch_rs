@@ -198,13 +198,18 @@ impl AutoMatch {
                         futures.push(future);
                     }
                 }
-                // println!("Running {} futures...",futures.len());
+                println!("automatch_by_search: Running {} futures...",futures.len());
                 let mut search_results = join_all(futures).await.into_iter()
                     .filter_map(|r|r)
                     .map(|(entry_id,items)| items.into_iter().map(move |q|(entry_id,q.to_string())))
                     .flatten()
                     .collect_vec();
-                // println!("Futures complete");
+                search_results.sort();
+                search_results.dedup();
+                println!("automatch_by_search: Futures complete, {} results",search_results.len());
+                if search_results.is_empty() {
+                    continue;
+                }
 
                 // Remove meta items
                 let mut no_meta_items = search_results.iter().map(|(_entry_id,q)|q).cloned().collect_vec();
