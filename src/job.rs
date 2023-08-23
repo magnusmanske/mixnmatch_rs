@@ -121,11 +121,10 @@ pub trait Jobbable {
 
     //TODO test
     async fn remember_job_data(&mut self, json: &serde_json::Value) -> Result<(),GenericError> {
-        let job = match self.get_current_job_mut() {
-            Some(job) => job,
+        match self.get_current_job_mut() {
+            Some(job) => job.set_json(Some(json.to_owned())).await,
             None => return Ok(())
-        };
-        job.set_json(Some(json.to_owned())).await
+        }
     }
 
     //TODO test
@@ -162,11 +161,10 @@ pub trait Jobbable {
 
     //TODO test
     async fn clear_offset(&mut self) -> Result<(),GenericError> {
-        let job = match self.get_current_job_mut() {
-            Some(job) => job,
-            None => return Ok(())
-        };
-        job.set_json(None).await
+        match self.get_current_job_mut() {
+            Some(job) => job.set_json(None).await,
+            None => Ok(())
+        }
     }
 }
 

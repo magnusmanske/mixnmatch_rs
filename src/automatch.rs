@@ -229,7 +229,7 @@ impl AutoMatch {
 
                 // println!("Matching {} entries",entry_id2items.len());
                 let _ = self.match_entries_to_items(&entry_id2items).await;
-                // println!("Batch completed.");
+                // println!("automatch_by_search [{catalog_id}]: Batch completed.");
             }
 
             if results.len()<batch_size {
