@@ -229,15 +229,18 @@ impl AutoMatch {
 
                 // println!("Matching {} entries",entry_id2items.len());
                 let _ = self.match_entries_to_items(&entry_id2items).await;
-                // println!("automatch_by_search [{catalog_id}]: Batch completed.");
+                println!("automatch_by_search [{catalog_id}]: Result batch completed.");
             }
+            println!("automatch_by_search [{catalog_id}]: Batch completed.");
 
             if results.len()<batch_size {
                 break;
             }
+            println!("automatch_by_search [{catalog_id}]: Another batch...");
             offset += results.len();
             let _ = self.remember_offset(offset).await;
         }
+        println!("automatch_by_search [{catalog_id}]: All batches completed.");
         let _ = self.clear_offset().await;
         Ok(())
     }
