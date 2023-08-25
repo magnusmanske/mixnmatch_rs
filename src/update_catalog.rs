@@ -689,6 +689,7 @@ impl UpdateCatalog {
     
     //TODO test
     async fn process_row(&self, row: &csv::StringRecord, datasource: &mut DataSource) -> Result<(),GenericError> {
+        println!("{row:?}");
         let ext_id = match row.get(datasource.ext_id_column) {
             Some(ext_id) => ext_id,
             None => return Ok(()) // TODO ???
