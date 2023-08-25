@@ -227,7 +227,7 @@ impl AutoMatch {
                     entry_id2items.entry(entry_id).or_default().push(q);
                 }
 
-                // println!("Matching {} entries",entry_id2items.len());
+                println!("Matching {} entries",entry_id2items.len());
                 let _ = self.match_entries_to_items(&entry_id2items).await;
                 println!("automatch_by_search [{catalog_id}]: Result batch completed.");
             }
