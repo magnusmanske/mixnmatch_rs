@@ -132,6 +132,7 @@ impl ExtendedEntry {
             location: None
         };
 
+        println!("from_row: labels");
         for (label,col_num) in &datasource.colmap {
             let cell = match row.get(*col_num) {
                 Some(cell) => cell,
@@ -140,6 +141,7 @@ impl ExtendedEntry {
             ret.process_cell(label, cell)?;
         }
 
+        println!("from_row: patterns");
         for pattern in &datasource.patterns {
             let cell = match row.get(pattern.column_number) {
                 Some(cell) => cell,
@@ -149,6 +151,7 @@ impl ExtendedEntry {
                 ret.process_cell(&pattern.use_column_label, &new_cell)?;
             }
         }
+        println!("from_row: DONE");
 
         if ret.entry.type_name.is_none() {
             ret.entry.type_name = datasource.default_type.to_owned();
