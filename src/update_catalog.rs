@@ -704,7 +704,7 @@ impl UpdateCatalog {
                 }
             }
             _ => {
-                println!("Does not exits yet: #{} : {row:?}",datasource.ext_id_column);
+                println!("Does not exits yet: #{} : {:?}",datasource.ext_id_column,row.get(0));
                 let mut extended_entry = ExtendedEntry::from_row(row, datasource)?;
                 println!("Extended entry generated");
                 extended_entry.insert_new(&self.mnm).await?;
