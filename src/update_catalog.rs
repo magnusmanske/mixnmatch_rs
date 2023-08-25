@@ -694,10 +694,10 @@ impl UpdateCatalog {
             Some(ext_id) => ext_id,
             None => return Ok(()) // TODO ???
         };
-        println!("Extid: {extid}");
+        println!("Extid: {ext_id}");
         match Entry::from_ext_id(datasource.catalog_id,ext_id, &self.mnm).await {
             Ok(mut entry) => {
-                println("Already exists");
+                println!("Already exists");
                 if !datasource.just_add {
                     let mut extended_entry = ExtendedEntry::from_row(row, datasource)?;
                     extended_entry.update_existing(&mut entry, &self.mnm).await?;
