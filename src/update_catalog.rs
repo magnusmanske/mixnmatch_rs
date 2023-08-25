@@ -132,7 +132,7 @@ impl ExtendedEntry {
             location: None
         };
 
-        println!("from_row: labels");
+        println!("from_row: labels {:?}",datasource.colmap);
         for (label,col_num) in &datasource.colmap {
             let cell = match row.get(*col_num) {
                 Some(cell) => cell,
