@@ -689,20 +689,26 @@ impl UpdateCatalog {
     
     //TODO test
     async fn process_row(&self, row: &csv::StringRecord, datasource: &mut DataSource) -> Result<(),GenericError> {
+        println!("{row:?}");
         let ext_id = match row.get(datasource.ext_id_column) {
             Some(ext_id) => ext_id,
             None => return Ok(()) // TODO ???
         };
+        println!("Extid: {extid}");
         match Entry::from_ext_id(datasource.catalog_id,ext_id, &self.mnm).await {
             Ok(mut entry) => {
+                println("Already exists");
                 if !datasource.just_add {
                     let mut extended_entry = ExtendedEntry::from_row(row, datasource)?;
                     extended_entry.update_existing(&mut entry, &self.mnm).await?;
                 }
             }
             _ => {
+                println!("Does not exits yet");
                 let mut extended_entry = ExtendedEntry::from_row(row, datasource)?;
+                println!("Extended entry generated");
                 extended_entry.insert_new(&self.mnm).await?;
+                println!("Extended entry added");
             }
         }
         Ok(())
