@@ -280,7 +280,7 @@ impl ExtendedEntry {
                 "name" => { self.entry.ext_name = cell.to_owned() }
                 "desc" => { self.entry.ext_desc = cell.to_owned() }
                 "url" => { self.entry.ext_url = cell.to_owned() }
-                "autoq" => {
+                "q"|"autoq" => {
                     self.entry.q = cell.to_string().replace('Q',"").parse::<isize>().ok();
                     if let Some(i) = self.entry.q { // Don't accept invalid or N/A item IDs
                         if i<=0 {
