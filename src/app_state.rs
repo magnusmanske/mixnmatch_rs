@@ -121,6 +121,9 @@ impl AppState {
         Job::new(&mnm).reset_running_jobs().await?;
         Job::new(&mnm).reset_failed_jobs().await?;
         println!("Old jobs reset, starting bot");
+
+        let threshold_job_size = TaskSize::MEDIUM;
+        let threshold_percent = 50;
     
         loop {
             let current_jobs_len = current_jobs.lock().unwrap().len();
@@ -132,9 +135,9 @@ impl AppState {
             let task_size = job.get_tasks().await?;
             let big_jobs_running = current_jobs.lock().unwrap().iter()
                 .map(|(_job_id,size)|size.to_owned())
-                .filter(|size|*size>=TaskSize::LARGE)
+                .filter(|size|*size>threshold_job_size)
                 .count();
-            let max_job_size = if big_jobs_running>=self.max_concurrent_jobs*2/4 { TaskSize::SMALL } else { TaskSize::GINORMOUS };
+            let max_job_size = if big_jobs_running>=self.max_concurrent_jobs*threshold_percent/100 { threshold_job_size.to_owned() } else { TaskSize::GINORMOUS };
             job.skip_actions = Some(
                 task_size.iter()
                     .filter(|(_action,size)| **size>max_job_size)
