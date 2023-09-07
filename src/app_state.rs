@@ -134,7 +134,7 @@ impl AppState {
                 .map(|(_job_id,size)|size.to_owned())
                 .filter(|size|*size>=TaskSize::LARGE)
                 .count();
-            let max_job_size = if big_jobs_running>=self.max_concurrent_jobs*3/4 { TaskSize::SMALL } else { TaskSize::GINORMOUS };
+            let max_job_size = if big_jobs_running>=self.max_concurrent_jobs*2/4 { TaskSize::SMALL } else { TaskSize::GINORMOUS };
             job.skip_actions = Some(
                 task_size.iter()
                     .filter(|(_action,size)| **size>max_job_size)
