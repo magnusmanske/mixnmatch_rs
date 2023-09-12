@@ -124,6 +124,9 @@ impl AppState {
 
         let threshold_job_size = TaskSize::MEDIUM;
         let threshold_percent = 50;
+
+        // TO MANUALLY FIND ACTIONS NOT ASSIGNED A TASK SIZE:
+        // select distinct action from jobs where action not in (select action from job_sizes);
     
         loop {
             let current_jobs_len = current_jobs.lock().unwrap().len();

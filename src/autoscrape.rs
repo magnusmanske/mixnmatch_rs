@@ -22,7 +22,7 @@ type AutoscrapeRegex = regex::Regex;
 type AutoscrapeRegexBuilder = regex::RegexBuilder;
 
 const AUTOSCRAPER_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.12; rv:56.0) Gecko/20100101 Firefox/56.0";
-const AUTOSCRAPE_ENTRY_BATCH_SIZE: usize = 100;
+const AUTOSCRAPE_ENTRY_BATCH_SIZE: usize = 1;//100;
 const AUTOSCRAPE_URL_LOAD_TIMEOUT_SEC: u64 = 60;
 
 lazy_static!{
