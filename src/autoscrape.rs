@@ -22,7 +22,7 @@ type AutoscrapeRegex = regex::Regex;
 type AutoscrapeRegexBuilder = regex::RegexBuilder;
 
 const AUTOSCRAPER_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.12; rv:56.0) Gecko/20100101 Firefox/56.0";
-const AUTOSCRAPE_ENTRY_BATCH_SIZE: usize = 1;//100;
+const AUTOSCRAPE_ENTRY_BATCH_SIZE: usize = 100;
 const AUTOSCRAPE_URL_LOAD_TIMEOUT_SEC: u64 = 60;
 
 lazy_static!{
@@ -933,7 +933,6 @@ impl Autoscrape {
             let _ = self.remember_state().await;
             return Ok(())
         }
-        self.entry_batch.clear();
 
         let ext_ids: Vec<String> = self.entry_batch.iter().map(|e|e.entry.ext_id.to_owned()).collect();
         let placeholders = MixNMatch::sql_placeholders(ext_ids.len());
@@ -953,6 +952,7 @@ impl Autoscrape {
                 }
             }
         }
+        self.entry_batch.clear();
         let _ = self.remember_state().await;
         Ok(())
     }
@@ -971,11 +971,10 @@ impl Autoscrape {
         let _ = self.start().await;
         loop {
             self.iterate_one().await;
-            if !self.tick().await {
+            if self.tick().await {
                 break
             }
         }
-        // while !self.iterate_one().await {}
         let _ = self.finish().await;
         Ok(())
     }
