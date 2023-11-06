@@ -115,7 +115,9 @@ impl TaxonMatcher {
                         let q = &items[0];
                         let _ = Entry::from_id(entry_id, &self.mnm).await?.set_match(q,USER_AUX_MATCH).await ;
                     }
-                    _ => {} // TODO log multiple potential matches
+                    _ => {
+                        let _ = Entry::from_id(entry_id, &self.mnm).await?.set_multi_match(&items).await;
+                    }
                 }
             }
             if results.len()<batch_size {
