@@ -59,7 +59,17 @@ impl TaxonMatcher {
     /// Bespoke taxon name fixes for specific catalogs
     fn rewrite_taxon_name(&self, catalog_id: usize, taxon_name: &str) -> Option<String> {
         let mut taxon_name = taxon_name.to_string();
+
+        // Generic
         taxon_name = taxon_name.replace(" ssp. "," subsp. ");
+        if taxon_name.starts_with("× ") {
+            taxon_name = taxon_name.replacen("× ","×",1);
+        };
+        taxon_name = taxon_name
+            .replace(" subsp "," subsp. ")
+            .replace(" var "," var. ");
+
+        // Catalog-specific
         if catalog_id==169 {
             taxon_name = RE_CATALOG_169.replace_all(&taxon_name,"$1").to_string();
         }
@@ -83,7 +93,7 @@ impl TaxonMatcher {
                 .map_and_drop(from_row::<(usize,String,String)>).await?;
             for result in &results {
                 let entry_id = result.0 ;
-                let mut taxon_name = match self.rewrite_taxon_name(catalog_id,&result.1) {
+                let taxon_name = match self.rewrite_taxon_name(catalog_id,&result.1) {
                     Some(s) => s,
                     None => continue
                 };
@@ -92,14 +102,6 @@ impl TaxonMatcher {
                     Some(rank) => format!(" haswbstatement:P105={}",rank),
                     None => "".to_string()
                 };
-
-                // Remove space from leading "×"
-                if taxon_name.starts_with("× ") {
-                    taxon_name = taxon_name.replacen("× ","×",1);
-                };
-                taxon_name = taxon_name
-                    .replace(" subsp "," subsp. ")
-                    .replace(" var "," var. ");
 
                 // Q4886 is "cultivar"
                 let query = format!("haswbstatement:\"P31=Q16521|P31=Q4886\" haswbstatement:\"P225={}|P1420={}\" {}",&taxon_name,&taxon_name,&rank);
