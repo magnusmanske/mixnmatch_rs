@@ -399,7 +399,7 @@ impl AutoMatch {
         let batch_size = 5000 ;
         loop {
             let results = self.mnm.app.get_mnm_conn().await?
-                .exec_iter(sql.clone(),params! {catalog_id,batch_size,offset}).await?
+                .exec_iter(sql,params! {catalog_id,batch_size,offset}).await?
                 .map_and_drop(from_row::<(usize,String,String,String)>).await?;
             for result in &results {
                 let entry_id = result.0;
@@ -526,18 +526,17 @@ impl AutoMatch {
     }
 
     //TODO test
-    async fn subset_items_by_birth_death_year(&self, items: &Vec<String>, birth_year: i32, death_year: i32, mw_api: &mediawiki::api::Api) -> Result<Vec<String>,GenericError> {
-        if items.len()>100 { // TODO chunks but that's a nightly feature
-            return Ok(vec![]) ;
+    async fn subset_items_by_birth_death_year(&self, all_items: &Vec<String>, birth_year: i32, death_year: i32, mw_api: &mediawiki::api::Api) -> Result<Vec<String>,GenericError> {
+        let  mut ret = vec![];
+        for items in all_items.chunks(100) {
+            let item_str = items.join(" wd:");
+            let sparql = format!("SELECT DISTINCT ?q {{ VALUES ?q {{ wd:{} }} . ?q wdt:P569 ?born ; wdt:P570 ?died. FILTER ( year(?born)={}).FILTER ( year(?died)={} ) }}",&item_str,birth_year,death_year);
+            if let Ok(results) = mw_api.sparql_query(&sparql).await {
+                let mut candidates = mw_api.entities_from_sparql_result(&results,"q");
+                ret.append(&mut candidates);
+            }
         }
-        let item_str = items.join(" wd:");
-        let sparql = format!("SELECT DISTINCT ?q {{ VALUES ?q {{ wd:{} }} . ?q wdt:P569 ?born ; wdt:P570 ?died. FILTER ( year(?born)={}).FILTER ( year(?died)={} ) }}",&item_str,birth_year,death_year);
-        let results = match mw_api.sparql_query(&sparql).await {
-            Ok(result) => result,
-            _ => return Ok(vec![]) // Ignore error
-        } ;
-        let items = mw_api.entities_from_sparql_result(&results,"q");
-        Ok(items)
+        Ok(ret)
     }
 
 
