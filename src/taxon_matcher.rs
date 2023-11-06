@@ -78,6 +78,7 @@ impl TaxonMatcher {
 
     /// Tries to find full matches for entries that are a taxon
     pub async fn match_taxa(&mut self, catalog_id: usize) -> Result<(),GenericError> {
+        let mw_api = self.mnm.get_mw_api().await?;
         let use_desc = USE_DESCRIPTIONS_FOR_TAXON_NAME_CATALOGS.contains(&catalog_id);
         let taxon_name_column = if use_desc {"ext_desc"} else {"ext_name"};
         let mut ranks: Vec<&str> = TAXON_RANKS.clone().into_values().collect();
@@ -91,6 +92,7 @@ impl TaxonMatcher {
             let results = self.mnm.app.get_mnm_conn().await?
                 .exec_iter(sql.clone(),params! {catalog_id,batch_size,offset}).await?
                 .map_and_drop(from_row::<(usize,String,String)>).await?;
+            let mut ranked_names: HashMap<String,Vec<(usize,String)>> = HashMap::new();
             for result in &results {
                 let entry_id = result.0 ;
                 let taxon_name = match self.rewrite_taxon_name(catalog_id,&result.1) {
@@ -99,27 +101,53 @@ impl TaxonMatcher {
                 };
                 let type_name = &result.2 ;
                 let rank = match TAXON_RANKS.get(type_name.as_str()) {
-                    Some(rank) => format!(" haswbstatement:P105={}",rank),
+                    Some(rank) => format!(" ; wdt:P105 {rank}"),
                     None => "".to_string()
                 };
+                ranked_names.entry(rank).or_default().push((entry_id,taxon_name));
+            }
 
-                // Q4886 is "cultivar"
-                let query = format!("haswbstatement:\"P31=Q16521|P31=Q4886\" haswbstatement:\"P225={}|P1420={}\" {}",&taxon_name,&taxon_name,&rank);
-                let items = match self.mnm.wd_search(&query).await {
-                    Ok(v) => v,
-                    _ => continue // Ignore error
-                };
-                match items.len() {
-                    0 => {} // No matches
-                    1 => {
-                        let q = &items[0];
-                        let _ = Entry::from_id(entry_id, &self.mnm).await?.set_match(q,USER_AUX_MATCH).await ;
+            for (rank,v) in ranked_names.iter() {
+                let all_names: Vec<String> = v.iter().map(|(_entry_id,name)| format!("\"{name}\"")).collect();
+                let name2entry_id: HashMap<String,usize> = v.iter().map(|(entry_id,name)| (name.to_owned(),*entry_id)).collect();
+                for names in all_names.chunks(50) {
+                    // Prepare SPARQL
+                    let mut name2q: HashMap<String,Vec<String>> = HashMap::new();
+                    let names = names.join(" ");
+                    let sparql = format!("SELECT DISTINCT ?q ?name {{
+                        VALUES ?name {{ {} }} VALUES ?instance {{ wd:Q16521 wd:Q4886 }}
+                        {{ {{ SELECT DISTINCT ?q ?name ?instance {{ ?q wdt:P225 ?name ; wdt:P31 ?instance {rank} }} }} UNION
+                        {{ SELECT DISTINCT ?q ?name ?instance {{ ?q wdt:P1420 ?name ; wdt:P31 ?instance {rank} }} }} }} }}",names);
+
+                    // Run SPARQL
+                    if let Ok(sparql_result) = mw_api.sparql_query(&sparql).await {
+                        if let Some(bindings) = sparql_result["results"]["bindings"].as_array() {
+                            for b in bindings {
+                                if let (Some(entity_url),Some(name)) = (b["q"]["value"].as_str(),b["name"]["value"].as_str()) {
+                                    if let Ok(q) = mw_api.extract_entity_from_uri(entity_url) {
+                                        name2q.entry(name.to_string()).or_default().push(q);
+                                    }
+                                }
+                            }
+                        }
                     }
-                    _ => {
-                        let _ = Entry::from_id(entry_id, &self.mnm).await?.set_multi_match(&items).await;
+
+                    // Filter results
+                    for (name, mut qs) in name2q {
+                        if let Some(entry_id) = name2entry_id.get(&name) {
+                            qs.sort();
+                            qs.dedup();
+                            if qs.len()==1 {
+                                let q = qs.pop().unwrap(); // Safe
+                                let _ = Entry::from_id(*entry_id, &self.mnm).await?.set_match(&q,USER_AUX_MATCH).await ;
+                            } else if qs.len()>1 {
+                                let _ = Entry::from_id(*entry_id, &self.mnm).await?.set_multi_match(&qs).await;
+                            }
+                        }
                     }
                 }
             }
+
             if results.len()<batch_size {
                 break;
             }
