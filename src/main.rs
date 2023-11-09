@@ -5,6 +5,7 @@ pub mod automatch ;
 pub mod taxon_matcher ;
 pub mod update_catalog ;
 pub mod auxiliary_matcher ;
+pub mod coordinate_matcher ;
 pub mod autoscrape ;
 pub mod microsync ;
 pub mod catalog ;
