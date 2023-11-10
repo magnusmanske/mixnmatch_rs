@@ -57,6 +57,7 @@ pub const Q_NOWD: isize = -1;
 pub const USER_AUTO: usize = 0;
 pub const USER_DATE_MATCH: usize = 3;
 pub const USER_AUX_MATCH: usize = 4;
+pub const USER_LOCATION_MATCH: usize = 5;
 pub const WIKIDATA_API_URL: &'static str = "https://www.wikidata.org/w/api.php";
 pub const META_ITEMS: &'static [&'static str] = &[
     "Q4167410", // Wikimedia disambiguation page

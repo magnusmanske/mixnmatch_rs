@@ -1,4 +1,5 @@
 use lazy_static::lazy_static;
+use mediawiki::api::Api;
 use rand::prelude::*;
 use regex::{RegexBuilder, Regex};
 use std::collections::HashMap;
@@ -6,7 +7,8 @@ use std::error::Error;
 use std::fmt;
 use mysql_async::prelude::*;
 use mysql_async::{Row, from_row};
-use crate::mixnmatch::MatchState;
+use crate::entry::Entry;
+use crate::mixnmatch::{MatchState, USER_LOCATION_MATCH};
 use crate::{mixnmatch::MixNMatch, job::{Job, Jobbable}, app_state::GenericError};
 
 const DEFAULT_MAX_DISTANCE: &str = "500m";
@@ -29,7 +31,7 @@ impl fmt::Display for CoordinateMatcherError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             CoordinateMatcherError::String(s) => write!(f, "{}", s), // user-facing output
-            _ => write!(f, "{}", self) // user-facing output
+            // _ => write!(f, "{}", self) // user-facing output
         }
     }
 }
@@ -63,6 +65,7 @@ impl LocationRow {
 #[derive(Debug, Clone)]
 pub struct CoordinateMatcher {
     mnm: MixNMatch,
+    mw_api: Api,
     job: Option<Job>,
     catalog_id: Option<usize>,
     permissions: HashMap<String,HashMap<usize,String>>,
@@ -85,8 +88,10 @@ impl Jobbable for CoordinateMatcher {
 
 impl CoordinateMatcher {
     pub async fn new(mnm: &MixNMatch, catalog_id: Option<usize>) -> Result<Self,GenericError> {
+        let mw_api = mnm.get_mw_api().await?;
         let mut ret = Self {
             mnm: mnm.clone(),
+            mw_api,
             job: None,
             catalog_id, // Specific catalog ID, or None for random catalogs
             permissions: HashMap::new(),
@@ -115,22 +120,56 @@ impl CoordinateMatcher {
         let p31 = self.get_entry_type(&row).unwrap_or_default();
         let (max_distance, max_distance_sparql) = self.get_max_distance_sparql_for_entry(&row);
 
-        let query = format!("nearcoord:{max_distance},{},{}",row.lat,row.lon);
-        println!("{query}");
-        let items = match self.mnm.wd_search_with_type(&query,&p31).await {
-            Ok(items) => items,
-            Err(_) => return Err(Box::new(CoordinateMatcherError::String(format!("CoordinateMatcher: wd_search_with_type failed for {query}"))))
+        let ext_name = match row.ext_name.split("(").next() {
+            Some(ext_name) => ext_name.trim().to_lowercase(),
+            None => panic!("This never happens!"),
         };
-        println!("{items:?}");
-        if items.is_empty() {
+
+        let mut query = format!("nearcoord:{max_distance},{},{}",row.lat,row.lon);
+        if !p31.is_empty() {
+            query += " haswbstatement:P31={p31}";
+        }
+        let params = vec![
+            ("action","query"),
+            ("list","search"),
+            ("titlesnippet",""),
+            ("srnamespace","0"),
+            ("srlimit","500"),
+            ("srsearch",query.as_str()),
+        ];
+        let params = self.mw_api.params_into(&params);
+        let result = match self.mw_api.query_api_json(&params, "GET").await {
+            Ok(r) => r,
+            Err(e) => return Err(Box::new(e)),
+        };
+
+        let mut matches = vec![];
+        let results = result["query"]["search"].as_array().map(|v|v.to_owned()).unwrap_or_default();
+
+        for result in results {
+            let q = match result["title"].as_str() {
+                Some(q) => q,
+                None => continue, // No title, should never happen
+            };
+            let snippet = result["snippet"].as_str().unwrap_or_default();
+            for label in snippet.split("\n") {
+                let label = label.trim().to_lowercase();
+                if label.starts_with(&ext_name) || label.ends_with(&ext_name) {
+                    matches.push(q.to_string());
+                    break;
+                }
+            }
+        }
+
+        if matches.is_empty() {
             if self.is_permission("allow_location_create",row.catalog_id,"yes") {
                 if self.try_match_via_sparql_query(&row, max_distance_sparql).await {
-                    todo!() // TODO create item
+                    eprintln!("CoordinateMatcher: TODO create item");
                 }
             }
         } else {
             if self.is_permission("allow_location_match",row.catalog_id,"yes") {
-                if !self.try_match_via_wikidata_search(&row, &items).await {
+                if !self.try_match_via_wikidata_search(&row, &matches).await {
                     let _ = self.try_match_via_sparql_query(&row, max_distance_sparql).await;
                 }
             }
@@ -138,43 +177,56 @@ impl CoordinateMatcher {
         Ok(())
     }
 
-    async fn try_match_via_wikidata_search(&self, _row: &LocationRow, _items: &Vec<String>) -> bool {
-        todo!()
+    // Returns true if there is a match
+    async fn try_match_via_wikidata_search(&self, row: &LocationRow, items: &Vec<String>) -> bool {
+        if items.is_empty() {
+            return false;
+        }
+        let mut entry = match Entry::from_id(row.entry_id, &self.mnm).await {
+            Ok(entry) => entry,
+            Err(_) => return false,
+        };
+        if items.len()==1 {
+            let q = items.get(0).unwrap();
+            if entry.q==self.mnm.item2numeric(&q) && entry.is_fully_matched() { // Already the same match
+                return false;
+            }
+            // println!("Matching https://mix-n-match.toolforge.org/#/entry/{} to https://www.wikidata.org/wiki/{q}", row.entry_id);
+            let _ = entry.set_match(q,USER_LOCATION_MATCH).await;
+        } else if items.len()>1 && entry.is_unmatched() { // Only set multimatch if entry is unmatched
+			// println!("WARNING: https://mix-n-match.toolforge.org/#/entry/{} seems to match: {items:?}", row.entry_id);
+            let _ = entry.set_auto_and_multi_match(&items).await;
+        }
+        true // Entry is fully or partially matched
     }
 
     // Returns true if no results were found
     async fn try_match_via_sparql_query(&self, row: &LocationRow, max_distance: f64) -> bool {
         let type_query = match self.get_entry_type(&row) {
-            Some(type_q) => format!("?place wdt:P31 wd:{type_q} ."), // TODO subclass of?
+            Some(type_q) => format!("?place wdt:P31/wdt:P279* wd:{type_q}"),
             None => String::default(),
         };
-        let sparql = format!("SELECT ?place ?distance WHERE {{
+        let sparql = format!("SELECT DISTINCT ?place ?distance WHERE {{
 		    SERVICE wikibase:around {{ 
 		      ?place wdt:P625 ?location . 
-              {type_query}
 		      bd:serviceParam wikibase:center 'Point({} {})'^^geo:wktLiteral . 
 		      bd:serviceParam wikibase:radius '{max_distance}' . 
 		      bd:serviceParam wikibase:distance ?distance .
 		    }}
-		    #OPTIONAL {{ ?place wdt:P31 ?p31 }}
+            {type_query}
 		}} ORDER BY (?distance) LIMIT 500",row.lon,row.lat);
-        println!("{sparql}");
-        let mw_api = match self.mnm.get_mw_api().await {
-            Ok(mw_api) => mw_api,
-            Err(_) => return false,
-        };
-        let sparql_result = match mw_api.sparql_query(&sparql).await {
+        let sparql_result = match self.mw_api.sparql_query(&sparql).await {
             Ok(r) => r,
             Err(_) => return false,
         };
+        let mut candidates = vec![];
         if let Some(bindings) = sparql_result["results"]["bindings"].as_array() {
-            let mut candidates = vec![];
             for b in bindings {
                 if b["distance"]["value"].as_f64().unwrap_or_else(|| 0.0)>max_distance {
                     continue;
                 }
                 if let Some(place) = b["place"]["value"].as_str() {
-                    if let Ok(place) = mw_api.extract_entity_from_uri(place) {
+                    if let Ok(place) = self.mw_api.extract_entity_from_uri(place) {
                         let q_already_set_to_place = match row.q {
                             Some(q) => format!("Q{q}")!=place,
                             None => false,
@@ -185,9 +237,8 @@ impl CoordinateMatcher {
                     }
                 }
             }
-            println!("{}: {candidates:?}",row.entry_id);
         }
-        true
+        candidates.is_empty()
     }
 
     fn check_bad_catalog(&self) -> Result<(),GenericError> {
@@ -206,12 +257,11 @@ impl CoordinateMatcher {
             None => DEFAULT_MAX_DISTANCE.to_string(),
         };
         let mut max_distance_sparql = MAX_AUTOMATCH_DISTANCE; // Default
-        if let Some(captures) = RE_METERS.captures(&max_distance) {
+        if let Some(captures) = RE_KILOMETERS.captures(&max_distance) {
             if let Ok(value) = captures[1].parse::<f64>() {
                 max_distance_sparql = value;
             }
-        }
-        if let Some(captures) = RE_KILOMETERS.captures(&max_distance) {
+        } else if let Some(captures) = RE_METERS.captures(&max_distance) {
             if let Ok(value) = captures[1].parse::<f64>() {
                 max_distance_sparql = value/1000.0;
             }
@@ -277,10 +327,10 @@ impl CoordinateMatcher {
 mod tests {
 
     use super::*;
-    use crate::{mixnmatch::*, entry::Entry};
+    use crate::mixnmatch::*;
 
     const TEST_CATALOG_ID: usize = 5526 ;
-    const TEST_ENTRY_ID: usize = 143962196 ;
+    const TEST_ENTRY_ID: usize = 157175552 ;
 
     #[tokio::test]
     async fn test_match_by_coordinates() {
@@ -289,6 +339,9 @@ mod tests {
         entry.unmatch().await.unwrap();
         let cm = CoordinateMatcher::new(&mnm,Some(TEST_CATALOG_ID)).await.unwrap();
         cm.run().await.unwrap();
+        let mut entry = Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        assert_eq!(entry.q,Some(12060465));
+        entry.unmatch().await.unwrap();
     }
 
 }

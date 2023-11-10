@@ -8,6 +8,7 @@ use mysql_async::from_row;
 use chrono::{Duration, Utc};
 use std::fmt;
 use async_trait::async_trait;
+use crate::coordinate_matcher::CoordinateMatcher;
 use crate::maintenance::*;
 use crate::app_state::*;
 use crate::entry::*;
@@ -533,8 +534,9 @@ impl Job {
             "update_descriptions_from_url" => {
                 PhpWrapper::update_descriptions_from_url(catalog_id)
             },
-            "match_by_coordinates" => { // TODO native
-                PhpWrapper::match_by_coordinates(catalog_id)
+            "match_by_coordinates" => {
+                let cm = CoordinateMatcher::new(&self.mnm,Some(catalog_id)).await?;
+                cm.run().await
             },
     
             other => {
