@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::{thread, time, cmp};
+use std::{thread, time};
 use std::sync::{Arc, Mutex};
 use std::env;
 use std::fs::File;
