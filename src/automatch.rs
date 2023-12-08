@@ -244,6 +244,37 @@ impl AutoMatch {
         let _ = self.clear_offset().await;
         Ok(())
     }
+    
+    pub async fn automatch_creations(&mut self, catalog_id: usize) -> Result<(),GenericError> {
+        let sql = "SELECT object_title,object_entry_id,search_query FROM vw_object_creator WHERE object_catalog={} AND object_q IS NULL
+                UNION
+                SELECT object_title,object_entry_id,search_query FROM vw_object_creator_aux WHERE object_catalog={} AND object_q IS NULL";
+        let results = self.mnm.app.get_mnm_conn().await?
+            .exec_iter(sql,params! {catalog_id}).await?
+            .map_and_drop(from_row::<(String,usize,String)>).await?;
+
+        for result in &results {
+            let object_title = &result.0 ;
+            let object_entry_id = result.1 ;
+            let search_query = &result.2 ;
+
+            if !object_title.contains(" ") { // Skip single-word titles
+                continue;
+            }
+
+            let items = match self.mnm.wd_search(search_query).await {
+                Ok(items) => items,
+                Err(_e) => continue,
+            };
+            if items.is_empty() { // No search results
+                continue;
+            }
+            if let Ok(mut entry) = Entry::from_id(object_entry_id, &self.mnm).await {
+                let _ = entry.set_auto_and_multi_match(&items).await;
+            };
+        }
+        Ok(())
+    }
 
 
     pub async fn automatch_simple(&mut self, catalog_id: usize) -> Result<(),GenericError> {

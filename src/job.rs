@@ -443,6 +443,11 @@ impl Job {
                 am.set_current_job(self);
                 am.automatch_by_sitelink(catalog_id).await
             },
+            "automatch_creations" => {
+                let mut am = AutoMatch::new(&self.mnm);
+                am.set_current_job(self);
+                am.automatch_creations(catalog_id).await
+            },
             "purge_automatches" => {
                 let mut am = AutoMatch::new(&self.mnm);
                 am.set_current_job(self);
