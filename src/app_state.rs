@@ -5,6 +5,7 @@ use std::env;
 use std::fs::File;
 use serde_json::Value;
 use mysql_async::{PoolOpts, PoolConstraints, Opts, OptsBuilder, Conn};
+use tokio::runtime::{Runtime, self};
 use core::time::Duration;
 use crate::mixnmatch::*;
 use crate::job::*;
@@ -25,8 +26,7 @@ pub struct AppState {
     pub bot_password: String,
     pub task_specific_usize: HashMap<String,usize>,
     max_concurrent_jobs: usize,
-    pub thread_stack_factor: usize,
-    pub default_threads: usize,
+    pub runtime: Arc<Runtime>,
 }
 
 impl AppState {
@@ -45,6 +45,8 @@ impl AppState {
             .into_iter()
             .map(|(k,v)|(k.to_owned(),v.as_u64().unwrap_or_default() as usize))
             .collect();
+        let thread_stack_factor = config["thread_stack_factor"].as_u64().unwrap_or(64) as usize;
+        let default_threads= config["default_threads"].as_u64().unwrap_or(64) as usize;
         let ret = Self {
             wd_pool: Self::create_pool(&config["wikidata"]),
             mnm_pool: Self::create_pool(&config["mixnmatch"]),
@@ -54,10 +56,26 @@ impl AppState {
             bot_password: config["bot_password"].as_str().unwrap().to_string(),
             task_specific_usize,
             max_concurrent_jobs: config["max_concurrent_jobs"].as_u64().unwrap_or(10) as usize,
-            thread_stack_factor: config["thread_stack_factor"].as_u64().unwrap_or(64) as usize,
-            default_threads: config["default_threads"].as_u64().unwrap_or(64) as usize,
+            runtime: Arc::new(Self::create_runtime(default_threads, thread_stack_factor)),
         };
         ret
+    }
+
+    fn create_runtime(default_threads: usize, thread_stack_factor: usize) -> Runtime {
+        let threads = match env::var("MNM_THREADS") {
+            Ok(s) => s.parse::<usize>().unwrap_or(default_threads),
+            Err(_) => default_threads,
+        };
+        println!("Using {threads} threads");
+    
+        let threaded_rt = runtime::Builder::new_multi_thread()
+            .enable_all()
+            .worker_threads(threads)
+            .thread_name("mixnmatch")
+            .thread_stack_size(thread_stack_factor * 1024 * 1024)
+            .build()
+            .expect("Could not create tokio runtime");
+        threaded_rt
     }
 
     /// Helper function to create a DB pool from a JSON config object
@@ -108,13 +126,15 @@ impl AppState {
 
     pub async fn run_single_job(&self, job_id: usize) -> Result<(),GenericError> {
         let mnm = MixNMatch::new(self.clone());
-        let mut job = Job::new(&mnm);
-        job.set_from_id(job_id).await?;
-        match job.set_status(JobStatus::Running).await {
-            Ok(_) => println!("Finished successfully"),
-            Err(_e) => println!("ERROR:"),// {e}
-        }
-        job.run().await
+        let handle = self.runtime.spawn(async move {
+            let mut job = Job::new(&mnm);
+            job.set_from_id(job_id).await?;
+            if let Err(e) = job.set_status(JobStatus::Running).await {
+                println!("ERROR SETTING JOB STATUS: {e}")
+            }
+            job.run().await
+        });
+        handle.await.expect("Handle unwrap failed")
     }
 
     pub async fn forever_loop(&self) -> Result<(),GenericError> {
@@ -179,7 +199,7 @@ impl AppState {
                         }
                     }
                     let current_jobs = current_jobs.clone();
-                    tokio::spawn(async move {
+                    self.runtime.spawn(async move {
                         if let Err(_e) = job.run().await {
                             println!("Job {job_id} failed with error") // Not writing error, there might be an issue that causes stack overflow
                         }

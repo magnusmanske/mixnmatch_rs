@@ -18,7 +18,6 @@ pub mod maintenance;
 
 use std::env;
 use app_state::AppState;
-use tokio::runtime;
 
 async fn run(app: AppState) -> Result<(),app_state::GenericError> {
     let argv: Vec<String> = env::args_os().map(|s|s.into_string().unwrap()).collect();
@@ -40,21 +39,8 @@ async fn run(app: AppState) -> Result<(),app_state::GenericError> {
 
 fn main() -> Result<(),app_state::GenericError> {
     let app = app_state::AppState::from_config_file("config.json")?;
-
-    let threads = match env::var("MNM_THREADS") {
-        Ok(s) => s.parse::<usize>().unwrap_or(app.default_threads),
-        Err(_) => app.default_threads,
-    };
-    println!("Using {threads} threads");
-
-    let threaded_rt = runtime::Builder::new_multi_thread()
-        .enable_all()
-        .worker_threads(threads)
-        .thread_name("mixnmatch")
-        .thread_stack_size(app.thread_stack_factor*threads * 1024 * 1024)
-        .build()?;
-
-    threaded_rt.block_on(async move {
+    let runtime = app.runtime.clone();
+    runtime.block_on(async move {
         match run(app).await {
             Ok(_) => {},
             Err(e) => println!("CATASTROPHIC FAILURE: {e}"),
@@ -75,7 +61,7 @@ git pull && ./build.sh && toolforge jobs delete rustbot ; \rm ~/rustbot.* ; \
 toolforge jobs run --image tf-php74 --mem 5Gi --cpu 3 --continuous --command '/data/project/mix-n-match/mixnmatch_rs/run.sh' rustbot
 
 rm ~/build.err ; \
-toolforge jobs run build --command "bash -c 'source ~/.profile && cd ~/mixnmatch_rs && cargo build --release'" --image python3.11 --mem 2G --cpu 3 ; \
+toolforge jobs run build --command "bash -c 'source ~/.profile && cd ~/mixnmatch_rs && cargo build --release'" --image php7.4 --mem 2G --cpu 3 --wait ; \
 cat ~/build.err
 
 

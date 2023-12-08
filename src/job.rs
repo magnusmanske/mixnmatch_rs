@@ -292,15 +292,15 @@ impl Job {
                 self.set_status(JobStatus::Done).await?;
                 println!("Job {} catalog {}:{} completed.",self.get_id().await?,catalog_id,action);
             }
-            Err(e) => {
+            Err(_e) => {
                 match catalog_id {
                     0 => self.set_status(JobStatus::Done).await?, // Don't fail'
                     _ => self.set_status(JobStatus::Failed).await?,
                 }
-                let e = e.to_string();
-                let note = Some(e.to_owned());
+                // let e = e.to_string(); // causes stack overflow!
+                let note = Some("ERROR".to_string());//Some(e.to_owned());
                 self.set_note(note).await?;
-                println!("Job {} catalog {}:{} FAILED: {:?}",self.get_id().await?,catalog_id,action,e);
+                println!("Job {} catalog {}:{} FAILED:",self.get_id().await?,catalog_id,action);
             }
         }
         self.update_next_ts().await
