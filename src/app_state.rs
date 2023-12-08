@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::{thread, time};
+use std::{thread, time, cmp};
 use std::sync::{Arc, Mutex};
 use std::env;
 use std::fs::File;
@@ -45,6 +45,7 @@ impl AppState {
             .into_iter()
             .map(|(k,v)|(k.to_owned(),v.as_u64().unwrap_or_default() as usize))
             .collect();
+        let max_concurrent_jobs = config["max_concurrent_jobs"].as_u64().unwrap_or(10) as usize;
         let thread_stack_factor = config["thread_stack_factor"].as_u64().unwrap_or(64) as usize;
         let default_threads= config["default_threads"].as_u64().unwrap_or(64) as usize;
         let ret = Self {
@@ -55,17 +56,18 @@ impl AppState {
             bot_name: config["bot_name"].as_str().unwrap().to_string(),
             bot_password: config["bot_password"].as_str().unwrap().to_string(),
             task_specific_usize,
-            max_concurrent_jobs: config["max_concurrent_jobs"].as_u64().unwrap_or(10) as usize,
-            runtime: Arc::new(Self::create_runtime(default_threads, thread_stack_factor)),
+            max_concurrent_jobs,
+            runtime: Arc::new(Self::create_runtime(max_concurrent_jobs, default_threads, thread_stack_factor)),
         };
         ret
     }
 
-    fn create_runtime(default_threads: usize, thread_stack_factor: usize) -> Runtime {
+    fn create_runtime(max_concurrent_jobs: usize, default_threads: usize, thread_stack_factor: usize) -> Runtime {
         let threads = match env::var("MNM_THREADS") {
             Ok(s) => s.parse::<usize>().unwrap_or(default_threads),
             Err(_) => default_threads,
         };
+        let threads = cmp::min(threads,max_concurrent_jobs+1); // No point having more threads than max concurrent jobs
         println!("Using {threads} threads");
     
         let threaded_rt = runtime::Builder::new_multi_thread()
