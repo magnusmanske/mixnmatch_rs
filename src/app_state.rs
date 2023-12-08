@@ -62,12 +62,12 @@ impl AppState {
         ret
     }
 
-    fn create_runtime(max_concurrent_jobs: usize, default_threads: usize, thread_stack_factor: usize) -> Runtime {
+    fn create_runtime(_max_concurrent_jobs: usize, default_threads: usize, thread_stack_factor: usize) -> Runtime {
         let threads = match env::var("MNM_THREADS") {
             Ok(s) => s.parse::<usize>().unwrap_or(default_threads),
             Err(_) => default_threads,
         };
-        let threads = cmp::min(threads,max_concurrent_jobs+1); // No point having more threads than max concurrent jobs
+        // let threads = cmp::min(threads,max_concurrent_jobs+1); // No point having more threads than max concurrent jobs
         println!("Using {threads} threads");
     
         let threaded_rt = runtime::Builder::new_multi_thread()
