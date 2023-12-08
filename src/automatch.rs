@@ -181,11 +181,11 @@ impl AutoMatch {
         let search_batch_size = *self.mnm.app.task_specific_usize.get("automatch_by_search_search_batch_size").unwrap_or(&100) ;
 
         loop {
-            println!("automatch_by_search [{catalog_id}]: {catalog_id},{offset},{batch_size}");
+            // println!("automatch_by_search [{catalog_id}]: {catalog_id},{offset},{batch_size}");
             let results = self.mnm.app.get_mnm_conn().await?
                 .exec_iter(sql.clone(),params! {catalog_id,offset,batch_size}).await?
                 .map_and_drop(from_row::<(usize,String,String,String)>).await?;
-            println!("automatch_by_search [{catalog_id}]:Done.");
+            // println!("automatch_by_search [{catalog_id}]:Done.");
 
             for result_batch in results.chunks(search_batch_size) {
                 // println!("Starting batch of {search_batch_size}...");
@@ -202,7 +202,7 @@ impl AutoMatch {
                         futures.push(future);
                     }
                 }
-                println!("automatch_by_search [{catalog_id}]: Running {} futures...",futures.len());
+                // println!("automatch_by_search [{catalog_id}]: Running {} futures...",futures.len());
                 let mut search_results = join_all(futures).await.into_iter()
                     .filter_map(|r|r)
                     .map(|(entry_id,items)| items.into_iter().map(move |q|(entry_id,q.to_string())))
@@ -210,7 +210,7 @@ impl AutoMatch {
                     .collect_vec();
                 search_results.sort();
                 search_results.dedup();
-                println!("automatch_by_search [{catalog_id}]: Futures complete, {} results",search_results.len());
+                // println!("automatch_by_search [{catalog_id}]: Futures complete, {} results",search_results.len());
                 if search_results.is_empty() {
                     continue;
                 }
@@ -227,20 +227,20 @@ impl AutoMatch {
                     entry_id2items.entry(entry_id).or_default().push(q);
                 }
 
-                println!("Matching {} entries",entry_id2items.len());
+                // println!("Matching {} entries",entry_id2items.len());
                 let _ = self.match_entries_to_items(&entry_id2items).await;
-                println!("automatch_by_search [{catalog_id}]: Result batch completed.");
+                // println!("automatch_by_search [{catalog_id}]: Result batch completed.");
             }
-            println!("automatch_by_search [{catalog_id}]: Batch completed.");
+            // println!("automatch_by_search [{catalog_id}]: Batch completed.");
 
             if results.len()<batch_size {
                 break;
             }
-            println!("automatch_by_search [{catalog_id}]: Another batch...");
+            // println!("automatch_by_search [{catalog_id}]: Another batch...");
             offset += results.len();
             let _ = self.remember_offset(offset).await;
         }
-        println!("automatch_by_search [{catalog_id}]: All batches completed.");
+        // println!("automatch_by_search [{catalog_id}]: All batches completed.");
         let _ = self.clear_offset().await;
         Ok(())
     }

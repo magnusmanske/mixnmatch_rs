@@ -25,6 +25,8 @@ pub struct AppState {
     pub bot_password: String,
     pub task_specific_usize: HashMap<String,usize>,
     max_concurrent_jobs: usize,
+    pub thread_stack_factor: usize,
+    pub default_threads: usize,
 }
 
 impl AppState {
@@ -52,6 +54,8 @@ impl AppState {
             bot_password: config["bot_password"].as_str().unwrap().to_string(),
             task_specific_usize,
             max_concurrent_jobs: config["max_concurrent_jobs"].as_u64().unwrap_or(10) as usize,
+            thread_stack_factor: config["thread_stack_factor"].as_u64().unwrap_or(64) as usize,
+            default_threads: config["default_threads"].as_u64().unwrap_or(64) as usize,
         };
         ret
     }
@@ -108,7 +112,7 @@ impl AppState {
         job.set_from_id(job_id).await?;
         match job.set_status(JobStatus::Running).await {
             Ok(_) => println!("Finished successfully"),
-            Err(e) => println!("ERROR: {}",e),
+            Err(_e) => println!("ERROR:"),// {e}
         }
         job.run().await
     }
@@ -160,13 +164,20 @@ impl AppState {
                     let job_size = task_size.get(&action).unwrap_or(&TaskSize::SMALL).to_owned();
                     let job_id = match job.get_id().await {
                         Ok(id) => id,
-                        Err(e) => {
-                            eprintln!("No job ID:{}",e);
+                        Err(_e) => {
+                            eprintln!("No job ID");//,e);
                             continue;
                         }
                     };
-                    current_jobs.lock().unwrap().insert(job_id,job_size);
-                    println!("Now {} jobs running",current_jobs.lock().unwrap().len());
+                    match current_jobs.lock() {
+                        Ok(mut cj) => {
+                            cj.insert(job_id,job_size);
+                            println!("Now {} jobs running",cj.len());
+                        }
+                        Err(_e) => {
+                            panic!("current_jobs mutex poisoned!");
+                        }
+                    }
                     let current_jobs = current_jobs.clone();
                     tokio::spawn(async move {
                         if let Err(_e) = job.run().await {

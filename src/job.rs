@@ -5,7 +5,7 @@ use std::sync::Arc;
 use serde_json::json;
 use mysql_async::prelude::*;
 use mysql_async::from_row;
-use chrono::{Duration, Utc};
+use chrono::Duration;
 use std::fmt;
 use async_trait::async_trait;
 use crate::coordinate_matcher::CoordinateMatcher;
@@ -155,7 +155,7 @@ pub trait Jobbable {
             Some(job) => job,
             None => return Ok(())
         };
-        println!("{}: {offset} [{}]",job.get_id().await.unwrap_or(0), Utc::now());
+        // println!("{}: {offset} [{}]",job.get_id().await.unwrap_or(0), Utc::now());
         job.set_json(Some(json!({"offset":offset}))).await?;
         Ok(())
     }
@@ -418,8 +418,9 @@ impl Job {
 
     //TODO test
     async fn run_this_job(&mut self) -> Result<(),GenericError> {
-        let json = self.get_json().await;
-        println!("STARTING {:?} with option {:?}", &self.data().await?,&json);
+        // let json = self.get_json().await;
+        // println!("STARTING {:?} with option {:?}", &self.data().await?,&json);
+        println!("STARTING JOB {:?}",self.get_id().await); // DEACTIVATED VERBOSE OUTPUT FOR FEAR OF STACK OVERFLOW
         let catalog_id = self.get_catalog().await?;
         match self.get_action().await?.as_str() {
             "automatch" => {
