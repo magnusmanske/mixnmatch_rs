@@ -28,6 +28,7 @@ itertools = "*"
 html-escape = "*"
 tempfile = "*"
 fancy-regex = "*"
+dashmap = "5"
 
 [profile.release]
 lto = 'thin'

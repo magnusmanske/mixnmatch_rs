@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::{thread, time};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use dashmap::DashMap;
 use std::env;
 use std::fs::File;
 use serde_json::Value;
@@ -141,7 +142,7 @@ impl AppState {
 
     pub async fn forever_loop(&self) -> Result<(),GenericError> {
         let mnm = MixNMatch::new(self.clone());
-        let current_jobs: Arc<Mutex<HashMap<usize,TaskSize>>> = Arc::new(Mutex::new(HashMap::new()));
+        let current_jobs: Arc<DashMap<usize,TaskSize>> = Arc::new(DashMap::new());
     
         // Reset old running&failed jobs
         Job::new(&mnm).reset_running_jobs().await?;
@@ -155,14 +156,17 @@ impl AppState {
         // select distinct action from jobs where action not in (select action from job_sizes);
     
         loop {
-            let current_jobs_len = current_jobs.lock().unwrap().len();
+            let current_jobs_len = current_jobs.len();
             if current_jobs_len >= self.max_concurrent_jobs {
                 self.hold_on();
                 continue;
             }
             let mut job = Job::new(&mnm);
             let task_size = job.get_tasks().await?;
-            let big_jobs_running = current_jobs.lock().unwrap().iter()
+            let big_jobs_running = (*current_jobs)
+                .clone()
+                .into_read_only()
+                .iter()
                 .map(|(_job_id,size)|size.to_owned())
                 .filter(|size|*size>threshold_job_size)
                 .count();
@@ -191,21 +195,14 @@ impl AppState {
                             continue;
                         }
                     };
-                    match current_jobs.lock() {
-                        Ok(mut cj) => {
-                            cj.insert(job_id,job_size);
-                            println!("Now {} jobs running",cj.len());
-                        }
-                        Err(_e) => {
-                            panic!("current_jobs mutex poisoned!");
-                        }
-                    }
+                    current_jobs.insert(job_id,job_size);
+                    println!("Now {} jobs running",current_jobs.len());
                     let current_jobs = current_jobs.clone();
                     self.runtime.spawn(async move {
                         if let Err(_e) = job.run().await {
                             println!("Job {job_id} failed with error") // Not writing error, there might be an issue that causes stack overflow
                         }
-                        current_jobs.lock().unwrap().remove(&job_id);
+                        current_jobs.remove(&job_id);
                     });
                 }
                 Ok(false) => {
