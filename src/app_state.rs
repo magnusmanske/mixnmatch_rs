@@ -5,8 +5,10 @@ use dashmap::DashMap;
 use std::env;
 use std::fs::File;
 use serde_json::Value;
-use mysql_async::{PoolOpts, PoolConstraints, Opts, OptsBuilder, Conn};
+use mysql_async::prelude::*;
+use mysql_async::{PoolOpts, PoolConstraints, Opts, OptsBuilder, Conn, from_row};
 use tokio::runtime::{Runtime, self};
+use tokio::time::sleep;
 use core::time::Duration;
 use crate::mixnmatch::*;
 use crate::job::*;
@@ -140,6 +142,36 @@ impl AppState {
         handle.await.expect("Handle unwrap failed")
     }
 
+    // Kills the app if there are jobs running but have no recent activity
+    // Toolforge k8s "continuous job" will restart a new instance
+    fn seppuku(&self) {
+        let check_every_minutes = 5;
+        let max_age_min = 20;
+        let mnm = MixNMatch::new(self.clone());
+        self.runtime.spawn(async move {
+            loop {
+                sleep(tokio::time::Duration::from_secs(60*check_every_minutes)).await;
+                println!("seppuku check running");
+                let utc = chrono::Utc::now() - chrono::Duration::minutes(max_age_min);
+                let ts = MixNMatch::get_timestamp_relative(&utc);
+                let sql = format!("SELECT
+                    (SELECT count(*) FROM jobs WHERE `status` IN ('RUNNING')) AS running,
+                    (SELECT count(*) FROM jobs WHERE `status` IN ('RUNNING') AND last_ts>='{ts}') AS running_recent");
+                let (running, running_recent) = *mnm.app.get_mnm_conn().await
+                    .expect("seppuku: No DB connection")
+                    .exec_iter(sql,()).await
+                    .expect("seppuku: No results")
+                    .map_and_drop(from_row::<(usize,usize)>).await
+                    .expect("seppuku: Result retrieval failure")
+                    .get(0).expect("seppuku: No DB results");
+                if running>0 && running_recent==0 {
+                    panic!("seppuku: {running} jobs running but no activity within {max_age_min} minutes, commiting seppuku");
+                }
+                println!("seppuku: honor intact");
+            }
+        });
+    }
+
     pub async fn forever_loop(&self) -> Result<(),GenericError> {
         let mnm = MixNMatch::new(self.clone());
         let current_jobs: Arc<DashMap<usize,TaskSize>> = Arc::new(DashMap::new());
@@ -148,6 +180,9 @@ impl AppState {
         Job::new(&mnm).reset_running_jobs().await?;
         Job::new(&mnm).reset_failed_jobs().await?;
         println!("Old jobs reset, starting bot");
+
+        self.seppuku();
+        println!("Seppuku ready");
 
         let threshold_job_size = TaskSize::MEDIUM;
         let threshold_percent = 50;
