@@ -151,7 +151,7 @@ impl AppState {
         self.runtime.spawn(async move {
             loop {
                 sleep(tokio::time::Duration::from_secs(60*check_every_minutes)).await;
-                println!("seppuku check running");
+                // println!("seppuku check running");
                 let utc = chrono::Utc::now() - chrono::Duration::minutes(max_age_min);
                 let ts = MixNMatch::get_timestamp_relative(&utc);
                 let sql = format!("SELECT
@@ -167,7 +167,7 @@ impl AppState {
                 if running>0 && running_recent==0 {
                     panic!("seppuku: {running} jobs running but no activity within {max_age_min} minutes, commiting seppuku");
                 }
-                println!("seppuku: honor intact");
+                // println!("seppuku: honor intact");
             }
         });
     }
@@ -182,7 +182,6 @@ impl AppState {
         println!("Old jobs reset, starting bot");
 
         self.seppuku();
-        println!("Seppuku ready");
 
         let threshold_job_size = TaskSize::MEDIUM;
         let threshold_percent = 50;
