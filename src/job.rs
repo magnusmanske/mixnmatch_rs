@@ -631,7 +631,7 @@ impl Job {
     //TODO test
     pub async fn get_next_high_priority_job(&self) -> Option<usize> {
         let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NULL",JobStatus::HighPriority.as_str()) ;
-        let sql = self.add_sql_action_filter(sql);
+        // let sql = self.add_sql_action_filter(sql);
         self.get_next_job_generic(&sql).await
     }
     
