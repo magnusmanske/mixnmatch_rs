@@ -81,6 +81,7 @@ pub enum JobStatus {
     Running,
     HighPriority,
     LowPriority,
+    Blocked,
 }
 
 impl JobStatus {
@@ -92,6 +93,7 @@ impl JobStatus {
             "RUNNING" => Some(JobStatus::Running),
             "HIGH_PRIORITY" => Some(JobStatus::HighPriority),
             "LOW_PRIORITY" => Some(JobStatus::LowPriority),
+            "BLOCKED" => Some(JobStatus::Blocked),
             _ => None
         }
     }
@@ -103,6 +105,7 @@ impl JobStatus {
             JobStatus::Running => "RUNNING",
             JobStatus::HighPriority => "HIGH_PRIORITY",
             JobStatus::LowPriority => "LOW_PRIORITY",
+            JobStatus::Blocked => "BLOCKED",
         }
     }
 }
