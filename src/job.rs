@@ -72,7 +72,7 @@ impl TaskSize {
 }
 
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub enum JobStatus {
     #[default]
     Todo,
@@ -285,6 +285,7 @@ impl Job {
         self.data = result;
         Ok(true)
     }
+
     //TODO test
     pub async fn run(&mut self) -> Result<(),GenericError> {
         let catalog_id = self.get_catalog().await?;
@@ -423,6 +424,9 @@ impl Job {
     async fn run_this_job(&mut self) -> Result<(),GenericError> {
         // let json = self.get_json().await;
         // println!("STARTING {:?} with option {:?}", &self.data().await?,&json);
+        if self.data.status == JobStatus::Blocked {
+            return Err(Box::new(JobError::S(format!("Job::run_this_job: Blocked"))))
+        }
         println!("STARTING JOB {:?}",self.get_id().await); // DEACTIVATED VERBOSE OUTPUT FOR FEAR OF STACK OVERFLOW
         let catalog_id = self.get_catalog().await?;
         match self.get_action().await?.as_str() {
