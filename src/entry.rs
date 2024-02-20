@@ -139,7 +139,7 @@ impl Entry {
     }
 
     fn sql_select() -> String {
-        r"SELECT id,catalog,ext_id,ext_url,ext_name,ext_desc,q,user,timestamp,random,`type` FROM `entry`".into()
+        r"SELECT id,catalog,ext_id,ext_url,ext_name,ext_desc,q,user,timestamp,if(isnull(random),rand(),random) as random,`type` FROM `entry`".into()
     }
     
     //TODO test

@@ -37,15 +37,17 @@ async fn run(app: AppState) -> Result<(),app_state::GenericError> {
     }
 }
 
-fn main() -> Result<(),app_state::GenericError> {
+
+#[tokio::main(flavor = "multi_thread", worker_threads = 3)]
+async fn main() -> Result<(),app_state::GenericError> {
     let app = app_state::AppState::from_config_file("config.json")?;
-    let runtime = app.runtime.clone();
-    runtime.block_on(async move {
+    // let runtime = app.runtime.clone();
+    // runtime.block_on(async move {
         match run(app).await {
             Ok(_) => {},
             Err(e) => println!("CATASTROPHIC FAILURE: {e}"),
         }
-    });
+    // });
     Ok(())
 }
 

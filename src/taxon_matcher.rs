@@ -138,8 +138,12 @@ impl TaxonMatcher {
                             qs.sort();
                             qs.dedup();
                             if qs.len()==1 {
-                                let q = qs.pop().unwrap(); // Safe
-                                let _ = Entry::from_id(*entry_id, &self.mnm).await?.set_match(&q,USER_AUX_MATCH).await ;
+                                match qs.pop() {
+                                    Some(q) => {
+                                        let _ = Entry::from_id(*entry_id, &self.mnm).await?.set_match(&q,USER_AUX_MATCH).await ;
+                                    }
+                                    None => {}
+                                }
                             } else if qs.len()>1 {
                                 let _ = Entry::from_id(*entry_id, &self.mnm).await?.set_multi_match(&qs).await;
                             }

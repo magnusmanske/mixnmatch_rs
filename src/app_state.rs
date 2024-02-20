@@ -7,7 +7,7 @@ use std::fs::File;
 use serde_json::Value;
 use mysql_async::prelude::*;
 use mysql_async::{PoolOpts, PoolConstraints, Opts, OptsBuilder, Conn, from_row};
-use tokio::runtime::{Runtime, self};
+// use tokio::runtime::{Runtime, self};
 use tokio::time::sleep;
 use core::time::Duration;
 use crate::mixnmatch::*;
@@ -29,7 +29,7 @@ pub struct AppState {
     pub bot_password: String,
     pub task_specific_usize: HashMap<String,usize>,
     max_concurrent_jobs: usize,
-    pub runtime: Arc<Runtime>,
+    // pub runtime: Arc<Runtime>,
 }
 
 impl AppState {
@@ -49,8 +49,8 @@ impl AppState {
             .map(|(k,v)|(k.to_owned(),v.as_u64().unwrap_or_default() as usize))
             .collect();
         let max_concurrent_jobs = config["max_concurrent_jobs"].as_u64().unwrap_or(10) as usize;
-        let thread_stack_factor = config["thread_stack_factor"].as_u64().unwrap_or(64) as usize;
-        let default_threads= config["default_threads"].as_u64().unwrap_or(64) as usize;
+        // let thread_stack_factor = config["thread_stack_factor"].as_u64().unwrap_or(64) as usize;
+        // let default_threads= config["default_threads"].as_u64().unwrap_or(64) as usize;
         let ret = Self {
             wd_pool: Self::create_pool(&config["wikidata"]),
             mnm_pool: Self::create_pool(&config["mixnmatch"]),
@@ -60,28 +60,28 @@ impl AppState {
             bot_password: config["bot_password"].as_str().unwrap().to_string(),
             task_specific_usize,
             max_concurrent_jobs,
-            runtime: Arc::new(Self::create_runtime(max_concurrent_jobs, default_threads, thread_stack_factor)),
+            // runtime: Arc::new(Self::create_runtime(max_concurrent_jobs, default_threads, thread_stack_factor)),
         };
         ret
     }
 
-    fn create_runtime(_max_concurrent_jobs: usize, default_threads: usize, thread_stack_factor: usize) -> Runtime {
-        let threads = match env::var("MNM_THREADS") {
-            Ok(s) => s.parse::<usize>().unwrap_or(default_threads),
-            Err(_) => default_threads,
-        };
-        // let threads = cmp::min(threads,max_concurrent_jobs+1); // No point having more threads than max concurrent jobs
-        println!("Using {threads} threads");
+    // fn create_runtime(_max_concurrent_jobs: usize, default_threads: usize, thread_stack_factor: usize) -> Runtime {
+    //     let threads = match env::var("MNM_THREADS") {
+    //         Ok(s) => s.parse::<usize>().unwrap_or(default_threads),
+    //         Err(_) => default_threads,
+    //     };
+    //     // let threads = cmp::min(threads,max_concurrent_jobs+1); // No point having more threads than max concurrent jobs
+    //     println!("Using {threads} threads");
     
-        let threaded_rt = runtime::Builder::new_multi_thread()
-            .enable_all()
-            .worker_threads(threads)
-            .thread_name("mixnmatch")
-            .thread_stack_size(thread_stack_factor * 1024 * 1024)
-            .build()
-            .expect("Could not create tokio runtime");
-        threaded_rt
-    }
+    //     let threaded_rt = runtime::Builder::new_multi_thread()
+    //         .enable_all()
+    //         .worker_threads(threads)
+    //         .thread_name("mixnmatch")
+    //         .thread_stack_size(thread_stack_factor * 1024 * 1024)
+    //         .build()
+    //         .expect("Could not create tokio runtime");
+    //     threaded_rt
+    // }
 
     /// Helper function to create a DB pool from a JSON config object
     fn create_pool(config: &Value) -> mysql_async::Pool {
@@ -131,7 +131,7 @@ impl AppState {
 
     pub async fn run_single_job(&self, job_id: usize) -> Result<(),GenericError> {
         let mnm = MixNMatch::new(self.clone());
-        let handle = self.runtime.spawn(async move {
+        let handle = tokio::spawn(async move {
             let mut job = Job::new(&mnm);
             job.set_from_id(job_id).await?;
             if let Err(e) = job.set_status(JobStatus::Running).await {
@@ -148,7 +148,7 @@ impl AppState {
         let check_every_minutes = 5;
         let max_age_min = 20;
         let mnm = MixNMatch::new(self.clone());
-        self.runtime.spawn(async move {
+        tokio::spawn(async move {
             loop {
                 sleep(tokio::time::Duration::from_secs(60*check_every_minutes)).await;
                 // println!("seppuku check running");
@@ -232,7 +232,7 @@ impl AppState {
                     current_jobs.insert(job_id,job_size);
                     println!("Now {} jobs running",current_jobs.len());
                     let current_jobs = current_jobs.clone();
-                    self.runtime.spawn(async move {
+                    tokio::spawn(async move {
                         if let Err(_e) = job.run().await {
                             println!("Job {job_id} failed with error") // Not writing error, there might be an issue that causes stack overflow
                         }
