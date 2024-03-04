@@ -33,7 +33,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// Creatre an AppState object from a config JSON file
+    /// Create an AppState object from a config JSON file
     pub fn from_config_file(filename: &str) -> Result<Self,GenericError> {
         let mut path = env::current_dir().expect("Can't get CWD");
         path.push(filename);

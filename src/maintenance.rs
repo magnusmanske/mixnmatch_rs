@@ -345,7 +345,7 @@ impl Maintenance {
     }
 
     /// Unlinks MnM matches to items in a list.
-    pub async fn unlink_item_matches(&self, items: &Vec<String>) -> Result<(),GenericError> {
+    pub async fn unlink_item_matches(&self, items: &[String]) -> Result<(),GenericError> {
         let items: Vec<isize> = items
             .iter()
             .filter_map(|q|self.mnm.item2numeric(q))
