@@ -16,15 +16,24 @@ pub mod taxon_matcher;
 pub mod update_catalog;
 pub mod wikidata_commands;
 
-use app_state::AppState;
 use std::env;
 
-async fn run(app: AppState) -> Result<(), app_state::GenericError> {
+async fn run() -> Result<(), app_state::GenericError> {
     let argv: Vec<String> = env::args_os().map(|s| s.into_string().unwrap()).collect();
+    let config_file = argv
+        .get(2)
+        .map(|s| s.to_owned())
+        .unwrap_or("config.json".into());
+    let app = app_state::AppState::from_config_file(&config_file)?;
     match argv.get(1).map(|s| s.as_str()) {
         Some("job") => {
-            app.run_single_job(argv.get(2).unwrap().parse::<usize>().unwrap())
-                .await
+            app.run_single_job(
+                argv.get(3)
+                    .expect("Job ID as thirs parameter required")
+                    .parse::<usize>()
+                    .unwrap(),
+            )
+            .await
         }
         Some("hpjob") => app.run_single_hp_job().await,
         Some("test") => {
@@ -36,20 +45,18 @@ async fn run(app: AppState) -> Result<(), app_state::GenericError> {
             println!("{job:?}");
             Ok(())
         }
-        _ => app.forever_loop().await,
+        Some("server") => app.forever_loop().await,
+        Some(other) => panic!("Unrecodnized command '{other}'"),
+        None => panic!("Command required: server CONFIG_FILE | job CONFIG_FILE JOB_ID"),
     }
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 3)]
 async fn main() -> Result<(), app_state::GenericError> {
-    let app = app_state::AppState::from_config_file("config.json")?;
-    // let runtime = app.runtime.clone();
-    // runtime.block_on(async move {
-    match run(app).await {
+    match run().await {
         Ok(_) => {}
         Err(e) => println!("CATASTROPHIC FAILURE: {e}"),
     }
-    // });
     Ok(())
 }
 

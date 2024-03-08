@@ -245,7 +245,7 @@ impl Level for AutoscrapeFollow {
     async fn tick(&mut self) -> bool {
         match self.cache.pop() {
             Some(key) => {
-                self.current_key = key.into();
+                self.current_key = key;
                 false
             }
             None => true,
@@ -343,14 +343,12 @@ impl Level for AutoscrapeMediaWiki {
 
     //TODO test
     async fn tick(&mut self) -> bool {
-        if self.title_cache.is_empty() {
-            if let Err(_) = self.refill_cache().await {
-                return true;
-            }
+        if self.title_cache.is_empty() && self.refill_cache().await.is_err() {
+            return true;
         }
         match self.title_cache.pop() {
             Some(title) => {
-                self.apfrom = title.into();
+                self.apfrom = title;
                 false
             }
             None => true,
@@ -553,14 +551,14 @@ impl AutoscrapeResolve {
             .unwrap_or_else(|| json!([]))
             .as_array()
             .map(|x| x.to_owned())
-            .unwrap_or_else(|| vec![]);
+            .unwrap_or_else(Vec::new);
         let mut regexs = vec![];
         for regex in regexs_str {
             let arr = regex
                 .as_array()
                 .ok_or_else(|| AutoscrapeError::UnknownLevelType(json.to_string()))?;
             let pattern = arr
-                .get(0)
+                .first()
                 .ok_or_else(|| AutoscrapeError::UnknownLevelType(json.to_string()))?
                 .as_str()
                 .ok_or_else(|| AutoscrapeError::UnknownLevelType(json.to_string()))?;
@@ -890,7 +888,7 @@ impl Autoscrape {
             }
         }
         if let Some(levels) = json.get("levels") {
-            for level in levels.as_array().unwrap_or(&vec![]).into_iter() {
+            for level in levels.as_array().unwrap_or(&vec![]).iter() {
                 ret.levels.push(AutoscrapeLevel::from_json(level)?);
             }
         }
@@ -920,7 +918,7 @@ impl Autoscrape {
     pub async fn init(&mut self) {
         let mut levels = self.levels.clone();
         for level in &mut levels {
-            level.init(&self).await
+            level.init(self).await
         }
         self.levels = levels;
     }
@@ -932,7 +930,7 @@ impl Autoscrape {
         while l > 0 {
             let mut level = self.levels[l - 1].clone();
             if level.tick().await {
-                level.init(&self).await;
+                level.init(self).await;
                 self.levels[l - 1] = level;
                 l -= 1;
             } else {
@@ -1100,15 +1098,12 @@ impl Autoscrape {
             let _ = conn.exec_drop(sql, params! {autoscrape_id}).await;
         }
         if let Some(json) = self.get_last_job_data().await {
-            match json.as_array() {
-                Some(arr) => {
-                    if arr.len() == self.levels.len() {
-                        arr.iter()
-                            .enumerate()
-                            .for_each(|(num, j)| self.levels[num].level_type.set_state(j));
-                    }
+            if let Some(arr) = json.as_array() {
+                if arr.len() == self.levels.len() {
+                    arr.iter()
+                        .enumerate()
+                        .for_each(|(num, j)| self.levels[num].level_type.set_state(j));
                 }
-                None => {}
             }
         }
         Ok(())
