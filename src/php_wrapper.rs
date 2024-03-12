@@ -10,10 +10,11 @@ impl PhpWrapper {
             "PHP: update_person_dates {catalog_id} START [{}]",
             Utc::now()
         );
-        let output =
-            Command::new("/data/project/mix-n-match/scripts/person_dates/update_person_dates.php")
-                .arg(format!("{catalog_id}"))
-                .output()?;
+        let output = Command::new(
+            "php /data/project/mix-n-match/scripts/person_dates/update_person_dates.php",
+        )
+        .arg(format!("{catalog_id}"))
+        .output()?;
         println!(
             "PHP: update_person_dates {catalog_id} END [{}]\n{output:?}",
             Utc::now()
