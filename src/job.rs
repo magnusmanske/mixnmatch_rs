@@ -336,7 +336,7 @@ impl Job {
                     action
                 );
             }
-            Err(_e) => {
+            Err(error) => {
                 match catalog_id {
                     0 => self.set_status(JobStatus::Done).await?, // Don't fail'
                     _ => self.set_status(JobStatus::Failed).await?,
@@ -344,12 +344,8 @@ impl Job {
                 // let e = e.to_string(); // causes stack overflow!
                 let note = Some("ERROR".to_string()); //Some(e.to_owned());
                 self.set_note(note).await?;
-                println!(
-                    "Job {} catalog {}:{} FAILED:",
-                    self.get_id().await?,
-                    catalog_id,
-                    action
-                );
+                let job_id = self.get_id().await?;
+                println!("Job {job_id} catalog {catalog_id}:{action} FAILED: {error}");
             }
         }
         self.update_next_ts().await
