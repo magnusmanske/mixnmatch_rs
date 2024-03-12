@@ -336,7 +336,7 @@ impl Job {
                     action
                 );
             }
-            Err(error) => {
+            Err(_e) => {
                 match catalog_id {
                     0 => self.set_status(JobStatus::Done).await?, // Don't fail'
                     _ => self.set_status(JobStatus::Failed).await?,
@@ -345,7 +345,7 @@ impl Job {
                 let note = Some("ERROR".to_string()); //Some(e.to_owned());
                 self.set_note(note).await?;
                 let job_id = self.get_id().await?;
-                println!("Job {job_id} catalog {catalog_id}:{action} FAILED: {error}");
+                println!("Job {job_id} catalog {catalog_id}:{action} FAILED");
             }
         }
         self.update_next_ts().await
