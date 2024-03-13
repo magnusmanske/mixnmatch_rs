@@ -626,9 +626,9 @@ impl MixNMatch {
     }
 
     pub fn is_on_toolforge() -> bool {
-        true // HACK TODO FIXME
-             // std::env::var("LOGNAME") == Ok("tools.mix-n-match".to_string())
-             //     || std::env::var("TOOL_DATA_DIR") == Ok("/data/project/mix-n-match".to_string())
+        std::path::Path::new("/etc/wmcs-project").exists()
+        // std::env::var("LOGNAME") == Ok("tools.mix-n-match".to_string())
+        //     || std::env::var("TOOL_DATA_DIR") == Ok("/data/project/mix-n-match".to_string())
     }
 }
 
