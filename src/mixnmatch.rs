@@ -620,6 +620,11 @@ impl MixNMatch {
             .await?;
         Ok(())
     }
+
+    pub fn is_on_toolforge() -> bool {
+        std::env::var("LOGNAME") == Ok("tools.mix-n-match".to_string())
+            || std::env::var("TOOL_DATA_DIR") == Ok("/data/project/mix-n-match".to_string())
+    }
 }
 
 #[cfg(test)]

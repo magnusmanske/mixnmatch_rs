@@ -1,4 +1,4 @@
-use crate::app_state::*;
+use crate::{app_state::*, mixnmatch::MixNMatch};
 use chrono::Utc;
 use std::process::Command;
 
@@ -6,9 +6,10 @@ pub struct PhpWrapper {}
 
 impl PhpWrapper {
     fn new_command() -> Command {
-        if std::env::var("LOGNAME") == Ok("tools.mix-n-match".to_string()) {
-            // On toolforge
-            Command::new("php8.1")
+        if MixNMatch::is_on_toolforge() {
+            let mut ret = Command::new("php8.1");
+            let _ = ret.args(["-c", "/data/project/mix-n-match/mixnmatch_rs/php.ini"]);
+            ret
         } else {
             Command::new("php")
         }
