@@ -102,6 +102,17 @@ impl Maintenance {
         Ok(())
     }
 
+    pub async fn cleanup_mnm_relations(&self) -> Result<(), GenericError> {
+        let sql = "DELETE from mnm_relation WHERE entry_id=0 or target_entry_id=0";
+        self.mnm
+            .app
+            .get_mnm_conn()
+            .await?
+            .exec_drop(sql, ())
+            .await?;
+        Ok(())
+    }
+
     // WDRC sync stuff
 
     async fn get_wrdc_api_responses(

@@ -618,6 +618,11 @@ impl Job {
                 maintenance.remove_p17_for_humans().await
             }
 
+            "cleanup_mnm_relations" => {
+                let maintenance = Maintenance::new(&self.mnm);
+                maintenance.cleanup_mnm_relations().await
+            }
+
             "wdrc_sync" => Maintenance::new(&self.mnm).wdrc_sync().await,
 
             "update_person_dates" => PhpWrapper::update_person_dates(catalog_id),
