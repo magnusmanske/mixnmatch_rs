@@ -19,90 +19,37 @@ impl PhpWrapper {
         ret
     }
 
-    pub fn update_person_dates(catalog_id: usize) -> Result<(), GenericError> {
-        println!(
-            "PHP: update_person_dates {catalog_id} START [{}]",
-            Utc::now()
-        );
-        let output = Self::new_command("person_dates/update_person_dates.php")
+    fn run_command_with_catalog_id(catalog_id: usize, command: &str) -> Result<(), GenericError> {
+        println!("PHP: {command} {catalog_id} START [{}]", Utc::now());
+        let output = Self::new_command(command)
             .arg(format!("{catalog_id}"))
             .output()?;
-        println!(
-            "PHP: update_person_dates {catalog_id} END [{}]\n{output:?}",
-            Utc::now()
-        );
+        println!("PHP: {command} {catalog_id} END [{}]", Utc::now());
+        println!("{output:?}");
         Ok(())
+    }
+
+    pub fn update_person_dates(catalog_id: usize) -> Result<(), GenericError> {
+        Self::run_command_with_catalog_id(catalog_id, "person_dates/update_person_dates.php")
     }
 
     pub fn generate_aux_from_description(catalog_id: usize) -> Result<(), GenericError> {
-        println!(
-            "PHP: generate_aux_from_description {catalog_id} START [{}]",
-            Utc::now()
-        );
-        let output = Self::new_command("generate_aux_from_description.php")
-            .arg(format!("{catalog_id}"))
-            .output()?;
-        println!(
-            "PHP: generate_aux_from_description {catalog_id} END [{}]\n{output:?}",
-            Utc::now()
-        );
-        Ok(())
+        Self::run_command_with_catalog_id(catalog_id, "generate_aux_from_description.php")
     }
 
     pub fn bespoke_scraper(catalog_id: usize) -> Result<(), GenericError> {
-        println!("PHP: bespoke_scraper {catalog_id} START [{}]", Utc::now());
-        let output = Self::new_command("bespoke_scraper.php")
-            .arg(format!("{catalog_id}"))
-            .output()?;
-        println!(
-            "PHP: bespoke_scraper {catalog_id} END [{}]\n{output:?}",
-            Utc::now()
-        );
-        Ok(())
+        Self::run_command_with_catalog_id(catalog_id, "bespoke_scraper.php")
     }
 
     pub fn update_descriptions_from_url(catalog_id: usize) -> Result<(), GenericError> {
-        println!(
-            "PHP: update_descriptions_from_url {catalog_id} START [{}]",
-            Utc::now()
-        );
-        let output = Self::new_command("update_descriptions_from_url.php")
-            .arg(format!("{catalog_id}"))
-            .output()?;
-        println!(
-            "PHP: update_descriptions_from_url {catalog_id} END [{}]\n{output:?}",
-            Utc::now()
-        );
-        Ok(())
+        Self::run_command_with_catalog_id(catalog_id, "update_descriptions_from_url.php")
     }
 
     pub fn import_aux_from_url(catalog_id: usize) -> Result<(), GenericError> {
-        println!(
-            "PHP: import_aux_from_url {catalog_id} START [{}]",
-            Utc::now()
-        );
-        let output = Self::new_command("import_aux_from_url.php")
-            .arg(format!("{catalog_id}"))
-            .output()?;
-        println!(
-            "PHP: import_aux_from_url {catalog_id} END [{}]\n{output:?}",
-            Utc::now()
-        );
-        Ok(())
+        Self::run_command_with_catalog_id(catalog_id, "import_aux_from_url.php")
     }
 
     pub fn match_by_coordinates(catalog_id: usize) -> Result<(), GenericError> {
-        println!(
-            "PHP: match_by_coordinates {catalog_id} START [{}]",
-            Utc::now()
-        );
-        let output = Self::new_command("match_by_coordinates.php")
-            .arg(format!("{catalog_id}"))
-            .output()?;
-        println!(
-            "PHP: match_by_coordinates {catalog_id} END [{}]\n{output:?}",
-            Utc::now()
-        );
-        Ok(())
+        Self::run_command_with_catalog_id(catalog_id, "match_by_coordinates.php")
     }
 }
