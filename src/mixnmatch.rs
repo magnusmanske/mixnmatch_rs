@@ -621,6 +621,10 @@ impl MixNMatch {
         Ok(())
     }
 
+    pub fn tool_root_dir() -> String {
+        std::env::var("TOOL_DATA_DIR").unwrap_or("/data/project/mix-n-match".to_string())
+    }
+
     pub fn is_on_toolforge() -> bool {
         true // HACK TODO FIXME
              // std::env::var("LOGNAME") == Ok("tools.mix-n-match".to_string())
