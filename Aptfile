@@ -1,4 +1,5 @@
 php
 php-mysql
 php-mysqli
+php-mysqlnd
 mysql-client
