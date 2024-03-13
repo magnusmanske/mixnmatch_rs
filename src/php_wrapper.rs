@@ -6,14 +6,16 @@ pub struct PhpWrapper {}
 
 impl PhpWrapper {
     fn new_command(script: &str) -> Command {
+        let root_dir = MixNMatch::tool_root_dir();
         let mut ret = if MixNMatch::is_on_toolforge() {
             let mut ret = Command::new("php8.1");
-            let _ = ret.args(["-c", "/data/project/mix-n-match/mixnmatch_rs/php.ini"]);
+            let _ = ret.arg("-c");
+            let _ = ret.arg(format!("{root_dir}/mixnmatch_rs/php.ini"));
             ret
         } else {
             Command::new("php")
         };
-        let _ = ret.arg(format!("{}/scripts/{script}", MixNMatch::tool_root_dir()));
+        let _ = ret.arg(format!("{root_dir}/scripts/{script}"));
         ret
     }
 
