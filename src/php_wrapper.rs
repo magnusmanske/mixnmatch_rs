@@ -20,10 +20,12 @@ impl PhpWrapper {
             "PHP: update_person_dates {catalog_id} START [{}]",
             Utc::now()
         );
-        let output = Self::new_command()
-            .arg("/data/project/mix-n-match/scripts/person_dates/update_person_dates.php")
-            .arg(format!("{catalog_id}"))
-            .output()?;
+        let mut command = Self::new_command();
+        let _ =
+            command.arg("/data/project/mix-n-match/scripts/person_dates/update_person_dates.php");
+        let _ = command.arg(format!("{catalog_id}"));
+        println!("{command:?}");
+        let output = command.output()?;
         println!(
             "PHP: update_person_dates {catalog_id} END [{}]\n{output:?}",
             Utc::now()
