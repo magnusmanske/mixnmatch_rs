@@ -878,7 +878,6 @@ impl Entry {
     }
 
     /// Before q query or an update to the entry in the database, checks if this is a valid entry ID (eg not a new entry)
-    //TODO test
     pub fn check_valid_id(&self) -> Result<(), GenericError> {
         match self.id {
             ENTRY_NEW_ID => Err(Box::new(EntryError::TryingToUpdateNewEntry)),
@@ -1035,6 +1034,7 @@ impl Entry {
         }
     }
 
+    /// Sets auto-match and multi-match for an entry
     pub async fn set_auto_and_multi_match(&mut self, items: &[String]) -> Result<(), GenericError> {
         let mnm = self.mnm()?;
         let mut qs_numeric: Vec<isize> = items.iter().filter_map(|q| mnm.item2numeric(q)).collect();
@@ -1061,6 +1061,7 @@ impl Entry {
         self.set_multi_match_db(items, &mut conn).await
     }
 
+    /// Sets multi-matches for an entry
     async fn set_multi_match_db(
         &self,
         items: &[String],
@@ -1090,6 +1091,7 @@ impl Entry {
         self.remove_multi_match_db(&mut conn).await
     }
 
+    /// Removes multi-matches for an entry, eg when the entry has been fully matched.
     async fn remove_multi_match_db(&self, conn: &mut Conn) -> Result<(), GenericError> {
         let entry_id = self.id;
         conn.exec_drop(
@@ -1100,14 +1102,17 @@ impl Entry {
         Ok(())
     }
 
+    /// Checks if the entry is unmatched
     pub fn is_unmatched(&self) -> bool {
         self.q.is_none()
     }
 
+    /// Checks if the entry is partially matched
     pub fn is_partially_matched(&self) -> bool {
         self.user == Some(0)
     }
 
+    /// Checks if the entry is fully matched
     pub fn is_fully_matched(&self) -> bool {
         match self.user {
             Some(user_id) => user_id > 0,
@@ -1346,5 +1351,15 @@ mod tests {
         assert!(entry.is_fully_matched());
         entry.unmatch().await.unwrap();
         assert!(!entry.is_fully_matched());
+    }
+
+    #[tokio::test]
+    async fn test_check_valid_id() {
+        let _test_lock = TEST_MUTEX.lock();
+        let mnm = get_test_mnm();
+        let entry = Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        assert!(entry.check_valid_id().is_ok());
+        let entry = Entry::new_from_catalog_and_ext_id(1, "234");
+        assert!(entry.check_valid_id().is_err());
     }
 }
