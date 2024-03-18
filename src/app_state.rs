@@ -1,3 +1,4 @@
+use crate::entry::Entry;
 use dashmap::DashMap;
 use mysql_async::prelude::*;
 use mysql_async::{from_row, Conn, Opts, OptsBuilder, PoolConstraints, PoolOpts};
@@ -7,6 +8,7 @@ use std::env;
 use std::fs::File;
 use std::sync::Arc;
 use std::{thread, time};
+use wikibase::ItemEntity;
 // use tokio::runtime::{Runtime, self};
 use crate::job::*;
 use crate::mixnmatch::*;
@@ -124,6 +126,113 @@ impl AppState {
     pub async fn disconnect(&self) -> Result<(), GenericError> {
         self.wd_pool.clone().disconnect().await?;
         self.mnm_pool.clone().disconnect().await?;
+        Ok(())
+    }
+
+    pub async fn run_from_props(
+        &self,
+        props: Vec<u32>,
+        min_entries: u16,
+    ) -> Result<(), GenericError> {
+        if props.len() < 2 {
+            return Err("Minimum of two properties required.".into());
+        }
+        let mut mnm = MixNMatch::new(self.clone());
+        let first_prop = props.first().unwrap(); // Safe
+        let mut sql = format!(
+            r#"SELECT main_ext_id,group_concat(entry_id),count(DISTINCT entry_id) AS cnt
+            FROM ( SELECT entry_id,aux_name AS main_ext_id FROM auxiliary,entry WHERE aux_p={first_prop} and entry.id=entry_id AND (entry.q is null or entry.user=0)
+            UNION SELECT entry.id,ext_id FROM entry,catalog WHERE entry.catalog=catalog.id AND catalog.active=1 AND catalog.wd_prop={first_prop} AND (entry.q is null or entry.user=0) ) t1"#
+        );
+        for (num, prop) in props.iter().skip(1).enumerate() {
+            sql += if num == 0 { " WHERE" } else { " AND" };
+            sql += &format!(
+                r#" entry_id IN (SELECT entry_id FROM auxiliary,entry WHERE aux_p={prop} and entry.id=entry_id UNION SELECT entry.id FROM entry,catalog WHERE entry.catalog=catalog.id AND catalog.active=1 AND catalog.wd_prop={prop})"#
+            );
+        }
+        sql += &format!(r#"GROUP BY main_ext_id HAVING cnt>={min_entries}"#);
+        sql = sql.replace(['\n', '\t'], " ");
+
+        let mut conn = self
+            .get_mnm_conn()
+            .await
+            .expect("run_from_props: No DB connection");
+
+        let results: Vec<_> = conn
+            .exec_iter(sql, ())
+            .await
+            .expect("run_from_props: No results")
+            .map_and_drop(from_row::<(String, String, usize)>)
+            .await
+            .expect("run_from_props: Result retrieval failure");
+
+        let props_s = props
+            .iter()
+            .map(|p| format!("{p}"))
+            .collect::<Vec<String>>()
+            .join(",");
+        for (_primary_ext_id, entries_s, _cnt) in results {
+            let entries_v: Vec<_> = entries_s
+                .split(',')
+                .filter_map(|s| s.parse::<usize>().ok())
+                .collect();
+            let sql = format!(
+                r#"SELECT entry_id,aux_p,aux_name FROM auxiliary WHERE entry_id IN ({entries_s}) AND aux_p IN ({props_s}) UNION SELECT entry.id,catalog.wd_prop,ext_id FROM entry,catalog WHERE entry.catalog=catalog.id AND entry.id IN ({entries_s}) AND wd_prop IN ({props_s})"#
+            );
+
+            let entry_prop_values: Vec<_> = conn
+                .exec_iter(sql, ())
+                .await
+                .expect("run_from_props: No results")
+                .map_and_drop(from_row::<(usize, u32, String)>)
+                .await
+                .expect("run_from_props: Result retrieval failure");
+
+            let prop_values = entry_prop_values
+                .iter()
+                .map(|(_entry_id, prop, value)| format!("P{prop}={value}"))
+                .collect::<Vec<String>>()
+                .join("|");
+            let query = format!(r#"haswbstatement:"{prop_values}""#);
+            let mut qs = mnm.wd_search(&query).await?;
+            if qs.is_empty() {
+                println!("Create new item from {entries_s}");
+                let mut new_item = ItemEntity::new_empty();
+                for entry_id in &entries_v {
+                    let entry = Entry::from_id(*entry_id, &mnm).await?;
+                    entry.add_to_item(&mut new_item).await?;
+                }
+                // println!("{:#?}", new_item);
+                match mnm.create_new_wikidata_item(new_item).await {
+                    Ok(q) => {
+                        println!("Created https://www.wikidata.org/wiki/{q}");
+                        for entry_id in &entries_v {
+                            let mut entry = Entry::from_id(*entry_id, &mnm).await?;
+                            let _ = entry.set_match(&q, USER_AUX_MATCH).await;
+                        }
+                    }
+                    Err(e) => {
+                        // Ignore TODO try again with blank description?
+                        println!("ERROR: {e}");
+                        continue;
+                    }
+                }
+            } else {
+                qs.sort();
+                qs.dedup();
+                if qs.len() == 1 {
+                    let q = qs.first().unwrap(); // Safe
+                    for entry_id in &entries_v {
+                        let mut entry = Entry::from_id(*entry_id, &mnm).await?;
+                        if !entry.is_fully_matched() {
+                            let _ = entry.set_match(q, USER_AUX_MATCH).await?;
+                        }
+                    }
+                } else {
+                    println!("Multiple potential matches for {entries_s} {qs:?}, skipping");
+                }
+            }
+        }
         Ok(())
     }
 

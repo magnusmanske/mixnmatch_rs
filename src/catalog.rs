@@ -1,7 +1,10 @@
 use crate::app_state::*;
+use crate::entry::AuxiliaryRow;
 use crate::mixnmatch::*;
 use mysql_async::prelude::*;
 use mysql_async::Row;
+use wikibase::Reference;
+use wikibase::Snak;
 
 #[derive(Debug, Clone)]
 pub struct Catalog {
@@ -101,6 +104,37 @@ impl Catalog {
             .exec_drop(sql, params! {catalog_id})
             .await?;
         Ok(())
+    }
+
+    pub async fn references(&self, entry: &crate::entry::Entry) -> Vec<Reference> {
+        let mut snaks = vec![];
+        if let Some(source_item) = self.source_item {
+            let value = format!("Q{source_item}");
+            let snak = Snak::new_item("P248", &value);
+            snaks.push(snak);
+        }
+        if self.wd_prop.is_some() && self.wd_qual.is_none() {
+            let prop = self.wd_prop.unwrap(); // Safe
+            let prop = format!("P{prop}");
+            let value = AuxiliaryRow::fix_external_id(&prop, &entry.ext_id);
+            let snak = Snak::new_external_id(&prop, &value);
+            snaks.push(snak);
+        } else if !entry.ext_url.is_empty() {
+            let snak = Snak::new_string("P854", &entry.ext_url);
+            snaks.push(snak);
+        }
+        if let Some(ts) = entry.get_creation_time().await {
+            if let Some(date) = ts.split(' ').next() {
+                let time = format!("+{date}T00:00:00Z");
+                let snak = Snak::new_time("P813", &time, 11);
+                snaks.push(snak);
+            }
+        }
+        if snaks.is_empty() {
+            return vec![];
+        }
+        let reference = Reference::new(snaks);
+        vec![reference]
     }
 }
 

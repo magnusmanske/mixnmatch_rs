@@ -16,6 +16,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 use tempfile::tempfile;
 use urlencoding::encode;
+use wikibase::EntityTrait;
 
 pub const MNM_SITE_URL: &str = "https://mix-n-match.toolforge.org";
 
@@ -575,6 +576,32 @@ impl MixNMatch {
         }
 
         Ok(())
+    }
+
+    pub async fn create_new_wikidata_item(
+        &mut self,
+        item: wikibase::ItemEntity,
+    ) -> Result<String, GenericError> {
+        let comment = "Mix'n'match item creation (V2)".to_string();
+        let json = item.to_json();
+        self.api_log_in().await?;
+        if let Some(mw_api) = self.mw_api.as_mut() {
+            let mut params: HashMap<String, String> = HashMap::new();
+            params.insert("action".to_string(), "wbeditentity".to_string());
+            params.insert("new".to_string(), "item".to_string());
+            params.insert("data".to_string(), json.to_string());
+            params.insert("token".to_string(), mw_api.get_edit_token().await?);
+            if !comment.is_empty() {
+                params.insert("summary".to_string(), comment);
+            }
+            let res = mw_api.post_query_api_json_mut(&params).await?;
+            Ok(res["entity"]["id"]
+                .as_str()
+                .ok_or("Can't get ID of new entity")?
+                .to_string())
+        } else {
+            Err("Could not get a mutable API object".into())
+        }
     }
 
     async fn api_log_in(&mut self) -> Result<(), GenericError> {

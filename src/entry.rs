@@ -1,4 +1,5 @@
 use crate::app_state::*;
+use crate::catalog::Catalog;
 use crate::mixnmatch::*;
 use mysql_async::{from_row, Row, Value};
 use mysql_async::{prelude::*, Conn};
@@ -6,9 +7,12 @@ use rand::prelude::*;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
+use wikibase::entity_container::EntityContainer;
 use wikibase::locale_string::LocaleString;
+use wikibase::{EntityTrait, ItemEntity, Reference, Snak, Statement};
 
 pub const ENTRY_NEW_ID: usize = 0;
+pub const WESTERN_LANGUAGES: &[&str] = &["en", "de", "fr", "es", "nl", "it", "pt"];
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CoordinateLocation {
@@ -35,6 +39,49 @@ impl AuxiliaryRow {
             in_wikidata: row.get(3)?,
             entry_is_matched: row.get(4)?,
         })
+    }
+
+    pub fn fix_external_id(prop: &str, value: &str) -> String {
+        match prop {
+            "P213" => value.replace(' ', ""), // ISNI
+            _ => value.to_string(),
+        }
+    }
+
+    fn get_claim_for_aux(
+        &self,
+        prop: wikibase::Entity,
+        references: &Vec<Reference>,
+    ) -> Option<Statement> {
+        let prop = match prop {
+            wikibase::Entity::Property(prop) => prop,
+            _ => return None, // Ignore
+        };
+        let snak = match prop.datatype().to_owned()? {
+            wikibase::SnakDataType::Time => todo!(),
+            wikibase::SnakDataType::WikibaseItem => Snak::new_item(prop.id(), &self.value),
+            wikibase::SnakDataType::WikibaseProperty => todo!(),
+            wikibase::SnakDataType::WikibaseLexeme => todo!(),
+            wikibase::SnakDataType::WikibaseSense => todo!(),
+            wikibase::SnakDataType::WikibaseForm => todo!(),
+            wikibase::SnakDataType::String => Snak::new_string(prop.id(), &self.value),
+            wikibase::SnakDataType::ExternalId => {
+                Snak::new_external_id(prop.id(), &Self::fix_external_id(prop.id(), &self.value))
+            }
+            wikibase::SnakDataType::GlobeCoordinate => todo!(),
+            wikibase::SnakDataType::MonolingualText => todo!(),
+            wikibase::SnakDataType::Quantity => todo!(),
+            wikibase::SnakDataType::Url => todo!(),
+            wikibase::SnakDataType::CommonsMedia => Snak::new_string(prop.id(), &self.value),
+            wikibase::SnakDataType::Math => todo!(),
+            wikibase::SnakDataType::TabularData => todo!(),
+            wikibase::SnakDataType::MusicalNotation => todo!(),
+            wikibase::SnakDataType::GeoShape => todo!(),
+            wikibase::SnakDataType::NotSet => todo!(),
+            wikibase::SnakDataType::NoValue => todo!(),
+            wikibase::SnakDataType::SomeValue => todo!(),
+        };
+        Some(Statement::new_normal(snak, vec![], references.to_owned()))
     }
 }
 
@@ -264,7 +311,6 @@ impl Entry {
         }
     }
 
-    //TODO test
     pub fn get_entry_url(&self) -> Option<String> {
         if self.id == ENTRY_NEW_ID {
             None
@@ -276,23 +322,41 @@ impl Entry {
         }
     }
 
-    //TODO test
     pub fn get_item_url(&self) -> Option<String> {
         self.q
             .map(|q| format!("https://www.wikidata.org/wiki/Q{q}"))
     }
 
     /// Sets the MixNMatch object. Automatically done when created via from_id().
-    //TODO test
     pub fn set_mnm(&mut self, mnm: &MixNMatch) {
         self.mnm = Some(mnm.clone());
     }
 
     /// Returns the MixNMatch object reference.
-    //TODO test
     pub fn mnm(&self) -> Result<&MixNMatch, GenericError> {
         let mnm = self.mnm.as_ref().ok_or("Entry: No mnm set")?;
         Ok(mnm)
+    }
+
+    pub async fn get_creation_time(&self) -> Option<String> {
+        self.check_valid_id().ok()?;
+        let entry_id = self.id;
+        let mnm = self.mnm().ok()?;
+        let results = mnm
+            .app
+            .get_mnm_conn()
+            .await
+            .ok()?
+            .exec_iter(
+                r"SELECT `timestamp` FROM `entry_creation` WHERE `entry_id`=:entry_id",
+                params! {entry_id},
+            )
+            .await
+            .ok()?
+            .map_and_drop(from_row::<String>)
+            .await
+            .ok()?;
+        results.first().map(|s| s.to_owned())
     }
 
     /// Updates ext_name locally and in the database
@@ -345,6 +409,162 @@ impl Entry {
                 .await?;
         }
         Ok(())
+    }
+
+    pub async fn add_to_item(&self, item: &mut ItemEntity) -> Result<(), GenericError> {
+        let catalog = Catalog::from_id(self.catalog, self.mnm()?).await?;
+        let references = catalog.references(self).await;
+
+        // Own prop if any
+        if catalog.wd_prop.is_some() && catalog.wd_qual.is_none() {
+            let prop = catalog.wd_prop.to_owned().unwrap(); // Safe
+            let snak = Snak::new_external_id(&format!("P{prop}"), &self.ext_id);
+            let claim = Statement::new_normal(snak, vec![], references.to_owned());
+            self.add_claim_or_references(item, claim);
+        }
+
+        // Type
+        if let Some(tn) = &self.type_name {
+            if !tn.is_empty() {
+                let snak = Snak::new_item("P31", tn);
+                let claim = Statement::new_normal(snak, vec![], references.to_owned());
+                self.add_claim_or_references(item, claim);
+            }
+        }
+
+        // Name
+        let language = catalog.search_wp.to_owned();
+        let mut aliases = self.get_aliases().await?;
+        let name = &self.ext_name;
+        let name = MixNMatch::sanitize_person_name(name);
+        let name = MixNMatch::simplify_person_name(&name);
+        let locale_string = LocaleString::new(&language, &name);
+        let mut names = vec![locale_string.to_owned()];
+        if self.type_name == Some("Q5".into()) && WESTERN_LANGUAGES.contains(&language.as_str()) {
+            for l in WESTERN_LANGUAGES {
+                names.push(LocaleString::new(*l, &name));
+            }
+        }
+        for name in names {
+            if item.label_in_locale(&language).is_none() {
+                item.labels_mut().push(name);
+            } else {
+                aliases.push(name);
+            }
+        }
+
+        // Aliases
+        for alias in aliases {
+            if !item.labels().contains(&alias) && !item.aliases().contains(&alias) {
+                item.aliases_mut().push(alias);
+            }
+        }
+
+        // Descriptions
+        // TODO append/merge descriptions?
+        let mut descriptions = self.get_language_descriptions().await?;
+        if self.ext_desc.is_empty() {
+            descriptions.insert(language.to_owned(), self.ext_desc.to_owned());
+        }
+        for (lang, desc) in descriptions {
+            if item.description_in_locale(&lang).is_none() {
+                let desc = LocaleString::new(&lang, &desc);
+                item.descriptions_mut().push(desc);
+            }
+        }
+
+        // Coordinates
+        if let Some(coord) = self.get_coordinate_location().await? {
+            let snak = Snak::new_coordinate("P625", coord.lat, coord.lon);
+            let claim = Statement::new_normal(snak, vec![], references.to_owned());
+            self.add_claim_or_references(item, claim);
+        }
+
+        // Born/died
+        let (born, died) = self.get_person_dates().await?;
+        if let Some(time) = born {
+            let (value, precision) = self.time_precision_from_ymd(&time);
+            let snak = Snak::new_time("P569", &value, precision);
+            let claim = Statement::new_normal(snak, vec![], references.to_owned());
+            self.add_claim_or_references(item, claim);
+        }
+        if let Some(time) = died {
+            let (value, precision) = self.time_precision_from_ymd(&time);
+            let snak = Snak::new_time("P570", &value, precision);
+            let claim = Statement::new_normal(snak, vec![], references.to_owned());
+            self.add_claim_or_references(item, claim);
+        }
+
+        // Auxiliary
+        let auxiliary = self.get_aux().await?;
+        if !auxiliary.is_empty() {
+            let api = self.mnm()?.get_mw_api().await?;
+            let ec = EntityContainer::new();
+            let props2load: Vec<String> = auxiliary
+                .iter()
+                .map(|a| format!("P{}", a.prop_numeric))
+                .collect();
+            let _ = ec.load_entities(&api, &props2load).await; // Try to pre-load all properties in one query
+            for aux in auxiliary {
+                if let Ok(prop) = ec.load_entity(&api, format!("P{}", aux.prop_numeric)).await {
+                    if let Some(claim) = aux.get_claim_for_aux(prop, &references) {
+                        self.add_claim_or_references(item, claim);
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn add_claim_or_references(&self, item: &mut ItemEntity, mut claim: Statement) {
+        // Remove self-referencing references
+        if claim
+            .references()
+            .iter()
+            .flat_map(|r| r.snaks())
+            .any(|snak| snak == claim.main_snak())
+        {
+            claim.set_references(vec![]);
+        }
+
+        // Check if the claim already exists in the item
+        for existing_claim in item.claims_mut() {
+            if existing_claim.main_snak() == claim.main_snak() {
+                // Claim exists, just add references
+                let mut references = existing_claim.references().to_owned();
+                for reference in claim.references() {
+                    if !references.contains(reference) {
+                        references.push(reference.to_owned());
+                    }
+                }
+                existing_claim.set_references(references);
+                return;
+            }
+        }
+
+        // Claim doesn't exist, add it
+        item.add_claim(claim);
+    }
+
+    fn time_precision_from_ymd(&self, ymd: &str) -> (String, u64) {
+        let parts: Vec<&str> = ymd.split('-').collect();
+        let prefix = if ymd.starts_with('-') { "" } else { "+" };
+        match parts.len() {
+            1 => (format!("{prefix}{}-01-01T00:00:00Z", parts[0]), 9),
+            2 => (
+                format!("{prefix}{}-{:0<2}-01T00:00:00Z", parts[0], parts[1]),
+                10,
+            ),
+            3 => (
+                format!(
+                    "{prefix}{}-{:0<2}-{:0<2}T00:00:00Z",
+                    parts[0], parts[1], parts[2]
+                ),
+                11,
+            ),
+            _ => panic!("Entry::time_precision_from_ymd trying to parse {ymd}"),
+        }
     }
 
     /// Updates ext_id locally and in the database
@@ -1050,5 +1270,34 @@ mod tests {
         let result = entry.get_multi_match().await.unwrap();
         let empty: Vec<String> = vec![];
         assert_eq!(result, empty);
+    }
+
+    #[tokio::test]
+    async fn test_get_item_url() {
+        let _test_lock = TEST_MUTEX.lock();
+        let mnm = get_test_mnm();
+        let mut entry = Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        entry.set_match("Q12345", 4).await.unwrap();
+        assert_eq!(
+            entry.get_item_url(),
+            Some("https://www.wikidata.org/wiki/Q12345".to_string())
+        );
+        entry.unmatch().await.unwrap();
+        assert_eq!(entry.get_item_url(), None);
+    }
+
+    #[tokio::test]
+    async fn test_get_entry_url() {
+        let _test_lock = TEST_MUTEX.lock();
+        let mnm = get_test_mnm();
+        let entry = Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        assert_eq!(
+            entry.get_entry_url(),
+            Some(format!(
+                "https://mix-n-match.toolforge.org/#/entry/{TEST_ENTRY_ID}"
+            ))
+        );
+        let entry = Entry::new_from_catalog_and_ext_id(1, "234");
+        assert_eq!(entry.get_entry_url(), None);
     }
 }
