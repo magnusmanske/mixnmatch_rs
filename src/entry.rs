@@ -1100,17 +1100,14 @@ impl Entry {
         Ok(())
     }
 
-    //TODO test
     pub fn is_unmatched(&self) -> bool {
         self.q.is_none()
     }
 
-    //TODO test
     pub fn is_partially_matched(&self) -> bool {
         self.user == Some(0)
     }
 
-    //TODO test
     pub fn is_fully_matched(&self) -> bool {
         match self.user {
             Some(user_id) => user_id > 0,
@@ -1299,5 +1296,55 @@ mod tests {
         );
         let entry = Entry::new_from_catalog_and_ext_id(1, "234");
         assert_eq!(entry.get_entry_url(), None);
+    }
+
+    #[test]
+    fn test_time_precision_from_ymd() {
+        let entry = Entry::new_from_catalog_and_ext_id(1, "234");
+        assert_eq!(
+            entry.time_precision_from_ymd("2021-01-01"),
+            ("+2021-01-01T00:00:00Z".to_string(), 11)
+        );
+        assert_eq!(
+            entry.time_precision_from_ymd("2021-01"),
+            ("+2021-01-01T00:00:00Z".to_string(), 10)
+        );
+        assert_eq!(
+            entry.time_precision_from_ymd("2021"),
+            ("+2021-01-01T00:00:00Z".to_string(), 9)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_is_unmatched() {
+        let _test_lock = TEST_MUTEX.lock();
+        let mnm = get_test_mnm();
+        let mut entry = Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        entry.set_match("Q12345", 4).await.unwrap();
+        assert!(!entry.is_unmatched());
+        entry.unmatch().await.unwrap();
+        assert!(entry.is_unmatched());
+    }
+
+    #[tokio::test]
+    async fn test_is_partially_matched() {
+        let _test_lock = TEST_MUTEX.lock();
+        let mnm = get_test_mnm();
+        let mut entry = Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        entry.set_match("Q12345", 0).await.unwrap();
+        assert!(entry.is_partially_matched());
+        entry.unmatch().await.unwrap();
+        assert!(!entry.is_partially_matched());
+    }
+
+    #[tokio::test]
+    async fn is_fully_matched() {
+        let _test_lock = TEST_MUTEX.lock();
+        let mnm = get_test_mnm();
+        let mut entry = Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        entry.set_match("Q12345", 4).await.unwrap();
+        assert!(entry.is_fully_matched());
+        entry.unmatch().await.unwrap();
+        assert!(!entry.is_fully_matched());
     }
 }
