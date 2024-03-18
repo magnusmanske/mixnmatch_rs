@@ -176,61 +176,75 @@ impl AppState {
                 .split(',')
                 .filter_map(|s| s.parse::<usize>().ok())
                 .collect();
-            let sql = format!(
-                r#"SELECT entry_id,aux_p,aux_name FROM auxiliary WHERE entry_id IN ({entries_s}) AND aux_p IN ({props_s}) UNION SELECT entry.id,catalog.wd_prop,ext_id FROM entry,catalog WHERE entry.catalog=catalog.id AND entry.id IN ({entries_s}) AND wd_prop IN ({props_s})"#
-            );
+            self.create_item_from_entries(&entries_v, &props_s, &mut conn, &mut mnm)
+                .await?;
+        }
+        Ok(())
+    }
 
-            let entry_prop_values: Vec<_> = conn
-                .exec_iter(sql, ())
-                .await
-                .expect("run_from_props: No results")
-                .map_and_drop(from_row::<(usize, u32, String)>)
-                .await
-                .expect("run_from_props: Result retrieval failure");
+    pub async fn create_item_from_entries(
+        &self,
+        entries_v: &[usize],
+        props_s: &str,
+        conn: &mut Conn,
+        mnm: &mut MixNMatch,
+    ) -> Result<(), GenericError> {
+        let entries_s: Vec<_> = entries_v.iter().map(|id| format!("{id}")).collect();
+        let entries_s = entries_s.join(",");
+        let sql = format!(
+            r#"SELECT entry_id,aux_p,aux_name FROM auxiliary WHERE entry_id IN ({entries_s}) AND aux_p IN ({props_s}) UNION SELECT entry.id,catalog.wd_prop,ext_id FROM entry,catalog WHERE entry.catalog=catalog.id AND entry.id IN ({entries_s}) AND wd_prop IN ({props_s})"#
+        );
 
-            let prop_values = entry_prop_values
-                .iter()
-                .map(|(_entry_id, prop, value)| format!("P{prop}={value}"))
-                .collect::<Vec<String>>()
-                .join("|");
-            let query = format!(r#"haswbstatement:"{prop_values}""#);
-            let mut qs = mnm.wd_search(&query).await?;
-            if qs.is_empty() {
-                println!("Create new item from {entries_s}");
-                let mut new_item = ItemEntity::new_empty();
-                for entry_id in &entries_v {
-                    let entry = Entry::from_id(*entry_id, &mnm).await?;
-                    entry.add_to_item(&mut new_item).await?;
-                }
-                // println!("{:#?}", new_item);
-                match mnm.create_new_wikidata_item(new_item).await {
-                    Ok(q) => {
-                        println!("Created https://www.wikidata.org/wiki/{q}");
-                        for entry_id in &entries_v {
-                            let mut entry = Entry::from_id(*entry_id, &mnm).await?;
-                            let _ = entry.set_match(&q, USER_AUX_MATCH).await;
-                        }
+        let entry_prop_values: Vec<_> = conn
+            .exec_iter(sql, ())
+            .await
+            .expect("run_from_props: No results")
+            .map_and_drop(from_row::<(usize, u32, String)>)
+            .await
+            .expect("run_from_props: Result retrieval failure");
+
+        let prop_values = entry_prop_values
+            .iter()
+            .map(|(_entry_id, prop, value)| format!("P{prop}={value}"))
+            .collect::<Vec<String>>()
+            .join("|");
+        let query = format!(r#"haswbstatement:"{prop_values}""#);
+        let mut qs = mnm.wd_search(&query).await?;
+        if qs.is_empty() {
+            println!("Create new item from {entries_s}");
+            let mut new_item = ItemEntity::new_empty();
+            for entry_id in entries_v {
+                let entry = Entry::from_id(*entry_id, mnm).await?;
+                entry.add_to_item(&mut new_item).await?;
+            }
+            // println!("{:#?}", new_item);
+            match mnm.create_new_wikidata_item(new_item).await {
+                Ok(q) => {
+                    println!("Created https://www.wikidata.org/wiki/{q}");
+                    for entry_id in entries_v {
+                        let mut entry = Entry::from_id(*entry_id, mnm).await?;
+                        let _ = entry.set_match(&q, USER_AUX_MATCH).await;
                     }
-                    Err(e) => {
-                        // Ignore TODO try again with blank description?
-                        println!("ERROR: {e}");
-                        continue;
+                }
+                Err(e) => {
+                    // Ignore TODO try again with blank description?
+                    println!("ERROR: {e}");
+                    return Ok(());
+                }
+            }
+        } else {
+            qs.sort();
+            qs.dedup();
+            if qs.len() == 1 {
+                let q = qs.first().unwrap(); // Safe
+                for entry_id in entries_v {
+                    let mut entry = Entry::from_id(*entry_id, mnm).await?;
+                    if !entry.is_fully_matched() {
+                        let _ = entry.set_match(q, USER_AUX_MATCH).await?;
                     }
                 }
             } else {
-                qs.sort();
-                qs.dedup();
-                if qs.len() == 1 {
-                    let q = qs.first().unwrap(); // Safe
-                    for entry_id in &entries_v {
-                        let mut entry = Entry::from_id(*entry_id, &mnm).await?;
-                        if !entry.is_fully_matched() {
-                            let _ = entry.set_match(q, USER_AUX_MATCH).await?;
-                        }
-                    }
-                } else {
-                    println!("Multiple potential matches for {entries_s} {qs:?}, skipping");
-                }
+                println!("Multiple potential matches for {entries_s} {qs:?}, skipping");
             }
         }
         Ok(())
