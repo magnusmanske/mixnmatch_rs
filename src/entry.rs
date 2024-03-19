@@ -735,7 +735,6 @@ impl Entry {
         Ok(ret)
     }
 
-    //TODO test
     pub async fn add_alias(&self, s: &LocaleString) -> Result<(), GenericError> {
         self.check_valid_id()?;
         let entry_id = self.id;
@@ -1361,5 +1360,48 @@ mod tests {
         assert!(entry.check_valid_id().is_ok());
         let entry = Entry::new_from_catalog_and_ext_id(1, "234");
         assert!(entry.check_valid_id().is_err());
+    }
+
+    #[tokio::test]
+    async fn test_add_alias() {
+        let _test_lock = TEST_MUTEX.lock();
+        let mnm = get_test_mnm();
+        let entry = Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        let s = LocaleString::new("en", "test");
+        entry.add_alias(&s).await.unwrap();
+        assert!(entry.get_aliases().await.unwrap().contains(&s));
+    }
+
+    #[tokio::test]
+    async fn test_get_claim_for_aux() {
+        let aux = AuxiliaryRow {
+            row_id: 1,
+            prop_numeric: 12345,
+            value: "Q5678".to_string(),
+            in_wikidata: true,
+            entry_is_matched: true,
+        };
+        let property = wikibase::PropertyEntity::new(
+            "P12345".to_string(),
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            Some(wikibase::SnakDataType::WikibaseItem),
+            false,
+        );
+        let prop = wikibase::Entity::Property(property);
+        // prop.set_id("P12345".to_string());
+        // match prop {
+        //     wikibase::Entity::Property(mut p) => {
+        //         p.set_datatype(Some(wikibase::SnakDataType::WikibaseItem));
+        //     }
+        //     _ => panic!(),
+        // }
+        // let prop = prop;
+        let references = vec![];
+        let claim = aux.get_claim_for_aux(prop, &references);
+        let expected = Snak::new_item("P12345", "Q5678");
+        assert_eq!(*claim.unwrap().main_snak(), expected);
     }
 }
