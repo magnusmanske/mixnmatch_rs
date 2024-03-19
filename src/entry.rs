@@ -1391,16 +1391,7 @@ mod tests {
             false,
         );
         let prop = wikibase::Entity::Property(property);
-        // prop.set_id("P12345".to_string());
-        // match prop {
-        //     wikibase::Entity::Property(mut p) => {
-        //         p.set_datatype(Some(wikibase::SnakDataType::WikibaseItem));
-        //     }
-        //     _ => panic!(),
-        // }
-        // let prop = prop;
-        let references = vec![];
-        let claim = aux.get_claim_for_aux(prop, &references);
+        let claim = aux.get_claim_for_aux(prop, &vec![]);
         let expected = Snak::new_item("P12345", "Q5678");
         assert_eq!(*claim.unwrap().main_snak(), expected);
     }
