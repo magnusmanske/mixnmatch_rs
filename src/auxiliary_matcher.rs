@@ -1,10 +1,10 @@
-use crate::app_state::*;
 use crate::catalog::*;
 use crate::entry::*;
 use crate::issue::*;
 use crate::job::*;
 use crate::mixnmatch::*;
 use crate::wikidata_commands::*;
+use anyhow::Result;
 use futures::future::join_all;
 use lazy_static::lazy_static;
 use mysql_async::from_row;
@@ -167,7 +167,7 @@ impl AuxiliaryMatcher {
     }
 
     //TODO test
-    async fn get_properties_using_items(mnm: &MixNMatch) -> Result<Vec<String>, GenericError> {
+    async fn get_properties_using_items(mnm: &MixNMatch) -> Result<Vec<String>> {
         let mw_api = mnm.get_mw_api().await?;
         let sparql = "SELECT ?p WHERE { ?p rdf:type wikibase:Property; wikibase:propertyType wikibase:WikibaseItem }";
         let sparql_results = mw_api.sparql_query(sparql).await?;
@@ -175,9 +175,7 @@ impl AuxiliaryMatcher {
     }
 
     //TODO test
-    async fn get_properties_that_have_external_ids(
-        mnm: &MixNMatch,
-    ) -> Result<Vec<String>, GenericError> {
+    async fn get_properties_that_have_external_ids(mnm: &MixNMatch) -> Result<Vec<String>> {
         let mw_api = mnm.get_mw_api().await?;
         let sparql = "SELECT ?p WHERE { ?p rdf:type wikibase:Property; wikibase:propertyType wikibase:ExternalId }";
         let sparql_results = mw_api.sparql_query(sparql).await?;
@@ -196,7 +194,7 @@ impl AuxiliaryMatcher {
     }
 
     //TODO test
-    pub async fn match_via_auxiliary(&mut self, catalog_id: usize) -> Result<(), GenericError> {
+    pub async fn match_via_auxiliary(&mut self, catalog_id: usize) -> Result<()> {
         let blacklisted_catalogs: Vec<String> = AUX_BLACKLISTED_CATALOGS
             .iter()
             .map(|u| format!("{}", u))
@@ -348,12 +346,9 @@ impl AuxiliaryMatcher {
     }
 
     //TODO test
-    pub async fn add_auxiliary_to_wikidata(
-        &mut self,
-        catalog_id: usize,
-    ) -> Result<(), GenericError> {
+    pub async fn add_auxiliary_to_wikidata(&mut self, catalog_id: usize) -> Result<()> {
         if AUX_DO_NOT_SYNC_CATALOG_TO_WIKIDATA.contains(&catalog_id) {
-            return Err(Box::new(AuxiliaryMatcherError::BlacklistedCatalog));
+            return Err(AuxiliaryMatcherError::BlacklistedCatalog.into());
         }
         self.properties_using_items = Self::get_properties_using_items(&self.mnm).await?;
         self.properties_that_have_external_ids =

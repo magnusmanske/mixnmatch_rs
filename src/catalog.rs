@@ -1,6 +1,6 @@
-use crate::app_state::*;
 use crate::entry::AuxiliaryRow;
 use crate::mixnmatch::*;
+use anyhow::{anyhow, Result};
 use mysql_async::prelude::*;
 use mysql_async::Row;
 use wikibase::Reference;
@@ -48,7 +48,7 @@ impl Catalog {
     }
 
     /// Returns a Catalog object for a given entry ID.
-    pub async fn from_id(catalog_id: usize, mnm: &MixNMatch) -> Result<Self, GenericError> {
+    pub async fn from_id(catalog_id: usize, mnm: &MixNMatch) -> Result<Self> {
         let sql = r"SELECT id,`name`,url,`desc`,`type`,wd_prop,wd_qual,search_wp,active,owner,note,source_item,has_person_date,taxon_run FROM `catalog` WHERE `id`=:catalog_id";
         let mut rows: Vec<Catalog> = mnm
             .app
@@ -64,7 +64,7 @@ impl Catalog {
         // `id` is a unique index, so there can be only zero or one row in rows.
         let mut ret = rows
             .pop()
-            .ok_or(format!("No catalog #{}", catalog_id))?
+            .ok_or(anyhow!("No catalog #{}", catalog_id))?
             .to_owned();
         ret.set_mnm(mnm);
         Ok(ret)
@@ -76,15 +76,15 @@ impl Catalog {
         self.mnm = Some(mnm.clone());
     }
 
-    fn mnm(&self) -> Result<&MixNMatch, GenericError> {
+    fn mnm(&self) -> Result<&MixNMatch> {
         match &self.mnm {
             Some(mnm) => Ok(mnm),
-            None => Err(format!("Catalog {}: MnM not set", self.id).into()),
+            None => Err(anyhow!("Catalog {}: MnM not set", self.id)),
         }
     }
 
     //TODO test
-    pub async fn refresh_overview_table(&self) -> Result<(), GenericError> {
+    pub async fn refresh_overview_table(&self) -> Result<()> {
         let catalog_id = self.id;
         let sql = r"REPLACE INTO `overview` (catalog,total,noq,autoq,na,manual,nowd,multi_match,types) VALUES (
             :catalog_id,

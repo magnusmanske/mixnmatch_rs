@@ -15,20 +15,21 @@ urlencoding = "^2"
 roxmltree = "*"
 mediawiki = "*"
 wikibase = { git = "https://gitlab.com/tobias47n9e/wikibase_rs" }
-tokio = { version = "^1", features = ["full","rt-multi-thread"] }
+tokio = { version = "^1", features = ["full", "rt-multi-thread"] }
 futures = "*"
 mysql_async = "*"
 md5 = "*"
-reqwest = { version="*" , features=["gzip","deflate","brotli"] }
+reqwest = { version = "*", features = ["gzip", "deflate", "brotli"] }
 async-trait = "*"
 csv = "*"
 rand = "*"
-uuid = { version="*", features=["v4"] }
+uuid = { version = "*", features = ["v4"] }
 itertools = "*"
 html-escape = "*"
 tempfile = "*"
 fancy-regex = "*"
 dashmap = "5"
+anyhow = "*"
 
 [profile.release]
 lto = 'thin'

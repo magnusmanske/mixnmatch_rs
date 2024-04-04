@@ -1,9 +1,9 @@
-use crate::app_state::*;
 use crate::catalog::Catalog;
 use crate::entry::*;
 use crate::job::*;
 use crate::mixnmatch::MixNMatch;
 use crate::update_catalog::ExtendedEntry;
+use anyhow::Result;
 use async_trait::async_trait;
 use lazy_static::lazy_static;
 use mysql_async::from_row;
@@ -37,7 +37,7 @@ lazy_static! {
 
 #[derive(Debug, Clone)]
 enum AutoscrapeError {
-    NoAutoscrapeForCatalog,
+    NoAutoscrapeForCatalog(usize),
     UnknownLevelType(String),
     BadType(Value),
     MediawikiFailure(String),
@@ -49,8 +49,12 @@ impl fmt::Display for AutoscrapeError {
     //TODO test
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            AutoscrapeError::UnknownLevelType(s) => write!(f, "{}", s), // user-facing output
-            _ => write!(f, "{}", self),                                 // user-facing output
+            AutoscrapeError::UnknownLevelType(s) => write!(f, "{s}"), // user-facing output
+            AutoscrapeError::BadType(v) => write!(f, "{v}"),
+            AutoscrapeError::MediawikiFailure(v) => write!(f, "{v}"),
+            AutoscrapeError::NoAutoscrapeForCatalog(catalog_id) => {
+                write!(f, "No Autoscraper for catalog {catalog_id}")
+            }
         }
     }
 }
@@ -290,7 +294,7 @@ impl AutoscrapeFollow {
 
     /// Follows the next URL
     //TODO test
-    async fn refill_cache(&mut self, autoscrape: &Autoscrape) -> Result<(), GenericError> {
+    async fn refill_cache(&mut self, autoscrape: &Autoscrape) -> Result<()> {
         // Construct URL with level values
         let mut url = self.url.clone();
         let level2value: HashMap<String, String> = autoscrape
@@ -394,7 +398,7 @@ impl AutoscrapeMediaWiki {
 
     /// Returns an allpages query result. Order is reversed so A->Z works via pop().
     //TODO test
-    async fn refill_cache(&mut self) -> Result<(), GenericError> {
+    async fn refill_cache(&mut self) -> Result<()> {
         let url = format!("{}?action=query&format=json&list=allpages&apnamespace=0&aplimit=500&apfilterredir=nonredirects&apfrom={}",&self.url,&self.apfrom) ;
         if Some(url.to_owned()) == self.last_url {
             return Ok(()); // Empty cache, will trigger end-of-the-line
@@ -648,7 +652,7 @@ impl JsonStuff for AutoscrapeScraper {}
 
 impl AutoscrapeScraper {
     //TODO test
-    fn from_json(json: &Value) -> Result<Self, GenericError> {
+    fn from_json(json: &Value) -> Result<Self> {
         let resolve = json
             .get("resolve")
             .ok_or_else(|| AutoscrapeError::BadType(json.to_owned()))?;
@@ -666,7 +670,7 @@ impl AutoscrapeScraper {
     }
 
     //TODO test
-    fn resolve_aux_from_json(json: &Value) -> Result<Vec<AutoscrapeResolveAux>, GenericError> {
+    fn resolve_aux_from_json(json: &Value) -> Result<Vec<AutoscrapeResolveAux>> {
         Ok(json // TODO test aux, eg catalog 287
             .get("aux")
             .map(|x| x.to_owned())
@@ -680,7 +684,7 @@ impl AutoscrapeScraper {
     }
 
     //TODO test
-    fn regex_entry_from_json(json: &Value) -> Result<Vec<AutoscrapeRegex>, GenericError> {
+    fn regex_entry_from_json(json: &Value) -> Result<Vec<AutoscrapeRegex>> {
         let rx_entry = json
             .get("rx_entry")
             .ok_or_else(|| AutoscrapeError::BadType(json.to_owned()))?;
@@ -711,7 +715,7 @@ impl AutoscrapeScraper {
     }
 
     //TODO test
-    fn regex_block_from_json(json: &Value) -> Result<Option<AutoscrapeRegex>, GenericError> {
+    fn regex_block_from_json(json: &Value) -> Result<Option<AutoscrapeRegex>> {
         Ok(
             // TODO test
             if let Some(v) = json.get("rx_block") {
@@ -846,7 +850,7 @@ impl Jobbable for Autoscrape {
 
 impl Autoscrape {
     //TODO test
-    pub async fn new(catalog_id: usize, mnm: &MixNMatch) -> Result<Self, GenericError> {
+    pub async fn new(catalog_id: usize, mnm: &MixNMatch) -> Result<Self> {
         let results = mnm
             .app
             .get_mnm_conn()
@@ -860,7 +864,7 @@ impl Autoscrape {
             .await?;
         let (id, json) = results
             .first()
-            .ok_or(AutoscrapeError::NoAutoscrapeForCatalog)?;
+            .ok_or(AutoscrapeError::NoAutoscrapeForCatalog(catalog_id))?;
         let json: Value = serde_json::from_str(json)?;
         let mut ret = Self {
             autoscrape_id: *id,
@@ -872,7 +876,7 @@ impl Autoscrape {
             levels: vec![],
             scraper: AutoscrapeScraper::from_json(
                 json.get("scraper")
-                    .ok_or(AutoscrapeError::NoAutoscrapeForCatalog)?,
+                    .ok_or(AutoscrapeError::NoAutoscrapeForCatalog(catalog_id))?,
             )?,
             job: None,
             urls_loaded: 0,
@@ -1024,7 +1028,7 @@ impl Autoscrape {
     // }
 
     //TODO test
-    async fn add_batch(&mut self) -> Result<(), GenericError> {
+    async fn add_batch(&mut self) -> Result<()> {
         if self.entry_batch.is_empty() {
             let _ = self.remember_state().await;
             return Ok(());
@@ -1065,7 +1069,7 @@ impl Autoscrape {
     }
 
     //TODO test
-    pub async fn remember_state(&mut self) -> Result<(), GenericError> {
+    pub async fn remember_state(&mut self) -> Result<()> {
         let json: Vec<Value> = self
             .levels
             .iter()
@@ -1077,7 +1081,7 @@ impl Autoscrape {
     }
 
     //TODO test
-    pub async fn run(&mut self) -> Result<(), GenericError> {
+    pub async fn run(&mut self) -> Result<()> {
         self.init().await;
         let _ = self.start().await;
         loop {
@@ -1091,7 +1095,7 @@ impl Autoscrape {
     }
 
     //TODO test
-    pub async fn start(&mut self) -> Result<(), GenericError> {
+    pub async fn start(&mut self) -> Result<()> {
         let autoscrape_id = self.autoscrape_id;
         let sql = "UPDATE `autoscrape` SET `status`='RUNNING'`last_run_min`=NULL,`last_run_urls`=NULL WHERE `id`=:autoscrape_id" ;
         if let Ok(mut conn) = self.mnm.app.get_mnm_conn().await {
@@ -1110,7 +1114,7 @@ impl Autoscrape {
     }
 
     //TODO test
-    pub async fn finish(&mut self) -> Result<(), GenericError> {
+    pub async fn finish(&mut self) -> Result<()> {
         let _ = self.add_batch().await; // Flush
         let autoscrape_id = self.autoscrape_id;
         let last_run_urls = self.urls_loaded;
@@ -1129,7 +1133,7 @@ impl Autoscrape {
         Ok(())
     }
 
-    pub fn reqwest_client_external() -> Result<reqwest::Client, GenericError> {
+    pub fn reqwest_client_external() -> Result<reqwest::Client> {
         Ok(reqwest::Client::builder()
             .user_agent(AUTOSCRAPER_USER_AGENT)
             .timeout(core::time::Duration::from_secs(

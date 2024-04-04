@@ -1,9 +1,9 @@
-use crate::app_state::*;
 use crate::catalog::*;
 use crate::entry::*;
 use crate::issue::*;
 use crate::job::*;
 use crate::mixnmatch::*;
+use anyhow::Result;
 use chrono::prelude::*;
 use chrono::{NaiveDateTime, Utc};
 use futures::future::join_all;
@@ -73,7 +73,7 @@ impl AutoMatch {
         }
     }
 
-    pub async fn automatch_by_sitelink(&mut self, catalog_id: usize) -> Result<(), GenericError> {
+    pub async fn automatch_by_sitelink(&mut self, catalog_id: usize) -> Result<()> {
         let language = Catalog::from_id(catalog_id, &self.mnm).await?.search_wp;
         let site = format!("{}wiki", &language);
         let sql = format!("SELECT `id`,`ext_name` FROM entry WHERE catalog=:catalog_id AND q IS NULL
@@ -160,7 +160,7 @@ impl AutoMatch {
     async fn match_entries_to_items(
         &self,
         entry_id2items: &HashMap<usize, Vec<String>>,
-    ) -> Result<(), GenericError> {
+    ) -> Result<()> {
         let entry_ids: Vec<usize> = entry_id2items.keys().copied().collect();
         let mut entries = Entry::multiple_from_ids(&entry_ids, &self.mnm).await?;
         let mut futures = vec![];
@@ -191,7 +191,7 @@ impl AutoMatch {
     //     Ok(())
     // }
 
-    pub async fn automatch_by_search(&mut self, catalog_id: usize) -> Result<(), GenericError> {
+    pub async fn automatch_by_search(&mut self, catalog_id: usize) -> Result<()> {
         let sql = format!("SELECT `id`,`ext_name`,`type`,
             IFNULL((SELECT group_concat(DISTINCT `label` SEPARATOR '|') FROM aliases WHERE entry_id=entry.id),'') AS `aliases` 
             FROM `entry` WHERE `catalog`=:catalog_id {} 
@@ -292,7 +292,7 @@ impl AutoMatch {
         Ok(())
     }
 
-    pub async fn automatch_creations(&mut self, catalog_id: usize) -> Result<(), GenericError> {
+    pub async fn automatch_creations(&mut self, catalog_id: usize) -> Result<()> {
         let sql = "SELECT object_title,object_entry_id,search_query FROM vw_object_creator WHERE object_catalog={} AND object_q IS NULL
                 UNION
                 SELECT object_title,object_entry_id,search_query FROM vw_object_creator_aux WHERE object_catalog={} AND object_q IS NULL";
@@ -331,7 +331,7 @@ impl AutoMatch {
         Ok(())
     }
 
-    pub async fn automatch_simple(&mut self, catalog_id: usize) -> Result<(), GenericError> {
+    pub async fn automatch_simple(&mut self, catalog_id: usize) -> Result<()> {
         let sql = format!("SELECT `id`,`ext_name`,`type`,
             IFNULL((SELECT group_concat(DISTINCT `label` SEPARATOR '|') FROM aliases WHERE entry_id=entry.id),'') AS `aliases` 
             FROM `entry` WHERE `catalog`=:catalog_id {} 
@@ -399,10 +399,7 @@ impl AutoMatch {
     }
 
     //TODO test
-    pub async fn automatch_from_other_catalogs(
-        &mut self,
-        catalog_id: usize,
-    ) -> Result<(), GenericError> {
+    pub async fn automatch_from_other_catalogs(&mut self, catalog_id: usize) -> Result<()> {
         let sql1 = "SELECT `id`,`ext_name`,`type` FROM entry WHERE catalog=:catalog_id AND q IS NULL LIMIT :batch_size OFFSET :offset" ;
         let mut offset = self.get_last_job_offset().await;
         let batch_size = 500;
@@ -494,7 +491,7 @@ impl AutoMatch {
         Ok(())
     }
 
-    pub async fn purge_automatches(&self, catalog_id: usize) -> Result<(), GenericError> {
+    pub async fn purge_automatches(&self, catalog_id: usize) -> Result<()> {
         let mut conn = self.mnm.app.get_mnm_conn().await?;
         conn.exec_drop("UPDATE entry SET q=NULL,user=NULL,`timestamp`=NULL WHERE catalog=:catalog_id AND user=0", params! {catalog_id}).await?;
         conn.exec_drop(
@@ -505,7 +502,7 @@ impl AutoMatch {
         Ok(())
     }
 
-    pub async fn match_person_by_dates(&mut self, catalog_id: usize) -> Result<(), GenericError> {
+    pub async fn match_person_by_dates(&mut self, catalog_id: usize) -> Result<()> {
         let mw_api = self.mnm.get_mw_api().await?;
         let sql = "SELECT entry_id,ext_name,born,died 
             FROM (`entry` join `person_dates`)
@@ -586,10 +583,7 @@ impl AutoMatch {
         Ok(())
     }
 
-    pub async fn match_person_by_single_date(
-        &mut self,
-        catalog_id: usize,
-    ) -> Result<(), GenericError> {
+    pub async fn match_person_by_single_date(&mut self, catalog_id: usize) -> Result<()> {
         let precision = 10; // 2022-xx-xx=10; use 4 for just the year
         let match_field = "born";
         let match_prop = if match_field == "born" {
@@ -687,7 +681,7 @@ impl AutoMatch {
     }
 
     //TODO test
-    async fn search_person(&self, name: &str) -> Result<Vec<String>, GenericError> {
+    async fn search_person(&self, name: &str) -> Result<Vec<String>> {
         let name = MixNMatch::sanitize_person_name(name);
         let name = MixNMatch::simplify_person_name(&name);
         self.mnm.wd_search_with_type(&name, "Q5").await
@@ -700,7 +694,7 @@ impl AutoMatch {
         birth_year: i32,
         death_year: i32,
         mw_api: &mediawiki::api::Api,
-    ) -> Result<Vec<String>, GenericError> {
+    ) -> Result<Vec<String>> {
         let mut ret = vec![];
         for items in all_items.chunks(100) {
             let item_str = items.join(" wd:");

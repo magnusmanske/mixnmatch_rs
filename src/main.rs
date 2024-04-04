@@ -16,9 +16,10 @@ pub mod taxon_matcher;
 pub mod update_catalog;
 pub mod wikidata_commands;
 
+use anyhow::Result;
 use std::env;
 
-async fn run() -> Result<(), app_state::GenericError> {
+async fn run() -> Result<()> {
     let argv: Vec<String> = env::args_os().map(|s| s.into_string().unwrap()).collect();
     let config_file = argv
         .get(2)
@@ -29,7 +30,7 @@ async fn run() -> Result<(), app_state::GenericError> {
         Some("job") => {
             app.run_single_job(
                 argv.get(3)
-                    .expect("Job ID as thirs parameter required")
+                    .expect("Job ID as third parameter required")
                     .parse::<usize>()
                     .unwrap(),
             )
@@ -62,7 +63,7 @@ async fn run() -> Result<(), app_state::GenericError> {
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 3)]
-async fn main() -> Result<(), app_state::GenericError> {
+async fn main() -> Result<()> {
     match run().await {
         Ok(_) => {}
         Err(e) => println!("CATASTROPHIC FAILURE: {e}"),

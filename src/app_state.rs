@@ -1,4 +1,5 @@
 use crate::entry::Entry;
+use anyhow::{anyhow, Result};
 use dashmap::DashMap;
 use mysql_async::prelude::*;
 use mysql_async::{from_row, Conn, Opts, OptsBuilder, PoolConstraints, PoolOpts};
@@ -14,8 +15,6 @@ use crate::job::*;
 use crate::mixnmatch::*;
 use core::time::Duration;
 use tokio::time::sleep;
-
-pub type GenericError = Box<dyn std::error::Error + Send + Sync>;
 
 pub const DB_POOL_MIN: usize = 0;
 pub const DB_POOL_MAX: usize = 3;
@@ -36,7 +35,7 @@ pub struct AppState {
 
 impl AppState {
     /// Create an AppState object from a config JSON file
-    pub fn from_config_file(filename: &str) -> Result<Self, GenericError> {
+    pub fn from_config_file(filename: &str) -> Result<Self> {
         let mut path = env::current_dir().expect("Can't get CWD");
         path.push(filename);
         let file = File::open(&path)?;
@@ -123,19 +122,15 @@ impl AppState {
         self.wdrc_pool.get_conn().await
     }
 
-    pub async fn disconnect(&self) -> Result<(), GenericError> {
+    pub async fn disconnect(&self) -> Result<()> {
         self.wd_pool.clone().disconnect().await?;
         self.mnm_pool.clone().disconnect().await?;
         Ok(())
     }
 
-    pub async fn run_from_props(
-        &self,
-        props: Vec<u32>,
-        min_entries: u16,
-    ) -> Result<(), GenericError> {
+    pub async fn run_from_props(&self, props: Vec<u32>, min_entries: u16) -> Result<()> {
         if props.len() < 2 {
-            return Err("Minimum of two properties required.".into());
+            return Err(anyhow!("Minimum of two properties required."));
         }
         let mut mnm = MixNMatch::new(self.clone());
         let first_prop = props.first().unwrap(); // Safe
@@ -188,7 +183,7 @@ impl AppState {
         props_s: &str,
         conn: &mut Conn,
         mnm: &mut MixNMatch,
-    ) -> Result<(), GenericError> {
+    ) -> Result<()> {
         let entries_s: Vec<_> = entries_v.iter().map(|id| format!("{id}")).collect();
         let entries_s = entries_s.join(",");
         let sql = format!(
@@ -250,7 +245,7 @@ impl AppState {
         Ok(())
     }
 
-    pub async fn run_single_hp_job(&self) -> Result<(), GenericError> {
+    pub async fn run_single_hp_job(&self) -> Result<()> {
         let mnm = MixNMatch::new(self.clone());
         let mut job = Job::new(&mnm);
         if let Some(job_id) = job.get_next_high_priority_job().await {
@@ -261,7 +256,7 @@ impl AppState {
         Ok(())
     }
 
-    pub async fn run_single_job(&self, job_id: usize) -> Result<(), GenericError> {
+    pub async fn run_single_job(&self, job_id: usize) -> Result<()> {
         let mnm = MixNMatch::new(self.clone());
         let handle = tokio::spawn(async move {
             let mut job = Job::new(&mnm);
@@ -284,7 +279,8 @@ impl AppState {
             loop {
                 sleep(tokio::time::Duration::from_secs(60 * check_every_minutes)).await;
                 // println!("seppuku check running");
-                let utc = chrono::Utc::now() - chrono::Duration::minutes(max_age_min);
+                let min = chrono::Duration::try_minutes(max_age_min).unwrap();
+                let utc = chrono::Utc::now() - min;
                 let ts = MixNMatch::get_timestamp_relative(&utc);
                 let sql = format!("SELECT
                     (SELECT count(*) FROM jobs WHERE `status` IN ('RUNNING')) AS running,
@@ -303,14 +299,15 @@ impl AppState {
                     .first()
                     .expect("seppuku: No DB results");
                 if running > 0 && running_recent == 0 {
-                    panic!("seppuku: {running} jobs running but no activity within {max_age_min} minutes, commiting seppuku");
+                    println!("seppuku: {running} jobs running but no activity within {max_age_min} minutes, commiting seppuku");
+                    std::process::exit(0);
                 }
                 // println!("seppuku: honor intact");
             }
         });
     }
 
-    pub async fn forever_loop(&self) -> Result<(), GenericError> {
+    pub async fn forever_loop(&self) -> Result<()> {
         let mnm = MixNMatch::new(self.clone());
         let current_jobs: Arc<DashMap<usize, TaskSize>> = Arc::new(DashMap::new());
 

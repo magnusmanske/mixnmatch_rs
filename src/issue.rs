@@ -1,5 +1,5 @@
-use crate::app_state::*;
 use crate::mixnmatch::*;
+use anyhow::Result;
 use mysql_async::prelude::*;
 use serde_json::Value;
 use std::error::Error;
@@ -99,7 +99,7 @@ impl Issue {
         issue_type: IssueType,
         json: Value,
         mnm: &MixNMatch,
-    ) -> Result<Self, GenericError> {
+    ) -> Result<Self> {
         Ok(Self {
             mnm: mnm.clone(),
             entry_id,
@@ -112,7 +112,7 @@ impl Issue {
         })
     }
 
-    pub async fn insert(&self) -> Result<(), GenericError> {
+    pub async fn insert(&self) -> Result<()> {
         let sql = "INSERT IGNORE INTO `issues` (`entry_id`,`type`,`json`,`random`,`catalog`)
             SELECT :entry_id,:issue_type,:json,rand(),`catalog` FROM `entry` WHERE `id`=:entry_id";
         let params = params! {

@@ -1,6 +1,6 @@
-use crate::app_state::*;
 use crate::catalog::Catalog;
 use crate::mixnmatch::*;
+use anyhow::{anyhow, Result};
 use mysql_async::{from_row, Row, Value};
 use mysql_async::{prelude::*, Conn};
 use rand::prelude::*;
@@ -138,7 +138,7 @@ impl Entry {
 
     /// Returns an Entry object for a given entry ID.
     //TODO test
-    pub async fn from_id(entry_id: usize, mnm: &MixNMatch) -> Result<Self, GenericError> {
+    pub async fn from_id(entry_id: usize, mnm: &MixNMatch) -> Result<Self> {
         let sql = format!("{} WHERE `id`=:entry_id", Self::sql_select());
         let mut rows: Vec<Self> = mnm
             .app
@@ -154,7 +154,7 @@ impl Entry {
         // `id` is a unique index, so there can be only zero or one row in rows.
         let mut ret = rows
             .pop()
-            .ok_or(format!("No entry #{}", entry_id))?
+            .ok_or(anyhow!("No entry #{}", entry_id))?
             .to_owned();
         ret.set_mnm(mnm);
         Ok(ret)
@@ -162,11 +162,7 @@ impl Entry {
 
     /// Returns an Entry object for a given external ID in a catalog.
     //TODO test
-    pub async fn from_ext_id(
-        catalog_id: usize,
-        ext_id: &str,
-        mnm: &MixNMatch,
-    ) -> Result<Entry, GenericError> {
+    pub async fn from_ext_id(catalog_id: usize, ext_id: &str, mnm: &MixNMatch) -> Result<Entry> {
         let sql = format!(
             "{} WHERE `catalog`=:catalog_id AND `ext_id`=:ext_id",
             Self::sql_select()
@@ -183,7 +179,7 @@ impl Entry {
         // `catalog`/`ext_id` comprises a unique index, so there can be only zero or one row in rows.
         let mut ret = rows
             .pop()
-            .ok_or(format!("No entry '{}' in catalog #{}", ext_id, catalog_id))?
+            .ok_or(anyhow!("No entry '{}' in catalog #{}", ext_id, catalog_id))?
             .to_owned();
         ret.set_mnm(mnm);
         Ok(ret)
@@ -192,7 +188,7 @@ impl Entry {
     pub async fn multiple_from_ids(
         entry_ids: &[usize],
         mnm: &MixNMatch,
-    ) -> Result<HashMap<usize, Self>, GenericError> {
+    ) -> Result<HashMap<usize, Self>> {
         if entry_ids.is_empty() {
             return Ok(HashMap::new());
         }
@@ -244,9 +240,9 @@ impl Entry {
 
     /// Inserts the current entry into the database. id must be ENTRY_NEW_ID.
     //TODO test
-    pub async fn insert_as_new(&mut self) -> Result<(), GenericError> {
+    pub async fn insert_as_new(&mut self) -> Result<()> {
         if self.id != ENTRY_NEW_ID {
-            return Err(Box::new(EntryError::TryingToInsertExistingEntry));
+            return Err(EntryError::TryingToInsertExistingEntry.into());
         }
         let sql = "INSERT IGNORE INTO `entry` (`catalog`,`ext_id`,`ext_url`,`ext_name`,`ext_desc`,`q`,`user`,`timestamp`,`random`,`type`) VALUES (:catalog,:ext_id,:ext_url,:ext_name,:ext_desc,:q,:user,:timestamp,:random,:type_name)";
         let params = params! {
@@ -269,7 +265,7 @@ impl Entry {
 
     /// Deletes the entry and all of its associated data in the database. Resets the local ID to 0
     //TODO test
-    pub async fn delete(&mut self) -> Result<(), GenericError> {
+    pub async fn delete(&mut self) -> Result<()> {
         self.check_valid_id()?;
         let entry_id = self.id;
         let mut conn = self.mnm()?.app.get_mnm_conn().await?;
@@ -286,7 +282,7 @@ impl Entry {
 
     /// Helper function for from_row().
     //TODO test
-    fn value2opt_string(value: mysql_async::Value) -> Result<Option<String>, GenericError> {
+    fn value2opt_string(value: mysql_async::Value) -> Result<Option<String>> {
         match value {
             Value::Bytes(s) => Ok(Some(std::str::from_utf8(&s)?.to_owned())),
             _ => Ok(None),
@@ -295,7 +291,7 @@ impl Entry {
 
     /// Helper function for from_row().
     //TODO test
-    fn value2opt_isize(value: mysql_async::Value) -> Result<Option<isize>, GenericError> {
+    fn value2opt_isize(value: mysql_async::Value) -> Result<Option<isize>> {
         match value {
             Value::Int(i) => Ok(Some(i.try_into()?)),
             _ => Ok(None),
@@ -304,7 +300,7 @@ impl Entry {
 
     /// Helper function for from_row().
     //TODO test
-    fn value2opt_usize(value: mysql_async::Value) -> Result<Option<usize>, GenericError> {
+    fn value2opt_usize(value: mysql_async::Value) -> Result<Option<usize>> {
         match value {
             Value::Int(i) => Ok(Some(i.try_into()?)),
             _ => Ok(None),
@@ -333,8 +329,8 @@ impl Entry {
     }
 
     /// Returns the MixNMatch object reference.
-    pub fn mnm(&self) -> Result<&MixNMatch, GenericError> {
-        let mnm = self.mnm.as_ref().ok_or("Entry: No mnm set")?;
+    pub fn mnm(&self) -> Result<&MixNMatch> {
+        let mnm = self.mnm.as_ref().ok_or(anyhow!("Entry: No mnm set"))?;
         Ok(mnm)
     }
 
@@ -361,7 +357,7 @@ impl Entry {
 
     /// Updates ext_name locally and in the database
     //TODO test
-    pub async fn set_ext_name(&mut self, ext_name: &str) -> Result<(), GenericError> {
+    pub async fn set_ext_name(&mut self, ext_name: &str) -> Result<()> {
         if self.ext_name != ext_name {
             self.check_valid_id()?;
             let entry_id = self.id;
@@ -378,11 +374,7 @@ impl Entry {
     }
 
     //TODO test
-    pub async fn set_auxiliary_in_wikidata(
-        &self,
-        aux_id: usize,
-        in_wikidata: bool,
-    ) -> Result<(), GenericError> {
+    pub async fn set_auxiliary_in_wikidata(&self, aux_id: usize, in_wikidata: bool) -> Result<()> {
         let sql = "UPDATE `auxiliary` SET `in_wikidata`=:in_wikidata WHERE `id`=:aux_id AND `in_wikidata`!=:in_wikidata";
         self.mnm()?
             .app
@@ -395,7 +387,7 @@ impl Entry {
 
     /// Updates ext_desc locally and in the database
     //TODO test
-    pub async fn set_ext_desc(&mut self, ext_desc: &str) -> Result<(), GenericError> {
+    pub async fn set_ext_desc(&mut self, ext_desc: &str) -> Result<()> {
         if self.ext_desc != ext_desc {
             self.check_valid_id()?;
             let entry_id = self.id;
@@ -411,7 +403,7 @@ impl Entry {
         Ok(())
     }
 
-    pub async fn add_to_item(&self, item: &mut ItemEntity) -> Result<(), GenericError> {
+    pub async fn add_to_item(&self, item: &mut ItemEntity) -> Result<()> {
         let catalog = Catalog::from_id(self.catalog, self.mnm()?).await?;
         let references = catalog.references(self).await;
 
@@ -569,7 +561,7 @@ impl Entry {
 
     /// Updates ext_id locally and in the database
     //TODO test
-    pub async fn set_ext_id(&mut self, ext_id: &str) -> Result<(), GenericError> {
+    pub async fn set_ext_id(&mut self, ext_id: &str) -> Result<()> {
         if self.ext_id != ext_id {
             self.check_valid_id()?;
             let entry_id = self.id;
@@ -587,7 +579,7 @@ impl Entry {
 
     /// Updates ext_url locally and in the database
     //TODO test
-    pub async fn set_ext_url(&mut self, ext_url: &str) -> Result<(), GenericError> {
+    pub async fn set_ext_url(&mut self, ext_url: &str) -> Result<()> {
         if self.ext_url != ext_url {
             self.check_valid_id()?;
             let entry_id = self.id;
@@ -605,7 +597,7 @@ impl Entry {
 
     /// Updates type_name locally and in the database
     //TODO test
-    pub async fn set_type_name(&mut self, type_name: Option<String>) -> Result<(), GenericError> {
+    pub async fn set_type_name(&mut self, type_name: Option<String>) -> Result<()> {
         if self.type_name != type_name {
             self.check_valid_id()?;
             let entry_id = self.id;
@@ -626,7 +618,7 @@ impl Entry {
         &self,
         born: &Option<String>,
         died: &Option<String>,
-    ) -> Result<(), GenericError> {
+    ) -> Result<()> {
         let (already_born, already_died) = self.get_person_dates().await?;
         if already_born != *born || already_died != *died {
             let entry_id = self.id;
@@ -655,7 +647,7 @@ impl Entry {
 
     /// Returns the birth and death date of a person as a tuple (born,died)
     /// Born/died are Option<String>
-    pub async fn get_person_dates(&self) -> Result<(Option<String>, Option<String>), GenericError> {
+    pub async fn get_person_dates(&self) -> Result<(Option<String>, Option<String>)> {
         self.check_valid_id()?;
         let entry_id = self.id;
         let mnm = self.mnm()?;
@@ -685,7 +677,7 @@ impl Entry {
         &self,
         language: &str,
         text: Option<String>,
-    ) -> Result<(), GenericError> {
+    ) -> Result<()> {
         self.check_valid_id()?;
         let entry_id = self.id;
         match text {
@@ -713,7 +705,7 @@ impl Entry {
 
     /// Returns a LocaleString Vec of all aliases of the entry
     //TODO test
-    pub async fn get_aliases(&self) -> Result<Vec<LocaleString>, GenericError> {
+    pub async fn get_aliases(&self) -> Result<Vec<LocaleString>> {
         self.check_valid_id()?;
         let entry_id = self.id;
         let mnm = self.mnm()?;
@@ -735,7 +727,7 @@ impl Entry {
         Ok(ret)
     }
 
-    pub async fn add_alias(&self, s: &LocaleString) -> Result<(), GenericError> {
+    pub async fn add_alias(&self, s: &LocaleString) -> Result<()> {
         self.check_valid_id()?;
         let entry_id = self.id;
         let language = s.language();
@@ -752,7 +744,7 @@ impl Entry {
 
     /// Returns a language:text HashMap of all language descriptions of the entry
     //TODO test
-    pub async fn get_language_descriptions(&self) -> Result<HashMap<String, String>, GenericError> {
+    pub async fn get_language_descriptions(&self) -> Result<HashMap<String, String>> {
         self.check_valid_id()?;
         let entry_id = self.id;
         let mnm = self.mnm()?;
@@ -775,11 +767,7 @@ impl Entry {
     }
 
     //TODO test
-    pub async fn set_auxiliary(
-        &self,
-        prop_numeric: usize,
-        value: Option<String>,
-    ) -> Result<(), GenericError> {
+    pub async fn set_auxiliary(&self, prop_numeric: usize, value: Option<String>) -> Result<()> {
         self.check_valid_id()?;
         let entry_id = self.id;
         match value {
@@ -809,10 +797,7 @@ impl Entry {
     }
 
     /// Update coordinate location in the database, where necessary
-    pub async fn set_coordinate_location(
-        &self,
-        cl: &Option<CoordinateLocation>,
-    ) -> Result<(), GenericError> {
+    pub async fn set_coordinate_location(&self, cl: &Option<CoordinateLocation>) -> Result<()> {
         let existing_cl = self.get_coordinate_location().await?;
         if existing_cl != *cl {
             let entry_id = self.id;
@@ -843,9 +828,7 @@ impl Entry {
     }
 
     /// Returns the coordinate locationm or None
-    pub async fn get_coordinate_location(
-        &self,
-    ) -> Result<Option<CoordinateLocation>, GenericError> {
+    pub async fn get_coordinate_location(&self) -> Result<Option<CoordinateLocation>> {
         self.check_valid_id()?;
         let entry_id = self.id;
         let mnm = self.mnm()?;
@@ -866,7 +849,7 @@ impl Entry {
 
     /// Returns auxiliary data for the entry
     //TODO test
-    pub async fn get_aux(&self) -> Result<Vec<AuxiliaryRow>, GenericError> {
+    pub async fn get_aux(&self) -> Result<Vec<AuxiliaryRow>> {
         self.check_valid_id()?;
         let entry_id = self.id;
         let mnm = self.mnm()?;
@@ -877,31 +860,26 @@ impl Entry {
     }
 
     /// Before q query or an update to the entry in the database, checks if this is a valid entry ID (eg not a new entry)
-    pub fn check_valid_id(&self) -> Result<(), GenericError> {
+    pub fn check_valid_id(&self) -> Result<()> {
         match self.id {
-            ENTRY_NEW_ID => Err(Box::new(EntryError::TryingToUpdateNewEntry)),
+            ENTRY_NEW_ID => Err(EntryError::TryingToUpdateNewEntry.into()),
             _ => Ok(()),
         }
     }
 
     /// Sets a match for the entry, and marks the entry as matched in other tables.
-    pub async fn set_match(&mut self, q: &str, user_id: usize) -> Result<bool, GenericError> {
+    pub async fn set_match(&mut self, q: &str, user_id: usize) -> Result<bool> {
         let mut conn = self.mnm()?.app.get_mnm_conn().await?;
         self.set_match_db(q, user_id, &mut conn).await
     }
 
-    async fn set_match_db(
-        &mut self,
-        q: &str,
-        user_id: usize,
-        conn: &mut Conn,
-    ) -> Result<bool, GenericError> {
+    async fn set_match_db(&mut self, q: &str, user_id: usize, conn: &mut Conn) -> Result<bool> {
         self.check_valid_id()?;
         let entry_id = self.id;
         let mnm = self.mnm()?;
         let q_numeric = mnm
             .item2numeric(q)
-            .ok_or(format!("'{}' is not a valid item", &q))?;
+            .ok_or(anyhow!("'{}' is not a valid item", &q))?;
         let timestamp = MixNMatch::get_timestamp();
         let mut sql = "UPDATE `entry` SET `q`=:q_numeric,`user`=:user_id,`timestamp`=:timestamp WHERE `id`=:entry_id AND (`q` IS NULL OR `q`!=:q_numeric OR `user`!=:user_id)".to_string();
         if user_id == USER_AUTO {
@@ -946,7 +924,7 @@ impl Entry {
     }
 
     // Removes the current match from the entry, and marks the entry as unmatched in other tables.
-    pub async fn unmatch(&mut self) -> Result<(), GenericError> {
+    pub async fn unmatch(&mut self) -> Result<()> {
         let entry_id = self.id;
         let mnm = self.mnm()?;
         mnm.app
@@ -966,11 +944,7 @@ impl Entry {
 
     /// Updates the entry matching status in multiple tables.
     //TODO test
-    pub async fn set_match_status(
-        &self,
-        status: &str,
-        is_matched: bool,
-    ) -> Result<(), GenericError> {
+    pub async fn set_match_status(&self, status: &str, is_matched: bool) -> Result<()> {
         let mut conn = self.mnm()?.app.get_mnm_conn().await?;
         self.set_match_status_db(status, is_matched, &mut conn)
             .await
@@ -981,7 +955,7 @@ impl Entry {
         status: &str,
         is_matched: bool,
         conn: &mut Conn,
-    ) -> Result<(), GenericError> {
+    ) -> Result<()> {
         let entry_id = self.id;
         let is_matched = if is_matched { 1 } else { 0 };
         let timestamp = MixNMatch::get_timestamp();
@@ -1006,7 +980,7 @@ impl Entry {
 
     /// Retrieves the multi-matches for an entry
     //TODO test
-    pub async fn get_multi_match(&self) -> Result<Vec<String>, GenericError> {
+    pub async fn get_multi_match(&self) -> Result<Vec<String>> {
         let mnm = self.mnm()?;
         let entry_id = self.id;
         let rows: Vec<String> = mnm
@@ -1025,7 +999,7 @@ impl Entry {
         } else {
             let ret = rows
                 .first()
-                .ok_or("get_multi_match err1")?
+                .ok_or(anyhow!("get_multi_match err1"))?
                 .split(',')
                 .map(|s| format!("Q{}", s))
                 .collect();
@@ -1034,7 +1008,7 @@ impl Entry {
     }
 
     /// Sets auto-match and multi-match for an entry
-    pub async fn set_auto_and_multi_match(&mut self, items: &[String]) -> Result<(), GenericError> {
+    pub async fn set_auto_and_multi_match(&mut self, items: &[String]) -> Result<()> {
         let mnm = self.mnm()?;
         let mut qs_numeric: Vec<isize> = items.iter().filter_map(|q| mnm.item2numeric(q)).collect();
         if qs_numeric.is_empty() {
@@ -1055,17 +1029,13 @@ impl Entry {
     }
 
     /// Sets multi-matches for an entry
-    pub async fn set_multi_match(&self, items: &[String]) -> Result<(), GenericError> {
+    pub async fn set_multi_match(&self, items: &[String]) -> Result<()> {
         let mut conn = self.mnm()?.app.get_mnm_conn().await?;
         self.set_multi_match_db(items, &mut conn).await
     }
 
     /// Sets multi-matches for an entry
-    async fn set_multi_match_db(
-        &self,
-        items: &[String],
-        conn: &mut Conn,
-    ) -> Result<(), GenericError> {
+    async fn set_multi_match_db(&self, items: &[String], conn: &mut Conn) -> Result<()> {
         let entry_id = self.id;
         let mnm = self.mnm()?;
         let qs_numeric: Vec<String> = items
@@ -1085,13 +1055,13 @@ impl Entry {
     }
 
     /// Removes multi-matches for an entry, eg when the entry has been fully matched.
-    pub async fn remove_multi_match(&self) -> Result<(), GenericError> {
+    pub async fn remove_multi_match(&self) -> Result<()> {
         let mut conn = self.mnm()?.app.get_mnm_conn().await?;
         self.remove_multi_match_db(&mut conn).await
     }
 
     /// Removes multi-matches for an entry, eg when the entry has been fully matched.
-    async fn remove_multi_match_db(&self, conn: &mut Conn) -> Result<(), GenericError> {
+    async fn remove_multi_match_db(&self, conn: &mut Conn) -> Result<()> {
         let entry_id = self.id;
         conn.exec_drop(
             r"DELETE FROM multi_match WHERE entry_id=:entry_id",

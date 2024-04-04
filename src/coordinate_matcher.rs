@@ -1,10 +1,10 @@
 use crate::entry::Entry;
 use crate::mixnmatch::{MatchState, USER_LOCATION_MATCH};
 use crate::{
-    app_state::GenericError,
     job::{Job, Jobbable},
     mixnmatch::MixNMatch,
 };
+use anyhow::Result;
 use lazy_static::lazy_static;
 use mediawiki::api::Api;
 use mysql_async::prelude::*;
@@ -94,7 +94,7 @@ impl Jobbable for CoordinateMatcher {
 }
 
 impl CoordinateMatcher {
-    pub async fn new(mnm: &MixNMatch, catalog_id: Option<usize>) -> Result<Self, GenericError> {
+    pub async fn new(mnm: &MixNMatch, catalog_id: Option<usize>) -> Result<Self> {
         let mw_api = mnm.get_mw_api().await?;
         let mut ret = Self {
             mnm: mnm.clone(),
@@ -108,7 +108,7 @@ impl CoordinateMatcher {
         Ok(ret)
     }
 
-    pub async fn run(&self) -> Result<(), GenericError> {
+    pub async fn run(&self) -> Result<()> {
         self.check_bad_catalog()?;
         let sql = self.main_query_sql();
         let rows: Vec<LocationRow> = self
@@ -129,7 +129,7 @@ impl CoordinateMatcher {
         Ok(())
     }
 
-    async fn process_row(&self, row: &LocationRow) -> Result<(), GenericError> {
+    async fn process_row(&self, row: &LocationRow) -> Result<()> {
         let p31 = self.get_entry_type(row).unwrap_or_default();
         let (max_distance, max_distance_sparql) = self.get_max_distance_sparql_for_entry(row);
 
@@ -153,7 +153,7 @@ impl CoordinateMatcher {
         let params = self.mw_api.params_into(&params);
         let result = match self.mw_api.query_api_json(&params, "GET").await {
             Ok(r) => r,
-            Err(e) => return Err(Box::new(e)),
+            Err(e) => return Err(e.into()),
         };
 
         let mut matches = vec![];
@@ -264,12 +264,13 @@ impl CoordinateMatcher {
         candidates.is_empty()
     }
 
-    fn check_bad_catalog(&self) -> Result<(), GenericError> {
+    fn check_bad_catalog(&self) -> Result<()> {
         if let Some(catalog_id) = self.catalog_id {
             if self.bad_catalogs.contains(&catalog_id) {
-                return Err(Box::new(CoordinateMatcherError::String(format!(
+                return Err(CoordinateMatcherError::String(format!(
                     "CoordinateMatcher: Bad catalog: {catalog_id}"
-                ))));
+                ))
+                .into());
             }
         }
         Ok(())
@@ -311,7 +312,7 @@ impl CoordinateMatcher {
         self.get_permission_value(key, catalog_id) == Some(&value.to_string())
     }
 
-    async fn load_permissions(&mut self) -> Result<(), GenericError> {
+    async fn load_permissions(&mut self) -> Result<()> {
         let sql = r#"SELECT `catalog_id`,`kv_key`,`kv_value` FROM `kv_catalog`"#; // WHERE `kv_key` IN ('allow_location_match','allow_location_create','allow_location_operations','location_distance','location_force_same_type')"#;
         let results = self
             .mnm

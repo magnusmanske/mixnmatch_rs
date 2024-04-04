@@ -1,7 +1,7 @@
-use crate::app_state::*;
 use crate::entry::*;
 use crate::job::*;
 use crate::mixnmatch::*;
+use anyhow::Result;
 use lazy_static::lazy_static;
 use mysql_async::from_row;
 use mysql_async::prelude::*;
@@ -80,7 +80,7 @@ impl TaxonMatcher {
     }
 
     /// Tries to find full matches for entries that are a taxon
-    pub async fn match_taxa(&mut self, catalog_id: usize) -> Result<(), GenericError> {
+    pub async fn match_taxa(&mut self, catalog_id: usize) -> Result<()> {
         let mw_api = self.mnm.get_mw_api().await?;
         let use_desc = USE_DESCRIPTIONS_FOR_TAXON_NAME_CATALOGS.contains(&catalog_id);
         let taxon_name_column = if use_desc { "ext_desc" } else { "ext_name" };

@@ -1,10 +1,10 @@
-use crate::app_state::*;
 use crate::auxiliary_matcher::*;
 use crate::catalog::*;
 use crate::entry::*;
 use crate::job::*;
 use crate::maintenance::*;
 use crate::mixnmatch::*;
+use anyhow::Result;
 use itertools::Itertools;
 use mysql_async::from_row;
 use mysql_async::prelude::*;
@@ -95,7 +95,7 @@ impl Microsync {
         }
     }
 
-    pub async fn check_catalog(&mut self, catalog_id: usize) -> Result<(), GenericError> {
+    pub async fn check_catalog(&mut self, catalog_id: usize) -> Result<()> {
         if BLACKLISTED_CATALOGS.contains(&catalog_id) {
             return Ok(()); // TODO error?
         }
@@ -128,11 +128,7 @@ impl Microsync {
     }
 
     //TODO test
-    async fn update_wiki_page(
-        &mut self,
-        catalog_id: usize,
-        wikitext: &str,
-    ) -> Result<(), GenericError> {
+    async fn update_wiki_page(&mut self, catalog_id: usize, wikitext: &str) -> Result<()> {
         let page_title = format!("User:Magnus Manske/Mix'n'match report/{}", catalog_id);
         let day = &MixNMatch::get_timestamp()[0..8];
         let comment = format!("Update {}", day);
@@ -151,7 +147,7 @@ impl Microsync {
         multiple_q_in_mnm: Vec<ExtIdWithMutipleQ>,
         match_differs: Vec<MatchDiffers>,
         extid_not_in_mnm: Vec<ExtIdNoMnM>,
-    ) -> Result<String, GenericError> {
+    ) -> Result<String> {
         let formatter_url = Self::get_formatter_url_for_prop(catalog.wd_prop.unwrap_or(0)).await?;
         let catalog_name = match &catalog.name {
             Some(s) => s.to_owned(),
@@ -259,10 +255,7 @@ impl Microsync {
         Ok(ret)
     }
 
-    async fn load_entry_names(
-        &self,
-        entry_ids: &Vec<usize>,
-    ) -> Result<HashMap<usize, String>, GenericError> {
+    async fn load_entry_names(&self, entry_ids: &Vec<usize>) -> Result<HashMap<usize, String>> {
         let placeholders = MixNMatch::sql_placeholders(entry_ids.len());
         let sql = format!(
             "SELECT `id`,`ext_name` FROM `entry` WHERE `id` IN ({})",
@@ -294,7 +287,7 @@ impl Microsync {
         }
     }
 
-    async fn get_formatter_url_for_prop(property: usize) -> Result<String, GenericError> {
+    async fn get_formatter_url_for_prop(property: usize) -> Result<String> {
         let url = format!(
             "https://www.wikidata.org/w/api.php?action=wbgetentities&ids=P{property}&format=json"
         );
@@ -313,7 +306,7 @@ impl Microsync {
     async fn get_multiple_extid_in_wikidata(
         &self,
         property: usize,
-    ) -> Result<Vec<MultipleExtIdInWikidata>, GenericError> {
+    ) -> Result<Vec<MultipleExtIdInWikidata>> {
         let mw_api = self.mnm.get_mw_api().await?;
         // TODO: lcase?
         let sparql = format!(
@@ -350,10 +343,7 @@ impl Microsync {
             .collect())
     }
 
-    async fn get_multiple_q_in_mnm(
-        &self,
-        catalog_id: usize,
-    ) -> Result<Vec<ExtIdWithMutipleQ>, GenericError> {
+    async fn get_multiple_q_in_mnm(&self, catalog_id: usize) -> Result<Vec<ExtIdWithMutipleQ>> {
         let sql = format!("SELECT q,group_concat(id) AS ids,group_concat(ext_id SEPARATOR '{}') AS ext_ids FROM entry WHERE catalog=:catalog_id AND q IS NOT NULL and q>0 AND user>0 GROUP BY q HAVING count(id)>1 ORDER BY q",EXT_URL_UNIQUE_SEPARATOR);
         let results = self
             .mnm
@@ -394,7 +384,7 @@ impl Microsync {
         reader: &mut csv::Reader<File>,
         case_insensitive: bool,
         batch_size: usize,
-    ) -> Result<Vec<(isize, String)>, GenericError> {
+    ) -> Result<Vec<(isize, String)>> {
         let mw_api = self.mnm.get_mw_api().await?;
         Ok(reader
             .records()
@@ -419,7 +409,7 @@ impl Microsync {
         &self,
         catalog_id: usize,
         property: usize,
-    ) -> Result<(Vec<ExtIdNoMnM>, Vec<MatchDiffers>), GenericError> {
+    ) -> Result<(Vec<ExtIdNoMnM>, Vec<MatchDiffers>)> {
         let case_insensitive = AUX_PROPERTIES_ALSO_USING_LOWERCASE.contains(&property);
         let sparql = format!("SELECT ?item ?value {{ ?item wdt:P{property} ?value }}"); // "ORDER BY ?item" unnecessary?
         let mut reader = self.mnm.load_sparql_csv(&sparql).await?;
@@ -493,7 +483,7 @@ impl Microsync {
         catalog_id: usize,
         property: usize,
         ext_ids: &Vec<&String>,
-    ) -> Result<HashMap<String, SmallEntry>, GenericError> {
+    ) -> Result<HashMap<String, SmallEntry>> {
         if ext_ids.is_empty() {
             return Ok(HashMap::new());
         }

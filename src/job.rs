@@ -1,4 +1,3 @@
-use crate::app_state::*;
 use crate::automatch::*;
 use crate::autoscrape::*;
 use crate::auxiliary_matcher::*;
@@ -10,6 +9,7 @@ use crate::mixnmatch::*;
 use crate::php_wrapper::*;
 use crate::taxon_matcher::*;
 use crate::update_catalog::*;
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use chrono::Duration;
 use mysql_async::from_row;
@@ -122,7 +122,7 @@ pub trait Jobbable {
     }
 
     //TODO test
-    async fn remember_job_data(&mut self, json: &serde_json::Value) -> Result<(), GenericError> {
+    async fn remember_job_data(&mut self, json: &serde_json::Value) -> Result<()> {
         match self.get_current_job_mut() {
             Some(job) => job.set_json(Some(json.to_owned())).await,
             None => return Ok(()),
@@ -149,7 +149,7 @@ pub trait Jobbable {
     }
 
     //TODO test
-    async fn remember_offset(&mut self, offset: usize) -> Result<(), GenericError> {
+    async fn remember_offset(&mut self, offset: usize) -> Result<()> {
         let job = match self.get_current_job_mut() {
             Some(job) => job,
             None => return Ok(()),
@@ -160,7 +160,7 @@ pub trait Jobbable {
     }
 
     //TODO test
-    async fn clear_offset(&mut self) -> Result<(), GenericError> {
+    async fn clear_offset(&mut self) -> Result<()> {
         match self.get_current_job_mut() {
             Some(job) => job.set_json(None).await,
             None => Ok(()),
@@ -262,7 +262,7 @@ impl Job {
         }
     }
 
-    pub async fn get_tasks(&self) -> Result<HashMap<String, TaskSize>, GenericError> {
+    pub async fn get_tasks(&self) -> Result<HashMap<String, TaskSize>> {
         let sql = "SELECT `action`,`size` FROM `job_sizes`";
         let ret = self
             .mnm
@@ -282,14 +282,14 @@ impl Job {
     }
 
     //TODO test
-    pub async fn set_next(&mut self) -> Result<bool, GenericError> {
+    pub async fn set_next(&mut self) -> Result<bool> {
         match self.get_next_job_id().await {
             Some(job_id) => self.set_from_id(job_id).await,
             None => Ok(false),
         }
     }
 
-    pub async fn set_from_id(&mut self, job_id: usize) -> Result<bool, GenericError> {
+    pub async fn set_from_id(&mut self, job_id: usize) -> Result<bool> {
         let sql = r"SELECT id,action,catalog,json,depends_on,status,last_ts,note,repeat_after_sec,next_ts,user_id FROM `jobs` WHERE `id`=:job_id";
         let row = self
             .mnm
@@ -315,14 +315,14 @@ impl Job {
             )
             .await?
             .pop()
-            .ok_or(format!("No job with ID {}", job_id))?;
+            .ok_or(anyhow!("No job with ID {}", job_id))?;
         let result = JobRow::from_row(row);
         self.data = result;
         Ok(true)
     }
 
     //TODO test
-    pub async fn run(&mut self) -> Result<(), GenericError> {
+    pub async fn run(&mut self) -> Result<()> {
         let catalog_id = self.get_catalog().await?;
         let action = self.get_action().await?;
         let res = self.run_this_job().await;
@@ -352,7 +352,7 @@ impl Job {
     }
 
     //TODO test
-    pub async fn set_status(&mut self, status: JobStatus) -> Result<(), GenericError> {
+    pub async fn set_status(&mut self, status: JobStatus) -> Result<()> {
         let job_id = self.get_id().await?;
         let timestamp = MixNMatch::get_timestamp();
         let status_str = status.as_str();
@@ -368,7 +368,7 @@ impl Job {
     }
 
     //TODO test
-    pub async fn set_note(&mut self, note: Option<String>) -> Result<(), GenericError> {
+    pub async fn set_note(&mut self, note: Option<String>) -> Result<()> {
         let job_id = self.get_id().await?;
         let note_cloned = note.clone().map(|s| s.get(..127).unwrap_or(&s).to_string());
         let sql = "UPDATE `jobs` SET `note`=:note WHERE `id`=:job_id";
@@ -416,7 +416,7 @@ impl Job {
 
     /// Resets all RUNNING jobs of certain types to TODO. Used when bot restarts.
     //TODO test
-    pub async fn reset_running_jobs(&self) -> Result<(), GenericError> {
+    pub async fn reset_running_jobs(&self) -> Result<()> {
         let sql = format!(
             "UPDATE `jobs` SET `status`='{}' WHERE `status`='{}'",
             JobStatus::Todo.as_str(),
@@ -433,7 +433,7 @@ impl Job {
 
     /// Resets all FAILED jobs of certain types to TODO. Used when bot restarts.
     //TODO test
-    pub async fn reset_failed_jobs(&self) -> Result<(), GenericError> {
+    pub async fn reset_failed_jobs(&self) -> Result<()> {
         let sql = format!(
             "UPDATE `jobs` SET `status`='{}' WHERE `status`='{}'",
             JobStatus::Todo.as_str(),
@@ -460,7 +460,7 @@ impl Job {
         catalog_id: usize,
         action: &str,
         depends_on: Option<usize>,
-    ) -> Result<usize, GenericError> {
+    ) -> Result<usize> {
         let timestamp = MixNMatch::get_timestamp();
         let status = "TODO";
         let sql = "INSERT INTO `jobs` (catalog,action,status,depends_on,last_ts) VALUES (:catalog_id,:action,:status,:depends_on,:timestamp)
@@ -474,7 +474,7 @@ impl Job {
 
     /// Sets the value for `json` locally and in database, from a serde_json::Value
     //TODO test
-    pub async fn set_json(&mut self, json: Option<serde_json::Value>) -> Result<(), GenericError> {
+    pub async fn set_json(&mut self, json: Option<serde_json::Value>) -> Result<()> {
         let job_id = self.get_id().await?;
         let timestamp = MixNMatch::get_timestamp();
         match json {
@@ -507,11 +507,11 @@ impl Job {
     // PRIVATE METHODS
 
     //TODO test
-    async fn run_this_job(&mut self) -> Result<(), GenericError> {
+    async fn run_this_job(&mut self) -> Result<()> {
         // let json = self.get_json().await;
         // println!("STARTING {:?} with option {:?}", &self.data().await?,&json);
         if self.data.status == JobStatus::Blocked {
-            return Err(Box::new(JobError::S("Job::run_this_job: Blocked".into())));
+            return Err(anyhow!("Job::run_this_job: Blocked"));
         }
         println!("STARTING JOB {:?}", self.get_id().await); // DEACTIVATED VERBOSE OUTPUT FOR FEAR OF STACK OVERFLOW
         let catalog_id = self.get_catalog().await?;
@@ -637,73 +637,71 @@ impl Job {
                 cm.run().await
             }
 
-            other => Err(Box::new(JobError::S(format!(
-                "Job::run_this_job: Unknown action '{}'",
-                other
-            )))),
+            other => Err(anyhow!("Job::run_this_job: Unknown action '{}'", other)),
         }
     }
 
     //TODO test
-    async fn data(&self) -> Result<JobRow, JobError> {
+    async fn data(&self) -> Result<JobRow> {
         Ok(self.data.clone())
     }
     //TODO test
-    pub async fn get_id(&self) -> Result<usize, JobError> {
+    pub async fn get_id(&self) -> Result<usize> {
         Ok(self.data.id)
     }
     //TODO test
-    pub async fn get_action(&self) -> Result<String, JobError> {
+    pub async fn get_action(&self) -> Result<String> {
         Ok(self.data.action.clone())
     }
     //TODO test
-    async fn get_catalog(&self) -> Result<usize, JobError> {
+    async fn get_catalog(&self) -> Result<usize> {
         Ok(self.data.catalog)
     }
     //TODO test
-    async fn get_json(&self) -> Result<Option<String>, JobError> {
+    async fn get_json(&self) -> Result<Option<String>> {
         Ok(self.data.json.clone())
     }
 
     //TODO test
-    async fn put_status(&mut self, status: JobStatus) -> Result<(), JobError> {
+    async fn put_status(&mut self, status: JobStatus) -> Result<()> {
         self.data.status = status;
         Ok(())
     }
 
     //TODO test
-    async fn put_json(&mut self, json: Option<String>) -> Result<(), JobError> {
+    async fn put_json(&mut self, json: Option<String>) -> Result<()> {
         self.data.json = json;
         Ok(())
     }
 
     //TODO test
-    async fn put_note(&mut self, note: Option<String>) -> Result<(), JobError> {
+    async fn put_note(&mut self, note: Option<String>) -> Result<()> {
         self.data.note = note;
         Ok(())
     }
 
     //TODO test
-    async fn put_next_ts(&mut self, next_ts: &str) -> Result<(), JobError> {
+    async fn put_next_ts(&mut self, next_ts: &str) -> Result<()> {
         self.data.next_ts = next_ts.to_string();
         Ok(())
     }
 
-    async fn get_next_ts(&mut self) -> Result<String, GenericError> {
+    async fn get_next_ts(&mut self) -> Result<String> {
         let seconds = match self.data().await?.repeat_after_sec {
             Some(sec) => sec as i64,
             None => return Ok(String::new()),
         };
+        let seconds = Duration::try_seconds(seconds).unwrap();
         let utc = MixNMatch::parse_timestamp(&self.data().await?.last_ts.clone())
-            .ok_or("Can't parse timestamp in last_ts")?
-            .checked_add_signed(Duration::seconds(seconds))
+            .ok_or(anyhow!("Can't parse timestamp in last_ts"))?
+            .checked_add_signed(seconds)
             .ok_or(JobError::TimeError)?;
         let next_ts = utc.format("%Y%m%d%H%M%S").to_string();
         Ok(next_ts)
     }
 
     //TODO test
-    async fn update_next_ts(&mut self) -> Result<(), GenericError> {
+    async fn update_next_ts(&mut self) -> Result<()> {
         let next_ts = self.get_next_ts().await?;
 
         let job_id = self.get_id().await?;

@@ -1,13 +1,12 @@
-use futures::future::join_all;
-use std::collections::HashMap;
-// use futures::future::join_all;
-use crate::app_state::*;
 use crate::catalog::Catalog;
 use crate::entry::Entry;
 use crate::mixnmatch::*;
+use anyhow::{anyhow, Result};
+use futures::future::join_all;
 use itertools::Itertools;
 use mysql_async::from_row;
 use mysql_async::prelude::*;
+use std::collections::HashMap;
 
 pub struct Maintenance {
     mnm: MixNMatch,
@@ -19,11 +18,7 @@ impl Maintenance {
     }
 
     /// Iterates over blocks of (fully or partially) matched Wikidata items, and replaces redirects with their targets.
-    pub async fn fix_redirects(
-        &self,
-        catalog_id: usize,
-        state: &MatchState,
-    ) -> Result<(), GenericError> {
+    pub async fn fix_redirects(&self, catalog_id: usize, state: &MatchState) -> Result<()> {
         let mut offset = 0;
         loop {
             let unique_qs = self.get_items(catalog_id, offset, state).await?;
@@ -36,11 +31,7 @@ impl Maintenance {
     }
 
     /// Iterates over blocks of (fully or partially) matched Wikidata items, and unlinks meta items, such as disambiguation pages.
-    pub async fn unlink_meta_items(
-        &self,
-        catalog_id: usize,
-        state: &MatchState,
-    ) -> Result<(), GenericError> {
+    pub async fn unlink_meta_items(&self, catalog_id: usize, state: &MatchState) -> Result<()> {
         let mut offset = 0;
         loop {
             let unique_qs = self.get_items(catalog_id, offset, state).await?;
@@ -53,11 +44,7 @@ impl Maintenance {
     }
 
     /// Iterates over blocks of (fully or partially) matched Wikidata items, and unlinks deleted pages
-    pub async fn unlink_deleted_items(
-        &self,
-        catalog_id: usize,
-        state: &MatchState,
-    ) -> Result<(), GenericError> {
+    pub async fn unlink_deleted_items(&self, catalog_id: usize, state: &MatchState) -> Result<()> {
         let mut offset = 0;
         loop {
             let unique_qs = self.get_items(catalog_id, offset, state).await?;
@@ -71,11 +58,7 @@ impl Maintenance {
 
     /// Fixes redirected items, and unlinks deleted and meta items.
     /// This is more efficient than calling the functions individually, because it uses the same batching run.
-    pub async fn fix_matched_items(
-        &self,
-        catalog_id: usize,
-        state: &MatchState,
-    ) -> Result<(), GenericError> {
+    pub async fn fix_matched_items(&self, catalog_id: usize, state: &MatchState) -> Result<()> {
         let mut offset = 0;
         loop {
             let unique_qs = self.get_items(catalog_id, offset, state).await?;
@@ -90,7 +73,7 @@ impl Maintenance {
     }
 
     /// Removes P17 auxiliary values for entryies of type Q5 (human)
-    pub async fn remove_p17_for_humans(&self) -> Result<(), GenericError> {
+    pub async fn remove_p17_for_humans(&self) -> Result<()> {
         let dummy = 0;
         let sql = r#"DELETE FROM auxiliary WHERE aux_p=17 AND EXISTS (SELECT * FROM entry WHERE entry_id=entry.id AND `type`="Q5") AND id>:dummy"#;
         self.mnm
@@ -102,7 +85,7 @@ impl Maintenance {
         Ok(())
     }
 
-    pub async fn cleanup_mnm_relations(&self) -> Result<(), GenericError> {
+    pub async fn cleanup_mnm_relations(&self) -> Result<()> {
         let sql = "DELETE from mnm_relation WHERE entry_id=0 or target_entry_id=0";
         self.mnm
             .app
@@ -115,10 +98,7 @@ impl Maintenance {
 
     // WDRC sync stuff
 
-    async fn get_wrdc_api_responses(
-        &self,
-        query: &str,
-    ) -> Result<Vec<serde_json::Value>, GenericError> {
+    async fn get_wrdc_api_responses(&self, query: &str) -> Result<Vec<serde_json::Value>> {
         let rand = rand::random::<u32>();
         let url = format!("https://wdrc.toolforge.org/api.php?format=jsonl&{query}&random={rand}");
         let client = MixNMatch::reqwest_client_wd()?;
@@ -141,7 +121,7 @@ impl Maintenance {
         MixNMatch::get_timestamp_relative(&yesterday)
     }
 
-    async fn wdrc_sync_redirects(&self) -> Result<(), GenericError> {
+    async fn wdrc_sync_redirects(&self) -> Result<()> {
         let last_ts = self
             .mnm
             .get_kv_value("wdrc_sync_redirects")
@@ -185,7 +165,7 @@ impl Maintenance {
         Ok(())
     }
 
-    async fn wdrc_apply_deletions(&self) -> Result<(), GenericError> {
+    async fn wdrc_apply_deletions(&self) -> Result<()> {
         let last_ts = self
             .mnm
             .get_kv_value("wdrc_apply_deletions")
@@ -245,7 +225,7 @@ impl Maintenance {
         Ok(())
     }
 
-    async fn wdrc_get_prop2catalog_ids(&self) -> Result<HashMap<usize, Vec<usize>>, GenericError> {
+    async fn wdrc_get_prop2catalog_ids(&self) -> Result<HashMap<usize, Vec<usize>>> {
         let mut ret: HashMap<usize, Vec<usize>> = HashMap::new();
         let sql = r"SELECT `id`,`wd_prop` FROM `catalog` WHERE `wd_prop` IS NOT NULL AND `wd_qual` IS NULL AND `active`=1";
         let results = self
@@ -316,7 +296,7 @@ impl Maintenance {
         property: usize,
         results: &[(usize, usize)],
         prop2catalog_ids: &HashMap<usize, Vec<usize>>,
-    ) -> Result<(), GenericError> {
+    ) -> Result<()> {
         let entity_ids = results
             .iter()
             .filter(|(_item, prop)| *prop == property)
@@ -376,7 +356,7 @@ impl Maintenance {
         Ok(())
     }
 
-    pub async fn wdrc_sync_properties(&self) -> Result<(), GenericError> {
+    pub async fn wdrc_sync_properties(&self) -> Result<()> {
         let last_ts = self
             .mnm
             .get_kv_value("wdrc_sync_properties")
@@ -422,9 +402,9 @@ impl Maintenance {
                 .map(|property| self.wdrc_sync_property(*property, &results, &prop2catalog_ids))
                 .collect_vec();
             let results = join_all(futures).await;
-            let failed = results.iter().filter(|r| r.is_err()).collect_vec();
-            if let Some(Err(err)) = failed.first() {
-                return Err(err.to_string().into());
+            let failed = results.into_iter().filter(|r| r.is_err()).collect_vec();
+            if let Some(Err(e)) = failed.first() {
+                return Err(anyhow!("{e}"));
             }
         }
         self.mnm
@@ -433,7 +413,7 @@ impl Maintenance {
         Ok(())
     }
 
-    pub async fn wdrc_sync(&self) -> Result<(), GenericError> {
+    pub async fn wdrc_sync(&self) -> Result<()> {
         self.wdrc_sync_redirects().await?;
         self.wdrc_apply_deletions().await?;
         self.wdrc_sync_properties().await?;
@@ -443,10 +423,7 @@ impl Maintenance {
     // END WDRC STUFF
 
     /// Finds redirects in a batch of items, and changes MnM matches to their respective targets.
-    async fn fix_redirected_items_batch(
-        &self,
-        unique_qs: &Vec<String>,
-    ) -> Result<(), GenericError> {
+    async fn fix_redirected_items_batch(&self, unique_qs: &Vec<String>) -> Result<()> {
         let placeholders = MixNMatch::sql_placeholders(unique_qs.len());
         let sql = format!("SELECT page_title,rd_title FROM `page`,`redirect` 
             WHERE `page_id`=`rd_from` AND `rd_namespace`=0 AND `page_is_redirect`=1 AND `page_namespace`=0 
@@ -478,7 +455,7 @@ impl Maintenance {
     }
 
     /// Finds deleted items in a batch of items, and unlinks MnM matches to them.
-    async fn unlink_deleted_items_batch(&self, unique_qs: &[String]) -> Result<(), GenericError> {
+    async fn unlink_deleted_items_batch(&self, unique_qs: &[String]) -> Result<()> {
         let placeholders = MixNMatch::sql_placeholders(unique_qs.len());
         let sql = format!(
             "SELECT page_title FROM `page` WHERE `page_namespace`=0 AND `page_title` IN ({})",
@@ -503,7 +480,7 @@ impl Maintenance {
     }
 
     /// Finds meta items (disambig etc) in a batch of items, and unlinks MnM matches to them.
-    async fn unlink_meta_items_batch(&self, unique_qs: &[String]) -> Result<(), GenericError> {
+    async fn unlink_meta_items_batch(&self, unique_qs: &[String]) -> Result<()> {
         let placeholders = MixNMatch::sql_placeholders(unique_qs.len());
         let sql = format!("SELECT DISTINCT page_title FROM page,pagelinks WHERE page_namespace=0 AND page_title IN ({}) AND pl_from=page_id AND pl_title IN ('{}')",&placeholders,&META_ITEMS.join("','"));
         let meta_items = self
@@ -520,7 +497,7 @@ impl Maintenance {
     }
 
     /// Unlinks MnM matches to items in a list.
-    pub async fn unlink_item_matches(&self, items: &[String]) -> Result<(), GenericError> {
+    pub async fn unlink_item_matches(&self, items: &[String]) -> Result<()> {
         let items: Vec<isize> = items
             .iter()
             .filter_map(|q| self.mnm.item2numeric(q))
@@ -544,7 +521,7 @@ impl Maintenance {
 
     /// Finds some unmatched (Q5) entries where there is a (unique) full match for that name,
     /// and uses it as an auto-match
-    pub async fn maintenance_automatch(&self) -> Result<(), GenericError> {
+    pub async fn maintenance_automatch(&self) -> Result<()> {
         let sql = "SELECT e1.id,e2.q FROM entry e1,entry e2 
             WHERE e1.ext_name=e2.ext_name AND e1.id!=e2.id
             AND e1.type='Q5' AND e2.type='Q5'
@@ -578,7 +555,7 @@ impl Maintenance {
         catalog_id: usize,
         offset: usize,
         state: &MatchState,
-    ) -> Result<Vec<String>, GenericError> {
+    ) -> Result<Vec<String>> {
         let batch_size = 5000;
         let sql = format!("SELECT DISTINCT `q` FROM `entry` WHERE `catalog`=:catalog_id {} LIMIT :batch_size OFFSET :offset",
             state.get_sql()

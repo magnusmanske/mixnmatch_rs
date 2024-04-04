@@ -2,6 +2,7 @@ use crate::app_state::*;
 use crate::entry::*;
 use crate::error::MnMError;
 use crate::wikidata_commands::WikidataCommand;
+use anyhow::{anyhow, Result};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use itertools::Itertools;
 use lazy_static::lazy_static;
@@ -202,7 +203,7 @@ impl MixNMatch {
         old_entry: &Entry,
         user_id: Option<usize>,
         q: Option<isize>,
-    ) -> Result<(), GenericError> {
+    ) -> Result<()> {
         let mut conn = self.app.get_mnm_conn().await?;
         self.update_overview_table_db(old_entry, user_id, q, &mut conn)
             .await
@@ -214,7 +215,7 @@ impl MixNMatch {
         user_id: Option<usize>,
         q: Option<isize>,
         conn: &mut Conn,
-    ) -> Result<(), GenericError> {
+    ) -> Result<()> {
         let add_column = self.get_overview_column_name_for_user_and_q(&user_id, &q);
         let reduce_column =
             self.get_overview_column_name_for_user_and_q(&old_entry.user, &old_entry.q);
@@ -229,23 +230,19 @@ impl MixNMatch {
 
     /// Adds the item into a queue for reference fixer. Possibly deprecated.
     //TODO test
-    pub async fn queue_reference_fixer(&self, q_numeric: isize) -> Result<(), GenericError> {
+    pub async fn queue_reference_fixer(&self, q_numeric: isize) -> Result<()> {
         let mut conn = self.app.get_mnm_conn().await?;
         self.queue_reference_fixer_db(q_numeric, &mut conn).await
     }
 
-    pub async fn queue_reference_fixer_db(
-        &self,
-        q_numeric: isize,
-        conn: &mut Conn,
-    ) -> Result<(), GenericError> {
+    pub async fn queue_reference_fixer_db(&self, q_numeric: isize, conn: &mut Conn) -> Result<()> {
         conn.exec_drop(r"INSERT INTO `reference_fixer` (`q`,`done`) VALUES (:q_numeric,0) ON DUPLICATE KEY UPDATE `done`=0",params! {q_numeric}).await?;
         Ok(())
     }
 
     /// Removes "meta items" (eg disambiguation pages) from an item list.
     /// Items are in format "Qxxx".
-    pub async fn remove_meta_items(&self, items: &mut Vec<String>) -> Result<(), GenericError> {
+    pub async fn remove_meta_items(&self, items: &mut Vec<String>) -> Result<()> {
         if items.is_empty() {
             return Ok(());
         }
@@ -297,7 +294,7 @@ impl MixNMatch {
         &self,
         entry_id: usize,
         q_numeric: Option<isize>,
-    ) -> Result<bool, GenericError> {
+    ) -> Result<bool> {
         let mut conn = self.app.get_mnm_conn().await?;
         self.avoid_auto_match_db(entry_id, q_numeric, &mut conn)
             .await
@@ -308,7 +305,7 @@ impl MixNMatch {
         entry_id: usize,
         q_numeric: Option<isize>,
         conn: &mut Conn,
-    ) -> Result<bool, GenericError> {
+    ) -> Result<bool> {
         let mut sql = r"SELECT id FROM `log` WHERE `entry_id`=:entry_id".to_string();
         if let Some(q) = q_numeric {
             sql += &format!(" AND (q IS NULL OR q={})", &q)
@@ -340,11 +337,7 @@ impl MixNMatch {
     /// This value can be blank, in which case a normal search is performed.
     /// "Scholarly article" items are excluded from results, unless specifically asked for with Q13442814
     /// Common "meta items" such as disambiguation items are excluded as well
-    pub async fn wd_search_with_type(
-        &self,
-        name: &str,
-        type_q: &str,
-    ) -> Result<Vec<String>, GenericError> {
+    pub async fn wd_search_with_type(&self, name: &str, type_q: &str) -> Result<Vec<String>> {
         if name.is_empty() {
             return Ok(vec![]);
         }
@@ -364,11 +357,7 @@ impl MixNMatch {
         self.wd_search(&query).await
     }
 
-    pub async fn wd_search_with_type_db(
-        &self,
-        name: &str,
-        type_q: &str,
-    ) -> Result<Vec<String>, GenericError> {
+    pub async fn wd_search_with_type_db(&self, name: &str, type_q: &str) -> Result<Vec<String>> {
         if name.is_empty() {
             return Ok(vec![]);
         }
@@ -396,7 +385,7 @@ impl MixNMatch {
         Ok(items)
     }
 
-    pub fn reqwest_client_wd() -> Result<reqwest::Client, GenericError> {
+    pub fn reqwest_client_wd() -> Result<reqwest::Client> {
         Ok(reqwest::Client::builder()
             .user_agent(WIKIDATA_USER_AGENT)
             .timeout(Duration::from_secs(15))
@@ -404,7 +393,7 @@ impl MixNMatch {
     }
 
     /// Performs a Wikidata API search for the query string. Returns item IDs matching the query.
-    pub async fn wd_search(&self, query: &str) -> Result<Vec<String>, GenericError> {
+    pub async fn wd_search(&self, query: &str) -> Result<Vec<String>> {
         // TODO via mw_api?
         if query.is_empty() {
             return Ok(vec![]);
@@ -420,11 +409,11 @@ impl MixNMatch {
             .await?
             .json::<Value>()
             .await?;
-        let v = v.as_object().ok_or("bad result")?;
-        let v = v.get("query").ok_or("no key 'query'")?;
-        let v = v.as_object().ok_or("not an object")?;
-        let v = v.get("search").ok_or("no key 'search'")?;
-        let v = v.as_array().ok_or("not an array")?;
+        let v = v.as_object().ok_or(anyhow!("bad result"))?;
+        let v = v.get("query").ok_or(anyhow!("no key 'query'"))?;
+        let v = v.as_object().ok_or(anyhow!("not an object"))?;
+        let v = v.get("search").ok_or(anyhow!("no key 'search'"))?;
+        let v = v.as_array().ok_or(anyhow!("not an array"))?;
         let ret = v
             .iter()
             .filter_map(|result| {
@@ -486,7 +475,7 @@ impl MixNMatch {
         title: &str,
         wikitext: &str,
         summary: &str,
-    ) -> Result<(), GenericError> {
+    ) -> Result<()> {
         self.api_log_in().await?;
         if let Some(mw_api) = self.mw_api.as_mut() {
             let mut params: HashMap<String, String> = HashMap::new();
@@ -503,7 +492,7 @@ impl MixNMatch {
     }
 
     /// Queries SPARQL and returns a filename with the result as CSV.
-    pub async fn load_sparql_csv(&self, sparql: &str) -> Result<csv::Reader<File>, GenericError> {
+    pub async fn load_sparql_csv(&self, sparql: &str) -> Result<csv::Reader<File>> {
         let url = format!("https://query.wikidata.org/sparql?query={}", sparql);
         let mut f = tempfile()?;
         let mut res = Self::reqwest_client_wd()?
@@ -532,10 +521,7 @@ impl MixNMatch {
     }
 
     //TODO test
-    pub async fn execute_commands(
-        &mut self,
-        commands: Vec<WikidataCommand>,
-    ) -> Result<(), GenericError> {
+    pub async fn execute_commands(&mut self, commands: Vec<WikidataCommand>) -> Result<()> {
         if self.testing {
             println!("SKIPPING COMMANDS {:?}", commands);
             return Ok(());
@@ -578,10 +564,7 @@ impl MixNMatch {
         Ok(())
     }
 
-    pub async fn create_new_wikidata_item(
-        &mut self,
-        item: wikibase::ItemEntity,
-    ) -> Result<String, GenericError> {
+    pub async fn create_new_wikidata_item(&mut self, item: wikibase::ItemEntity) -> Result<String> {
         let comment = "Mix'n'match item creation (V2)".to_string();
         let json = item.to_json();
         self.api_log_in().await?;
@@ -597,20 +580,20 @@ impl MixNMatch {
             let res = mw_api.post_query_api_json_mut(&params).await?;
             Ok(res["entity"]["id"]
                 .as_str()
-                .ok_or("Can't get ID of new entity")?
+                .ok_or(anyhow!("Can't get ID of new entity"))?
                 .to_string())
         } else {
-            Err("Could not get a mutable API object".into())
+            Err(anyhow!("Could not get a mutable API object"))
         }
     }
 
-    async fn api_log_in(&mut self) -> Result<(), GenericError> {
+    async fn api_log_in(&mut self) -> Result<()> {
         if self.mw_api.is_none() {
             self.mw_api = Some(self.get_mw_api().await?);
         }
         let mw_api = match self.mw_api.as_mut() {
             Some(api) => api,
-            None => return Err(Box::new(MnMError::ApiUnreachable)),
+            None => return Err(MnMError::ApiUnreachable.into()),
         };
         if mw_api.user().logged_in() {
             // Already logged in
@@ -625,7 +608,7 @@ impl MixNMatch {
         Ok(())
     }
 
-    pub async fn get_kv_value(&self, key: &str) -> Result<Option<String>, GenericError> {
+    pub async fn get_kv_value(&self, key: &str) -> Result<Option<String>> {
         let sql = r"SELECT `kv_value` FROM `kv` WHERE `kv_key`=:key";
         Ok(self
             .app
@@ -638,7 +621,7 @@ impl MixNMatch {
             .pop())
     }
 
-    pub async fn set_kv_value(&self, key: &str, value: &str) -> Result<(), GenericError> {
+    pub async fn set_kv_value(&self, key: &str, value: &str) -> Result<()> {
         let sql = r"INSERT INTO `kv` (`kv_key`,`kv_value`) VALUES (:key,:value) ON DUPLICATE KEY UPDATE `kv_value`=:value";
         self.app
             .get_mnm_conn()
