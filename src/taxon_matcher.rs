@@ -8,6 +8,8 @@ use mysql_async::prelude::*;
 use regex::{Regex, RegexBuilder};
 use std::collections::HashMap;
 
+type RankedNames = HashMap<String, Vec<(usize, String)>>;
+
 lazy_static! {
     static ref TAXON_RANKS: HashMap<&'static str, &'static str> = {
         let mut m = HashMap::new();
@@ -96,98 +98,18 @@ impl TaxonMatcher {
         let mut offset = self.get_last_job_offset().await;
         let batch_size = 5000;
         loop {
-            let results = self
-                .mnm
-                .app
-                .get_mnm_conn()
-                .await?
-                .exec_iter(sql.clone(), params! {catalog_id,batch_size,offset})
-                .await?
-                .map_and_drop(from_row::<(usize, String, String)>)
+            let (results_len, ranked_names) = self
+                .match_taxa_get_ranked_names_batch(&sql, catalog_id, batch_size, offset)
                 .await?;
-            let mut ranked_names: HashMap<String, Vec<(usize, String)>> = HashMap::new();
-            for result in &results {
-                let entry_id = result.0;
-                let taxon_name = match self.rewrite_taxon_name(catalog_id, &result.1) {
-                    Some(s) => s,
-                    None => continue,
-                };
-                let type_name = &result.2;
-                let rank = match TAXON_RANKS.get(type_name.as_str()) {
-                    Some(rank) => format!(" ; wdt:P105 {rank}"),
-                    None => "".to_string(),
-                };
-                ranked_names
-                    .entry(rank)
-                    .or_default()
-                    .push((entry_id, taxon_name));
-            }
 
             for (rank, v) in ranked_names.iter() {
-                let all_names: Vec<String> = v
-                    .iter()
-                    .map(|(_entry_id, name)| format!("\"{name}\""))
-                    .collect();
-                let name2entry_id: HashMap<String, usize> = v
-                    .iter()
-                    .map(|(entry_id, name)| (name.to_owned(), *entry_id))
-                    .collect();
-                for names in all_names.chunks(50) {
-                    // Prepare SPARQL
-                    let mut name2q: HashMap<String, Vec<String>> = HashMap::new();
-                    let names = names.join(" ");
-                    let sparql = format!("SELECT DISTINCT ?q ?name {{
-                        VALUES ?name {{ {} }} VALUES ?instance {{ wd:Q16521 wd:Q4886 }}
-                        {{ {{ SELECT DISTINCT ?q ?name ?instance {{ ?q wdt:P225 ?name ; wdt:P31 ?instance {rank} }} }} UNION
-                        {{ SELECT DISTINCT ?q ?name ?instance {{ ?q wdt:P1420 ?name ; wdt:P31 ?instance {rank} }} }} }} }}",names);
-
-                    // Run SPARQL
-                    if let Ok(sparql_result) = mw_api.sparql_query(&sparql).await {
-                        if let Some(bindings) = sparql_result["results"]["bindings"].as_array() {
-                            for b in bindings {
-                                if let (Some(entity_url), Some(name)) =
-                                    (b["q"]["value"].as_str(), b["name"]["value"].as_str())
-                                {
-                                    if let Ok(q) = mw_api.extract_entity_from_uri(entity_url) {
-                                        name2q.entry(name.to_string()).or_default().push(q);
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Filter results
-                    for (name, mut qs) in name2q {
-                        if let Some(entry_id) = name2entry_id.get(&name) {
-                            qs.sort();
-                            qs.dedup();
-
-                            match qs.len().cmp(&1) {
-                                std::cmp::Ordering::Less => {}
-                                std::cmp::Ordering::Equal => {
-                                    if let Some(q) = qs.pop() {
-                                        let _ = Entry::from_id(*entry_id, &self.mnm)
-                                            .await?
-                                            .set_match(&q, USER_AUX_MATCH)
-                                            .await;
-                                    }
-                                }
-                                std::cmp::Ordering::Greater => {
-                                    let _ = Entry::from_id(*entry_id, &self.mnm)
-                                        .await?
-                                        .set_multi_match(&qs)
-                                        .await;
-                                }
-                            }
-                        }
-                    }
-                }
+                self.match_taxa_name_to_entry(rank, v, &mw_api).await?;
             }
 
-            if results.len() < batch_size {
+            if results_len < batch_size {
                 break;
             }
-            offset += results.len();
+            offset += results_len;
             let _ = self.remember_offset(offset).await;
         }
         let _ = self.clear_offset().await;
@@ -201,6 +123,118 @@ impl TaxonMatcher {
             .exec_drop(sql, params! {catalog_id})
             .await?;
         Ok(())
+    }
+
+    async fn match_taxa_name_to_entry(
+        &mut self,
+        rank: &str,
+        v: &[(usize, String)],
+        mw_api: &mediawiki::api::Api,
+    ) -> Result<(), anyhow::Error> {
+        let all_names: Vec<String> = v
+            .iter()
+            .map(|(_entry_id, name)| format!("\"{name}\""))
+            .collect();
+        let name2entry_id: HashMap<String, usize> = v
+            .iter()
+            .map(|(entry_id, name)| (name.to_owned(), *entry_id))
+            .collect();
+        for names in all_names.chunks(50) {
+            // Prepare SPARQL
+            let mut name2q: HashMap<String, Vec<String>> = HashMap::new();
+            let names = names.join(" ");
+            let sparql = format!("SELECT DISTINCT ?q ?name {{
+                        VALUES ?name {{ {} }} VALUES ?instance {{ wd:Q16521 wd:Q4886 }}
+                        {{ {{ SELECT DISTINCT ?q ?name ?instance {{ ?q wdt:P225 ?name ; wdt:P31 ?instance {rank} }} }} UNION
+                        {{ SELECT DISTINCT ?q ?name ?instance {{ ?q wdt:P1420 ?name ; wdt:P31 ?instance {rank} }} }} }} }}",names);
+
+            // Run SPARQL
+            if let Ok(sparql_result) = mw_api.sparql_query(&sparql).await {
+                if let Some(bindings) = sparql_result["results"]["bindings"].as_array() {
+                    for b in bindings {
+                        if let (Some(entity_url), Some(name)) =
+                            (b["q"]["value"].as_str(), b["name"]["value"].as_str())
+                        {
+                            if let Ok(q) = mw_api.extract_entity_from_uri(entity_url) {
+                                name2q.entry(name.to_string()).or_default().push(q);
+                            }
+                        }
+                    }
+                }
+            }
+
+            self.match_taxa_filter_name2q(name2q, &name2entry_id)
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn match_taxa_filter_name2q(
+        &mut self,
+        name2q: HashMap<String, Vec<String>>,
+        name2entry_id: &HashMap<String, usize>,
+    ) -> Result<(), anyhow::Error> {
+        for (name, mut qs) in name2q {
+            if let Some(entry_id) = name2entry_id.get(&name) {
+                qs.sort();
+                qs.dedup();
+
+                match qs.len().cmp(&1) {
+                    std::cmp::Ordering::Less => {}
+                    std::cmp::Ordering::Equal => {
+                        if let Some(q) = qs.pop() {
+                            let _ = Entry::from_id(*entry_id, &self.mnm)
+                                .await?
+                                .set_match(&q, USER_AUX_MATCH)
+                                .await;
+                        }
+                    }
+                    std::cmp::Ordering::Greater => {
+                        let _ = Entry::from_id(*entry_id, &self.mnm)
+                            .await?
+                            .set_multi_match(&qs)
+                            .await;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn match_taxa_get_ranked_names_batch(
+        &mut self,
+        sql: &str,
+        catalog_id: usize,
+        batch_size: usize,
+        offset: usize,
+    ) -> Result<(usize, RankedNames), anyhow::Error> {
+        let results = self
+            .mnm
+            .app
+            .get_mnm_conn()
+            .await?
+            .exec_iter(sql, params! {catalog_id,batch_size,offset})
+            .await?
+            .map_and_drop(from_row::<(usize, String, String)>)
+            .await?;
+        let mut ranked_names: RankedNames = HashMap::new();
+        for result in &results {
+            let entry_id = result.0;
+            let taxon_name = match self.rewrite_taxon_name(catalog_id, &result.1) {
+                Some(s) => s,
+                None => continue,
+            };
+            let type_name = &result.2;
+            let rank = match TAXON_RANKS.get(type_name.as_str()) {
+                Some(rank) => format!(" ; wdt:P105 {rank}"),
+                None => "".to_string(),
+            };
+            ranked_names
+                .entry(rank)
+                .or_default()
+                .push((entry_id, taxon_name));
+        }
+        Ok((results.len(), ranked_names))
     }
 }
 

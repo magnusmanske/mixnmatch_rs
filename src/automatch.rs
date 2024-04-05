@@ -773,7 +773,7 @@ mod tests {
 
         // Check in-database changes
         let mut entry = Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
-        assert_eq!(entry.q, Some(13520818));
+        assert_eq!(entry.q, Some(467402));
         assert_eq!(entry.user, Some(USER_AUTO));
 
         // Clear

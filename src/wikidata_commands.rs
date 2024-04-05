@@ -147,3 +147,149 @@ impl WikidataCommand {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::entry::CoordinateLocation;
+
+    #[test]
+    fn test_as_datavalue() {
+        let value = WikidataCommandValue::String("test".to_owned());
+        let datavalue = WikidataCommand {
+            item_id: 0,
+            what: WikidataCommandWhat::Property(0),
+            value: value.to_owned(),
+            references: vec![],
+            qualifiers: vec![],
+            comment: None,
+            rank: None,
+        }
+        .as_datavalue(&value);
+        assert_eq!(
+            datavalue,
+            json!({"value":"test","type":"string"}),
+            "as_datavalue failed"
+        );
+
+        let value = WikidataCommandValue::Item(0);
+        let datavalue = WikidataCommand {
+            item_id: 0,
+            what: WikidataCommandWhat::Property(0),
+            value: value.to_owned(),
+            references: vec![],
+            qualifiers: vec![],
+            comment: None,
+            rank: None,
+        }
+        .as_datavalue(&value);
+        assert_eq!(
+            datavalue,
+            json!({"value":{"entity-type":"item","numeric-id":0,"id":"Q0"},"type":"wikibase-entityid"}),
+            "as_datavalue failed"
+        );
+
+        let value = WikidataCommandValue::Location(CoordinateLocation { lat: 0.0, lon: 0.0 });
+        let datavalue = WikidataCommand {
+            item_id: 0,
+            what: WikidataCommandWhat::Property(0),
+            value: value.to_owned(),
+            references: vec![],
+            qualifiers: vec![],
+            comment: None,
+            rank: None,
+        }
+        .as_datavalue(&value);
+        assert_eq!(
+            datavalue,
+            json!({"value":{"latitude":0.0,"longitude":0.0,"globe":"http://www.wikidata.org/entity/Q2"},"type":"globecoordinate"}),
+            "as_datavalue failed"
+        );
+    }
+
+    #[test]
+    fn test_rank_as_str() {
+        let rank = WikidataCommandRank::Normal;
+        assert_eq!(rank.as_str(), "normal", "rank_as_str failed");
+
+        let rank = WikidataCommandRank::Preferred;
+        assert_eq!(rank.as_str(), "preferred", "rank_as_str failed");
+
+        let rank = WikidataCommandRank::Deprecated;
+        assert_eq!(rank.as_str(), "deprecated", "rank_as_str failed");
+    }
+
+    #[test]
+    fn test_value_as_snak() {
+        let value = WikidataCommandValue::String("test".to_owned());
+        let snak = WikidataCommand {
+            item_id: 0,
+            what: WikidataCommandWhat::Property(0),
+            value: value.to_owned(),
+            references: vec![],
+            qualifiers: vec![],
+            comment: None,
+            rank: None,
+        }
+        .value_as_snak(0, &value);
+        assert_eq!(
+            snak,
+            json!({"snaktype":"value","property":"P0","datavalue":{"value":"test","type":"string"}}),
+            "value_as_snak failed"
+        );
+
+        let value = WikidataCommandValue::Item(0);
+        let snak = WikidataCommand {
+            item_id: 0,
+            what: WikidataCommandWhat::Property(0),
+            value: value.to_owned(),
+            references: vec![],
+            qualifiers: vec![],
+            comment: None,
+            rank: None,
+        }
+        .value_as_snak(0, &value);
+        assert_eq!(
+            snak,
+            json!({"snaktype":"value","property":"P0","datavalue":{"value":{"entity-type":"item","numeric-id":0,"id":"Q0"},"type":"wikibase-entityid"}}),
+            "value_as_snak failed"
+        );
+
+        let value = WikidataCommandValue::Location(CoordinateLocation { lat: 0.0, lon: 0.0 });
+        let snak = WikidataCommand {
+            item_id: 0,
+            what: WikidataCommandWhat::Property(0),
+            value: value.to_owned(),
+            references: vec![],
+            qualifiers: vec![],
+            comment: None,
+            rank: None,
+        }
+        .value_as_snak(0, &value);
+        assert_eq!(
+            snak,
+            json!({"snaktype":"value","property":"P0","datavalue":{"value":{"latitude":0.0,"longitude":0.0,"globe":"http://www.wikidata.org/entity/Q2"},"type":"globecoordinate"}}),
+            "value_as_snak failed"
+        );
+    }
+
+    #[test]
+    fn test_datavalue_as_snak() {
+        let datavalue = json!({"value":"test","type":"string"});
+        let snak = WikidataCommand {
+            item_id: 0,
+            what: WikidataCommandWhat::Property(0),
+            value: WikidataCommandValue::String("test".to_owned()),
+            references: vec![],
+            qualifiers: vec![],
+            comment: None,
+            rank: None,
+        }
+        .datavalue_as_snak(0, datavalue);
+        assert_eq!(
+            snak,
+            json!({"snaktype":"value","property":"P0","datavalue":{"value":"test","type":"string"}}),
+            "datavalue_as_snak failed"
+        );
+    }
+}

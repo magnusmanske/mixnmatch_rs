@@ -447,7 +447,6 @@ impl MixNMatch {
         name.trim().to_string()
     }
 
-    //TODO test
     pub fn import_file_path(&self) -> String {
         self.app.import_file_path.to_owned()
     }
@@ -778,6 +777,145 @@ mod tests {
         assert_eq!(mnm.item2numeric("Q12345"), Some(12345));
         assert_eq!(mnm.item2numeric("Q12345X"), Some(12345));
         assert_eq!(mnm.item2numeric("Q12345X6"), Some(12345));
+    }
+
+    #[test]
+    fn test_sql_placeholders() {
+        assert_eq!(MixNMatch::sql_placeholders(0), "".to_string());
+        assert_eq!(MixNMatch::sql_placeholders(1), "?".to_string());
+        assert_eq!(MixNMatch::sql_placeholders(3), "?,?,?".to_string());
+    }
+
+    #[test]
+    fn test_sanitize_person_name() {
+        assert_eq!(
+            MixNMatch::sanitize_person_name("Sir John Doe"),
+            "John Doe".to_string()
+        );
+        assert_eq!(
+            MixNMatch::sanitize_person_name("Mme. Jane Doe"),
+            "Jane Doe".to_string()
+        );
+        assert_eq!(
+            MixNMatch::sanitize_person_name("Dr. Jane Doe"),
+            "Jane Doe".to_string()
+        );
+        assert_eq!(
+            MixNMatch::sanitize_person_name("Mother Jane Doe"),
+            "Jane Doe".to_string()
+        );
+        assert_eq!(
+            MixNMatch::sanitize_person_name("Father Jane Doe"),
+            "Jane Doe".to_string()
+        );
+        assert_eq!(
+            MixNMatch::sanitize_person_name("Jane Doe (actor)"),
+            "Jane Doe".to_string()
+        );
+        assert_eq!(
+            MixNMatch::sanitize_person_name("Jane Doe & John Smith"),
+            "Jane Doe John Smith".to_string()
+        );
+        assert_eq!(
+            MixNMatch::sanitize_person_name("Jane Doe & John Smith"),
+            "Jane Doe John Smith".to_string()
+        );
+        assert_eq!(
+            MixNMatch::sanitize_person_name("Jane Doe & John Smith"),
+            "Jane Doe John Smith".to_string()
+        );
+        assert_eq!(
+            MixNMatch::sanitize_person_name("Jane Doe & John Smith"),
+            "Jane Doe John Smith".to_string()
+        );
+        assert_eq!(
+            MixNMatch::sanitize_person_name("Jane Doe & John Smith"),
+            "Jane Doe John Smith".to_string()
+        );
+        assert_eq!(
+            MixNMatch::sanitize_person_name("Jane Doe & John Smith"),
+            "Jane Doe John Smith".to_string()
+        );
+        assert_eq!(
+            MixNMatch::sanitize_person_name("Jane Doe & John Smith"),
+            "Jane Doe John Smith".to_string()
+        );
+        assert_eq!(
+            MixNMatch::sanitize_person_name("Jane Doe & John Smith"),
+            "Jane Doe John Smith".to_string()
+        );
+        assert_eq!(
+            MixNMatch::sanitize_person_name("Jane Doe & John Smith"),
+            "Jane Doe John Smith".to_string()
+        );
+    }
+
+    #[test]
+    fn test_simplify_person_name() {
+        assert_eq!(
+            MixNMatch::simplify_person_name("Jane Doe (actor)"),
+            "Jane Doe".to_string()
+        );
+        assert_eq!(
+            MixNMatch::simplify_person_name("Jane Doe, Jr."),
+            "Jane Doe".to_string()
+        );
+        assert_eq!(
+            MixNMatch::simplify_person_name("Jane Doe, Sr."),
+            "Jane Doe".to_string()
+        );
+        assert_eq!(
+            MixNMatch::simplify_person_name("Jane Doe, PhD"),
+            "Jane Doe".to_string()
+        );
+        assert_eq!(
+            MixNMatch::simplify_person_name("Jane Doe, MD"),
+            "Jane Doe".to_string()
+        );
+        assert_eq!(
+            MixNMatch::simplify_person_name("Jane Doe, M.D."),
+            "Jane Doe".to_string()
+        );
+        assert_eq!(
+            MixNMatch::simplify_person_name("Sir Jane Doe"),
+            "Jane Doe".to_string()
+        );
+        assert_eq!(
+            MixNMatch::simplify_person_name("Baron Jane Doe"),
+            "Jane Doe".to_string()
+        );
+        assert_eq!(
+            MixNMatch::simplify_person_name("Baronesse Jane Doe"),
+            "Jane Doe".to_string()
+        );
+        assert_eq!(
+            MixNMatch::simplify_person_name("Graf Jane Doe"),
+            "Jane Doe".to_string()
+        );
+        assert_eq!(
+            MixNMatch::simplify_person_name("Gräfin Jane Doe"),
+            "Jane Doe".to_string()
+        );
+        assert_eq!(
+            MixNMatch::simplify_person_name("Prince Jane Doe"),
+            "Jane Doe".to_string()
+        );
+        assert_eq!(
+            MixNMatch::simplify_person_name("Princess Jane Doe"),
+            "Jane Doe".to_string()
+        );
+        assert_eq!(
+            MixNMatch::simplify_person_name("Dr. Jane Doe"),
+            "Jane Doe".to_string()
+        );
+        assert_eq!(
+            MixNMatch::simplify_person_name("Prof. Jane Doe"),
+            "Jane Doe".to_string()
+        );
+        assert_eq!(
+            MixNMatch::simplify_person_name("Rev. Jane Doe"),
+            "Jane Doe".to_string()
+        );
     }
 }
 
