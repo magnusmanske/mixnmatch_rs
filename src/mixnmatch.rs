@@ -17,7 +17,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 use tempfile::tempfile;
 use urlencoding::encode;
-use wikibase::EntityTrait;
+use wikimisc::wikibase::{EntityTrait, ItemEntity};
 
 pub const MNM_SITE_URL: &str = "https://mix-n-match.toolforge.org";
 
@@ -563,7 +563,7 @@ impl MixNMatch {
         Ok(())
     }
 
-    pub async fn create_new_wikidata_item(&mut self, item: wikibase::ItemEntity) -> Result<String> {
+    pub async fn create_new_wikidata_item(&mut self, item: ItemEntity) -> Result<String> {
         let comment = "Mix'n'match item creation (V2)".to_string();
         let json = item.to_json();
         self.api_log_in().await?;

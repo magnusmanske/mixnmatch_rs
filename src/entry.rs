@@ -7,9 +7,11 @@ use rand::prelude::*;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
-use wikibase::entity_container::EntityContainer;
-use wikibase::locale_string::LocaleString;
-use wikibase::{EntityTrait, ItemEntity, Reference, Snak, Statement};
+use wikimisc::wikibase::entity_container::EntityContainer;
+use wikimisc::wikibase::locale_string::LocaleString;
+use wikimisc::wikibase::{
+    Entity, EntityTrait, ItemEntity, Reference, Snak, SnakDataType, Statement,
+};
 
 pub const ENTRY_NEW_ID: usize = 0;
 pub const WESTERN_LANGUAGES: &[&str] = &["en", "de", "fr", "es", "nl", "it", "pt"];
@@ -48,38 +50,34 @@ impl AuxiliaryRow {
         }
     }
 
-    fn get_claim_for_aux(
-        &self,
-        prop: wikibase::Entity,
-        references: &Vec<Reference>,
-    ) -> Option<Statement> {
+    fn get_claim_for_aux(&self, prop: Entity, references: &Vec<Reference>) -> Option<Statement> {
         let prop = match prop {
-            wikibase::Entity::Property(prop) => prop,
+            Entity::Property(prop) => prop,
             _ => return None, // Ignore
         };
         let snak = match prop.datatype().to_owned()? {
-            wikibase::SnakDataType::Time => todo!(),
-            wikibase::SnakDataType::WikibaseItem => Snak::new_item(prop.id(), &self.value),
-            wikibase::SnakDataType::WikibaseProperty => todo!(),
-            wikibase::SnakDataType::WikibaseLexeme => todo!(),
-            wikibase::SnakDataType::WikibaseSense => todo!(),
-            wikibase::SnakDataType::WikibaseForm => todo!(),
-            wikibase::SnakDataType::String => Snak::new_string(prop.id(), &self.value),
-            wikibase::SnakDataType::ExternalId => {
+            SnakDataType::Time => todo!(),
+            SnakDataType::WikibaseItem => Snak::new_item(prop.id(), &self.value),
+            SnakDataType::WikibaseProperty => todo!(),
+            SnakDataType::WikibaseLexeme => todo!(),
+            SnakDataType::WikibaseSense => todo!(),
+            SnakDataType::WikibaseForm => todo!(),
+            SnakDataType::String => Snak::new_string(prop.id(), &self.value),
+            SnakDataType::ExternalId => {
                 Snak::new_external_id(prop.id(), &Self::fix_external_id(prop.id(), &self.value))
             }
-            wikibase::SnakDataType::GlobeCoordinate => todo!(),
-            wikibase::SnakDataType::MonolingualText => todo!(),
-            wikibase::SnakDataType::Quantity => todo!(),
-            wikibase::SnakDataType::Url => todo!(),
-            wikibase::SnakDataType::CommonsMedia => Snak::new_string(prop.id(), &self.value),
-            wikibase::SnakDataType::Math => todo!(),
-            wikibase::SnakDataType::TabularData => todo!(),
-            wikibase::SnakDataType::MusicalNotation => todo!(),
-            wikibase::SnakDataType::GeoShape => todo!(),
-            wikibase::SnakDataType::NotSet => todo!(),
-            wikibase::SnakDataType::NoValue => todo!(),
-            wikibase::SnakDataType::SomeValue => todo!(),
+            SnakDataType::GlobeCoordinate => todo!(),
+            SnakDataType::MonolingualText => todo!(),
+            SnakDataType::Quantity => todo!(),
+            SnakDataType::Url => todo!(),
+            SnakDataType::CommonsMedia => Snak::new_string(prop.id(), &self.value),
+            SnakDataType::Math => todo!(),
+            SnakDataType::TabularData => todo!(),
+            SnakDataType::MusicalNotation => todo!(),
+            SnakDataType::GeoShape => todo!(),
+            SnakDataType::NotSet => todo!(),
+            SnakDataType::NoValue => todo!(),
+            SnakDataType::SomeValue => todo!(),
         };
         Some(Statement::new_normal(snak, vec![], references.to_owned()))
     }
@@ -720,7 +718,7 @@ impl Entry {
             .await?
             .map_and_drop(from_row::<(String, String)>)
             .await?;
-        let mut ret: Vec<wikibase::locale_string::LocaleString> = vec![];
+        let mut ret: Vec<LocaleString> = vec![];
         rows.iter().for_each(|(k, v)| {
             ret.push(LocaleString::new(k, v));
         });
@@ -1351,16 +1349,16 @@ mod tests {
             in_wikidata: true,
             entry_is_matched: true,
         };
-        let property = wikibase::PropertyEntity::new(
+        let property = wikimisc::wikibase::PropertyEntity::new(
             "P12345".to_string(),
             vec![],
             vec![],
             vec![],
             vec![],
-            Some(wikibase::SnakDataType::WikibaseItem),
+            Some(SnakDataType::WikibaseItem),
             false,
         );
-        let prop = wikibase::Entity::Property(property);
+        let prop = Entity::Property(property);
         let claim = aux.get_claim_for_aux(prop, &vec![]);
         let expected = Snak::new_item("P12345", "Q5678");
         assert_eq!(*claim.unwrap().main_snak(), expected);

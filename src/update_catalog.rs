@@ -17,7 +17,7 @@ use std::fs::File;
 use std::io::Cursor;
 use std::path::Path;
 use uuid::Uuid;
-use wikibase::locale_string::LocaleString;
+use wikimisc::wikibase::LocaleString;
 
 lazy_static! {
     static ref RE_PATTERN_WRAP_REMOVAL: Regex =

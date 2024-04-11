@@ -249,7 +249,7 @@ impl Maintenance {
         entity_ids: Vec<String>,
     ) -> Option<HashMap<String, isize>> {
         let api = self.mnm.get_mw_api().await.ok()?;
-        let entities = wikibase::entity_container::EntityContainer::new();
+        let entities = wikimisc::wikibase::entity_container::EntityContainer::new();
         entities.load_entities(&api, &entity_ids).await.ok()?;
         let mut propval2item: HashMap<String, Vec<isize>> = HashMap::new();
         for q in entity_ids {
@@ -268,7 +268,7 @@ impl Maintenance {
                 .filter_map(|snak| snak.data_value().to_owned())
                 .map(|datavalue| datavalue.value().to_owned())
                 .filter_map(|value| match value {
-                    wikibase::Value::StringValue(v) => Some(v),
+                    wikimisc::wikibase::Value::StringValue(v) => Some(v),
                     _ => None,
                 })
                 .collect();

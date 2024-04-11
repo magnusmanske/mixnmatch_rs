@@ -1,5 +1,8 @@
 use crate::entry::Entry;
+use crate::job::*;
+use crate::mixnmatch::*;
 use anyhow::{anyhow, Result};
+use core::time::Duration;
 use dashmap::DashMap;
 use mysql_async::prelude::*;
 use mysql_async::{from_row, Conn, Opts, OptsBuilder, PoolConstraints, PoolOpts};
@@ -9,12 +12,8 @@ use std::env;
 use std::fs::File;
 use std::sync::Arc;
 use std::{thread, time};
-use wikibase::ItemEntity;
-// use tokio::runtime::{Runtime, self};
-use crate::job::*;
-use crate::mixnmatch::*;
-use core::time::Duration;
 use tokio::time::sleep;
+use wikimisc::wikibase::ItemEntity;
 
 pub const DB_POOL_MIN: usize = 0;
 pub const DB_POOL_MAX: usize = 3;
@@ -30,7 +29,6 @@ pub struct AppState {
     pub bot_password: String,
     pub task_specific_usize: HashMap<String, usize>,
     max_concurrent_jobs: usize,
-    // pub runtime: Arc<Runtime>,
 }
 
 impl AppState {
@@ -67,24 +65,6 @@ impl AppState {
         };
         ret
     }
-
-    // fn create_runtime(_max_concurrent_jobs: usize, default_threads: usize, thread_stack_factor: usize) -> Runtime {
-    //     let threads = match env::var("MNM_THREADS") {
-    //         Ok(s) => s.parse::<usize>().unwrap_or(default_threads),
-    //         Err(_) => default_threads,
-    //     };
-    //     // let threads = cmp::min(threads,max_concurrent_jobs+1); // No point having more threads than max concurrent jobs
-    //     println!("Using {threads} threads");
-
-    //     let threaded_rt = runtime::Builder::new_multi_thread()
-    //         .enable_all()
-    //         .worker_threads(threads)
-    //         .thread_name("mixnmatch")
-    //         .thread_stack_size(thread_stack_factor * 1024 * 1024)
-    //         .build()
-    //         .expect("Could not create tokio runtime");
-    //     threaded_rt
-    // }
 
     /// Helper function to create a DB pool from a JSON config object
     fn create_pool(config: &Value) -> mysql_async::Pool {

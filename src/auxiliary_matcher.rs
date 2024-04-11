@@ -14,7 +14,9 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
-use wikibase::entity_container::EntityContainer;
+use wikimisc::wikibase::entity_container::EntityContainer;
+use wikimisc::wikibase::Entity;
+use wikimisc::wikibase::Value;
 
 pub const AUX_BLACKLISTED_CATALOGS: &[usize] = &[506];
 pub const AUX_BLACKLISTED_CATALOGS_PROPERTIES: &[(usize, usize)] = &[(2099, 428)];
@@ -93,14 +95,14 @@ impl AuxiliaryResults {
     }
 
     //TODO test
-    fn entity_has_statement(&self, entity: &wikibase::Entity) -> bool {
+    fn entity_has_statement(&self, entity: &Entity) -> bool {
         entity
             .claims_with_property(self.prop())
             .iter()
             .filter_map(|statement| statement.main_snak().data_value().to_owned())
             .map(|datavalue| datavalue.value().to_owned())
             .any(|v| {
-                if let wikibase::Value::StringValue(s) = v {
+                if let Value::StringValue(s) = v {
                     if AUX_PROPERTIES_ALSO_USING_LOWERCASE.contains(&self.property) {
                         return s.to_lowercase() == self.value.to_lowercase();
                     }
@@ -131,7 +133,7 @@ pub struct AuxiliaryMatcher {
     properties_with_coordinates: Vec<String>,
     mnm: MixNMatch,
     catalogs: HashMap<usize, Option<Catalog>>,
-    properties: wikibase::entity_container::EntityContainer,
+    properties: EntityContainer,
     aux2wd_skip_existing_property: bool,
     job: Option<Job>,
 }
@@ -160,7 +162,7 @@ impl AuxiliaryMatcher {
             properties_with_coordinates: vec!["P625".to_string()], // TODO load dynamically like the ones above
             mnm: mnm.clone(),
             catalogs: HashMap::new(),
-            properties: wikibase::entity_container::EntityContainer::new(),
+            properties: EntityContainer::new(),
             aux2wd_skip_existing_property: true,
             job: None,
         }
@@ -322,7 +324,7 @@ impl AuxiliaryMatcher {
                 .iter()
                 .map(|(q, _aux)| q.to_owned())
                 .collect();
-            let entities = wikibase::entity_container::EntityContainer::new();
+            let entities = EntityContainer::new();
             let _ = entities.load_entities(&mw_api, &items_to_load).await;
             for (q, aux) in &items_to_check {
                 if let Some(entity) = &entities.get_entity(q.to_owned()) {
@@ -386,7 +388,7 @@ impl AuxiliaryMatcher {
                 results.iter().map(AuxiliaryResults::from_result).collect();
             let (aux, sources) = self.aux2wd_remap_results(catalog_id, &results).await;
 
-            let entities = wikibase::entity_container::EntityContainer::new();
+            let entities = EntityContainer::new();
             if self.aux2wd_skip_existing_property {
                 let entity_ids: Vec<String> = aux.keys().map(|q| format!("Q{}", q)).collect();
                 if entities.load_entities(&mw_api, &entity_ids).await.is_err() {
@@ -411,12 +413,7 @@ impl AuxiliaryMatcher {
     }
 
     //TODO test
-    fn is_statement_in_entity(
-        &self,
-        entity: &wikibase::Entity,
-        property: &str,
-        value: &str,
-    ) -> bool {
+    fn is_statement_in_entity(&self, entity: &Entity, property: &str, value: &str) -> bool {
         entity
             .claims_with_property(property)
             .iter()
@@ -424,9 +421,9 @@ impl AuxiliaryMatcher {
                 match &claim.main_snak().data_value() {
                     Some(datavalue) => {
                         match datavalue.value() {
-                            wikibase::Value::StringValue(s) => Some(s.to_string()),
-                            wikibase::Value::Entity(e) => Some(e.id().to_string()),
-                            wikibase::Value::Coordinate(c) => {
+                            Value::StringValue(s) => Some(s.to_string()),
+                            Value::Entity(e) => Some(e.id().to_string()),
+                            Value::Coordinate(c) => {
                                 Some(format!("@{}/{}", c.latitude(), c.longitude()))
                             }
                             _ => None, // TODO more types?
@@ -439,11 +436,7 @@ impl AuxiliaryMatcher {
     }
 
     //TODO test
-    async fn entity_already_has_property(
-        &self,
-        aux: &AuxiliaryResults,
-        entity: &wikibase::Entity,
-    ) -> bool {
+    async fn entity_already_has_property(&self, aux: &AuxiliaryResults, entity: &Entity) -> bool {
         if !entity.has_claims_with_property(aux.prop()) {
             return false;
         }
@@ -648,7 +641,7 @@ impl AuxiliaryMatcher {
                     let p9073 = prop_entity.values_for_property("P9073");
                     if let Some(value) = p9073.first() {
                         /* trunk-ignore(clippy/collapsible_match) */
-                        if let wikibase::Value::Entity(entity_value) = value {
+                        if let Value::Entity(entity_value) = value {
                             if let Ok(q) = entity_value.id().replace('Q', "").parse::<usize>() {
                                 stated_in.push(WikidataCommandPropertyValue {
                                     property: 248,
@@ -706,7 +699,7 @@ mod tests {
     async fn test_is_statement_in_entity() {
         let mnm = get_test_mnm();
         let mw_api = mnm.get_mw_api().await.unwrap();
-        let entities = wikibase::entity_container::EntityContainer::new();
+        let entities = EntityContainer::new();
         let entity = entities.load_entity(&mw_api, "Q13520818").await.unwrap();
         let am = AuxiliaryMatcher::new(&mnm);
         assert!(am.is_statement_in_entity(&entity, "P31", "Q5"));
@@ -718,7 +711,7 @@ mod tests {
     async fn test_entity_already_has_property() {
         let mnm = get_test_mnm();
         let mw_api = mnm.get_mw_api().await.unwrap();
-        let entities = wikibase::entity_container::EntityContainer::new();
+        let entities = EntityContainer::new();
         let entity = entities.load_entity(&mw_api, "Q13520818").await.unwrap();
         let aux = AuxiliaryResults {
             aux_id: 0,

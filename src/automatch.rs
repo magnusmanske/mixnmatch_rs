@@ -621,7 +621,7 @@ impl AutoMatch {
                 results.iter().map(CandidateDates::from_row).collect();
             let items_to_load: Vec<String> =
                 results.iter().flat_map(|r| r.matches.clone()).collect();
-            let items = wikibase::entity_container::EntityContainer::new();
+            let items = wikimisc::wikibase::entity_container::EntityContainer::new();
             let _ = items.load_entities(&mw_api, &items_to_load).await; // We don't really care if there was an error in the grand scheme of things
             for result in &results {
                 let mut candidates = vec![];
@@ -638,7 +638,7 @@ impl AutoMatch {
                             None => continue,
                         };
                         let time = match data_value.value() {
-                            wikibase::value::Value::Time(tv) => tv,
+                            wikimisc::wikibase::value::Value::Time(tv) => tv,
                             _ => continue,
                         };
                         let dt =

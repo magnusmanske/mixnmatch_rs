@@ -3,8 +3,8 @@ use crate::mixnmatch::*;
 use anyhow::{anyhow, Result};
 use mysql_async::prelude::*;
 use mysql_async::Row;
-use wikibase::Reference;
-use wikibase::Snak;
+use wikimisc::wikibase::Reference;
+use wikimisc::wikibase::Snak;
 
 #[derive(Debug, Clone)]
 pub struct Catalog {
