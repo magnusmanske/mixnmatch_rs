@@ -11,10 +11,8 @@ use regex::Regex;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::io::prelude::*;
 use std::sync::Mutex;
 use std::time::Duration;
-use tempfile::tempfile;
 use urlencoding::encode;
 use wikimisc::wikibase::{EntityTrait, ItemEntity};
 
@@ -364,13 +362,6 @@ impl MixNMatch {
         Ok(items)
     }
 
-    pub fn reqwest_client_wd() -> Result<reqwest::Client> {
-        Ok(reqwest::Client::builder()
-            .user_agent(WIKIDATA_USER_AGENT)
-            .timeout(Duration::from_secs(15))
-            .build()?)
-    }
-
     /// Performs a Wikidata API search for the query string. Returns item IDs matching the query.
     pub async fn wd_search(&self, query: &str) -> Result<Vec<String>> {
         // TODO via mw_api?
@@ -382,7 +373,8 @@ impl MixNMatch {
             "{}?action=query&list=search&format=json&srsearch={}",
             WIKIDATA_API_URL, query
         );
-        let v = Self::reqwest_client_wd()?
+        let v = wikimisc::wikidata::Wikidata::new()
+            .reqwest_client()?
             .get(url)
             .send()
             .await?
@@ -469,33 +461,11 @@ impl MixNMatch {
         Ok(())
     }
 
-    /// Queries SPARQL and returns a filename with the result as CSV.
+    // /// Queries SPARQL and returns a filename with the result as CSV.
     pub async fn load_sparql_csv(&self, sparql: &str) -> Result<csv::Reader<File>> {
-        let url = format!("https://query.wikidata.org/sparql?query={}", sparql);
-        let mut f = tempfile()?;
-        let mut res = Self::reqwest_client_wd()?
-            .get(url)
-            .header(
-                reqwest::header::ACCEPT,
-                reqwest::header::HeaderValue::from_str("text/csv")?,
-            )
-            .send()
-            .await?;
-        while let Some(chunk) = res.chunk().await? {
-            f.write_all(chunk.as_ref())?;
-        }
-        f.seek(std::io::SeekFrom::Start(0))?;
-        Ok(csv::ReaderBuilder::new()
-            .flexible(true)
-            .has_headers(true)
-            .delimiter(b',')
-            .from_reader(f))
-
-        /* HOWTO use:
-        let mut reader = self.mnm.load_sparql_csv(&sparql).await?;
-        for result in reader.records() {
-            let record = result.unwrap();
-        }*/
+        wikimisc::wikidata::Wikidata::new()
+            .load_sparql_csv(sparql)
+            .await
     }
 
     //TODO test
@@ -701,18 +671,6 @@ mod tests {
             mnm.get_overview_column_name_for_user_and_q(&None, &Some(1)),
             "noq"
         );
-    }
-
-    #[tokio::test]
-    async fn test_load_sparql_csv() {
-        let mnm = get_test_mnm();
-        let sparql = "SELECT ?item ?itemLabel WHERE {?item wdt:P31 wd:Q146. SERVICE wikibase:label { bd:serviceParam wikibase:language \"[AUTO_LANGUAGE],en\". } }";
-        let mut reader = mnm.load_sparql_csv(sparql).await.unwrap();
-        assert!(reader
-            .records()
-            .filter_map(|r| r.ok())
-            .filter_map(|x| x.get(1).map(|x| x.to_string()))
-            .any(|s| s == "Dusty the Klepto Kitty"));
     }
 
     #[tokio::test]

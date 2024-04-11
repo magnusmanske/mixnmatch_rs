@@ -292,7 +292,7 @@ impl Microsync {
         let url = format!(
             "https://www.wikidata.org/w/api.php?action=wbgetentities&ids=P{property}&format=json"
         );
-        let client = MixNMatch::reqwest_client_wd()?;
+        let client = wikimisc::wikidata::Wikidata::new().reqwest_client()?;
         let json = client.get(&url).send().await?.json::<Value>().await?;
         let url = match json["entities"][format!("P{property}")]["claims"]["P1630"][0]["mainsnak"]
             ["datavalue"]["value"]

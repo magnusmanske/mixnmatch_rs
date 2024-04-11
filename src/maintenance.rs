@@ -102,7 +102,7 @@ impl Maintenance {
     async fn get_wrdc_api_responses(&self, query: &str) -> Result<Vec<serde_json::Value>> {
         let rand = rand::random::<u32>();
         let url = format!("https://wdrc.toolforge.org/api.php?format=jsonl&{query}&random={rand}");
-        let client = MixNMatch::reqwest_client_wd()?;
+        let client = wikimisc::wikidata::Wikidata::new().reqwest_client()?;
         let mut text;
         loop {
             text = client.get(&url).send().await?.text().await?;

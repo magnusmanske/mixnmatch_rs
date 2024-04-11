@@ -2900,10 +2900,11 @@ dependencies = [
 [[package]]
 name = "wikimisc"
 version = "0.1.0"
-source = "git+https://github.com/magnusmanske/wikimisc#1fc366e521513cccb89266da458d1d571d3d7706"
+source = "git+https://github.com/magnusmanske/wikimisc#a250193a270024764f0a9ace4b377a3643e4aeb4"
 dependencies = [
  "anyhow",
  "chrono",
+ "csv",
  "lazy_static",
  "regex",
  "reqwest",
