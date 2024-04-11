@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::fs::File;
+use wikimisc::timestamp::TimeStamp;
 
 const MAX_WIKI_ROWS: usize = 400;
 const EXT_URL_UNIQUE_SEPARATOR: &str = "!@£$%^&|";
@@ -130,7 +131,7 @@ impl Microsync {
     //TODO test
     async fn update_wiki_page(&mut self, catalog_id: usize, wikitext: &str) -> Result<()> {
         let page_title = format!("User:Magnus Manske/Mix'n'match report/{}", catalog_id);
-        let day = &MixNMatch::get_timestamp()[0..8];
+        let day = &TimeStamp::now()[0..8];
         let comment = format!("Update {}", day);
         self.mnm
             .set_wikipage_text(&page_title, wikitext, &comment)

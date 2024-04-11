@@ -3,7 +3,6 @@ use crate::entry::*;
 use crate::error::MnMError;
 use crate::wikidata_commands::WikidataCommand;
 use anyhow::{anyhow, Result};
-use chrono::{DateTime, NaiveDateTime, Utc};
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use mysql_async::from_row;
@@ -265,26 +264,6 @@ impl MixNMatch {
 
         items.retain(|item| !meta_items.iter().any(|q| q == item));
         Ok(())
-    }
-
-    /// Returns the current UTF time as a timestamp, 14 char format
-    pub fn get_timestamp() -> String {
-        Utc::now().format("%Y%m%d%H%M%S").to_string()
-    }
-
-    /// Returns the given UTF time as a timestamp, 14 char format
-    pub fn get_timestamp_relative(utc: &DateTime<Utc>) -> String {
-        utc.format("%Y%m%d%H%M%S").to_string()
-    }
-
-    pub fn parse_timestamp(ts: &str) -> Option<DateTime<Utc>> {
-        match NaiveDateTime::parse_from_str(ts, "%Y%m%d%H%M%S")
-            .ok()?
-            .and_local_timezone(Utc)
-        {
-            chrono::offset::LocalResult::Single(d) => Some(d),
-            _ => None,
-        }
     }
 
     /// Checks if the log already has a removed match for this entry.
@@ -752,21 +731,6 @@ mod tests {
                 .unwrap(),
             vec!["Q13520818".to_string()]
         );
-    }
-
-    #[test]
-    fn test_get_timestamp() {
-        let ts = MixNMatch::get_timestamp();
-        assert_eq!(ts.len(), 14);
-        assert_eq!(ts.chars().next(), Some('2'));
-    }
-
-    #[test]
-    fn test_parse_timestamp() {
-        let ts = "20221027123456";
-        let dt = MixNMatch::parse_timestamp(ts).unwrap();
-        let ts2 = dt.format("%Y%m%d%H%M%S").to_string();
-        assert_eq!(ts, ts2)
     }
 
     #[test]

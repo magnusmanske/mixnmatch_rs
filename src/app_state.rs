@@ -13,6 +13,7 @@ use std::fs::File;
 use std::sync::Arc;
 use std::{thread, time};
 use tokio::time::sleep;
+use wikimisc::timestamp::TimeStamp;
 use wikimisc::wikibase::ItemEntity;
 
 pub const DB_POOL_MIN: usize = 0;
@@ -261,7 +262,7 @@ impl AppState {
                 // println!("seppuku check running");
                 let min = chrono::Duration::try_minutes(max_age_min).unwrap();
                 let utc = chrono::Utc::now() - min;
-                let ts = MixNMatch::get_timestamp_relative(&utc);
+                let ts = TimeStamp::datetime(&utc);
                 let sql = format!("SELECT
                     (SELECT count(*) FROM jobs WHERE `status` IN ('RUNNING')) AS running,
                     (SELECT count(*) FROM jobs WHERE `status` IN ('RUNNING') AND last_ts>='{ts}') AS running_recent");

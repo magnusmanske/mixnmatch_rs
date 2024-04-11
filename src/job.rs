@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
+use wikimisc::timestamp::TimeStamp;
 
 #[derive(Eq, Clone, Debug)]
 pub enum TaskSize {
@@ -237,7 +238,7 @@ impl JobRow {
             json: None,
             depends_on: None,
             status: JobStatus::Todo,
-            last_ts: MixNMatch::get_timestamp(),
+            last_ts: TimeStamp::now(),
             note: None,
             repeat_after_sec: None,
             next_ts: "".to_string(),
@@ -354,7 +355,7 @@ impl Job {
     //TODO test
     pub async fn set_status(&mut self, status: JobStatus) -> Result<()> {
         let job_id = self.get_id().await?;
-        let timestamp = MixNMatch::get_timestamp();
+        let timestamp = TimeStamp::now();
         let status_str = status.as_str();
         let sql = "UPDATE `jobs` SET `status`=:status_str,`last_ts`=:timestamp,`note`=NULL WHERE `id`=:job_id";
         self.mnm
@@ -461,7 +462,7 @@ impl Job {
         action: &str,
         depends_on: Option<usize>,
     ) -> Result<usize> {
-        let timestamp = MixNMatch::get_timestamp();
+        let timestamp = TimeStamp::now();
         let status = "TODO";
         let sql = "INSERT INTO `jobs` (catalog,action,status,depends_on,last_ts) VALUES (:catalog_id,:action,:status,:depends_on,:timestamp)
         ON DUPLICATE KEY UPDATE status=:status,depends_on=:depends_on,last_ts=:timestamp";
@@ -476,7 +477,7 @@ impl Job {
     //TODO test
     pub async fn set_json(&mut self, json: Option<serde_json::Value>) -> Result<()> {
         let job_id = self.get_id().await?;
-        let timestamp = MixNMatch::get_timestamp();
+        let timestamp = TimeStamp::now();
         match json {
             Some(json) => {
                 let json_string = json.to_string();
@@ -692,7 +693,7 @@ impl Job {
             None => return Ok(String::new()),
         };
         let seconds = Duration::try_seconds(seconds).unwrap();
-        let utc = MixNMatch::parse_timestamp(&self.data().await?.last_ts.clone())
+        let utc = TimeStamp::from_str(&self.data().await?.last_ts.clone())
             .ok_or(anyhow!("Can't parse timestamp in last_ts"))?
             .checked_add_signed(seconds)
             .ok_or(JobError::TimeError)?;
@@ -778,7 +779,7 @@ impl Job {
 
     //TODO test
     async fn get_next_scheduled_job(&self) -> Option<usize> {
-        let timestamp = MixNMatch::get_timestamp();
+        let timestamp = TimeStamp::now();
         let sql = format!(
             "SELECT `id` FROM `jobs` WHERE `status`='{}' AND `next_ts`!='' AND `next_ts`<='{}'",
             JobStatus::Done.as_str(),

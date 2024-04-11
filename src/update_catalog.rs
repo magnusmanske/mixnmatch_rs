@@ -17,6 +17,7 @@ use std::fs::File;
 use std::io::Cursor;
 use std::path::Path;
 use uuid::Uuid;
+use wikimisc::timestamp::TimeStamp;
 use wikimisc::wikibase::LocaleString;
 
 lazy_static! {
@@ -319,7 +320,7 @@ impl ExtendedEntry {
                     if self.entry.q.is_some() {
                         // q is set, also set user and timestamp
                         self.entry.user = Some(4); // Auxiliary data matcher
-                        self.entry.timestamp = Some(MixNMatch::get_timestamp());
+                        self.entry.timestamp = Some(TimeStamp::now());
                     }
                 }
                 "type" => self.entry.type_name = Self::parse_type(cell),

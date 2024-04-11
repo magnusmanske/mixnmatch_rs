@@ -7,6 +7,7 @@ use rand::prelude::*;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
+use wikimisc::timestamp::TimeStamp;
 use wikimisc::wikibase::entity_container::EntityContainer;
 use wikimisc::wikibase::locale_string::LocaleString;
 use wikimisc::wikibase::{
@@ -878,7 +879,7 @@ impl Entry {
         let q_numeric = mnm
             .item2numeric(q)
             .ok_or(anyhow!("'{}' is not a valid item", &q))?;
-        let timestamp = MixNMatch::get_timestamp();
+        let timestamp = TimeStamp::now();
         let mut sql = "UPDATE `entry` SET `q`=:q_numeric,`user`=:user_id,`timestamp`=:timestamp WHERE `id`=:entry_id AND (`q` IS NULL OR `q`!=:q_numeric OR `user`!=:user_id)".to_string();
         if user_id == USER_AUTO {
             if mnm
@@ -956,7 +957,7 @@ impl Entry {
     ) -> Result<()> {
         let entry_id = self.id;
         let is_matched = if is_matched { 1 } else { 0 };
-        let timestamp = MixNMatch::get_timestamp();
+        let timestamp = TimeStamp::now();
         conn.exec_drop(r"INSERT INTO `wd_matches` (`entry_id`,`status`,`timestamp`,`catalog`) VALUES (:entry_id,:status,:timestamp,(SELECT entry.catalog FROM entry WHERE entry.id=:entry_id)) ON DUPLICATE KEY UPDATE `status`=:status,`timestamp`=:timestamp",params! {entry_id,status,timestamp}).await?;
         conn.exec_drop(
             r"UPDATE `person_dates` SET is_matched=:is_matched WHERE entry_id=:entry_id",

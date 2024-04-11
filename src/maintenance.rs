@@ -7,6 +7,7 @@ use itertools::Itertools;
 use mysql_async::from_row;
 use mysql_async::prelude::*;
 use std::collections::HashMap;
+use wikimisc::timestamp::TimeStamp;
 
 pub struct Maintenance {
     mnm: MixNMatch,
@@ -118,7 +119,7 @@ impl Maintenance {
 
     fn yesterday(&self) -> String {
         let yesterday = chrono::Utc::now() - chrono::Duration::days(1);
-        MixNMatch::get_timestamp_relative(&yesterday)
+        TimeStamp::datetime(&yesterday)
     }
 
     async fn wdrc_sync_redirects(&self) -> Result<()> {
@@ -542,7 +543,7 @@ impl Maintenance {
         let sql = "UPDATE `entry` SET `q`=:q,`user`=0,`timestamp`=:timestamp WHERE `id`=:entry_id AND `q` IS NULL" ;
         let mut conn = self.mnm.app.get_mnm_conn().await?;
         for (entry_id, q) in &new_automatches {
-            let timestamp = MixNMatch::get_timestamp();
+            let timestamp = TimeStamp::now();
             conn.exec_drop(sql, params! {entry_id,q,timestamp}).await?;
         }
         drop(conn);
