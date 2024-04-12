@@ -725,6 +725,7 @@ impl AutoMatch {
         &self,
         el_chunk: &[(usize, String)],
         sparql_parts: &str,
+        language: &str,
     ) -> Result<()> {
         let query: Vec<String> = el_chunk
             .iter()
@@ -746,7 +747,7 @@ impl AutoMatch {
             let sr = sr.join(" wd:");
             let sparql_subquery =
                 format!("SELECT DISTINCT ?q {{ {sparql_parts} . VALUES ?q {{ wd:{sr} }} }}");
-            let sparql = format!("SELECT ?q ?qLabel {{ {{ {sparql_subquery} }} SERVICE wikibase:label {{ bd:serviceParam wikibase:language \"[AUTO_LANGUAGE],en\" }} }}");
+            let sparql = format!("SELECT ?q ?qLabel {{ {{ {sparql_subquery} }} SERVICE wikibase:label {{ bd:serviceParam wikibase:language \"{language},[AUTO_LANGUAGE],en\" }} }}");
             let mut reader = match self.mnm.load_sparql_csv(&sparql).await {
                 Ok(result) => result,
                 Err(_) => continue, // Ignore error
@@ -773,8 +774,7 @@ impl AutoMatch {
         Ok(())
     }
 
-    async fn automatch_complex_get_sparql_parts(&self, catalog_id: usize) -> Result<String> {
-        let catalog = Catalog::from_id(catalog_id, &self.mnm).await?;
+    async fn automatch_complex_get_sparql_parts(&self, catalog: &Catalog) -> Result<String> {
         let key_value_pairs = catalog.get_key_value_pairs().await?;
         let property_roots = key_value_pairs
             .get("automatch_complex")
@@ -793,7 +793,12 @@ impl AutoMatch {
     }
 
     pub async fn automatch_complex(&mut self, catalog_id: usize) -> Result<()> {
-        let sparql_parts = self.automatch_complex_get_sparql_parts(catalog_id).await?;
+        let catalog = Catalog::from_id(catalog_id, &self.mnm).await?;
+        let sparql_parts = self.automatch_complex_get_sparql_parts(&catalog).await?;
+        let mut language = catalog.search_wp.to_owned();
+        if language.is_empty() {
+            language = "en".to_string();
+        }
 
         let sql = format!("SELECT `id`,`ext_name` FROM entry WHERE catalog=:catalog_id AND q IS NULL
             AND NOT EXISTS (SELECT * FROM `log` WHERE log.entry_id=entry.id AND log.action='remove_q')
@@ -814,7 +819,9 @@ impl AutoMatch {
             if el_chunk.is_empty() {
                 break; // Done
             }
-            let _ = self.automatch_complex_batch(&el_chunk, &sparql_parts).await; // Ignore error
+            let _ = self
+                .automatch_complex_batch(&el_chunk, &sparql_parts, &language)
+                .await; // Ignore error
             if el_chunk.len() < batch_size {
                 break;
             }
