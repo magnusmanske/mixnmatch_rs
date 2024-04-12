@@ -51,13 +51,19 @@ impl fmt::Display for UpdateCatalogError {
     //TODO test
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            UpdateCatalogError::NoUpdateInfoForCatalog => write!(f, "{self}"),
-            UpdateCatalogError::MissingColumn => write!(f, "{self}"),
-            UpdateCatalogError::MissingDataSourceLocation => write!(f, "{self}"),
-            UpdateCatalogError::MissingDataSourceType => write!(f, "{self}"),
+            UpdateCatalogError::NoUpdateInfoForCatalog => {
+                write!(f, "UpdateCatalogError::NoUpdateInfoForCatalog")
+            }
+            UpdateCatalogError::MissingColumn => write!(f, "UpdateCatalogError::MissingColumn"),
+            UpdateCatalogError::MissingDataSourceLocation => {
+                write!(f, "UpdateCatalogError::MissingDataSourceLocation")
+            }
+            UpdateCatalogError::MissingDataSourceType => {
+                write!(f, "UpdateCatalogError::MissingDataSourceType")
+            }
             UpdateCatalogError::NotEnoughColumns(v) => write!(f, "NotEnoughColumns {v}"),
             UpdateCatalogError::UnknownColumnLabel(s) => write!(f, "UnknownColumnLabel {s}"),
-            UpdateCatalogError::BadPattern => write!(f, "{self}"),
+            UpdateCatalogError::BadPattern => write!(f, "UpdateCatalogError::BadPattern"),
         }
     }
 }

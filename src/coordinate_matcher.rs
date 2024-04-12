@@ -38,8 +38,7 @@ impl Error for CoordinateMatcherError {}
 impl fmt::Display for CoordinateMatcherError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            CoordinateMatcherError::String(s) => write!(f, "{}", s), // user-facing output
-                                                                     // _ => write!(f, "{}", self) // user-facing output
+            CoordinateMatcherError::String(s) => write!(f, "{s}"),
         }
     }
 }

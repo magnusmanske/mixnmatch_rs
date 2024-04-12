@@ -28,7 +28,11 @@ impl Error for MicrosyncError {}
 
 impl fmt::Display for MicrosyncError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self) // user-facing output
+        match self {
+            MicrosyncError::UnsuitableCatalogProperty => {
+                write!(f, "MicrosyncError::UnsuitableCatalogProperty")
+            }
+        }
     }
 }
 

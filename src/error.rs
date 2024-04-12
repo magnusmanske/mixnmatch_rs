@@ -10,6 +10,8 @@ impl Error for MnMError {}
 
 impl fmt::Display for MnMError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self) // user-facing output
+        match self {
+            MnMError::ApiUnreachable => write!(f, "API unreachable"),
+        }
     }
 }

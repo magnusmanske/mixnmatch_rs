@@ -16,7 +16,11 @@ impl Error for IssueError {}
 
 impl fmt::Display for IssueError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self) // user-facing output
+        match self {
+            IssueError::UnregognizedType => write!(f, "IssueError::UnregognizedType"),
+            IssueError::UnregognizedStatus => write!(f, "IssueError::UnregognizedStatus"),
+            IssueError::NoIssueWithId(id) => write!(f, "No issue with ID {id}"),
+        }
     }
 }
 

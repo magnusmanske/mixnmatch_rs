@@ -180,7 +180,10 @@ impl Error for JobError {}
 impl fmt::Display for JobError {
     //TODO test
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self) // user-facing output
+        match self {
+            JobError::S(s) => write!(f, "JobError::S: {s}"),
+            JobError::TimeError => write!(f, "JobError::TimeError"),
+        }
     }
 }
 
@@ -337,16 +340,15 @@ impl Job {
                     action
                 );
             }
-            Err(_e) => {
+            Err(e) => {
                 match catalog_id {
                     0 => self.set_status(JobStatus::Done).await?, // Don't fail'
                     _ => self.set_status(JobStatus::Failed).await?,
                 }
-                // let e = e.to_string(); // causes stack overflow!
-                let note = Some("ERROR".to_string()); //Some(e.to_owned());
+                let note = Some(format!("{e}")); //Some("ERROR".to_string()); //
                 self.set_note(note).await?;
                 let job_id = self.get_id().await?;
-                println!("Job {job_id} catalog {catalog_id}:{action} FAILED");
+                println!("Job {job_id} catalog {catalog_id}:{action} FAILED: {e}");
             }
         }
         self.update_next_ts().await
@@ -541,6 +543,11 @@ impl Job {
                 let mut am = AutoMatch::new(&self.mnm);
                 am.set_current_job(self);
                 am.automatch_creations(catalog_id).await
+            }
+            "automatch_complex" => {
+                let mut am = AutoMatch::new(&self.mnm);
+                am.set_current_job(self);
+                am.automatch_complex(catalog_id).await
             }
             "purge_automatches" => {
                 let mut am = AutoMatch::new(&self.mnm);

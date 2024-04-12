@@ -3,7 +3,7 @@ use crate::entry::*;
 use crate::issue::*;
 use crate::job::*;
 use crate::mixnmatch::*;
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use chrono::prelude::*;
 use chrono::{NaiveDateTime, Utc};
 use futures::future::join_all;
@@ -720,6 +720,110 @@ impl AutoMatch {
             Some(year)
         }
     }
+
+    async fn automatch_complex_batch(
+        &self,
+        el_chunk: &[(usize, String)],
+        sparql_parts: &str,
+    ) -> Result<()> {
+        let query: Vec<String> = el_chunk
+            .iter()
+            .map(|(_, label)| format!("\"{}\"", label.replace('"', "")))
+            .collect();
+        let query = query.join(" OR ");
+        let mut search_results = self.mnm.wd_search_with_limit(&query, Some(500)).await?;
+        if search_results.is_empty() {
+            return Ok(());
+        }
+        search_results.sort();
+        search_results.dedup();
+        let api = self.mnm.get_mw_api().await?;
+
+        let entry_ids = el_chunk.iter().map(|(entry_id, _)| *entry_id).collect_vec();
+        let mut entries = Entry::multiple_from_ids(&entry_ids, &self.mnm).await?;
+
+        for sr in search_results.chunks(50) {
+            let sr = sr.join(" wd:");
+            let sparql_subquery =
+                format!("SELECT DISTINCT ?q {{ {sparql_parts} . VALUES ?q {{ wd:{sr} }} }}");
+            let sparql = format!("SELECT ?q ?qLabel {{ {{ {sparql_subquery} }} SERVICE wikibase:label {{ bd:serviceParam wikibase:language \"[AUTO_LANGUAGE],en\" }} }}");
+            let mut reader = match self.mnm.load_sparql_csv(&sparql).await {
+                Ok(result) => result,
+                Err(_) => continue, // Ignore error
+            };
+            for row in reader.records().filter_map(|r| r.ok()) {
+                let q = api.extract_entity_from_uri(&row[0]).unwrap();
+                let q_label = &row[1];
+
+                let entry_candidates: Vec<usize> = el_chunk
+                    .iter()
+                    .filter(|(_, label)| label.contains(q_label) || q_label.contains(label))
+                    .map(|(entry_id, _)| *entry_id)
+                    .collect();
+                if entry_candidates.len() != 1 {
+                    // No match, or multiple matches, not touching this one
+                    continue;
+                }
+                if let Some(entry) = entries.get_mut(&entry_candidates[0]) {
+                    // println!("{q} {q_label} => {}",entry.id);
+                    let _ = entry.set_auto_and_multi_match(&[q]).await; // Ignore error
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn automatch_complex_get_sparql_parts(&self, catalog_id: usize) -> Result<String> {
+        let catalog = Catalog::from_id(catalog_id, &self.mnm).await?;
+        let key_value_pairs = catalog.get_key_value_pairs().await?;
+        let property_roots = key_value_pairs
+            .get("automatch_complex")
+            .ok_or_else(|| anyhow!("No automatch_complex key in catalog"))?;
+        let property_roots = serde_json::from_str::<Vec<(usize, usize)>>(property_roots)?;
+        let sparql_parts: Vec<String> = property_roots
+            .iter()
+            .map(|(p, q)| match *p {
+                31 => format!("?q wdt:P31/wdt:P279* wd:Q{q}"),
+                131 => format!("?q wdt:P131* wd:Q{q}"),
+                prop => format!("?q wdt:P{prop} wd:Q{q}"),
+            })
+            .collect();
+        let sparql_parts = sparql_parts.join(" . ");
+        Ok(sparql_parts)
+    }
+
+    pub async fn automatch_complex(&mut self, catalog_id: usize) -> Result<()> {
+        let sparql_parts = self.automatch_complex_get_sparql_parts(catalog_id).await?;
+
+        let sql = format!("SELECT `id`,`ext_name` FROM entry WHERE catalog=:catalog_id AND q IS NULL
+            AND NOT EXISTS (SELECT * FROM `log` WHERE log.entry_id=entry.id AND log.action='remove_q')
+            {}
+            ORDER BY `id` LIMIT :batch_size OFFSET :offset",MatchState::unmatched().get_sql());
+        let mut offset = self.get_last_job_offset().await;
+        let batch_size = 10;
+        loop {
+            let el_chunk = self
+                .mnm
+                .app
+                .get_mnm_conn()
+                .await?
+                .exec_iter(sql.clone(), params! {catalog_id,offset,batch_size})
+                .await?
+                .map_and_drop(from_row::<(usize, String)>)
+                .await?;
+            if el_chunk.is_empty() {
+                break; // Done
+            }
+            let _ = self.automatch_complex_batch(&el_chunk, &sparql_parts).await; // Ignore error
+            if el_chunk.len() < batch_size {
+                break;
+            }
+            offset += el_chunk.len();
+            let _ = self.remember_offset(offset).await;
+        }
+        let _ = self.clear_offset().await;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -730,6 +834,15 @@ mod tests {
     const TEST_CATALOG_ID: usize = 5526;
     const TEST_ENTRY_ID: usize = 143962196;
     const TEST_ENTRY_ID2: usize = 144000954;
+
+    #[tokio::test]
+    async fn test_automatch_complex() {
+        let _test_lock = TEST_MUTEX.lock();
+        let mnm = get_test_mnm();
+        let mut am = AutoMatch::new(&mnm);
+        let result = am.automatch_complex(3663).await.unwrap();
+        println!("{result:?}");
+    }
 
     #[tokio::test]
     async fn test_match_person_by_dates() {

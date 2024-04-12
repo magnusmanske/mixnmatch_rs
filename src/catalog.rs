@@ -1,6 +1,9 @@
+use std::collections::HashMap;
+
 use crate::entry::AuxiliaryRow;
 use crate::mixnmatch::*;
 use anyhow::{anyhow, Result};
+use mysql_async::from_row;
 use mysql_async::prelude::*;
 use mysql_async::Row;
 use wikimisc::wikibase::Reference;
@@ -67,6 +70,23 @@ impl Catalog {
             .ok_or(anyhow!("No catalog #{}", catalog_id))?
             .to_owned();
         ret.set_mnm(mnm);
+        Ok(ret)
+    }
+
+    /// Returns a HashMap of key-value pairs for the catalog.
+    pub async fn get_key_value_pairs(&self) -> Result<HashMap<String, String>> {
+        let catalog_id = self.id;
+        let sql = r#"SELECT `kv_key`,`kv_value` FROM `kv_catalog` WHERE `catalog_id`=:catalog_id"#;
+        let results = self
+            .mnm()?
+            .app
+            .get_mnm_conn()
+            .await?
+            .exec_iter(sql, params! {catalog_id})
+            .await?
+            .map_and_drop(from_row::<(String, String)>)
+            .await?;
+        let ret: HashMap<String, String> = results.into_iter().collect();
         Ok(ret)
     }
 

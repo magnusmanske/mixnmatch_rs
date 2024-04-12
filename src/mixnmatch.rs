@@ -362,17 +362,18 @@ impl MixNMatch {
         Ok(items)
     }
 
-    /// Performs a Wikidata API search for the query string. Returns item IDs matching the query.
-    pub async fn wd_search(&self, query: &str) -> Result<Vec<String>> {
+    pub async fn wd_search_with_limit(
+        &self,
+        query: &str,
+        srlimit: Option<usize>,
+    ) -> Result<Vec<String>> {
         // TODO via mw_api?
         if query.is_empty() {
             return Ok(vec![]);
         }
         let query = encode(query);
-        let url = format!(
-            "{}?action=query&list=search&format=json&srsearch={}",
-            WIKIDATA_API_URL, query
-        );
+        let srlimit = srlimit.unwrap_or(10);
+        let url = format!("{WIKIDATA_API_URL}?action=query&list=search&format=json&srsearch={query}&srlimit={srlimit}");
         let v = wikimisc::wikidata::Wikidata::new()
             .reqwest_client()?
             .get(url)
@@ -395,6 +396,11 @@ impl MixNMatch {
             })
             .collect();
         Ok(ret)
+    }
+
+    /// Performs a Wikidata API search for the query string. Returns item IDs matching the query.
+    pub async fn wd_search(&self, query: &str) -> Result<Vec<String>> {
+        self.wd_search_with_limit(query, None).await
     }
 
     //TODO test

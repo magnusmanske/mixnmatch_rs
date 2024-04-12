@@ -96,7 +96,13 @@ impl Error for EntryError {}
 impl fmt::Display for EntryError {
     //TODO test
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self) // user-facing output
+        match self {
+            EntryError::TryingToUpdateNewEntry => write!(f, "EntryError::TryingToUpdateNewEntry"),
+            EntryError::TryingToInsertExistingEntry => {
+                write!(f, "EntryError::TryingToInsertExistingEntry")
+            }
+            EntryError::EntryInsertFailed => write!(f, "EntryError::EntryInsertFailed"),
+        }
     }
 }
 
