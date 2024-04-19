@@ -5,8 +5,7 @@ use crate::wikidata_commands::WikidataCommand;
 use anyhow::{anyhow, Result};
 use itertools::Itertools;
 use lazy_static::lazy_static;
-use mysql_async::from_row;
-use mysql_async::{prelude::*, Conn};
+use mysql_async::{from_row, prelude::*, Conn};
 use regex::Regex;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -245,9 +244,9 @@ impl MixNMatch {
         }
         items.sort();
         items.dedup();
-        let mut sql = "SELECT DISTINCT page_title FROM page,pagelinks WHERE page_namespace=0 AND page_title IN ('".to_string() ;
+        let mut sql = "SELECT DISTINCT page_title FROM page,pagelinks,linktarget WHERE page_namespace=0 AND page_title IN ('".to_string() ;
         sql += &items.join("','");
-        sql += "') AND pl_from=page_id AND pl_title IN ('";
+        sql += "') AND pl_from=page_id AND lt_title IN ('";
         sql += &META_ITEMS.join("','");
         sql += "')";
 
@@ -349,7 +348,7 @@ impl MixNMatch {
                 .await?
         } else {
             let sql = "SELECT concat('Q',wbit_item_id) AS q FROM wbt_text,wbt_item_terms,wbt_term_in_lang,wbt_text_in_lang WHERE wbit_term_in_lang_id=wbtl_id AND wbtl_text_in_lang_id=wbxl_id AND wbxl_text_id=wbx_id  AND wbx_text=:name
-            AND EXISTS (SELECT * FROM page,pagelinks WHERE page_title=concat('Q',wbit_item_id) AND page_namespace=0 AND pl_from=page_id AND pl_namespace=0 AND pl_title=:type_q)
+            AND EXISTS (SELECT * FROM page,pagelinks,linktarget WHERE page_title=concat('Q',wbit_item_id) AND page_namespace=0 AND pl_target_id=lt_id AND pl_from=page_id AND lt_namespace=0 AND lt_title=:type_q)
             GROUP BY name,q";
             self.app
                 .get_wd_conn()
