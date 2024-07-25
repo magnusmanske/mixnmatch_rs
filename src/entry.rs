@@ -1,5 +1,6 @@
 use crate::catalog::Catalog;
 use crate::mixnmatch::*;
+use crate::storage::Storage;
 use anyhow::{anyhow, Result};
 use mysql_async::{from_row, Row, Value};
 use mysql_async::{prelude::*, Conn};
@@ -908,7 +909,8 @@ impl Entry {
             return Ok(false);
         }
 
-        mnm.update_overview_table_db(self, Some(user_id), Some(q_numeric), conn)
+        mnm.get_storage()
+            .update_overview_table(self, Some(user_id), Some(q_numeric))
             .await?;
 
         let is_full_match = user_id > 0 && q_numeric > 0;

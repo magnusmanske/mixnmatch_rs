@@ -3,6 +3,8 @@ use crate::{
     app_state::AppState,
     catalog::Catalog,
     coordinate_matcher::LocationRow,
+    entry::Entry,
+    issue::Issue,
     microsync::EXT_URL_UNIQUE_SEPARATOR,
     mixnmatch::MatchState,
     taxon_matcher::{RankedNames, TaxonMatcher, TaxonNameField, TAXON_RANKS},
@@ -10,7 +12,7 @@ use crate::{
 };
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
-use mysql_async::{from_row, prelude::*, Row};
+use mysql_async::{from_row, futures::GetConn, prelude::*, Row};
 use rand::prelude::*;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -29,6 +31,10 @@ impl StorageMySQL {
 
     pub fn pool(&self) -> &mysql_async::Pool {
         &self.pool
+    }
+
+    fn get_conn(&self) -> GetConn {
+        self.pool.get_conn()
     }
 
     fn sql_placeholders(num: usize) -> String {
@@ -92,7 +98,25 @@ impl StorageMySQL {
             mnm: None,
         })
     }
+
+    /// Computes the column of the overview table that is affected, given a user ID and item ID
+    fn get_overview_column_name_for_user_and_q(
+        &self,
+        user_id: &Option<usize>,
+        q: &Option<isize>,
+    ) -> &str {
+        match (user_id, q) {
+            (Some(0), _) => "autoq",
+            (Some(_), None) => "noq",
+            (Some(_), Some(0)) => "na",
+            (Some(_), Some(-1)) => "nowd",
+            (Some(_), _) => "manual",
+            _ => "noq",
+        }
+    }
 }
+
+// STORAGE TRAIT IMPLEMENTATION
 
 #[async_trait]
 impl Storage for StorageMySQL {
@@ -105,7 +129,7 @@ impl Storage for StorageMySQL {
     async fn set_catalog_taxon_run(&self, catalog_id: usize, taxon_run: bool) -> Result<()> {
         let taxon_run = taxon_run as u16;
         let sql = format!("UPDATE `catalog` SET `taxon_run`=1 WHERE `id`=? AND `taxon_run`=?",);
-        let mut conn = self.pool.get_conn().await?;
+        let mut conn = self.get_conn().await?;
         conn.exec_drop(sql, params! {catalog_id, taxon_run}).await?;
         Ok(())
     }
@@ -132,7 +156,7 @@ impl Storage for StorageMySQL {
             ranks.join("','")
         );
 
-        let mut conn = self.pool.get_conn().await?;
+        let mut conn = self.get_conn().await?;
         let results = conn
             .exec_iter(sql, params! {catalog_id,batch_size,offset})
             .await?
@@ -167,7 +191,7 @@ impl Storage for StorageMySQL {
         max_results: usize,
     ) -> Result<Vec<LocationRow>> {
         let sql = Self::coordinate_matcher_main_query_sql(catalog_id, bad_catalogs, max_results);
-        let mut conn = self.pool.get_conn().await?;
+        let mut conn = self.get_conn().await?;
         let rows: Vec<LocationRow> = conn
             .exec_iter(sql, ())
             .await?
@@ -181,7 +205,7 @@ impl Storage for StorageMySQL {
 
     async fn get_coordinate_matcher_permissions(&self) -> Result<Vec<(usize, String, String)>> {
         let sql = r#"SELECT `catalog_id`,`kv_key`,`kv_value` FROM `kv_catalog`"#;
-        let mut conn = self.pool.get_conn().await?;
+        let mut conn = self.get_conn().await?;
         let results = conn
             .exec_iter(sql, ())
             .await?
@@ -195,7 +219,7 @@ impl Storage for StorageMySQL {
     async fn get_data_source_type_for_uuid(&self, uuid: &str) -> Result<Vec<String>> {
         let results = "SELECT `type` FROM `import_file` WHERE `uuid`=:uuid"
             .with(params! {uuid})
-            .map(self.pool.get_conn().await?, |type_name| type_name)
+            .map(self.get_conn().await?, |type_name| type_name)
             .await?;
         Ok(results)
     }
@@ -212,7 +236,7 @@ impl Storage for StorageMySQL {
         );
         let existing_ext_ids = sql
             .with(ext_ids.to_vec())
-            .map(self.pool.get_conn().await?, |ext_id| ext_id)
+            .map(self.get_conn().await?, |ext_id| ext_id)
             .await?;
         Ok(existing_ext_ids)
     }
@@ -220,7 +244,7 @@ impl Storage for StorageMySQL {
     async fn update_catalog_get_update_info(&self, catalog_id: usize) -> Result<Vec<UpdateInfo>> {
         let results = "SELECT id, catalog, json, note, user_id, is_current FROM `update_info` WHERE `catalog`=:catalog_id AND `is_current`=1 LIMIT 1"
             .with(params!{catalog_id})
-            .map(self.pool.get_conn().await?,
+            .map(self.get_conn().await?,
                 |(id, catalog, json, note, user_id, is_current)|{
                 UpdateInfo{id, catalog, json, note, user_id, is_current}
             })
@@ -233,14 +257,14 @@ impl Storage for StorageMySQL {
     async fn number_of_entries_in_catalog(&self, catalog_id: usize) -> Result<usize> {
         let results: Vec<usize> = "SELECT count(*) AS cnt FROM `entry` WHERE `catalog`=:catalog_id"
             .with(params! {catalog_id})
-            .map(self.pool.get_conn().await?, |num| num)
+            .map(self.get_conn().await?, |num| num)
             .await?;
         Ok(*results.get(0).unwrap_or(&0))
     }
 
     async fn get_catalog_from_id(&self, catalog_id: usize) -> Result<Catalog> {
         let sql = r"SELECT id,`name`,url,`desc`,`type`,wd_prop,wd_qual,search_wp,active,owner,note,source_item,has_person_date,taxon_run FROM `catalog` WHERE `id`=:catalog_id";
-        let mut conn = self.pool.get_conn().await?;
+        let mut conn = self.get_conn().await?;
         let mut rows: Vec<Catalog> = conn
             .exec_iter(sql, params! {catalog_id})
             .await?
@@ -261,7 +285,7 @@ impl Storage for StorageMySQL {
         catalog_id: usize,
     ) -> Result<HashMap<String, String>> {
         let sql = r#"SELECT `kv_key`,`kv_value` FROM `kv_catalog` WHERE `catalog_id`=:catalog_id"#;
-        let mut conn = self.pool.get_conn().await?;
+        let mut conn = self.get_conn().await?;
         let results = conn
             .exec_iter(sql, params! {catalog_id})
             .await?
@@ -283,7 +307,7 @@ impl Storage for StorageMySQL {
 	        (SELECT count(*) FROM `multi_match` WHERE `catalog`=:catalog_id),
 	        (SELECT group_concat(DISTINCT `type` SEPARATOR '|') FROM `entry` WHERE `catalog`=:catalog_id)
 	        )";
-        let mut conn = self.pool.get_conn().await?;
+        let mut conn = self.get_conn().await?;
         conn.exec_drop(sql, params! {catalog_id}).await?;
         Ok(())
     }
@@ -299,7 +323,7 @@ impl Storage for StorageMySQL {
             "SELECT `id`,`ext_name` FROM `entry` WHERE `id` IN ({})",
             placeholders
         );
-        let mut conn = self.pool.get_conn().await?;
+        let mut conn = self.get_conn().await?;
         let results = conn
             .exec_iter(sql, entry_ids)
             .await?
@@ -316,7 +340,7 @@ impl Storage for StorageMySQL {
         catalog_id: usize,
     ) -> Result<Vec<(isize, String, String)>> {
         let sql = format!("SELECT q,group_concat(id) AS ids,group_concat(ext_id SEPARATOR '{}') AS ext_ids FROM entry WHERE catalog=:catalog_id AND q IS NOT NULL and q>0 AND user>0 GROUP BY q HAVING count(id)>1 ORDER BY q",EXT_URL_UNIQUE_SEPARATOR);
-        let mut conn = self.pool.get_conn().await?;
+        let mut conn = self.get_conn().await?;
         let results = conn
             .exec_iter(sql, params! {catalog_id})
             .await?
@@ -333,7 +357,7 @@ impl Storage for StorageMySQL {
         let placeholders: Vec<&str> = ext_ids.iter().map(|_| "BINARY ?").collect();
         let placeholders = placeholders.join(",");
         let sql = format!("SELECT `id`,`q`,`user`,`ext_id`,`ext_url` FROM `entry` WHERE `catalog`={catalog_id} AND `ext_id` IN ({placeholders})");
-        let mut conn = self.pool.get_conn().await?;
+        let mut conn = self.get_conn().await?;
         let results = conn
             .exec_iter(sql, ext_ids)
             .await?
@@ -341,4 +365,87 @@ impl Storage for StorageMySQL {
             .await?;
         Ok(results)
     }
+
+    // MixNMatch
+
+    /// Updates the overview table for a catalog, given the old Entry object, and the user ID and new item.
+    async fn update_overview_table(
+        &self,
+        old_entry: &Entry,
+        user_id: Option<usize>,
+        q: Option<isize>,
+    ) -> Result<()> {
+        let mut conn = self.get_conn().await?;
+        let add_column = self.get_overview_column_name_for_user_and_q(&user_id, &q);
+        let reduce_column =
+            self.get_overview_column_name_for_user_and_q(&old_entry.user, &old_entry.q);
+        let catalog_id = old_entry.catalog;
+        let sql = format!(
+            "UPDATE overview SET {}={}+1,{}={}-1 WHERE catalog=:catalog_id",
+            &add_column, &add_column, &reduce_column, &reduce_column
+        );
+        conn.exec_drop(sql, params! {catalog_id}).await?;
+        Ok(())
+    }
+
+    // Issue
+
+    async fn issue_insert(&self, issue: &Issue) -> Result<()> {
+        let sql = "INSERT IGNORE INTO `issues` (`entry_id`,`type`,`json`,`random`,`catalog`)
+        SELECT :entry_id,:issue_type,:json,rand(),`catalog` FROM `entry` WHERE `id`=:entry_id";
+        let params = params! {
+            "entry_id" => issue.entry_id,
+            "issue_type" => issue.issue_type.to_str(),
+            "json" => issue.json.to_string(),
+            //"status" => self.status.to_str(),
+            //"user_id" => self.user_id,
+            //"resolved_ts" => &self.resolved_ts,
+            "catalog" => issue.catalog_id,
+        };
+        self.get_conn().await?.exec_drop(sql, params).await?;
+        Ok(())
+    }
 }
+
+/* TODO
+
+#[tokio::test]
+async fn test_get_overview_column_name_for_user_and_q() {
+    let mnm = get_test_mnm();
+    assert_eq!(
+        mnm.get_storage()
+            .get_overview_column_name_for_user_and_q(&Some(0), &None),
+        "autoq"
+    );
+    assert_eq!(
+        mnm.get_storage()
+            .get_overview_column_name_for_user_and_q(&Some(2), &Some(1)),
+        "manual"
+    );
+    assert_eq!(
+        mnm.get_storage()
+            .get_overview_column_name_for_user_and_q(&Some(2), &Some(0)),
+        "na"
+    );
+    assert_eq!(
+        mnm.get_storage()
+            .get_overview_column_name_for_user_and_q(&Some(2), &Some(-1)),
+        "nowd"
+    );
+    assert_eq!(
+        mnm.get_storage()
+            .get_overview_column_name_for_user_and_q(&Some(2), &None),
+        "noq"
+    );
+    assert_eq!(
+        mnm.get_storage()
+            .get_overview_column_name_for_user_and_q(&None, &None),
+        "noq"
+    );
+    assert_eq!(
+        mnm.get_storage()
+            .get_overview_column_name_for_user_and_q(&None, &Some(1)),
+        "noq"
+    );
+}
+*/

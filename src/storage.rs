@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use crate::{
     catalog::Catalog,
     coordinate_matcher::LocationRow,
+    entry::Entry,
+    issue::Issue,
     taxon_matcher::{RankedNames, TaxonNameField},
     update_catalog::UpdateInfo,
 };
@@ -73,4 +75,17 @@ pub trait Storage {
         catalog_id: usize,
         ext_ids: &Vec<&String>,
     ) -> Result<Vec<(usize, Option<isize>, Option<usize>, String, String)>>;
+
+    // MixNMatch
+    //
+    async fn update_overview_table(
+        &self,
+        old_entry: &Entry,
+        user_id: Option<usize>,
+        q: Option<isize>,
+    ) -> Result<()>;
+
+    // Issue
+
+    async fn issue_insert(&self, issue: &Issue) -> Result<()>;
 }

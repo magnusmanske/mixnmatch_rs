@@ -1,5 +1,4 @@
 use crate::app_state::*;
-use crate::entry::*;
 use crate::error::MnMError;
 use crate::storage::Storage;
 use crate::wikidata_commands::WikidataCommand;
@@ -179,54 +178,6 @@ impl MixNMatch {
         panic!("No MediaWiki API created")*/
         let builder = reqwest::Client::builder().timeout(Duration::from_secs(60));
         mediawiki::api::Api::new_from_builder(WIKIDATA_API_URL, builder).await
-    }
-
-    /// Computes the column of the overview table that is affected, given a user ID and item ID
-    pub fn get_overview_column_name_for_user_and_q(
-        &self,
-        user_id: &Option<usize>,
-        q: &Option<isize>,
-    ) -> &str {
-        match (user_id, q) {
-            (Some(0), _) => "autoq",
-            (Some(_), None) => "noq",
-            (Some(_), Some(0)) => "na",
-            (Some(_), Some(-1)) => "nowd",
-            (Some(_), _) => "manual",
-            _ => "noq",
-        }
-    }
-
-    /// Updates the overview table for a catalog, given the old Entry object, and the user ID and new item.
-    //TODO test
-    pub async fn update_overview_table(
-        &self,
-        old_entry: &Entry,
-        user_id: Option<usize>,
-        q: Option<isize>,
-    ) -> Result<()> {
-        let mut conn = self.app.get_mnm_conn().await?;
-        self.update_overview_table_db(old_entry, user_id, q, &mut conn)
-            .await
-    }
-
-    pub async fn update_overview_table_db(
-        &self,
-        old_entry: &Entry,
-        user_id: Option<usize>,
-        q: Option<isize>,
-        conn: &mut Conn,
-    ) -> Result<()> {
-        let add_column = self.get_overview_column_name_for_user_and_q(&user_id, &q);
-        let reduce_column =
-            self.get_overview_column_name_for_user_and_q(&old_entry.user, &old_entry.q);
-        let catalog_id = old_entry.catalog;
-        let sql = format!(
-            "UPDATE overview SET {}={}+1,{}={}-1 WHERE catalog=:catalog_id",
-            &add_column, &add_column, &reduce_column, &reduce_column
-        );
-        conn.exec_drop(sql, params! {catalog_id}).await?;
-        Ok(())
     }
 
     /// Adds the item into a queue for reference fixer. Possibly deprecated.
@@ -648,39 +599,6 @@ mod tests {
             .collect();
         mnm.remove_meta_items(&mut items).await.unwrap();
         assert_eq!(items, ["Q1", "Q2"]);
-    }
-
-    #[tokio::test]
-    async fn test_get_overview_column_name_for_user_and_q() {
-        let mnm = get_test_mnm();
-        assert_eq!(
-            mnm.get_overview_column_name_for_user_and_q(&Some(0), &None),
-            "autoq"
-        );
-        assert_eq!(
-            mnm.get_overview_column_name_for_user_and_q(&Some(2), &Some(1)),
-            "manual"
-        );
-        assert_eq!(
-            mnm.get_overview_column_name_for_user_and_q(&Some(2), &Some(0)),
-            "na"
-        );
-        assert_eq!(
-            mnm.get_overview_column_name_for_user_and_q(&Some(2), &Some(-1)),
-            "nowd"
-        );
-        assert_eq!(
-            mnm.get_overview_column_name_for_user_and_q(&Some(2), &None),
-            "noq"
-        );
-        assert_eq!(
-            mnm.get_overview_column_name_for_user_and_q(&None, &None),
-            "noq"
-        );
-        assert_eq!(
-            mnm.get_overview_column_name_for_user_and_q(&None, &Some(1)),
-            "noq"
-        );
     }
 
     #[tokio::test]

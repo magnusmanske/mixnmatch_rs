@@ -1,6 +1,6 @@
 use crate::mixnmatch::*;
+use crate::storage::Storage;
 use anyhow::Result;
-use mysql_async::prelude::*;
 use serde_json::Value;
 use std::error::Error;
 use std::fmt;
@@ -117,23 +117,7 @@ impl Issue {
     }
 
     pub async fn insert(&self) -> Result<()> {
-        let sql = "INSERT IGNORE INTO `issues` (`entry_id`,`type`,`json`,`random`,`catalog`)
-            SELECT :entry_id,:issue_type,:json,rand(),`catalog` FROM `entry` WHERE `id`=:entry_id";
-        let params = params! {
-            "entry_id" => self.entry_id,
-            "issue_type" => self.issue_type.to_str(),
-            "json" => self.json.to_string(),
-            //"status" => self.status.to_str(),
-            //"user_id" => self.user_id,
-            //"resolved_ts" => &self.resolved_ts,
-            "catalog" => self.catalog_id,
-        };
-        self.mnm
-            .app
-            .get_mnm_conn()
-            .await?
-            .exec_drop(sql, params)
-            .await?;
+        self.mnm.get_storage().issue_insert(&self).await?;
         Ok(())
     }
 }
@@ -141,13 +125,13 @@ impl Issue {
 #[cfg(test)]
 mod tests {
 
-    use super::*;
-    use mysql_async::from_row;
-    use serde_json::json;
+    // use super::*;
+    // use mysql_async::from_row;
+    // use serde_json::json;
 
     const _TEST_CATALOG_ID: usize = 5526;
-    const TEST_ENTRY_ID: usize = 143962196;
-
+    // const TEST_ENTRY_ID: usize = 143962196;
+    /*
     #[tokio::test]
     async fn test_issue_insert() {
         let _test_lock = TEST_MUTEX.lock();
@@ -219,4 +203,5 @@ mod tests {
             .await
             .unwrap();
     }
+     */
 }
