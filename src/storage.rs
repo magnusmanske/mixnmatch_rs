@@ -6,6 +6,7 @@ use crate::{
     coordinate_matcher::LocationRow,
     entry::Entry,
     issue::Issue,
+    job::{JobRow, JobStatus, TaskSize},
     mixnmatch::MatchState,
     taxon_matcher::{RankedNames, TaxonNameField},
     update_catalog::UpdateInfo,
@@ -147,4 +148,34 @@ pub trait Storage {
         offset: usize,
         state: &MatchState,
     ) -> Result<Vec<String>>;
+
+    // Jobs
+
+    async fn jobs_get_tasks(&self) -> Result<HashMap<String, TaskSize>>;
+    async fn reset_running_jobs(&self) -> Result<()>;
+    async fn reset_failed_jobs(&self) -> Result<()>;
+    async fn jobs_queue_simple_job(
+        &self,
+        catalog_id: usize,
+        action: &str,
+        depends_on: Option<usize>,
+        status: &str,
+        timestamp: String,
+    ) -> Result<usize>;
+    async fn jobs_reset_json(&self, job_id: usize, timestamp: String) -> Result<()>;
+    async fn jobs_set_json(
+        &self,
+        job_id: usize,
+        json_string: String,
+        timestamp: &String,
+    ) -> Result<()>;
+    async fn jobs_row_from_id(&self, job_id: usize) -> Result<JobRow>;
+    async fn jobs_set_status(
+        &self,
+        status: &JobStatus,
+        job_id: usize,
+        timestamp: String,
+    ) -> Result<()>;
+    async fn jobs_set_note(&self, note: Option<String>, job_id: usize) -> Result<Option<String>>;
+    async fn jobs_update_next_ts(&self, job_id: usize, next_ts: String) -> Result<()>;
 }

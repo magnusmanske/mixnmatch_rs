@@ -4,8 +4,9 @@ use crate::{
     auxiliary_matcher::AuxiliaryResults,
     catalog::Catalog,
     coordinate_matcher::LocationRow,
-    entry::Entry,
+    entry::{Entry, EntryError},
     issue::Issue,
+    job::{JobRow, JobStatus, TaskSize},
     microsync::EXT_URL_UNIQUE_SEPARATOR,
     mixnmatch::MatchState,
     taxon_matcher::{RankedNames, TaxonMatcher, TaxonNameField, TAXON_RANKS},
@@ -715,6 +716,144 @@ impl Storage for StorageMySQL {
         let ret = ret.iter().map(|q| format!("Q{}", q)).collect();
         Ok(ret)
     }
+
+    // Jobs
+
+    async fn jobs_get_tasks(&self) -> Result<HashMap<String, TaskSize>> {
+        let sql = "SELECT `action`,`size` FROM `job_sizes`";
+        let mut conn = self.get_conn().await?;
+        let ret = conn
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(from_row::<(String, String)>)
+            .await?
+            .into_iter()
+            .map(|(name, size)| (name, TaskSize::new(&size)))
+            .filter(|(_name, size)| size.is_some())
+            .map(|(name, size)| (name, size.unwrap()))
+            .collect();
+        Ok(ret)
+    }
+
+    /// Resets all RUNNING jobs of certain types to TODO. Used when bot restarts.
+    //TODO test
+    async fn reset_running_jobs(&self) -> Result<()> {
+        let sql = format!(
+            "UPDATE `jobs` SET `status`='{}' WHERE `status`='{}'",
+            JobStatus::Todo.as_str(),
+            JobStatus::Running.as_str()
+        );
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop(sql, ()).await?;
+        Ok(())
+    }
+
+    /// Resets all FAILED jobs of certain types to TODO. Used when bot restarts.
+    //TODO test
+    async fn reset_failed_jobs(&self) -> Result<()> {
+        let sql = format!(
+            "UPDATE `jobs` SET `status`='{}' WHERE `status`='{}'",
+            JobStatus::Todo.as_str(),
+            JobStatus::Failed.as_str()
+        );
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop(sql, ()).await?;
+        Ok(())
+    }
+
+    async fn jobs_queue_simple_job(
+        &self,
+        catalog_id: usize,
+        action: &str,
+        depends_on: Option<usize>,
+        status: &str,
+        timestamp: String,
+    ) -> Result<usize> {
+        let sql = "INSERT INTO `jobs` (catalog,action,status,depends_on,last_ts) VALUES (:catalog_id,:action,:status,:depends_on,:timestamp)
+            ON DUPLICATE KEY UPDATE status=:status,depends_on=:depends_on,last_ts=:timestamp";
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop(sql, params! {catalog_id,action,depends_on,status,timestamp})
+            .await?;
+        let last_id = conn.last_insert_id().ok_or(EntryError::EntryInsertFailed)? as usize;
+        Ok(last_id)
+    }
+
+    async fn jobs_reset_json(&self, job_id: usize, timestamp: String) -> Result<()> {
+        let sql = "UPDATE `jobs` SET `json`=NULL,last_ts=:timestamp WHERE `id`=:job_id";
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop(sql, params! {job_id, timestamp}).await?;
+        Ok(())
+    }
+
+    async fn jobs_set_json(
+        &self,
+        job_id: usize,
+        json_string: String,
+        timestamp: &String,
+    ) -> Result<()> {
+        let sql = "UPDATE `jobs` SET `json`=:json_string,last_ts=:timestamp WHERE `id`=:job_id";
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop(sql, params! {job_id, json_string, timestamp})
+            .await?;
+        Ok(())
+    }
+
+    async fn jobs_row_from_id(&self, job_id: usize) -> Result<JobRow> {
+        let sql = r"SELECT id,action,catalog,json,depends_on,status,last_ts,note,repeat_after_sec,next_ts,user_id FROM `jobs` WHERE `id`=:job_id";
+        let mut conn = self.get_conn().await?;
+        let row = conn
+            .exec_iter(sql, params! {job_id})
+            .await?
+            .map_and_drop(
+                from_row::<(
+                    usize,
+                    String,
+                    usize,
+                    Option<String>,
+                    Option<usize>,
+                    String,
+                    String,
+                    Option<String>,
+                    Option<usize>,
+                    String,
+                    usize,
+                )>,
+            )
+            .await?
+            .pop()
+            .ok_or(anyhow!("No job with ID {}", job_id))?;
+        let job_row = JobRow::from_row(row);
+        Ok(job_row)
+    }
+
+    async fn jobs_set_status(
+        &self,
+        status: &JobStatus,
+        job_id: usize,
+        timestamp: String,
+    ) -> Result<()> {
+        let status_str = status.as_str();
+        let sql = "UPDATE `jobs` SET `status`=:status_str,`last_ts`=:timestamp,`note`=NULL WHERE `id`=:job_id";
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop(sql, params! {job_id,timestamp,status_str})
+            .await?;
+        Ok(())
+    }
+
+    async fn jobs_set_note(&self, note: Option<String>, job_id: usize) -> Result<Option<String>> {
+        let note_cloned = note.clone().map(|s| s.get(..127).unwrap_or(&s).to_string());
+        let sql = "UPDATE `jobs` SET `note`=:note WHERE `id`=:job_id";
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop(sql, params! {job_id,note}).await?;
+        Ok(note_cloned)
+    }
+
+    async fn jobs_update_next_ts(&self, job_id: usize, next_ts: String) -> Result<()> {
+        let sql = "UPDATE `jobs` SET `next_ts`=:next_ts WHERE `id`=:job_id";
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop(sql, params! {job_id,next_ts}).await?;
+        Ok(())
+    }
 }
 
 /* TODO
@@ -790,4 +929,89 @@ async fn test_match_via_auxiliary() {
         .await
         .unwrap();
 }
+
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+    use mysql_async::from_row;
+    use serde_json::json;
+
+    const _TEST_CATALOG_ID: usize = 5526;
+    const TEST_ENTRY_ID: usize = 143962196;
+
+    #[tokio::test]
+    async fn test_issue_insert() {
+        let _test_lock = TEST_MUTEX.lock();
+        let mnm = get_test_mnm();
+        let entry_id = TEST_ENTRY_ID;
+
+        // Cleanup
+        mnm.app
+            .get_mnm_conn()
+            .await
+            .unwrap()
+            .exec_drop(
+                "DELETE FROM `issues` WHERE `entry_id`=:entry_id",
+                params! {entry_id},
+            )
+            .await
+            .unwrap();
+
+        let issues_for_entry = *mnm
+            .app
+            .get_mnm_conn()
+            .await
+            .unwrap()
+            .exec_iter(
+                "SELECT count(*) AS `cnt` FROM `issues` WHERE `entry_id`=:entry_id",
+                params! {entry_id},
+            )
+            .await
+            .unwrap()
+            .map_and_drop(from_row::<usize>)
+            .await
+            .unwrap()
+            .get(0)
+            .unwrap();
+        assert_eq!(issues_for_entry, 0);
+
+        let issue = Issue::new(entry_id, IssueType::Mismatch, json!("!"), &mnm)
+            .await
+            .unwrap();
+        issue.insert().await.unwrap();
+
+        let issues_for_entry = *mnm
+            .app
+            .get_mnm_conn()
+            .await
+            .unwrap()
+            .exec_iter(
+                "SELECT count(*) AS `cnt` FROM `issues` WHERE `entry_id`=:entry_id",
+                params! {entry_id},
+            )
+            .await
+            .unwrap()
+            .map_and_drop(from_row::<usize>)
+            .await
+            .unwrap()
+            .get(0)
+            .unwrap();
+        assert_eq!(issues_for_entry, 1);
+
+        // Cleanup
+        mnm.app
+            .get_mnm_conn()
+            .await
+            .unwrap()
+            .exec_drop(
+                "DELETE FROM `issues` WHERE `entry_id`=:entry_id",
+                params! {entry_id},
+            )
+            .await
+            .unwrap();
+    }
+}
+
 */

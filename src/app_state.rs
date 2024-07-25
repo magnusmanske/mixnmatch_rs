@@ -299,8 +299,8 @@ impl AppState {
         let current_jobs: Arc<DashMap<usize, TaskSize>> = Arc::new(DashMap::new());
 
         // Reset old running&failed jobs
-        Job::new(&mnm).reset_running_jobs().await?;
-        Job::new(&mnm).reset_failed_jobs().await?;
+        mnm.get_storage().reset_running_jobs().await?;
+        mnm.get_storage().reset_failed_jobs().await?;
         println!("Old jobs reset, starting bot");
 
         self.seppuku();
@@ -318,7 +318,7 @@ impl AppState {
                 continue;
             }
             let mut job = Job::new(&mnm);
-            let task_size = job.get_tasks().await?;
+            let task_size = self.get_storage().jobs_get_tasks().await?;
             let big_jobs_running = (*current_jobs)
                 .clone()
                 .into_read_only()
