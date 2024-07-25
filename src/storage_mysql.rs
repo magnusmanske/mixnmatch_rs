@@ -1,6 +1,7 @@
 pub use crate::storage::Storage;
 use crate::{
     app_state::AppState,
+    auxiliary_matcher::AuxiliaryResults,
     catalog::Catalog,
     coordinate_matcher::LocationRow,
     entry::Entry,
@@ -128,7 +129,7 @@ impl Storage for StorageMySQL {
     // Taxon matcher
     async fn set_catalog_taxon_run(&self, catalog_id: usize, taxon_run: bool) -> Result<()> {
         let taxon_run = taxon_run as u16;
-        let sql = format!("UPDATE `catalog` SET `taxon_run`=1 WHERE `id`=? AND `taxon_run`=?",);
+        let sql = "UPDATE `catalog` SET `taxon_run`=1 WHERE `id`=? AND `taxon_run`=?";
         let mut conn = self.get_conn().await?;
         conn.exec_drop(sql, params! {catalog_id, taxon_run}).await?;
         Ok(())
@@ -259,7 +260,7 @@ impl Storage for StorageMySQL {
             .with(params! {catalog_id})
             .map(self.get_conn().await?, |num| num)
             .await?;
-        Ok(*results.get(0).unwrap_or(&0))
+        Ok(*results.first().unwrap_or(&0))
     }
 
     async fn get_catalog_from_id(&self, catalog_id: usize) -> Result<Catalog> {
@@ -388,6 +389,60 @@ impl Storage for StorageMySQL {
         Ok(())
     }
 
+    async fn queue_reference_fixer(&self, q_numeric: isize) -> Result<()> {
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop(r"INSERT INTO `reference_fixer` (`q`,`done`) VALUES (:q_numeric,0) ON DUPLICATE KEY UPDATE `done`=0",params! {q_numeric}).await?;
+        Ok(())
+    }
+
+    /// Checks if the log already has a removed match for this entry.
+    /// If a q_numeric item is given, and a specific one is in the log entry, it will only trigger on this combination.
+    async fn avoid_auto_match(&self, entry_id: usize, q_numeric: Option<isize>) -> Result<bool> {
+        let mut sql = r"SELECT id FROM `log` WHERE `entry_id`=:entry_id".to_string();
+        if let Some(q) = q_numeric {
+            sql += &format!(" AND (q IS NULL OR q={})", &q)
+        }
+        let mut conn = self.get_conn().await?;
+        let rows = conn
+            .exec_iter(sql, params! {entry_id})
+            .await?
+            .map_and_drop(from_row::<usize>)
+            .await?;
+        Ok(!rows.is_empty())
+    }
+
+    //TODO test
+    async fn get_random_active_catalog_id_with_property(&self) -> Option<usize> {
+        let sql = "SELECT id FROM catalog WHERE active=1 AND wd_prop IS NOT NULL and wd_qual IS NULL ORDER by rand() LIMIT 1" ;
+        let mut conn = self.get_conn().await.ok()?;
+        let ids = conn
+            .exec_iter(sql, ())
+            .await
+            .ok()?
+            .map_and_drop(from_row::<usize>)
+            .await
+            .ok()?;
+        ids.first().map(|x| x.to_owned())
+    }
+
+    async fn get_kv_value(&self, key: &str) -> Result<Option<String>> {
+        let sql = r"SELECT `kv_value` FROM `kv` WHERE `kv_key`=:key";
+        let mut conn = self.get_conn().await?;
+        Ok(conn
+            .exec_iter(sql, params! {key})
+            .await?
+            .map_and_drop(from_row::<String>)
+            .await?
+            .pop())
+    }
+
+    async fn set_kv_value(&self, key: &str, value: &str) -> Result<()> {
+        let sql = r"INSERT INTO `kv` (`kv_key`,`kv_value`) VALUES (:key,:value) ON DUPLICATE KEY UPDATE `kv_value`=:value";
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop(sql, params! {key,value}).await?;
+        Ok(())
+    }
+
     // Issue
 
     async fn issue_insert(&self, issue: &Issue) -> Result<()> {
@@ -397,9 +452,6 @@ impl Storage for StorageMySQL {
             "entry_id" => issue.entry_id,
             "issue_type" => issue.issue_type.to_str(),
             "json" => issue.json.to_string(),
-            //"status" => self.status.to_str(),
-            //"user_id" => self.user_id,
-            //"resolved_ts" => &self.resolved_ts,
             "catalog" => issue.catalog_id,
         };
         self.get_conn().await?.exec_drop(sql, params).await?;
@@ -455,6 +507,69 @@ impl Storage for StorageMySQL {
         }
         Ok(())
     }
+
+    // Auxiliary matcher
+
+    async fn auxiliary_matcher_match_via_aux(
+        &self,
+        catalog_id: usize,
+        offset: usize,
+        batch_size: usize,
+        extid_props: &Vec<String>,
+        blacklisted_catalogs: &Vec<String>,
+    ) -> Result<Vec<AuxiliaryResults>> {
+        let sql = format!(
+            "SELECT auxiliary.id,entry_id,0,aux_p,aux_name FROM entry,auxiliary
+        WHERE entry_id=entry.id AND catalog=:catalog_id
+        {}
+        AND in_wikidata=0
+        AND aux_p IN ({})
+        AND catalog NOT IN ({})
+        /* ORDER BY auxiliary.id */
+        LIMIT :batch_size OFFSET :offset",
+            MatchState::not_fully_matched().get_sql(),
+            extid_props.join(","),
+            blacklisted_catalogs.join(",")
+        );
+        let mut conn = self.get_conn().await?;
+        let results = conn
+            .exec_iter(sql, params! {catalog_id,offset,batch_size})
+            .await?
+            .map_and_drop(from_row::<(usize, usize, usize, usize, String)>)
+            .await?;
+        let results: Vec<AuxiliaryResults> =
+            results.iter().map(AuxiliaryResults::from_result).collect();
+        Ok(results)
+    }
+
+    async fn auxiliary_matcher_add_auxiliary_to_wikidata(
+        &self,
+        blacklisted_properties: &Vec<String>,
+        catalog_id: usize,
+        offset: usize,
+        batch_size: usize,
+    ) -> Result<Vec<AuxiliaryResults>> {
+        let sql = format!(
+            "SELECT auxiliary.id,entry_id,q,aux_p,aux_name FROM entry,auxiliary
+            WHERE entry_id=entry.id AND catalog=:catalog_id
+            {}
+            AND in_wikidata=0
+            AND aux_p NOT IN ({})
+            AND (aux_p!=17 OR `type`!='Q5')
+            ORDER BY auxiliary.id LIMIT :batch_size OFFSET :offset",
+            MatchState::fully_matched().get_sql(),
+            blacklisted_properties.join(",")
+        );
+        let mut conn = self.get_conn().await?;
+        let results = conn
+            .exec_iter(sql.clone(), params! {catalog_id,offset,batch_size})
+            .await?
+            .map_and_drop(from_row::<(usize, usize, usize, usize, String)>)
+            .await?;
+        let results: Vec<AuxiliaryResults> =
+            results.iter().map(AuxiliaryResults::from_result).collect();
+        Ok(results)
+    }
 }
 
 /* TODO
@@ -497,5 +612,37 @@ async fn test_get_overview_column_name_for_user_and_q() {
             .get_overview_column_name_for_user_and_q(&None, &Some(1)),
         "noq"
     );
+}
+
+#[tokio::test]
+async fn test_match_via_auxiliary() {
+    let _test_lock = TEST_MUTEX.lock();
+    let mnm = get_test_mnm();
+    let mut entry = Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+    entry
+        .set_auxiliary(214, Some("30701597".to_string()))
+        .await
+        .unwrap();
+    entry.unmatch().await.unwrap();
+
+    // Run matcher
+    let mut am = AuxiliaryMatcher::new(&mnm);
+    am.match_via_auxiliary(TEST_CATALOG_ID).await.unwrap();
+
+    // Check
+    let mut entry = Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+    assert_eq!(entry.q.unwrap(), 13520818);
+
+    // Cleanup
+    entry.set_auxiliary(214, None).await.unwrap();
+    entry.unmatch().await.unwrap();
+    let catalog_id = TEST_CATALOG_ID;
+    let mut conn = self.get_conn().await?;
+    conn.exec_drop(
+            "DELETE FROM `jobs` WHERE `action`='aux2wd' AND `catalog`=:catalog_id",
+            params! {catalog_id},
+        )
+        .await
+        .unwrap();
 }
 */

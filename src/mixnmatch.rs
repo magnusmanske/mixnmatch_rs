@@ -5,7 +5,7 @@ use crate::wikidata_commands::WikidataCommand;
 use anyhow::{anyhow, Result};
 use itertools::Itertools;
 use lazy_static::lazy_static;
-use mysql_async::{from_row, prelude::*, Conn};
+use mysql_async::{from_row, prelude::*};
 use regex::Regex;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -180,18 +180,6 @@ impl MixNMatch {
         mediawiki::api::Api::new_from_builder(WIKIDATA_API_URL, builder).await
     }
 
-    /// Adds the item into a queue for reference fixer. Possibly deprecated.
-    //TODO test
-    pub async fn queue_reference_fixer(&self, q_numeric: isize) -> Result<()> {
-        let mut conn = self.app.get_mnm_conn().await?;
-        self.queue_reference_fixer_db(q_numeric, &mut conn).await
-    }
-
-    pub async fn queue_reference_fixer_db(&self, q_numeric: isize, conn: &mut Conn) -> Result<()> {
-        conn.exec_drop(r"INSERT INTO `reference_fixer` (`q`,`done`) VALUES (:q_numeric,0) ON DUPLICATE KEY UPDATE `done`=0",params! {q_numeric}).await?;
-        Ok(())
-    }
-
     /// Removes "meta items" (eg disambiguation pages) from an item list.
     /// Items are in format "Qxxx".
     pub async fn remove_meta_items(&self, items: &mut Vec<String>) -> Result<()> {
@@ -217,37 +205,6 @@ impl MixNMatch {
 
         items.retain(|item| !meta_items.iter().any(|q| q == item));
         Ok(())
-    }
-
-    /// Checks if the log already has a removed match for this entry.
-    /// If a q_numeric item is given, and a specific one is in the log entry, it will only trigger on this combination.
-    //TODO test
-    pub async fn avoid_auto_match(
-        &self,
-        entry_id: usize,
-        q_numeric: Option<isize>,
-    ) -> Result<bool> {
-        let mut conn = self.app.get_mnm_conn().await?;
-        self.avoid_auto_match_db(entry_id, q_numeric, &mut conn)
-            .await
-    }
-
-    pub async fn avoid_auto_match_db(
-        &self,
-        entry_id: usize,
-        q_numeric: Option<isize>,
-        conn: &mut Conn,
-    ) -> Result<bool> {
-        let mut sql = r"SELECT id FROM `log` WHERE `entry_id`=:entry_id".to_string();
-        if let Some(q) = q_numeric {
-            sql += &format!(" AND (q IS NULL OR q={})", &q)
-        }
-        let rows = conn
-            .exec_iter(sql, params! {entry_id})
-            .await?
-            .map_and_drop(from_row::<usize>)
-            .await?;
-        Ok(!rows.is_empty())
     }
 
     /// Converts a string like "Q12345" to the numeric 12334
@@ -384,23 +341,6 @@ impl MixNMatch {
     }
 
     //TODO test
-    pub async fn get_random_active_catalog_id_with_property(&self) -> Option<usize> {
-        let sql = "SELECT id FROM catalog WHERE active=1 AND wd_prop IS NOT NULL and wd_qual IS NULL ORDER by rand() LIMIT 1" ;
-        let ids = self
-            .app
-            .get_mnm_conn()
-            .await
-            .ok()?
-            .exec_iter(sql, ())
-            .await
-            .ok()?
-            .map_and_drop(from_row::<usize>)
-            .await
-            .ok()?;
-        ids.first().map(|x| x.to_owned())
-    }
-
-    //TODO test
     pub async fn set_wikipage_text(
         &mut self,
         title: &str,
@@ -513,29 +453,6 @@ impl MixNMatch {
                 self.app.bot_name.to_owned(),
                 self.app.bot_password.to_owned(),
             )
-            .await?;
-        Ok(())
-    }
-
-    pub async fn get_kv_value(&self, key: &str) -> Result<Option<String>> {
-        let sql = r"SELECT `kv_value` FROM `kv` WHERE `kv_key`=:key";
-        Ok(self
-            .app
-            .get_mnm_conn()
-            .await?
-            .exec_iter(sql, params! {key})
-            .await?
-            .map_and_drop(from_row::<String>)
-            .await?
-            .pop())
-    }
-
-    pub async fn set_kv_value(&self, key: &str, value: &str) -> Result<()> {
-        let sql = r"INSERT INTO `kv` (`kv_key`,`kv_value`) VALUES (:key,:value) ON DUPLICATE KEY UPDATE `kv_value`=:value";
-        self.app
-            .get_mnm_conn()
-            .await?
-            .exec_drop(sql, params! {key,value})
             .await?;
         Ok(())
     }

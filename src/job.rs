@@ -7,6 +7,7 @@ use crate::maintenance::*;
 use crate::microsync::*;
 use crate::mixnmatch::*;
 use crate::php_wrapper::*;
+use crate::storage::Storage;
 use crate::taxon_matcher::*;
 use crate::update_catalog::*;
 use anyhow::{anyhow, Result};
@@ -594,7 +595,12 @@ impl Job {
                 ms.set_current_job(self);
                 let catalog_id = match catalog_id {
                     0 => {
-                        match self.mnm.get_random_active_catalog_id_with_property().await {
+                        match self
+                            .mnm
+                            .get_storage()
+                            .get_random_active_catalog_id_with_property()
+                            .await
+                        {
                             Some(id) => id,
                             None => return Ok(()), // Ignore, very unlikely
                         }

@@ -1,6 +1,7 @@
 use crate::catalog::Catalog;
 use crate::entry::Entry;
 use crate::mixnmatch::*;
+use crate::storage::Storage;
 use anyhow::{anyhow, Result};
 use futures::future::join_all;
 use itertools::Itertools;
@@ -125,6 +126,7 @@ impl Maintenance {
     async fn wdrc_sync_redirects(&self) -> Result<()> {
         let last_ts = self
             .mnm
+            .get_storage()
             .get_kv_value("wdrc_sync_redirects")
             .await?
             .unwrap_or_else(|| self.yesterday());
@@ -161,6 +163,7 @@ impl Maintenance {
         }
         drop(conn);
         self.mnm
+            .get_storage()
             .set_kv_value("wdrc_sync_redirects", &new_ts)
             .await?;
         Ok(())
@@ -169,6 +172,7 @@ impl Maintenance {
     async fn wdrc_apply_deletions(&self) -> Result<()> {
         let last_ts = self
             .mnm
+            .get_storage()
             .get_kv_value("wdrc_apply_deletions")
             .await?
             .unwrap_or_else(|| self.yesterday());
@@ -221,6 +225,7 @@ impl Maintenance {
             }
         }
         self.mnm
+            .get_storage()
             .set_kv_value("wdrc_apply_deletions", &new_ts)
             .await?;
         Ok(())
@@ -360,6 +365,7 @@ impl Maintenance {
     pub async fn wdrc_sync_properties(&self) -> Result<()> {
         let last_ts = self
             .mnm
+            .get_storage()
             .get_kv_value("wdrc_sync_properties")
             .await?
             .unwrap_or_else(|| self.yesterday());
@@ -409,6 +415,7 @@ impl Maintenance {
             }
         }
         self.mnm
+            .get_storage()
             .set_kv_value("wdrc_sync_properties", &new_ts)
             .await?;
         Ok(())
@@ -426,8 +433,8 @@ impl Maintenance {
     /// Finds redirects in a batch of items, and changes MnM matches to their respective targets.
     async fn fix_redirected_items_batch(&self, unique_qs: &Vec<String>) -> Result<()> {
         let placeholders = MixNMatch::sql_placeholders(unique_qs.len());
-        let sql = format!("SELECT page_title,rd_title FROM `page`,`redirect` 
-            WHERE `page_id`=`rd_from` AND `rd_namespace`=0 AND `page_is_redirect`=1 AND `page_namespace`=0 
+        let sql = format!("SELECT page_title,rd_title FROM `page`,`redirect`
+            WHERE `page_id`=`rd_from` AND `rd_namespace`=0 AND `page_is_redirect`=1 AND `page_namespace`=0
             AND `page_title` IN ({})",placeholders);
         let page2rd = self
             .mnm
@@ -523,7 +530,7 @@ impl Maintenance {
     /// Finds some unmatched (Q5) entries where there is a (unique) full match for that name,
     /// and uses it as an auto-match
     pub async fn maintenance_automatch(&self) -> Result<()> {
-        let sql = "SELECT e1.id,e2.q FROM entry e1,entry e2 
+        let sql = "SELECT e1.id,e2.q FROM entry e1,entry e2
             WHERE e1.ext_name=e2.ext_name AND e1.id!=e2.id
             AND e1.type='Q5' AND e2.type='Q5'
             AND e1.q IS NULL

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
+    auxiliary_matcher::AuxiliaryResults,
     catalog::Catalog,
     coordinate_matcher::LocationRow,
     entry::Entry,
@@ -84,6 +85,11 @@ pub trait Storage {
         user_id: Option<usize>,
         q: Option<isize>,
     ) -> Result<()>;
+    async fn queue_reference_fixer(&self, q_numeric: isize) -> Result<()>;
+    async fn avoid_auto_match(&self, entry_id: usize, q_numeric: Option<isize>) -> Result<bool>;
+    async fn get_random_active_catalog_id_with_property(&self) -> Option<usize>;
+    async fn get_kv_value(&self, key: &str) -> Result<Option<String>>;
+    async fn set_kv_value(&self, key: &str, value: &str) -> Result<()>;
 
     // Issue
 
@@ -99,4 +105,22 @@ pub trait Storage {
     ) -> Result<Vec<(String, usize)>>;
     async fn autoscrape_start(&self, autoscrape_id: usize) -> Result<()>;
     async fn autoscrape_finish(&self, autoscrape_id: usize, last_run_urls: usize) -> Result<()>;
+
+    // Auxiliary matcher
+
+    async fn auxiliary_matcher_match_via_aux(
+        &self,
+        catalog_id: usize,
+        offset: usize,
+        batch_size: usize,
+        extid_props: &Vec<String>,
+        blacklisted_catalogs: &Vec<String>,
+    ) -> Result<Vec<AuxiliaryResults>>;
+    async fn auxiliary_matcher_add_auxiliary_to_wikidata(
+        &self,
+        blacklisted_properties: &Vec<String>,
+        catalog_id: usize,
+        offset: usize,
+        batch_size: usize,
+    ) -> Result<Vec<AuxiliaryResults>>;
 }

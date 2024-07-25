@@ -890,7 +890,8 @@ impl Entry {
         let mut sql = "UPDATE `entry` SET `q`=:q_numeric,`user`=:user_id,`timestamp`=:timestamp WHERE `id`=:entry_id AND (`q` IS NULL OR `q`!=:q_numeric OR `user`!=:user_id)".to_string();
         if user_id == USER_AUTO {
             if mnm
-                .avoid_auto_match_db(entry_id, Some(q_numeric), conn)
+                .get_storage()
+                .avoid_auto_match(entry_id, Some(q_numeric))
                 .await?
             {
                 return Ok(false); // Nothing wrong but shouldn't be matched
@@ -921,7 +922,7 @@ impl Entry {
             self.remove_multi_match_db(conn).await?;
         }
 
-        mnm.queue_reference_fixer_db(q_numeric, conn).await?;
+        mnm.get_storage().queue_reference_fixer(q_numeric).await?;
 
         self.user = preserve.0;
         self.timestamp = preserve.1;
