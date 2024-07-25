@@ -6,6 +6,7 @@ use crate::{
     coordinate_matcher::LocationRow,
     entry::Entry,
     issue::Issue,
+    mixnmatch::MatchState,
     taxon_matcher::{RankedNames, TaxonNameField},
     update_catalog::UpdateInfo,
 };
@@ -123,4 +124,27 @@ pub trait Storage {
         offset: usize,
         batch_size: usize,
     ) -> Result<Vec<AuxiliaryResults>>;
+
+    // Maintenance
+
+    async fn remove_p17_for_humans(&self) -> Result<()>;
+    async fn cleanup_mnm_relations(&self) -> Result<()>;
+    async fn maintenance_sync_redirects(&self, redirects: HashMap<isize, isize>) -> Result<()>;
+    async fn maintenance_apply_deletions(&self, deletions: Vec<isize>) -> Result<Vec<usize>>;
+    async fn maintenance_get_prop2catalog_ids(&self) -> Result<Vec<(usize, usize)>>;
+    async fn maintenance_sync_property(
+        &self,
+        catalogs: &Vec<usize>,
+        propval2item: &HashMap<String, isize>,
+        params: Vec<String>,
+    ) -> Result<Vec<(usize, String, Option<usize>, Option<usize>)>>;
+    async fn maintenance_fix_redirects(&self, from: isize, to: isize) -> Result<()>;
+    async fn maintenance_unlink_item_matches(&self, items: Vec<String>) -> Result<()>;
+    async fn maintenance_automatch(&self) -> Result<()>;
+    async fn get_items(
+        &self,
+        catalog_id: usize,
+        offset: usize,
+        state: &MatchState,
+    ) -> Result<Vec<String>>;
 }

@@ -13,10 +13,12 @@ use crate::{
 };
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
+use itertools::Itertools;
 use mysql_async::{from_row, futures::GetConn, prelude::*, Row};
 use rand::prelude::*;
 use serde_json::Value;
 use std::collections::HashMap;
+use wikimisc::timestamp::TimeStamp;
 
 #[derive(Debug, Clone)]
 pub struct StorageMySQL {
@@ -569,6 +571,149 @@ impl Storage for StorageMySQL {
         let results: Vec<AuxiliaryResults> =
             results.iter().map(AuxiliaryResults::from_result).collect();
         Ok(results)
+    }
+
+    // Maintenance
+
+    /// Removes P17 auxiliary values for entryies of type Q5 (human)
+    async fn remove_p17_for_humans(&self) -> Result<()> {
+        let sql = r#"DELETE FROM auxiliary WHERE aux_p=17 AND EXISTS (SELECT * FROM entry WHERE entry_id=entry.id AND `type`="Q5")"#;
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop(sql, mysql_async::Params::Empty).await?;
+        Ok(())
+    }
+
+    async fn cleanup_mnm_relations(&self) -> Result<()> {
+        let sql = "DELETE from mnm_relation WHERE entry_id=0 or target_entry_id=0";
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop(sql, ()).await?;
+        Ok(())
+    }
+
+    async fn maintenance_sync_redirects(&self, redirects: HashMap<isize, isize>) -> Result<()> {
+        let mut conn = self.get_conn().await?;
+        for (old_q, new_q) in redirects {
+            let sql = "UPDATE `entry` SET `q`=:new_q WHERE `q`=:old_q";
+            conn.exec_drop(sql, params! {old_q,new_q}).await?;
+        }
+        Ok(())
+    }
+
+    // Unlink deleted Wikidata items (item IDs in `deletions`).
+    // Returns the catalog ID that were affected by this.
+    async fn maintenance_apply_deletions(&self, deletions: Vec<isize>) -> Result<Vec<usize>> {
+        let mut conn = self.get_conn().await?;
+        let deletions_string = deletions
+            .iter()
+            .map(|i| format!("{}", *i))
+            .collect::<Vec<String>>()
+            .join(",");
+        let sql =
+            format!("SELECT DISTINCT `catalog` FROM `entry` WHERE `q` IN ({deletions_string})");
+        let catalog_ids = conn
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(from_row::<usize>)
+            .await?;
+        let sql = format!("UPDATE `entry` SET `q`=NULL,`user`=NULL,`timestamp`=NULL WHERE `q` IN ({deletions_string})");
+        conn.exec_drop(sql, ()).await?;
+        Ok(catalog_ids)
+    }
+
+    // Returns a list of active catalog IDs that have a WD property set but no WD qualifier.
+    // Return items are tuples of (catalog_id, wd_prop)
+    async fn maintenance_get_prop2catalog_ids(&self) -> Result<Vec<(usize, usize)>> {
+        let sql = r"SELECT `id`,`wd_prop` FROM `catalog` WHERE `wd_prop` IS NOT NULL AND `wd_qual` IS NULL AND `active`=1";
+        let mut conn = self.get_conn().await?;
+        let results = conn
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(from_row::<(usize, usize)>)
+            .await?;
+        Ok(results)
+    }
+
+    async fn maintenance_sync_property(
+        &self,
+        catalogs: &Vec<usize>,
+        propval2item: &HashMap<String, isize>,
+        params: Vec<String>,
+    ) -> Result<Vec<(usize, String, Option<usize>, Option<usize>)>> {
+        let catalogs_str: String = catalogs.iter().map(|id| format!("{id}")).join(",");
+        let qm_propvals = Self::sql_placeholders(propval2item.len());
+        let sql = format!(
+            r"SELECT `id`,`ext_id`,`user`,`q` FROM `entry` WHERE `catalog` IN ({catalogs_str}) AND `ext_id` IN ({qm_propvals})"
+        );
+        let mut conn = self.get_conn().await?;
+        let results = conn
+            .exec_iter(sql, params)
+            .await?
+            .map_and_drop(from_row::<(usize, String, Option<usize>, Option<usize>)>)
+            .await?;
+        Ok(results)
+    }
+
+    async fn maintenance_fix_redirects(&self, from: isize, to: isize) -> Result<()> {
+        let sql = "UPDATE `entry` SET `q`=:to WHERE `q`=:from";
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop(sql, params! {from,to}).await?;
+        Ok(())
+    }
+
+    async fn maintenance_unlink_item_matches(&self, items: Vec<String>) -> Result<()> {
+        let sql = format!(
+            "UPDATE `entry` SET `q`=NULL,`user`=NULL,`timestamp`=NULL WHERE `q` IN ({})",
+            items.join(",")
+        );
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop(sql, mysql_async::Params::Empty).await?;
+        Ok(())
+    }
+
+    /// Finds some unmatched (Q5) entries where there is a (unique) full match for that name,
+    /// and uses it as an auto-match
+    async fn maintenance_automatch(&self) -> Result<()> {
+        let mut conn = self.get_conn().await?;
+        let sql = "SELECT e1.id,e2.q FROM entry e1,entry e2
+            WHERE e1.ext_name=e2.ext_name AND e1.id!=e2.id
+            AND e1.type='Q5' AND e2.type='Q5'
+            AND e1.q IS NULL
+            AND e2.type IS NOT NULL AND e2.user>0
+            HAVING
+            (SELECT count(DISTINCT q) FROM entry e3 WHERE e3.ext_name=e2.ext_name AND e3.type=e2.type AND e3.q IS NOT NULL AND e3.user>0)=1
+            LIMIT 500";
+        let new_automatches = conn
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(from_row::<(usize, isize)>)
+            .await?;
+        let sql = "UPDATE `entry` SET `q`=:q,`user`=0,`timestamp`=:timestamp WHERE `id`=:entry_id AND `q` IS NULL" ;
+        for (entry_id, q) in &new_automatches {
+            let timestamp = TimeStamp::now();
+            conn.exec_drop(sql, params! {entry_id,q,timestamp}).await?;
+        }
+        Ok(())
+    }
+
+    /// Retrieves a batch of (unique) Wikidata items, in a given matching state.
+    async fn get_items(
+        &self,
+        catalog_id: usize,
+        offset: usize,
+        state: &MatchState,
+    ) -> Result<Vec<String>> {
+        let batch_size = 5000;
+        let sql = format!("SELECT DISTINCT `q` FROM `entry` WHERE `catalog`=:catalog_id {} LIMIT :batch_size OFFSET :offset",
+            state.get_sql()
+        ) ;
+        let mut conn = self.get_conn().await?;
+        let ret = conn
+            .exec_iter(sql.clone(), params! {catalog_id,offset,batch_size})
+            .await?
+            .map_and_drop(from_row::<usize>)
+            .await?;
+        let ret = ret.iter().map(|q| format!("Q{}", q)).collect();
+        Ok(ret)
     }
 }
 
