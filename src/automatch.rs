@@ -3,20 +3,36 @@ use crate::entry::*;
 use crate::issue::*;
 use crate::job::*;
 use crate::mixnmatch::*;
+use crate::storage::Storage;
 use anyhow::{anyhow, Result};
 use chrono::prelude::*;
 use chrono::{NaiveDateTime, Utc};
 use futures::future::join_all;
 use itertools::Itertools;
 use lazy_static::lazy_static;
+use mysql_async::from_row;
 use mysql_async::prelude::*;
-use mysql_async::{from_row, Params};
 use regex::Regex;
 use serde_json::json;
 use std::collections::HashMap;
 
 lazy_static! {
     static ref RE_YEAR: Regex = Regex::new(r"(\d{3,4})").expect("Regexp error");
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct ResultInOriginalCatalog {
+    pub entry_id: usize,
+    pub ext_name: String,
+    pub type_name: String,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct ResultInOtherCatalog {
+    pub entry_id: usize,
+    pub ext_name: String,
+    pub type_name: String,
+    pub q: Option<isize>,
 }
 
 #[derive(Debug, Clone)]
@@ -76,21 +92,13 @@ impl AutoMatch {
     pub async fn automatch_by_sitelink(&mut self, catalog_id: usize) -> Result<()> {
         let language = Catalog::from_id(catalog_id, &self.mnm).await?.search_wp;
         let site = format!("{}wiki", &language);
-        let sql = format!("SELECT `id`,`ext_name` FROM entry WHERE catalog=:catalog_id AND q IS NULL
-            AND NOT EXISTS (SELECT * FROM `log` WHERE log.entry_id=entry.id AND log.action='remove_q')
-            {}
-            ORDER BY `id` LIMIT :batch_size OFFSET :offset",MatchState::not_fully_matched().get_sql());
         let mut offset = self.get_last_job_offset().await;
         let batch_size = 5000;
         loop {
             let entries = self
                 .mnm
-                .app
-                .get_mnm_conn()
-                .await?
-                .exec_iter(sql.clone(), params! {catalog_id,offset,batch_size})
-                .await?
-                .map_and_drop(from_row::<(usize, String)>)
+                .get_storage()
+                .automatch_by_sitelink_get_entries(catalog_id, offset, batch_size)
                 .await?;
             if entries.is_empty() {
                 break; // Done
@@ -192,11 +200,6 @@ impl AutoMatch {
     // }
 
     pub async fn automatch_by_search(&mut self, catalog_id: usize) -> Result<()> {
-        let sql = format!("SELECT `id`,`ext_name`,`type`,
-            IFNULL((SELECT group_concat(DISTINCT `label` SEPARATOR '|') FROM aliases WHERE entry_id=entry.id),'') AS `aliases` 
-            FROM `entry` WHERE `catalog`=:catalog_id {} 
-            /* ORDER BY `id` */
-            LIMIT :batch_size OFFSET :offset",MatchState::not_fully_matched().get_sql());
         let mut offset = self.get_last_job_offset().await;
         let batch_size = *self
             .mnm
@@ -212,15 +215,10 @@ impl AutoMatch {
             .unwrap_or(&100);
 
         loop {
-            // println!("automatch_by_search [{catalog_id}]: {catalog_id},{offset},{batch_size}");
             let results = self
                 .mnm
-                .app
-                .get_mnm_conn()
-                .await?
-                .exec_iter(sql.clone(), params! {catalog_id,offset,batch_size})
-                .await?
-                .map_and_drop(from_row::<(usize, String, String, String)>)
+                .get_storage()
+                .automatch_by_search_get_results(catalog_id, offset, batch_size)
                 .await?;
             // println!("automatch_by_search [{catalog_id}]:Done.");
 
@@ -293,17 +291,10 @@ impl AutoMatch {
     }
 
     pub async fn automatch_creations(&mut self, catalog_id: usize) -> Result<()> {
-        let sql = "SELECT object_title,object_entry_id,search_query FROM vw_object_creator WHERE object_catalog={} AND object_q IS NULL
-                UNION
-                SELECT object_title,object_entry_id,search_query FROM vw_object_creator_aux WHERE object_catalog={} AND object_q IS NULL";
         let results = self
             .mnm
-            .app
-            .get_mnm_conn()
-            .await?
-            .exec_iter(sql, params! {catalog_id})
-            .await?
-            .map_and_drop(from_row::<(String, usize, String)>)
+            .get_storage()
+            .automatch_creations_get_results(catalog_id)
             .await?;
 
         for result in &results {
@@ -332,23 +323,14 @@ impl AutoMatch {
     }
 
     pub async fn automatch_simple(&mut self, catalog_id: usize) -> Result<()> {
-        let sql = format!("SELECT `id`,`ext_name`,`type`,
-            IFNULL((SELECT group_concat(DISTINCT `label` SEPARATOR '|') FROM aliases WHERE entry_id=entry.id),'') AS `aliases` 
-            FROM `entry` WHERE `catalog`=:catalog_id {} 
-            /* ORDER BY `id` */
-            LIMIT :batch_size OFFSET :offset",MatchState::not_fully_matched().get_sql());
         let mut offset = self.get_last_job_offset().await;
         let batch_size = 5000;
         loop {
             // TODO make this more efficient, too many wd replica queries
             let results = self
                 .mnm
-                .app
-                .get_mnm_conn()
-                .await?
-                .exec_iter(sql.clone(), params! {catalog_id,offset,batch_size})
-                .await?
-                .map_and_drop(from_row::<(usize, String, String, String)>)
+                .get_storage()
+                .automatch_simple_get_results(catalog_id, offset, batch_size)
                 .await?;
 
             for result in &results {
@@ -400,33 +382,21 @@ impl AutoMatch {
 
     //TODO test
     pub async fn automatch_from_other_catalogs(&mut self, catalog_id: usize) -> Result<()> {
-        let sql1 = "SELECT `id`,`ext_name`,`type` FROM entry WHERE catalog=:catalog_id AND q IS NULL LIMIT :batch_size OFFSET :offset" ;
         let mut offset = self.get_last_job_offset().await;
         let batch_size = 500;
         loop {
-            #[derive(Debug, PartialEq, Eq, Clone)]
-            struct ResultInOriginalCatalog {
-                entry_id: usize,
-                ext_name: String,
-                type_name: String,
-            }
-            let results_in_original_catalog: Vec<ResultInOriginalCatalog> = sql1
-                .with(params! {catalog_id,batch_size,offset})
-                .map(
-                    self.mnm.app.get_mnm_conn().await?,
-                    |(entry_id, ext_name, type_name)| ResultInOriginalCatalog {
-                        entry_id,
-                        ext_name,
-                        type_name,
-                    },
-                )
+            let results_in_original_catalog = self
+                .mnm
+                .get_storage()
+                .automatch_from_other_catalogs_get_results(catalog_id, batch_size, offset)
                 .await?;
             if results_in_original_catalog.is_empty() {
                 break;
             }
-            let ext_names: Vec<mysql_async::Value> = results_in_original_catalog
+
+            let ext_names: Vec<String> = results_in_original_catalog
                 .iter()
-                .map(|r| mysql_async::Value::Bytes(r.ext_name.as_bytes().to_vec()))
+                .map(|r| r.ext_name.to_owned())
                 .collect();
 
             let mut name_type2id: HashMap<(String, String), Vec<usize>> = HashMap::new();
@@ -437,35 +407,10 @@ impl AutoMatch {
                     .or_insert(vec![r.entry_id]);
             });
 
-            #[derive(Debug, PartialEq, Eq, Clone)]
-            struct ResultInOtherCatalog {
-                entry_id: usize,
-                ext_name: String,
-                type_name: String,
-                q: Option<isize>,
-            }
-
-            let params = Params::Positional(ext_names);
-            let placeholders = MixNMatch::sql_placeholders(results_in_original_catalog.len());
-            let sql2 = "SELECT `id`,`ext_name`,`type`,q FROM entry 
-            WHERE ext_name IN ("
-                .to_string()
-                + &placeholders
-                + ")
-            AND q IS NOT NULL AND q > 0 AND user IS NOT NULL AND user>0
-            AND catalog IN (SELECT id from catalog WHERE active=1)
-            GROUP BY ext_name,type HAVING count(DISTINCT q)=1";
-            let results_in_other_catalogs: Vec<ResultInOtherCatalog> = sql2
-                .with(params)
-                .map(
-                    self.mnm.app.get_mnm_conn().await?,
-                    |(entry_id, ext_name, type_name, q)| ResultInOtherCatalog {
-                        entry_id,
-                        ext_name,
-                        type_name,
-                        q,
-                    },
-                )
+            let results_in_other_catalogs = self
+                .mnm
+                .get_storage()
+                .automatch_from_other_catalogs_get_results2(&results_in_original_catalog, ext_names)
                 .await?;
             for r in &results_in_other_catalogs {
                 let q = match r.q {
@@ -492,34 +437,18 @@ impl AutoMatch {
     }
 
     pub async fn purge_automatches(&self, catalog_id: usize) -> Result<()> {
-        let mut conn = self.mnm.app.get_mnm_conn().await?;
-        conn.exec_drop("UPDATE entry SET q=NULL,user=NULL,`timestamp`=NULL WHERE catalog=:catalog_id AND user=0", params! {catalog_id}).await?;
-        conn.exec_drop(
-            "DELETE FROM multi_match WHERE catalog=:catalog_id",
-            params! {catalog_id},
-        )
-        .await?;
-        Ok(())
+        self.mnm.get_storage().purge_automatches(catalog_id).await
     }
 
     pub async fn match_person_by_dates(&mut self, catalog_id: usize) -> Result<()> {
         let mw_api = self.mnm.get_mw_api().await?;
-        let sql = "SELECT entry_id,ext_name,born,died 
-            FROM (`entry` join `person_dates`)
-            WHERE `person_dates`.`entry_id` = `entry`.`id`
-            AND `catalog`=:catalog_id AND (q IS NULL or user=0) AND born!='' AND died!='' 
-            LIMIT :batch_size OFFSET :offset";
         let mut offset = self.get_last_job_offset().await;
         let batch_size = 5000;
         loop {
             let results = self
                 .mnm
-                .app
-                .get_mnm_conn()
-                .await?
-                .exec_iter(sql, params! {catalog_id,batch_size,offset})
-                .await?
-                .map_and_drop(from_row::<(usize, String, String, String)>)
+                .get_storage()
+                .match_person_by_dates_get_results(catalog_id, batch_size, offset)
                 .await?;
             for result in &results {
                 let entry_id = result.0;
@@ -593,29 +522,19 @@ impl AutoMatch {
         };
         let mw_api = self.mnm.get_mw_api().await?;
         // CAUTION: Do NOT use views in the SQL statement, it will/might throw an "Prepared statement needs to be re-prepared" error
-        let sql = format!("(
-                SELECT multi_match.entry_id AS entry_id,born,died,candidates AS qs FROM person_dates,multi_match,entry
-                WHERE (q IS NULL OR user=0) AND person_dates.entry_id=multi_match.entry_id AND multi_match.catalog=:catalog_id AND length({})=:precision
-                AND entry.id=person_dates.entry_id
-            ) UNION (
-                SELECT entry_id,born,died,q qs FROM person_dates,entry
-                WHERE (q is not null and user=0) AND catalog=:catalog_id AND length({})=:precision AND entry.id=person_dates.entry_id
-            )
-            ORDER BY entry_id LIMIT :batch_size OFFSET :offset",match_field,match_field);
         let mut offset = self.get_last_job_offset().await;
         let batch_size = 100;
         loop {
             let results = self
                 .mnm
-                .app
-                .get_mnm_conn()
-                .await?
-                .exec_iter(
-                    sql.clone(),
-                    params! {catalog_id,precision,batch_size,offset},
+                .get_storage()
+                .match_person_by_single_date_get_results(
+                    match_field,
+                    catalog_id,
+                    precision,
+                    batch_size,
+                    offset,
                 )
-                .await?
-                .map_and_drop(from_row::<(usize, String, String, String)>)
                 .await?;
             let results: Vec<CandidateDates> =
                 results.iter().map(CandidateDates::from_row).collect();
@@ -800,21 +719,13 @@ impl AutoMatch {
             language = "en".to_string();
         }
 
-        let sql = format!("SELECT `id`,`ext_name` FROM entry WHERE catalog=:catalog_id AND q IS NULL
-            AND NOT EXISTS (SELECT * FROM `log` WHERE log.entry_id=entry.id AND log.action='remove_q')
-            {}
-            ORDER BY `id` LIMIT :batch_size OFFSET :offset",MatchState::unmatched().get_sql());
         let mut offset = self.get_last_job_offset().await;
         let batch_size = 10;
         loop {
             let el_chunk = self
                 .mnm
-                .app
-                .get_mnm_conn()
-                .await?
-                .exec_iter(sql.clone(), params! {catalog_id,offset,batch_size})
-                .await?
-                .map_and_drop(from_row::<(usize, String)>)
+                .get_storage()
+                .automatch_complex_get_el_chunk(catalog_id, offset, batch_size)
                 .await?;
             if el_chunk.is_empty() {
                 break; // Done

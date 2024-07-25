@@ -1,6 +1,7 @@
 pub use crate::storage::Storage;
 use crate::{
     app_state::AppState,
+    automatch::{ResultInOriginalCatalog, ResultInOtherCatalog},
     auxiliary_matcher::AuxiliaryResults,
     catalog::Catalog,
     coordinate_matcher::LocationRow,
@@ -15,7 +16,7 @@ use crate::{
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use itertools::Itertools;
-use mysql_async::{from_row, futures::GetConn, prelude::*, Row};
+use mysql_async::{from_row, futures::GetConn, prelude::*, Params, Row};
 use rand::prelude::*;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -117,6 +118,42 @@ impl StorageMySQL {
             (Some(_), _) => "manual",
             _ => "noq",
         }
+    }
+
+    fn jobs_get_next_job_construct_sql(
+        &self,
+        status: JobStatus,
+        depends_on: Option<JobStatus>,
+        no_actions: &Vec<String>,
+        next_ts: Option<String>,
+    ) -> String {
+        let mut sql = format!(
+            "SELECT `id` FROM `jobs` WHERE `status`='{}'",
+            status.as_str()
+        );
+        match depends_on {
+            Some(other_status) => {
+                sql += &format!(" AND `depends_on` IS NOT NULL AND `depends_on` IN (SELECT `id` FROM `jobs` WHERE `status`='{}')",other_status.as_str());
+            }
+            None => match &next_ts {
+                Some(ts) => {
+                    sql += &format!(" AND `next_ts`!='' AND `next_ts`<='{ts}'");
+                }
+                None => {
+                    sql += " AND `depends_on` IS NULL";
+                }
+            },
+        }
+        if !no_actions.is_empty() {
+            let actions = no_actions.join("','");
+            sql += &format!(" AND `action` NOT IN ('{actions}')");
+        }
+        if next_ts.is_some() {
+            sql += " ORDER BY `next_ts` LIMIT 1";
+        } else {
+            sql += " ORDER BY `last_ts` LIMIT 1";
+        }
+        sql
     }
 }
 
@@ -853,6 +890,320 @@ impl Storage for StorageMySQL {
         let mut conn = self.get_conn().await?;
         conn.exec_drop(sql, params! {job_id,next_ts}).await?;
         Ok(())
+    }
+
+    async fn jobs_get_next_job(
+        &self,
+        status: JobStatus,
+        depends_on: Option<JobStatus>,
+        no_actions: &Vec<String>,
+        next_ts: Option<String>,
+    ) -> Option<usize> {
+        let sql = self.jobs_get_next_job_construct_sql(status, depends_on, no_actions, next_ts);
+        let mut conn = self.get_conn().await.ok()?;
+        conn.exec_iter(sql, ())
+            .await
+            .ok()?
+            .map_and_drop(from_row::<usize>)
+            .await
+            .ok()?
+            .pop()
+    }
+
+    // Automatch
+
+    async fn automatch_by_sitelink_get_entries(
+        &self,
+        catalog_id: usize,
+        offset: usize,
+        batch_size: usize,
+    ) -> Result<Vec<(usize, String)>> {
+        let sql = format!("SELECT `id`,`ext_name` FROM entry WHERE catalog=:catalog_id AND q IS NULL
+	            AND NOT EXISTS (SELECT * FROM `log` WHERE log.entry_id=entry.id AND log.action='remove_q')
+	            {}
+	            ORDER BY `id` LIMIT :batch_size OFFSET :offset",MatchState::not_fully_matched().get_sql());
+        let mut conn = self.get_conn().await?;
+        let entries = conn
+            .exec_iter(sql.clone(), params! {catalog_id,offset,batch_size})
+            .await?
+            .map_and_drop(from_row::<(usize, String)>)
+            .await?;
+        Ok(entries)
+    }
+
+    async fn automatch_by_search_get_results(
+        &self,
+        catalog_id: usize,
+        offset: usize,
+        batch_size: usize,
+    ) -> Result<Vec<(usize, String, String, String)>> {
+        let sql = format!("SELECT `id`,`ext_name`,`type`,
+	            IFNULL((SELECT group_concat(DISTINCT `label` SEPARATOR '|') FROM aliases WHERE entry_id=entry.id),'') AS `aliases`
+	            FROM `entry` WHERE `catalog`=:catalog_id {}
+	            /* ORDER BY `id` */
+	            LIMIT :batch_size OFFSET :offset",MatchState::not_fully_matched().get_sql());
+        let mut conn = self.get_conn().await?;
+        let results = conn
+            .exec_iter(sql.clone(), params! {catalog_id,offset,batch_size})
+            .await?
+            .map_and_drop(from_row::<(usize, String, String, String)>)
+            .await?;
+        Ok(results)
+    }
+
+    async fn automatch_creations_get_results(
+        &self,
+        catalog_id: usize,
+    ) -> Result<Vec<(String, usize, String)>> {
+        let sql = "SELECT object_title,object_entry_id,search_query FROM vw_object_creator WHERE object_catalog={} AND object_q IS NULL
+                UNION
+                SELECT object_title,object_entry_id,search_query FROM vw_object_creator_aux WHERE object_catalog={} AND object_q IS NULL";
+        let mut conn = self.get_conn().await?;
+        let results = conn
+            .exec_iter(sql, params! {catalog_id})
+            .await?
+            .map_and_drop(from_row::<(String, usize, String)>)
+            .await?;
+        Ok(results)
+    }
+
+    async fn automatch_simple_get_results(
+        &self,
+        catalog_id: usize,
+        offset: usize,
+        batch_size: usize,
+    ) -> Result<Vec<(usize, String, String, String)>> {
+        let sql = format!("SELECT `id`,`ext_name`,`type`,
+                IFNULL((SELECT group_concat(DISTINCT `label` SEPARATOR '|') FROM aliases WHERE entry_id=entry.id),'') AS `aliases`
+                FROM `entry` WHERE `catalog`=:catalog_id {}
+                /* ORDER BY `id` */
+                LIMIT :batch_size OFFSET :offset",MatchState::not_fully_matched().get_sql());
+        let mut conn = self.get_conn().await?;
+        let results = conn
+            .exec_iter(sql.clone(), params! {catalog_id,offset,batch_size})
+            .await?
+            .map_and_drop(from_row::<(usize, String, String, String)>)
+            .await?;
+        Ok(results)
+    }
+
+    async fn automatch_from_other_catalogs_get_results(
+        &self,
+        catalog_id: usize,
+        batch_size: usize,
+        offset: usize,
+    ) -> Result<Vec<ResultInOriginalCatalog>> {
+        let sql = "SELECT `id`,`ext_name`,`type` FROM entry WHERE catalog=:catalog_id AND q IS NULL LIMIT :batch_size OFFSET :offset" ;
+        let conn = self.get_conn().await?;
+        let results_in_original_catalog: Vec<ResultInOriginalCatalog> = sql
+            .with(params! {catalog_id,batch_size,offset})
+            .map(conn, |(entry_id, ext_name, type_name)| {
+                ResultInOriginalCatalog {
+                    entry_id,
+                    ext_name,
+                    type_name,
+                }
+            })
+            .await?;
+        Ok(results_in_original_catalog)
+    }
+
+    async fn automatch_from_other_catalogs_get_results2(
+        &self,
+        results_in_original_catalog: &Vec<ResultInOriginalCatalog>,
+        ext_names: Vec<String>,
+    ) -> Result<Vec<ResultInOtherCatalog>> {
+        let ext_names: Vec<mysql_async::Value> = ext_names
+            .iter()
+            .map(|ext_name| mysql_async::Value::Bytes(ext_name.as_bytes().to_vec()))
+            .collect();
+        let params = Params::Positional(ext_names);
+        let placeholders = Self::sql_placeholders(results_in_original_catalog.len());
+        let sql = "SELECT `id`,`ext_name`,`type`,q FROM entry
+            WHERE ext_name IN ("
+            .to_string()
+            + &placeholders
+            + ")
+            AND q IS NOT NULL AND q > 0 AND user IS NOT NULL AND user>0
+            AND catalog IN (SELECT id from catalog WHERE active=1)
+            GROUP BY ext_name,type HAVING count(DISTINCT q)=1";
+        let conn = self.get_conn().await?;
+        let results_in_other_catalogs: Vec<ResultInOtherCatalog> = sql
+            .with(params)
+            .map(conn, |(entry_id, ext_name, type_name, q)| {
+                ResultInOtherCatalog {
+                    entry_id,
+                    ext_name,
+                    type_name,
+                    q,
+                }
+            })
+            .await?;
+        Ok(results_in_other_catalogs)
+    }
+
+    async fn purge_automatches(&self, catalog_id: usize) -> Result<()> {
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop("UPDATE entry SET q=NULL,user=NULL,`timestamp`=NULL WHERE catalog=:catalog_id AND user=0", params! {catalog_id}).await?;
+        conn.exec_drop(
+            "DELETE FROM multi_match WHERE catalog=:catalog_id",
+            params! {catalog_id},
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn match_person_by_dates_get_results(
+        &self,
+        catalog_id: usize,
+        batch_size: usize,
+        offset: usize,
+    ) -> Result<Vec<(usize, String, String, String)>> {
+        let sql = "SELECT entry_id,ext_name,born,died
+            FROM (`entry` join `person_dates`)
+            WHERE `person_dates`.`entry_id` = `entry`.`id`
+            AND `catalog`=:catalog_id AND (q IS NULL or user=0) AND born!='' AND died!=''
+            LIMIT :batch_size OFFSET :offset";
+        let mut conn = self.get_conn().await?;
+        let results = conn
+            .exec_iter(sql, params! {catalog_id,batch_size,offset})
+            .await?
+            .map_and_drop(from_row::<(usize, String, String, String)>)
+            .await?;
+        Ok(results)
+    }
+
+    async fn match_person_by_single_date_get_results(
+        &self,
+        match_field: &str,
+        catalog_id: usize,
+        precision: i32,
+        batch_size: usize,
+        offset: usize,
+    ) -> Result<Vec<(usize, String, String, String)>> {
+        let sql = format!("(
+	                SELECT multi_match.entry_id AS entry_id,born,died,candidates AS qs FROM person_dates,multi_match,entry
+	                WHERE (q IS NULL OR user=0) AND person_dates.entry_id=multi_match.entry_id AND multi_match.catalog=:catalog_id AND length({})=:precision
+	                AND entry.id=person_dates.entry_id
+	            ) UNION (
+	                SELECT entry_id,born,died,q qs FROM person_dates,entry
+	                WHERE (q is not null and user=0) AND catalog=:catalog_id AND length({})=:precision AND entry.id=person_dates.entry_id
+	            )
+	            ORDER BY entry_id LIMIT :batch_size OFFSET :offset",match_field,match_field);
+        let mut conn = self.get_conn().await?;
+        let results = conn
+            .exec_iter(
+                sql.clone(),
+                params! {catalog_id,precision,batch_size,offset},
+            )
+            .await?
+            .map_and_drop(from_row::<(usize, String, String, String)>)
+            .await?;
+        Ok(results)
+    }
+
+    async fn automatch_complex_get_el_chunk(
+        &self,
+        catalog_id: usize,
+        offset: usize,
+        batch_size: usize,
+    ) -> Result<Vec<(usize, String)>> {
+        let sql = format!("SELECT `id`,`ext_name` FROM entry WHERE catalog=:catalog_id AND q IS NULL
+            AND NOT EXISTS (SELECT * FROM `log` WHERE log.entry_id=entry.id AND log.action='remove_q')
+            {}
+            ORDER BY `id` LIMIT :batch_size OFFSET :offset",MatchState::unmatched().get_sql());
+        let mut conn = self.get_conn().await?;
+        let el_chunk = conn
+            .exec_iter(sql.clone(), params! {catalog_id,offset,batch_size})
+            .await?
+            .map_and_drop(from_row::<(usize, String)>)
+            .await?;
+        Ok(el_chunk)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{env, fs::File};
+
+    use super::*;
+
+    #[test]
+    fn test_jobs_get_next_job_construct_sql() {
+        let mut path = env::current_dir().expect("Can't get CWD");
+        path.push("config.json");
+        let file = File::open(&path).unwrap();
+        let config: Value = serde_json::from_reader(file).unwrap();
+        let storage = StorageMySQL {
+            pool: AppState::create_pool(&config["wikidata"]),
+        };
+
+        // High priority
+        let sql =
+            storage.jobs_get_next_job_construct_sql(JobStatus::HighPriority, None, &vec![], None);
+        let expected = format!(
+            "SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NULL ORDER BY `last_ts` LIMIT 1",
+            JobStatus::HighPriority.as_str()
+        );
+        assert_eq!(sql, expected);
+
+        // Low priority
+        let sql =
+            storage.jobs_get_next_job_construct_sql(JobStatus::LowPriority, None, &vec![], None);
+        let expected = format!(
+            "SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NULL ORDER BY `last_ts` LIMIT 1",
+            JobStatus::LowPriority.as_str()
+        );
+        assert_eq!(sql, expected);
+
+        // Next dependent
+        let sql = storage.jobs_get_next_job_construct_sql(
+            JobStatus::Todo,
+            Some(JobStatus::Done),
+            &vec![],
+            None,
+        );
+        let expected = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NOT NULL AND `depends_on` IN (SELECT `id` FROM `jobs` WHERE `status`='{}') ORDER BY `last_ts` LIMIT 1",JobStatus::Todo.as_str(),JobStatus::Done.as_str()) ;
+        assert_eq!(sql, expected);
+
+        // get_next_initial_allowed_job
+        let avoid = vec!["test1".to_string(), "test2".to_string()];
+        let sql = storage.jobs_get_next_job_construct_sql(JobStatus::Todo, None, &avoid, None);
+        let not_in = avoid.join("','");
+        let expected = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NULL AND `action` NOT IN ('{}') ORDER BY `last_ts` LIMIT 1",JobStatus::Todo.as_str(),&not_in) ;
+        assert_eq!(sql, expected);
+
+        // get_next_initial_job
+        let sql = storage.jobs_get_next_job_construct_sql(JobStatus::Todo, None, &vec![], None);
+        let expected = format!(
+            "SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NULL ORDER BY `last_ts` LIMIT 1",
+            JobStatus::Todo.as_str()
+        );
+        assert_eq!(sql, expected);
+
+        // get_next_scheduled_job
+        let timestamp = TimeStamp::now();
+        let sql = storage.jobs_get_next_job_construct_sql(
+            JobStatus::Done,
+            None,
+            &vec![],
+            Some(timestamp.to_owned()),
+        );
+        let expected = format!(
+            "SELECT `id` FROM `jobs` WHERE `status`='{}' AND `next_ts`!='' AND `next_ts`<='{}' ORDER BY `next_ts` LIMIT 1",
+            JobStatus::Done.as_str(),
+            &timestamp
+        );
+        assert_eq!(sql, expected);
+
+        // get_next_initial_job with avoid
+        let no_actions = vec!["foo".to_string(), "bar".to_string()];
+        let sql = storage.jobs_get_next_job_construct_sql(JobStatus::Todo, None, &no_actions, None);
+        let expected = format!(
+            "SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NULL AND `action` NOT IN ('foo','bar') ORDER BY `last_ts` LIMIT 1",
+            JobStatus::Todo.as_str()
+        );
+        assert_eq!(sql, expected);
     }
 }
 

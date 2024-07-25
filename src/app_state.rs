@@ -332,13 +332,11 @@ impl AppState {
                 } else {
                     TaskSize::GINORMOUS
                 };
-            job.skip_actions = Some(
-                task_size
-                    .iter()
-                    .filter(|(_action, size)| **size > max_job_size)
-                    .map(|(action, _size)| action.to_string())
-                    .collect(),
-            );
+            job.skip_actions = task_size
+                .iter()
+                .filter(|(_action, size)| **size > max_job_size)
+                .map(|(action, _size)| action.to_string())
+                .collect();
             match job.set_next().await {
                 Ok(true) => {
                     let _ = job.set_status(JobStatus::Running).await;

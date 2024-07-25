@@ -117,7 +117,7 @@ impl Issue {
     }
 
     pub async fn insert(&self) -> Result<()> {
-        self.mnm.get_storage().issue_insert(&self).await?;
+        self.mnm.get_storage().issue_insert(self).await?;
         Ok(())
     }
 }

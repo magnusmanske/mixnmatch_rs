@@ -12,8 +12,6 @@ use crate::update_catalog::*;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use chrono::Duration;
-use mysql_async::from_row;
-use mysql_async::prelude::*;
 use serde_json::json;
 use std::cmp::Ordering;
 use std::error::Error;
@@ -253,7 +251,7 @@ impl JobRow {
 pub struct Job {
     pub data: JobRow,
     pub mnm: Arc<MixNMatch>,
-    pub skip_actions: Option<Vec<String>>,
+    pub skip_actions: Vec<String>,
 }
 
 impl Job {
@@ -261,7 +259,7 @@ impl Job {
         Self {
             data: JobRow::default(),
             mnm: Arc::new(mnm.clone()),
-            skip_actions: None,
+            skip_actions: vec![],
         }
     }
 
@@ -616,7 +614,6 @@ impl Job {
     //TODO test
     async fn update_next_ts(&mut self) -> Result<()> {
         let next_ts = self.get_next_ts().await?;
-
         let job_id = self.get_id().await?;
         self.put_next_ts(&next_ts).await?;
         self.mnm
@@ -626,41 +623,33 @@ impl Job {
         Ok(())
     }
 
-    fn add_sql_action_filter(&self, sql: String) -> String {
-        match &self.skip_actions {
-            Some(actions) => {
-                let actions = actions.join("','");
-                format!("{sql} AND `action` NOT IN ('{actions}')")
-            }
-            None => sql,
-        }
-    }
-
     //TODO test
     pub async fn get_next_high_priority_job(&self) -> Option<usize> {
-        let sql = format!(
-            "SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NULL",
-            JobStatus::HighPriority.as_str()
-        );
-        // let sql = self.add_sql_action_filter(sql);
-        self.get_next_job_generic(&sql).await
+        self.mnm
+            .get_storage()
+            .jobs_get_next_job(JobStatus::HighPriority, None, &self.skip_actions, None)
+            .await
     }
 
     //TODO test
     async fn get_next_low_priority_job(&self) -> Option<usize> {
-        let sql = format!(
-            "SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NULL",
-            JobStatus::LowPriority.as_str()
-        );
-        let sql = self.add_sql_action_filter(sql);
-        self.get_next_job_generic(&sql).await
+        self.mnm
+            .get_storage()
+            .jobs_get_next_job(JobStatus::LowPriority, None, &self.skip_actions, None)
+            .await
     }
 
     //TODO test
     async fn get_next_dependent_job(&self) -> Option<usize> {
-        let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NOT NULL AND `depends_on` IN (SELECT `id` FROM `jobs` WHERE `status`='{}')",JobStatus::Todo.as_str(),JobStatus::Done.as_str()) ;
-        let sql = self.add_sql_action_filter(sql);
-        self.get_next_job_generic(&sql).await
+        self.mnm
+            .get_storage()
+            .jobs_get_next_job(
+                JobStatus::Todo,
+                Some(JobStatus::Done),
+                &self.skip_actions,
+                None,
+            )
+            .await
     }
 
     //TODO test
@@ -668,57 +657,29 @@ impl Job {
         if avoid.is_empty() {
             return None;
         }
-        let not_in = avoid.join("','");
-        let sql = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NULL AND `action` NOT IN ('{}')",JobStatus::Todo.as_str(),&not_in) ;
-        let sql = self.add_sql_action_filter(sql);
-        self.get_next_job_generic(&sql).await
+        let mut skip = avoid.to_vec();
+        skip.append(&mut self.skip_actions.clone());
+        self.mnm
+            .get_storage()
+            .jobs_get_next_job(JobStatus::Todo, None, &skip, None)
+            .await
     }
 
     //TODO test
     async fn get_next_initial_job(&self) -> Option<usize> {
-        let sql = format!(
-            "SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NULL",
-            JobStatus::Todo.as_str()
-        );
-        let sql = self.add_sql_action_filter(sql);
-        self.get_next_job_generic(&sql).await
+        self.mnm
+            .get_storage()
+            .jobs_get_next_job(JobStatus::Todo, None, &self.skip_actions, None)
+            .await
     }
 
     //TODO test
     async fn get_next_scheduled_job(&self) -> Option<usize> {
         let timestamp = TimeStamp::now();
-        let sql = format!(
-            "SELECT `id` FROM `jobs` WHERE `status`='{}' AND `next_ts`!='' AND `next_ts`<='{}'",
-            JobStatus::Done.as_str(),
-            &timestamp
-        );
-        let sql = self.add_sql_action_filter(sql);
-        let sql = format!("{sql} ORDER BY `next_ts` LIMIT 1");
-        self.get_next_job_generic(&sql).await
-    }
-
-    //TODO test
-    async fn get_next_job_generic(&self, sql: &str) -> Option<usize> {
-        let sql = if sql.contains(" ORDER BY ") {
-            // self.add_sql_action_filter(sql.to_string())
-            sql.to_string()
-        } else {
-            let sql = self.add_sql_action_filter(sql.to_string());
-            format!("{} ORDER BY `last_ts` LIMIT 1", sql)
-        };
-        // println!("{sql}");
         self.mnm
-            .app
-            .get_mnm_conn()
+            .get_storage()
+            .jobs_get_next_job(JobStatus::Done, None, &self.skip_actions, Some(timestamp))
             .await
-            .ok()?
-            .exec_iter(sql, ())
-            .await
-            .ok()?
-            .map_and_drop(from_row::<usize>)
-            .await
-            .ok()?
-            .pop()
     }
 }
 

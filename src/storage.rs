@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
+    automatch::{ResultInOriginalCatalog, ResultInOtherCatalog},
     auxiliary_matcher::AuxiliaryResults,
     catalog::Catalog,
     coordinate_matcher::LocationRow,
@@ -178,4 +179,68 @@ pub trait Storage {
     ) -> Result<()>;
     async fn jobs_set_note(&self, note: Option<String>, job_id: usize) -> Result<Option<String>>;
     async fn jobs_update_next_ts(&self, job_id: usize, next_ts: String) -> Result<()>;
+    async fn jobs_get_next_job(
+        &self,
+        status: JobStatus,
+        depends_on: Option<JobStatus>,
+        no_actions: &Vec<String>,
+        next_ts: Option<String>,
+    ) -> Option<usize>;
+
+    // Automatch
+
+    async fn automatch_by_sitelink_get_entries(
+        &self,
+        catalog_id: usize,
+        offset: usize,
+        batch_size: usize,
+    ) -> Result<Vec<(usize, String)>>;
+    async fn automatch_by_search_get_results(
+        &self,
+        catalog_id: usize,
+        offset: usize,
+        batch_size: usize,
+    ) -> Result<Vec<(usize, String, String, String)>>;
+    async fn automatch_creations_get_results(
+        &self,
+        catalog_id: usize,
+    ) -> Result<Vec<(String, usize, String)>>;
+    async fn automatch_simple_get_results(
+        &self,
+        catalog_id: usize,
+        offset: usize,
+        batch_size: usize,
+    ) -> Result<Vec<(usize, String, String, String)>>;
+    async fn automatch_from_other_catalogs_get_results(
+        &self,
+        catalog_id: usize,
+        batch_size: usize,
+        offset: usize,
+    ) -> Result<Vec<ResultInOriginalCatalog>>;
+    async fn automatch_from_other_catalogs_get_results2(
+        &self,
+        results_in_original_catalog: &Vec<ResultInOriginalCatalog>,
+        ext_names: Vec<String>,
+    ) -> Result<Vec<ResultInOtherCatalog>>;
+    async fn purge_automatches(&self, catalog_id: usize) -> Result<()>;
+    async fn match_person_by_dates_get_results(
+        &self,
+        catalog_id: usize,
+        batch_size: usize,
+        offset: usize,
+    ) -> Result<Vec<(usize, String, String, String)>>;
+    async fn match_person_by_single_date_get_results(
+        &self,
+        match_field: &str,
+        catalog_id: usize,
+        precision: i32,
+        batch_size: usize,
+        offset: usize,
+    ) -> Result<Vec<(usize, String, String, String)>>;
+    async fn automatch_complex_get_el_chunk(
+        &self,
+        catalog_id: usize,
+        offset: usize,
+        batch_size: usize,
+    ) -> Result<Vec<(usize, String)>>;
 }
