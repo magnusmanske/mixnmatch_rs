@@ -4,10 +4,8 @@ use crate::entry::*;
 use crate::job::*;
 use crate::maintenance::*;
 use crate::mixnmatch::*;
+use crate::storage::Storage;
 use anyhow::Result;
-use itertools::Itertools;
-use mysql_async::from_row;
-use mysql_async::prelude::*;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::error::Error;
@@ -16,7 +14,7 @@ use std::fs::File;
 use wikimisc::timestamp::TimeStamp;
 
 const MAX_WIKI_ROWS: usize = 400;
-const EXT_URL_UNIQUE_SEPARATOR: &str = "!@£$%^&|";
+pub const EXT_URL_UNIQUE_SEPARATOR: &str = "!@£$%^&|";
 const BLACKLISTED_CATALOGS: &[usize] = &[506];
 
 #[derive(Debug)]
@@ -189,7 +187,11 @@ impl Microsync {
                 ret += &format!("* {} enties have different items on Mix'n'match and Wikidata. Too many to show individually.\n\n",match_differs.len());
             } else {
                 let entry_ids = match_differs.iter().map(|e| e.entry_id).collect();
-                let entry2name = self.load_entry_names(&entry_ids).await?;
+                let entry2name = self
+                    .mnm
+                    .get_storage()
+                    .microsync_load_entry_names(&entry_ids)
+                    .await?;
                 ret += "{| class='wikitable'\n! External ID !! External label !! Item in Wikidata !! Item in Mix'n'Match !! Mix'n'match entry\n" ;
                 for e in &match_differs {
                     let ext_name = entry2name.get(&e.entry_id).unwrap_or(&e.ext_id);
@@ -212,7 +214,11 @@ impl Microsync {
                     .iter()
                     .flat_map(|e| e.entry2ext_id.iter().map(|x| x.0))
                     .collect();
-                let entry2name = self.load_entry_names(&entry_ids).await?;
+                let entry2name = self
+                    .mnm
+                    .get_storage()
+                    .microsync_load_entry_names(&entry_ids)
+                    .await?;
                 ret += "{| class='wikitable'\n! Item in Mix'n'Match !! Mix'n'match entry !! External ID !! External label\n" ;
                 for e in &multiple_q_in_mnm {
                     let mut first = true;
@@ -260,27 +266,6 @@ impl Microsync {
         Ok(ret)
     }
 
-    async fn load_entry_names(&self, entry_ids: &Vec<usize>) -> Result<HashMap<usize, String>> {
-        let placeholders = MixNMatch::sql_placeholders(entry_ids.len());
-        let sql = format!(
-            "SELECT `id`,`ext_name` FROM `entry` WHERE `id` IN ({})",
-            placeholders
-        );
-        let results = self
-            .mnm
-            .app
-            .get_mnm_conn()
-            .await?
-            .exec_iter(sql, entry_ids)
-            .await?
-            .map_and_drop(from_row::<(usize, String)>)
-            .await?
-            .iter()
-            .map(|(entry_id, ext_name)| (*entry_id, ext_name.to_owned()))
-            .collect();
-        Ok(results)
-    }
-
     fn format_ext_id(&self, ext_id: &str, ext_url: &str, formatter_url: &str) -> String {
         // TODO if ( !preg_match('|^[a-zA-Z0-9._ -]+$|',$ext_id) ) $ext_id = "<nowiki>{$ext_id}</nowiki>" ;
         if !formatter_url.is_empty() {
@@ -316,7 +301,7 @@ impl Microsync {
         // TODO: lcase?
         let sparql = format!(
             "SELECT ?extid (count(?q) AS ?cnt) (GROUP_CONCAT(?q; SEPARATOR = '|') AS ?items)
-            {{ ?q wdt:P{} ?extid }} 
+            {{ ?q wdt:P{} ?extid }}
             GROUP BY ?extid HAVING (?cnt>1)
             ORDER BY ?extid",
             property
@@ -349,15 +334,10 @@ impl Microsync {
     }
 
     async fn get_multiple_q_in_mnm(&self, catalog_id: usize) -> Result<Vec<ExtIdWithMutipleQ>> {
-        let sql = format!("SELECT q,group_concat(id) AS ids,group_concat(ext_id SEPARATOR '{}') AS ext_ids FROM entry WHERE catalog=:catalog_id AND q IS NOT NULL and q>0 AND user>0 GROUP BY q HAVING count(id)>1 ORDER BY q",EXT_URL_UNIQUE_SEPARATOR);
         let results = self
             .mnm
-            .app
-            .get_mnm_conn()
-            .await?
-            .exec_iter(sql, params! {catalog_id})
-            .await?
-            .map_and_drop(from_row::<(isize, String, String)>)
+            .get_storage()
+            .microsync_get_multiple_q_in_mnm(catalog_id)
             .await?;
         let mut results: Vec<ExtIdWithMutipleQ> = results
             .iter()
@@ -492,18 +472,12 @@ impl Microsync {
         if ext_ids.is_empty() {
             return Ok(HashMap::new());
         }
-        let case_insensitive = AUX_PROPERTIES_ALSO_USING_LOWERCASE.contains(&property);
-        let placeholders = ext_ids.iter().map(|_| "BINARY ?").join(",");
-        let sql = format!("SELECT `id`,`q`,`user`,`ext_id`,`ext_url` FROM `entry` WHERE `catalog`={catalog_id} AND `ext_id` IN ({placeholders})");
         let results = self
             .mnm
-            .app
-            .get_mnm_conn()
-            .await?
-            .exec_iter(sql, ext_ids)
-            .await?
-            .map_and_drop(from_row::<(usize, Option<isize>, Option<usize>, String, String)>)
+            .get_storage()
+            .microsync_get_entries_for_ext_ids(catalog_id, ext_ids)
             .await?;
+        let case_insensitive = AUX_PROPERTIES_ALSO_USING_LOWERCASE.contains(&property);
         let ret: HashMap<String, SmallEntry> = results
             .iter()
             .map(|(id, q, user, ext_id, ext_url)| {
@@ -599,8 +573,11 @@ mod tests {
     #[tokio::test]
     async fn test_load_entry_names() {
         let mnm = get_test_mnm();
-        let ms = Microsync::new(&mnm);
-        let result = ms.load_entry_names(&vec![TEST_ENTRY_ID]).await.unwrap();
+        let result = mnm
+            .get_storage()
+            .microsync_load_entry_names(&vec![TEST_ENTRY_ID])
+            .await
+            .unwrap();
         assert_eq!(
             result.get(&TEST_ENTRY_ID),
             Some(&"Magnus Manske".to_string())

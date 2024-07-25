@@ -1,11 +1,14 @@
 pub use crate::storage::Storage;
 use crate::{
     app_state::AppState,
+    catalog::Catalog,
     coordinate_matcher::LocationRow,
+    microsync::EXT_URL_UNIQUE_SEPARATOR,
     mixnmatch::MatchState,
     taxon_matcher::{RankedNames, TaxonMatcher, TaxonNameField, TAXON_RANKS},
+    update_catalog::UpdateInfo,
 };
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use mysql_async::{from_row, prelude::*, Row};
 use rand::prelude::*;
@@ -26,6 +29,12 @@ impl StorageMySQL {
 
     pub fn pool(&self) -> &mysql_async::Pool {
         &self.pool
+    }
+
+    fn sql_placeholders(num: usize) -> String {
+        let mut placeholders: Vec<String> = Vec::new();
+        placeholders.resize(num, "?".to_string());
+        placeholders.join(",")
     }
 
     fn coordinate_matcher_main_query_sql(
@@ -61,6 +70,26 @@ impl StorageMySQL {
             ext_name: row.get(4)?,
             entry_type: row.get(5)?,
             q: row.get(6)?,
+        })
+    }
+
+    fn catalog_from_row(row: &Row) -> Option<Catalog> {
+        Some(Catalog {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            url: row.get(2)?,
+            desc: row.get(3)?,
+            type_name: row.get(4)?,
+            wd_prop: row.get(5)?,
+            wd_qual: row.get(6)?,
+            search_wp: row.get(7)?,
+            active: row.get(8)?,
+            owner: row.get(9)?,
+            note: row.get(10)?,
+            source_item: row.get(11)?,
+            has_person_date: row.get(12)?,
+            taxon_run: row.get(13)?,
+            mnm: None,
         })
     }
 }
@@ -157,6 +186,158 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, ())
             .await?
             .map_and_drop(from_row::<(usize, String, String)>)
+            .await?;
+        Ok(results)
+    }
+
+    // Data source
+
+    async fn get_data_source_type_for_uuid(&self, uuid: &str) -> Result<Vec<String>> {
+        let results = "SELECT `type` FROM `import_file` WHERE `uuid`=:uuid"
+            .with(params! {uuid})
+            .map(self.pool.get_conn().await?, |type_name| type_name)
+            .await?;
+        Ok(results)
+    }
+
+    async fn get_existing_ext_ids(
+        &self,
+        placeholders: String,
+        catalog_id: usize,
+        ext_ids: &[String],
+    ) -> Result<Vec<String>> {
+        let sql = format!(
+            "SELECT `ext_id` FROM entry WHERE `ext_id` IN ({}) AND `catalog`={}",
+            &placeholders, catalog_id
+        );
+        let existing_ext_ids = sql
+            .with(ext_ids.to_vec())
+            .map(self.pool.get_conn().await?, |ext_id| ext_id)
+            .await?;
+        Ok(existing_ext_ids)
+    }
+
+    async fn update_catalog_get_update_info(&self, catalog_id: usize) -> Result<Vec<UpdateInfo>> {
+        let results = "SELECT id, catalog, json, note, user_id, is_current FROM `update_info` WHERE `catalog`=:catalog_id AND `is_current`=1 LIMIT 1"
+            .with(params!{catalog_id})
+            .map(self.pool.get_conn().await?,
+                |(id, catalog, json, note, user_id, is_current)|{
+                UpdateInfo{id, catalog, json, note, user_id, is_current}
+            })
+            .await?;
+        Ok(results)
+    }
+
+    // Catalog
+
+    async fn number_of_entries_in_catalog(&self, catalog_id: usize) -> Result<usize> {
+        let results: Vec<usize> = "SELECT count(*) AS cnt FROM `entry` WHERE `catalog`=:catalog_id"
+            .with(params! {catalog_id})
+            .map(self.pool.get_conn().await?, |num| num)
+            .await?;
+        Ok(*results.get(0).unwrap_or(&0))
+    }
+
+    async fn get_catalog_from_id(&self, catalog_id: usize) -> Result<Catalog> {
+        let sql = r"SELECT id,`name`,url,`desc`,`type`,wd_prop,wd_qual,search_wp,active,owner,note,source_item,has_person_date,taxon_run FROM `catalog` WHERE `id`=:catalog_id";
+        let mut conn = self.pool.get_conn().await?;
+        let mut rows: Vec<Catalog> = conn
+            .exec_iter(sql, params! {catalog_id})
+            .await?
+            .map_and_drop(|row| Self::catalog_from_row(&row))
+            .await?
+            .iter()
+            .filter_map(|row| row.to_owned())
+            .collect();
+        let ret = rows
+            .pop()
+            .ok_or(anyhow!("No catalog #{}", catalog_id))?
+            .to_owned();
+        Ok(ret)
+    }
+
+    async fn get_catalog_key_value_pairs(
+        &self,
+        catalog_id: usize,
+    ) -> Result<HashMap<String, String>> {
+        let sql = r#"SELECT `kv_key`,`kv_value` FROM `kv_catalog` WHERE `catalog_id`=:catalog_id"#;
+        let mut conn = self.pool.get_conn().await?;
+        let results = conn
+            .exec_iter(sql, params! {catalog_id})
+            .await?
+            .map_and_drop(from_row::<(String, String)>)
+            .await?;
+        let ret: HashMap<String, String> = results.into_iter().collect();
+        Ok(ret)
+    }
+
+    async fn catalog_refresh_overview_table(&self, catalog_id: usize) -> Result<()> {
+        let sql = r"REPLACE INTO `overview` (catalog,total,noq,autoq,na,manual,nowd,multi_match,types) VALUES (
+	        :catalog_id,
+	        (SELECT count(*) FROM `entry` WHERE `catalog`=:catalog_id),
+	        (SELECT count(*) FROM `entry` WHERE `catalog`=:catalog_id AND `q` IS NULL),
+	        (SELECT count(*) FROM `entry` WHERE `catalog`=:catalog_id AND `user`=0),
+	        (SELECT count(*) FROM `entry` WHERE `catalog`=:catalog_id AND `q`=0),
+	        (SELECT count(*) FROM `entry` WHERE `catalog`=:catalog_id AND `q` IS NOT NULL AND `user`>0),
+	        (SELECT count(*) FROM `entry` WHERE `catalog`=:catalog_id AND `q`=-1),
+	        (SELECT count(*) FROM `multi_match` WHERE `catalog`=:catalog_id),
+	        (SELECT group_concat(DISTINCT `type` SEPARATOR '|') FROM `entry` WHERE `catalog`=:catalog_id)
+	        )";
+        let mut conn = self.pool.get_conn().await?;
+        conn.exec_drop(sql, params! {catalog_id}).await?;
+        Ok(())
+    }
+
+    // Microsync
+
+    async fn microsync_load_entry_names(
+        &self,
+        entry_ids: &Vec<usize>,
+    ) -> Result<HashMap<usize, String>> {
+        let placeholders = Self::sql_placeholders(entry_ids.len());
+        let sql = format!(
+            "SELECT `id`,`ext_name` FROM `entry` WHERE `id` IN ({})",
+            placeholders
+        );
+        let mut conn = self.pool.get_conn().await?;
+        let results = conn
+            .exec_iter(sql, entry_ids)
+            .await?
+            .map_and_drop(from_row::<(usize, String)>)
+            .await?
+            .iter()
+            .map(|(entry_id, ext_name)| (*entry_id, ext_name.to_owned()))
+            .collect();
+        Ok(results)
+    }
+
+    async fn microsync_get_multiple_q_in_mnm(
+        &self,
+        catalog_id: usize,
+    ) -> Result<Vec<(isize, String, String)>> {
+        let sql = format!("SELECT q,group_concat(id) AS ids,group_concat(ext_id SEPARATOR '{}') AS ext_ids FROM entry WHERE catalog=:catalog_id AND q IS NOT NULL and q>0 AND user>0 GROUP BY q HAVING count(id)>1 ORDER BY q",EXT_URL_UNIQUE_SEPARATOR);
+        let mut conn = self.pool.get_conn().await?;
+        let results = conn
+            .exec_iter(sql, params! {catalog_id})
+            .await?
+            .map_and_drop(from_row::<(isize, String, String)>)
+            .await?;
+        Ok(results)
+    }
+
+    async fn microsync_get_entries_for_ext_ids(
+        &self,
+        catalog_id: usize,
+        ext_ids: &Vec<&String>,
+    ) -> Result<Vec<(usize, Option<isize>, Option<usize>, String, String)>> {
+        let placeholders: Vec<&str> = ext_ids.iter().map(|_| "BINARY ?").collect();
+        let placeholders = placeholders.join(",");
+        let sql = format!("SELECT `id`,`q`,`user`,`ext_id`,`ext_url` FROM `entry` WHERE `catalog`={catalog_id} AND `ext_id` IN ({placeholders})");
+        let mut conn = self.pool.get_conn().await?;
+        let results = conn
+            .exec_iter(sql, ext_ids)
+            .await?
+            .map_and_drop(from_row::<(usize, Option<isize>, Option<usize>, String, String)>)
             .await?;
         Ok(results)
     }

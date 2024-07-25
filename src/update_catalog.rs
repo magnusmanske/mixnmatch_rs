@@ -1,10 +1,11 @@
 use crate::autoscrape::Autoscrape;
+use crate::catalog::Catalog;
 use crate::entry::*;
 use crate::job::*;
 use crate::mixnmatch::*;
+use crate::storage::Storage;
 use anyhow::{anyhow, Result};
 use lazy_static::lazy_static;
-use mysql_async::prelude::*;
 use regex::Regex;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
@@ -69,13 +70,13 @@ impl fmt::Display for UpdateCatalogError {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-struct UpdateInfo {
-    id: usize,
-    catalog: usize,
-    json: String,
-    note: String,
-    user_id: usize,
-    is_current: u8,
+pub struct UpdateInfo {
+    pub id: usize,
+    pub catalog: usize,
+    pub json: String,
+    pub note: String,
+    pub user_id: usize,
+    pub is_current: u8,
 }
 
 impl UpdateInfo {
@@ -631,11 +632,10 @@ impl DataSource {
         };
         if let Some(file_uuid_value) = self.json.get("file_uuid") {
             if let Some(uuid) = file_uuid_value.as_str() {
-                let mut results: Vec<String> =
-                    "SELECT `type` FROM `import_file` WHERE `uuid`=:uuid"
-                        .with(params! {uuid})
-                        .map(mnm.app.get_mnm_conn().await?, |type_name| type_name)
-                        .await?;
+                let mut results = mnm
+                    .get_storage()
+                    .get_data_source_type_for_uuid(uuid)
+                    .await?;
                 if let Some(type_name) = results.pop() {
                     return Ok(DataSourceType::from_str(&type_name));
                 }
@@ -681,7 +681,8 @@ impl UpdateCatalog {
         let mut datasource = DataSource::new(catalog_id, &json)?;
         let offset = self.get_last_job_offset().await;
         let batch_size = 5000;
-        let entries_already_in_catalog = self.number_of_entries_in_catalog(catalog_id).await?;
+        let catalog = Catalog::from_id(catalog_id, &self.mnm).await?;
+        let entries_already_in_catalog = catalog.number_of_entries().await?;
 
         let mut rows_to_skip = datasource.num_header_rows + datasource.skip_first_rows;
         datasource.just_add = entries_already_in_catalog == 0 || datasource.just_add;
@@ -826,13 +827,10 @@ impl UpdateCatalog {
             return Ok(ret);
         }
         let placeholders = MixNMatch::sql_placeholders(ext_ids.len());
-        let sql = format!(
-            "SELECT `ext_id` FROM entry WHERE `ext_id` IN ({}) AND `catalog`={}",
-            &placeholders, catalog_id
-        );
-        let existing_ext_ids: Vec<String> = sql
-            .with(ext_ids.to_vec())
-            .map(self.mnm.app.get_mnm_conn().await?, |ext_id| ext_id)
+        let existing_ext_ids = self
+            .mnm
+            .get_storage()
+            .get_existing_ext_ids(placeholders, catalog_id, ext_ids)
             .await?;
         existing_ext_ids.iter().for_each(|ext_id| {
             ret.insert(ext_id.to_owned());
@@ -841,26 +839,14 @@ impl UpdateCatalog {
     }
 
     async fn get_update_info(&self, catalog_id: usize) -> Result<UpdateInfo> {
-        let mut results: Vec<UpdateInfo> = "SELECT id, catalog, json, note, user_id, is_current FROM `update_info` WHERE `catalog`=:catalog_id AND `is_current`=1 LIMIT 1"
-            .with(params!{catalog_id})
-            .map(self.mnm.app.get_mnm_conn().await?,
-                |(id, catalog, json, note, user_id, is_current)|{
-                UpdateInfo{id, catalog, json, note, user_id, is_current}
-            })
+        let mut results = self
+            .mnm
+            .get_storage()
+            .update_catalog_get_update_info(catalog_id)
             .await?;
         results
             .pop()
             .ok_or(UpdateCatalogError::NoUpdateInfoForCatalog.into())
-    }
-
-    //TODO test
-    async fn number_of_entries_in_catalog(&self, catalog_id: usize) -> Result<usize> {
-        let mut results: Vec<usize> =
-            "SELECT count(*) AS cnt FROM `entry` WHERE `catalog`=:catalog_id"
-                .with(params! {catalog_id})
-                .map(self.mnm.app.get_mnm_conn().await?, |num| num)
-                .await?;
-        Ok(results.pop().unwrap_or(0))
     }
 }
 
