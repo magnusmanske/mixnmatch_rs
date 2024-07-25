@@ -2,12 +2,11 @@ use crate::catalog::Catalog;
 use crate::entry::*;
 use crate::job::*;
 use crate::mixnmatch::MixNMatch;
+use crate::storage::Storage;
 use crate::update_catalog::ExtendedEntry;
 use anyhow::Result;
 use async_trait::async_trait;
 use lazy_static::lazy_static;
-use mysql_async::from_row;
-use mysql_async::prelude::*;
 use rand::prelude::*;
 use regex::{Regex, RegexBuilder};
 use serde_json::{json, Value};
@@ -852,15 +851,8 @@ impl Autoscrape {
     //TODO test
     pub async fn new(catalog_id: usize, mnm: &MixNMatch) -> Result<Self> {
         let results = mnm
-            .app
-            .get_mnm_conn()
-            .await?
-            .exec_iter(
-                "SELECT `id`,`json` FROM `autoscrape` WHERE `catalog`=:catalog_id",
-                params! {catalog_id},
-            )
-            .await?
-            .map_and_drop(from_row::<(usize, String)>)
+            .get_storage()
+            .autoscrape_get_for_catalog(catalog_id)
             .await?;
         let (id, json) = results
             .first()
@@ -1039,16 +1031,10 @@ impl Autoscrape {
             .iter()
             .map(|e| e.entry.ext_id.to_owned())
             .collect();
-        let placeholders = MixNMatch::sql_placeholders(ext_ids.len());
-        let sql = format!(
-            "SELECT `ext_id`,`id` FROM entry WHERE `ext_id` IN ({}) AND `catalog`={}",
-            &placeholders, self.catalog_id
-        );
-        let existing_ext_ids: Vec<(String, usize)> = sql
-            .with(ext_ids.clone())
-            .map(self.mnm.app.get_mnm_conn().await?, |(id, ext_id)| {
-                (id, ext_id)
-            })
+        let existing_ext_ids = self
+            .mnm
+            .get_storage()
+            .autoscrape_get_entry_ids_for_ext_ids(self.catalog_id, &ext_ids)
             .await?;
         let existing_ext_ids: HashMap<String, usize> = existing_ext_ids.into_iter().collect();
         for ex in &mut self.entry_batch {
@@ -1097,10 +1083,10 @@ impl Autoscrape {
     //TODO test
     pub async fn start(&mut self) -> Result<()> {
         let autoscrape_id = self.autoscrape_id;
-        let sql = "UPDATE `autoscrape` SET `status`='RUNNING'`last_run_min`=NULL,`last_run_urls`=NULL WHERE `id`=:autoscrape_id" ;
-        if let Ok(mut conn) = self.mnm.app.get_mnm_conn().await {
-            let _ = conn.exec_drop(sql, params! {autoscrape_id}).await;
-        }
+        self.mnm
+            .get_storage()
+            .autoscrape_start(autoscrape_id)
+            .await?;
         if let Some(json) = self.get_last_job_data().await {
             if let Some(arr) = json.as_array() {
                 if arr.len() == self.levels.len() {
@@ -1118,12 +1104,10 @@ impl Autoscrape {
         let _ = self.add_batch().await; // Flush
         let autoscrape_id = self.autoscrape_id;
         let last_run_urls = self.urls_loaded;
-        let sql = "UPDATE `autoscrape` SET `status`='OK',`last_run_min`=NULL,`last_run_urls`=:last_run_urls WHERE `id`=:autoscrape_id" ;
-        if let Ok(mut conn) = self.mnm.app.get_mnm_conn().await {
-            let _ = conn
-                .exec_drop(sql, params! {autoscrape_id,last_run_urls})
-                .await;
-        }
+        self.mnm
+            .get_storage()
+            .autoscrape_finish(autoscrape_id, last_run_urls)
+            .await?;
         let catalog = Catalog::from_id(self.catalog_id, &self.mnm).await?;
         let _ = catalog.refresh_overview_table().await;
         let _ = self.clear_offset().await;

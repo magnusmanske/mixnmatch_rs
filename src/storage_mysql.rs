@@ -45,7 +45,7 @@ impl StorageMySQL {
 
     fn coordinate_matcher_main_query_sql(
         catalog_id: &Option<usize>,
-        bad_catalogs: &Vec<usize>,
+        bad_catalogs: &[usize],
         max_results: usize,
     ) -> String {
         let conditions = match catalog_id {
@@ -136,7 +136,7 @@ impl Storage for StorageMySQL {
 
     async fn match_taxa_get_ranked_names_batch(
         &self,
-        ranks: &Vec<&str>,
+        ranks: &[&str],
         field: &TaxonNameField,
         catalog_id: usize,
         batch_size: usize,
@@ -187,7 +187,7 @@ impl Storage for StorageMySQL {
     async fn get_coordinate_matcher_rows(
         &self,
         catalog_id: &Option<usize>,
-        bad_catalogs: &Vec<usize>,
+        bad_catalogs: &[usize],
         max_results: usize,
     ) -> Result<Vec<LocationRow>> {
         let sql = Self::coordinate_matcher_main_query_sql(catalog_id, bad_catalogs, max_results);
@@ -403,6 +403,56 @@ impl Storage for StorageMySQL {
             "catalog" => issue.catalog_id,
         };
         self.get_conn().await?.exec_drop(sql, params).await?;
+        Ok(())
+    }
+
+    // Autoscrape
+
+    async fn autoscrape_get_for_catalog(&self, catalog_id: usize) -> Result<Vec<(usize, String)>> {
+        let mut conn = self.get_conn().await?;
+        let results = conn
+            .exec_iter(
+                "SELECT `id`,`json` FROM `autoscrape` WHERE `catalog`=:catalog_id",
+                params! {catalog_id},
+            )
+            .await?
+            .map_and_drop(from_row::<(usize, String)>)
+            .await?;
+        Ok(results)
+    }
+
+    async fn autoscrape_get_entry_ids_for_ext_ids(
+        &self,
+        catalog_id: usize,
+        ext_ids: &Vec<String>,
+    ) -> Result<Vec<(String, usize)>> {
+        let placeholders = Self::sql_placeholders(ext_ids.len());
+        let sql = format!(
+            "SELECT `ext_id`,`id` FROM entry WHERE `ext_id` IN ({}) AND `catalog`={}",
+            &placeholders, catalog_id
+        );
+        let existing_ext_ids: Vec<(String, usize)> = sql
+            .with(ext_ids.clone())
+            .map(self.get_conn().await?, |(ext_id, id)| (ext_id, id))
+            .await?;
+        Ok(existing_ext_ids)
+    }
+
+    async fn autoscrape_start(&self, autoscrape_id: usize) -> Result<()> {
+        let sql = "UPDATE `autoscrape` SET `status`='RUNNING'`last_run_min`=NULL,`last_run_urls`=NULL WHERE `id`=:autoscrape_id" ;
+        if let Ok(mut conn) = self.get_conn().await {
+            let _ = conn.exec_drop(sql, params! {autoscrape_id}).await; // Ignore error
+        }
+        Ok(())
+    }
+
+    async fn autoscrape_finish(&self, autoscrape_id: usize, last_run_urls: usize) -> Result<()> {
+        let sql = "UPDATE `autoscrape` SET `status`='OK',`last_run_min`=NULL,`last_run_urls`=:last_run_urls WHERE `id`=:autoscrape_id" ;
+        if let Ok(mut conn) = self.get_conn().await {
+            let _ = conn
+                .exec_drop(sql, params! {autoscrape_id,last_run_urls})
+                .await;
+        }
         Ok(())
     }
 }

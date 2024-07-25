@@ -22,7 +22,7 @@ pub trait Storage {
     async fn set_catalog_taxon_run(&self, catalog_id: usize, taxon_run: bool) -> Result<()>;
     async fn match_taxa_get_ranked_names_batch(
         &self,
-        ranks: &Vec<&str>,
+        ranks: &[&str],
         field: &TaxonNameField,
         catalog_id: usize,
         batch_size: usize,
@@ -34,7 +34,7 @@ pub trait Storage {
     async fn get_coordinate_matcher_rows(
         &self,
         catalog_id: &Option<usize>,
-        bad_catalogs: &Vec<usize>,
+        bad_catalogs: &[usize],
         max_results: usize,
     ) -> Result<Vec<LocationRow>>;
     async fn get_coordinate_matcher_permissions(&self) -> Result<Vec<(usize, String, String)>>;
@@ -88,4 +88,15 @@ pub trait Storage {
     // Issue
 
     async fn issue_insert(&self, issue: &Issue) -> Result<()>;
+
+    // Autoscrape
+
+    async fn autoscrape_get_for_catalog(&self, catalog_id: usize) -> Result<Vec<(usize, String)>>;
+    async fn autoscrape_get_entry_ids_for_ext_ids(
+        &self,
+        catalog_id: usize,
+        ext_ids: &Vec<String>,
+    ) -> Result<Vec<(String, usize)>>;
+    async fn autoscrape_start(&self, autoscrape_id: usize) -> Result<()>;
+    async fn autoscrape_finish(&self, autoscrape_id: usize, last_run_urls: usize) -> Result<()>;
 }

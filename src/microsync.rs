@@ -186,7 +186,7 @@ impl Microsync {
             if match_differs.len() > MAX_WIKI_ROWS {
                 ret += &format!("* {} enties have different items on Mix'n'match and Wikidata. Too many to show individually.\n\n",match_differs.len());
             } else {
-                let entry_ids = match_differs.iter().map(|e| e.entry_id).collect();
+                let entry_ids: Vec<usize> = match_differs.iter().map(|e| e.entry_id).collect();
                 let entry2name = self
                     .mnm
                     .get_storage()
@@ -210,7 +210,7 @@ impl Microsync {
             if multiple_q_in_mnm.len() > MAX_WIKI_ROWS {
                 ret += &format!("* {} items have more than one match in Mix'n'Match. Too many to show individually.\n\n",multiple_q_in_mnm.len());
             } else {
-                let entry_ids = multiple_q_in_mnm
+                let entry_ids: Vec<usize> = multiple_q_in_mnm
                     .iter()
                     .flat_map(|e| e.entry2ext_id.iter().map(|x| x.0))
                     .collect();

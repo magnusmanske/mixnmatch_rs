@@ -92,10 +92,10 @@ impl AppState {
 
     /// Returns a connection to the Mix'n'Match tool database
     pub async fn get_mnm_conn(&self) -> Result<Conn, mysql_async::Error> {
-        self.get_storage().pool().get_conn().await
+        self.storage.pool().get_conn().await
     }
 
-    pub fn get_storage(&self) -> &StorageMySQL {
+    pub fn get_storage(&self) -> &impl Storage {
         &self.storage
     }
 
