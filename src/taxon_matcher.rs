@@ -1,17 +1,17 @@
+use crate::catalog::Catalog;
 use crate::entry::*;
 use crate::job::*;
 use crate::mixnmatch::*;
+use crate::storage::Storage;
 use anyhow::Result;
 use lazy_static::lazy_static;
-use mysql_async::from_row;
-use mysql_async::prelude::*;
 use regex::{Regex, RegexBuilder};
 use std::collections::HashMap;
 
-type RankedNames = HashMap<String, Vec<(usize, String)>>;
+pub type RankedNames = HashMap<String, Vec<(usize, String)>>;
 
 lazy_static! {
-    static ref TAXON_RANKS: HashMap<&'static str, &'static str> = {
+    pub static ref TAXON_RANKS: HashMap<&'static str, &'static str> = {
         let mut m = HashMap::new();
         m.insert("variety", "Q767728");
         m.insert("subspecies", "Q68947");
@@ -30,6 +30,11 @@ lazy_static! {
         .case_insensitive(true)
         .build()
         .expect("Regex error");
+}
+
+pub enum TaxonNameField {
+    Name,
+    Description,
 }
 
 impl Jobbable for TaxonMatcher {
@@ -62,7 +67,7 @@ impl TaxonMatcher {
     }
 
     /// Bespoke taxon name fixes for specific catalogs
-    fn rewrite_taxon_name(&self, catalog_id: usize, taxon_name: &str) -> Option<String> {
+    pub fn rewrite_taxon_name(catalog_id: usize, taxon_name: &str) -> Option<String> {
         let mut taxon_name = taxon_name.to_string();
 
         // Generic
@@ -83,23 +88,29 @@ impl TaxonMatcher {
 
     /// Tries to find full matches for entries that are a taxon
     pub async fn match_taxa(&mut self, catalog_id: usize) -> Result<()> {
+        let mut catalog = Catalog::from_id(catalog_id, &self.mnm).await?;
         let mw_api = self.mnm.get_mw_api().await?;
         let use_desc = USE_DESCRIPTIONS_FOR_TAXON_NAME_CATALOGS.contains(&catalog_id);
-        let taxon_name_column = if use_desc { "ext_desc" } else { "ext_name" };
         let mut ranks: Vec<&str> = TAXON_RANKS.clone().into_values().collect();
         ranks.push("Q16521"); // taxon item
-        let sql = format!(
-            r"SELECT `id`,`{}` AS taxon_name,`type` FROM `entry`
-            WHERE `catalog` IN (:catalog_id) AND (`q` IS NULL OR `user`=0) AND `type` IN ('{}')
-            LIMIT :batch_size OFFSET :offset",
-            taxon_name_column,
-            ranks.join("','")
-        );
+        let taxon_name_field = if use_desc {
+            TaxonNameField::Description
+        } else {
+            TaxonNameField::Name
+        };
         let mut offset = self.get_last_job_offset().await;
         let batch_size = 5000;
         loop {
             let (results_len, ranked_names) = self
-                .match_taxa_get_ranked_names_batch(&sql, catalog_id, batch_size, offset)
+                .mnm
+                .get_storage()
+                .match_taxa_get_ranked_names_batch(
+                    &ranks,
+                    &taxon_name_field,
+                    catalog_id,
+                    batch_size,
+                    offset,
+                )
                 .await?;
 
             for (rank, v) in ranked_names.iter() {
@@ -115,13 +126,7 @@ impl TaxonMatcher {
         let _ = self.clear_offset().await;
 
         // Update catalog as "done at least once" if necessary
-        let sql = "UPDATE `catalog` SET `taxon_run`=1 WHERE `id`=:catalog_id AND `taxon_run`=0";
-        self.mnm
-            .app
-            .get_mnm_conn()
-            .await?
-            .exec_drop(sql, params! {catalog_id})
-            .await?;
+        catalog.set_taxon_run(self.mnm.get_storage(), true).await?;
         Ok(())
     }
 
@@ -200,42 +205,6 @@ impl TaxonMatcher {
         }
         Ok(())
     }
-
-    async fn match_taxa_get_ranked_names_batch(
-        &mut self,
-        sql: &str,
-        catalog_id: usize,
-        batch_size: usize,
-        offset: usize,
-    ) -> Result<(usize, RankedNames), anyhow::Error> {
-        let results = self
-            .mnm
-            .app
-            .get_mnm_conn()
-            .await?
-            .exec_iter(sql, params! {catalog_id,batch_size,offset})
-            .await?
-            .map_and_drop(from_row::<(usize, String, String)>)
-            .await?;
-        let mut ranked_names: RankedNames = HashMap::new();
-        for result in &results {
-            let entry_id = result.0;
-            let taxon_name = match self.rewrite_taxon_name(catalog_id, &result.1) {
-                Some(s) => s,
-                None => continue,
-            };
-            let type_name = &result.2;
-            let rank = match TAXON_RANKS.get(type_name.as_str()) {
-                Some(rank) => format!(" ; wdt:P105 {rank}"),
-                None => "".to_string(),
-            };
-            ranked_names
-                .entry(rank)
-                .or_default()
-                .push((entry_id, taxon_name));
-        }
-        Ok((results.len(), ranked_names))
-    }
 }
 
 #[cfg(test)]
@@ -249,19 +218,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_rewrite_taxon_name() {
-        let mnm = get_test_mnm();
-        let tm = TaxonMatcher::new(&mnm);
         assert_eq!(
             "Carphophis amoenus",
-            tm.rewrite_taxon_name(0, "Carphophis amoenus").unwrap()
+            TaxonMatcher::rewrite_taxon_name(0, "Carphophis amoenus").unwrap()
         ); // Pass through
         assert_eq!(
             "Carphophis subsp. amoenus",
-            tm.rewrite_taxon_name(0, "Carphophis ssp. amoenus").unwrap()
+            TaxonMatcher::rewrite_taxon_name(0, "Carphophis ssp. amoenus").unwrap()
         ); // Subspecies
         assert_eq!(
             "Carphophis amoenus",
-            tm.rewrite_taxon_name(169, "reptile; [Carphophis amoenus, foo bar]")
+            TaxonMatcher::rewrite_taxon_name(169, "reptile; [Carphophis amoenus, foo bar]")
                 .unwrap()
         ); // Britannica desc
     }

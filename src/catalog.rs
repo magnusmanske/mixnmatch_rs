@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use crate::entry::AuxiliaryRow;
 use crate::mixnmatch::*;
+use crate::storage::Storage;
 use anyhow::{anyhow, Result};
 use mysql_async::from_row;
 use mysql_async::prelude::*;
@@ -155,6 +156,21 @@ impl Catalog {
         }
         let reference = Reference::new(snaks);
         vec![reference]
+    }
+
+    // TODO test
+    pub async fn set_taxon_run(
+        &mut self,
+        storage: &impl Storage,
+        new_taxon_run: bool,
+    ) -> Result<()> {
+        if self.taxon_run != new_taxon_run {
+            storage
+                .set_catalog_taxon_run(self.id, new_taxon_run)
+                .await?;
+            self.taxon_run = new_taxon_run;
+        }
+        Ok(())
     }
 }
 

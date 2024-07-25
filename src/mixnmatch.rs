@@ -1,6 +1,7 @@
 use crate::app_state::*;
 use crate::entry::*;
 use crate::error::MnMError;
+use crate::storage::Storage;
 use crate::wikidata_commands::WikidataCommand;
 use anyhow::{anyhow, Result};
 use itertools::Itertools;
@@ -159,6 +160,10 @@ impl MixNMatch {
             mw_api: None,
             testing: false,
         }
+    }
+
+    pub fn get_storage(&self) -> &impl Storage {
+        self.app.get_storage()
     }
 
     pub async fn get_mw_api(

@@ -1,6 +1,8 @@
 use crate::entry::Entry;
 use crate::job::*;
 use crate::mixnmatch::*;
+use crate::storage::Storage;
+use crate::storage_mysql::StorageMySQL;
 use anyhow::{anyhow, Result};
 use core::time::Duration;
 use dashmap::DashMap;
@@ -23,8 +25,8 @@ pub const DB_POOL_KEEP_SEC: u64 = 120;
 #[derive(Debug, Clone)]
 pub struct AppState {
     wd_pool: mysql_async::Pool,
-    mnm_pool: mysql_async::Pool,
     wdrc_pool: mysql_async::Pool,
+    storage: StorageMySQL,
     pub import_file_path: String,
     pub bot_name: String,
     pub bot_password: String,
@@ -55,7 +57,7 @@ impl AppState {
         // let default_threads= config["default_threads"].as_u64().unwrap_or(64) as usize;
         let ret = Self {
             wd_pool: Self::create_pool(&config["wikidata"]),
-            mnm_pool: Self::create_pool(&config["mixnmatch"]),
+            storage: StorageMySQL::new(&config["mixnmatch"]),
             wdrc_pool: Self::create_pool(&config["wdrc"]),
             import_file_path: config["import_file_path"].as_str().unwrap().to_string(),
             bot_name: config["bot_name"].as_str().unwrap().to_string(),
@@ -68,7 +70,7 @@ impl AppState {
     }
 
     /// Helper function to create a DB pool from a JSON config object
-    fn create_pool(config: &Value) -> mysql_async::Pool {
+    pub fn create_pool(config: &Value) -> mysql_async::Pool {
         let min_connections = config["min_connections"]
             .as_u64()
             .expect("No min_connections value") as usize;
@@ -90,7 +92,11 @@ impl AppState {
 
     /// Returns a connection to the Mix'n'Match tool database
     pub async fn get_mnm_conn(&self) -> Result<Conn, mysql_async::Error> {
-        self.mnm_pool.get_conn().await
+        self.get_storage().pool().get_conn().await
+    }
+
+    pub fn get_storage(&self) -> &StorageMySQL {
+        &self.storage
     }
 
     /// Returns a connection to the Wikidata DB replica
@@ -105,7 +111,7 @@ impl AppState {
 
     pub async fn disconnect(&self) -> Result<()> {
         self.wd_pool.clone().disconnect().await?;
-        self.mnm_pool.clone().disconnect().await?;
+        self.storage.disconnect().await?; // TODO FIXME
         Ok(())
     }
 
