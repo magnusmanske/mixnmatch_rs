@@ -124,7 +124,7 @@ impl StorageMySQL {
         &self,
         status: JobStatus,
         depends_on: Option<JobStatus>,
-        no_actions: &Vec<String>,
+        no_actions: &[String],
         next_ts: Option<String>,
     ) -> String {
         let mut sql = format!(
