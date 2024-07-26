@@ -5,7 +5,7 @@ use crate::{
     auxiliary_matcher::AuxiliaryResults,
     catalog::Catalog,
     coordinate_matcher::LocationRow,
-    entry::Entry,
+    entry::{AuxiliaryRow, CoordinateLocation, Entry},
     issue::Issue,
     job::{JobRow, JobStatus, TaskSize},
     mixnmatch::MatchState,
@@ -14,6 +14,7 @@ use crate::{
 };
 use anyhow::Result;
 use async_trait::async_trait;
+use wikimisc::wikibase::LocaleString;
 // use serde_json::Value;
 
 #[async_trait]
@@ -243,4 +244,89 @@ pub trait Storage {
         offset: usize,
         batch_size: usize,
     ) -> Result<Vec<(usize, String)>>;
+
+    // Entry
+
+    async fn entry_from_id(&self, entry_id: usize) -> Result<Entry>;
+    async fn entry_from_ext_id(&self, catalog_id: usize, ext_id: &str) -> Result<Entry>;
+    async fn multiple_from_ids(&self, entry_ids: &[usize]) -> Result<HashMap<usize, Entry>>;
+    async fn entry_insert_as_new(&self, entry: &Entry) -> Result<usize>;
+    async fn entry_delete(&self, entry_id: usize) -> Result<()>;
+    async fn entry_get_creation_time(&self, entry_id: usize) -> Option<String>;
+    async fn entry_set_ext_name(&self, ext_name: &str, entry_id: usize) -> Result<()>;
+    async fn entry_set_auxiliary_in_wikidata(&self, in_wikidata: bool, aux_id: usize)
+        -> Result<()>;
+    async fn entry_set_ext_desc(&self, ext_desc: &str, entry_id: usize) -> Result<()>;
+    async fn entry_set_ext_id(&self, ext_id: &str, entry_id: usize) -> Result<()>;
+    async fn entry_set_ext_url(&self, ext_url: &str, entry_id: usize) -> Result<()>;
+    async fn entry_set_type_name(&self, type_name: Option<String>, entry_id: usize) -> Result<()>;
+    async fn entry_delete_person_dates(&self, entry_id: usize) -> Result<()>;
+    async fn entry_set_person_dates(
+        &self,
+        entry_id: usize,
+        born: String,
+        died: String,
+    ) -> Result<()>;
+    async fn entry_get_person_dates(
+        &self,
+        entry_id: usize,
+    ) -> Result<(Option<String>, Option<String>)>;
+    async fn entry_remove_language_description(
+        &self,
+        entry_id: usize,
+        language: &str,
+    ) -> Result<()>;
+    async fn entry_set_language_description(
+        &self,
+        entry_id: usize,
+        language: &str,
+        text: String,
+    ) -> Result<()>;
+    async fn entry_get_aliases(&self, entry_id: usize) -> Result<Vec<LocaleString>>;
+    async fn entry_add_alias(&self, entry_id: usize, language: &str, label: &str) -> Result<()>;
+    async fn entry_get_language_descriptions(
+        &self,
+        entry_id: usize,
+    ) -> Result<HashMap<String, String>>;
+    async fn entry_remove_auxiliary(&self, entry_id: usize, prop_numeric: usize) -> Result<()>;
+    async fn entry_set_auxiliary(
+        &self,
+        entry_id: usize,
+        prop_numeric: usize,
+        value: String,
+    ) -> Result<()>;
+    async fn entry_remove_coordinate_location(&self, entry_id: usize) -> Result<()>;
+    async fn entry_set_coordinate_location(
+        &self,
+        entry_id: usize,
+        lat: f64,
+        lon: f64,
+    ) -> Result<()>;
+    async fn entry_get_coordinate_location(
+        &self,
+        entry_id: usize,
+    ) -> Result<Option<CoordinateLocation>>;
+    async fn entry_get_aux(&self, entry_id: usize) -> Result<Vec<AuxiliaryRow>>;
+    async fn entry_set_match(
+        &self,
+        entry: &Entry,
+        user_id: usize,
+        q_numeric: isize,
+        timestamp: &str,
+    ) -> Result<bool>;
+    async fn entry_set_match_status(
+        &self,
+        entry_id: usize,
+        status: &str,
+        is_matched: i32,
+    ) -> Result<()>;
+    async fn entry_remove_multi_match(&self, entry_id: usize) -> Result<()>;
+    async fn entry_unmatch(&self, entry_id: usize) -> Result<()>;
+    async fn entry_get_multi_matches(&self, entry_id: usize) -> Result<Vec<String>>;
+    async fn entry_set_multi_match(
+        &self,
+        entry_id: usize,
+        candidates: String,
+        candidates_count: usize,
+    ) -> Result<()>;
 }

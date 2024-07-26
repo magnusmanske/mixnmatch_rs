@@ -5,11 +5,11 @@ use crate::{
     auxiliary_matcher::AuxiliaryResults,
     catalog::Catalog,
     coordinate_matcher::LocationRow,
-    entry::{Entry, EntryError},
+    entry::{AuxiliaryRow, CoordinateLocation, Entry, EntryError},
     issue::Issue,
     job::{JobRow, JobStatus, TaskSize},
     microsync::EXT_URL_UNIQUE_SEPARATOR,
-    mixnmatch::MatchState,
+    mixnmatch::{MatchState, TABLES_WITH_ENTRY_ID_FIELDS, USER_AUTO},
     taxon_matcher::{RankedNames, TaxonMatcher, TaxonNameField, TAXON_RANKS},
     update_catalog::UpdateInfo,
 };
@@ -20,7 +20,7 @@ use mysql_async::{from_row, futures::GetConn, prelude::*, Params, Row};
 use rand::prelude::*;
 use serde_json::Value;
 use std::collections::HashMap;
-use wikimisc::timestamp::TimeStamp;
+use wikimisc::{timestamp::TimeStamp, wikibase::LocaleString};
 
 #[derive(Debug, Clone)]
 pub struct StorageMySQL {
@@ -154,6 +154,27 @@ impl StorageMySQL {
             sql += " ORDER BY `last_ts` LIMIT 1";
         }
         sql
+    }
+
+    fn entry_sql_select() -> String {
+        r"SELECT id,catalog,ext_id,ext_url,ext_name,ext_desc,q,user,timestamp,if(isnull(random),rand(),random) as random,`type` FROM `entry`".into()
+    }
+
+    fn entry_from_row(row: &Row) -> Option<Entry> {
+        Some(Entry {
+            id: row.get(0)?,
+            catalog: row.get(1)?,
+            ext_id: row.get(2)?,
+            ext_url: row.get(3)?,
+            ext_name: row.get(4)?,
+            ext_desc: row.get(5)?,
+            q: Entry::value2opt_isize(row.get(6)?).ok()?,
+            user: Entry::value2opt_usize(row.get(7)?).ok()?,
+            timestamp: Entry::value2opt_string(row.get(8)?).ok()?,
+            random: row.get(9).unwrap_or(0.0), // random might be null, who cares
+            type_name: Entry::value2opt_string(row.get(10)?).ok()?,
+            mnm: None,
+        })
     }
 }
 
@@ -1119,6 +1140,458 @@ impl Storage for StorageMySQL {
             .map_and_drop(from_row::<(usize, String)>)
             .await?;
         Ok(el_chunk)
+    }
+
+    // Entry
+
+    async fn entry_from_id(&self, entry_id: usize) -> Result<Entry> {
+        let sql = format!("{} WHERE `id`=:entry_id", Self::entry_sql_select());
+        let mut conn = self.get_conn().await?;
+        let mut rows: Vec<Entry> = conn
+            .exec_iter(sql, params! {entry_id})
+            .await?
+            .map_and_drop(|row| Self::entry_from_row(&row))
+            .await?
+            .iter()
+            .filter_map(|row| row.to_owned())
+            .collect();
+        // `id` is a unique index, so there can be only zero or one row in rows.
+        let ret = rows
+            .pop()
+            .ok_or(anyhow!("No entry #{}", entry_id))?
+            .to_owned();
+        Ok(ret)
+    }
+
+    async fn entry_from_ext_id(&self, catalog_id: usize, ext_id: &str) -> Result<Entry> {
+        let sql = format!(
+            "{} WHERE `catalog`=:catalog_id AND `ext_id`=:ext_id",
+            Self::entry_sql_select()
+        );
+        let mut conn = self.get_conn().await?;
+        let mut rows: Vec<Entry> = conn
+            .exec_iter(sql, params! {catalog_id,ext_id})
+            .await?
+            .map_and_drop(|row| Self::entry_from_row(&row))
+            .await?
+            .iter()
+            .filter_map(|row| row.to_owned())
+            .collect();
+        // `catalog`/`ext_id` comprises a unique index, so there can be only zero or one row in rows.
+        let ret = rows
+            .pop()
+            .ok_or(anyhow!("No entry '{}' in catalog #{}", ext_id, catalog_id))?
+            .to_owned();
+        Ok(ret)
+    }
+
+    async fn multiple_from_ids(&self, entry_ids: &[usize]) -> Result<HashMap<usize, Entry>> {
+        if entry_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let entry_ids = entry_ids
+            .iter()
+            .map(|id| format!("{id}"))
+            .collect::<Vec<String>>()
+            .join(",");
+        let sql = format!("{} WHERE `id` IN ({})", Self::entry_sql_select(), entry_ids);
+        let mut conn = self.get_conn().await?;
+        let rows: Vec<Entry> = conn
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(|row| Self::entry_from_row(&row))
+            .await?
+            .iter()
+            .filter_map(|row| row.to_owned())
+            .collect();
+        let ret = rows.into_iter().map(|entry| (entry.id, entry)).collect();
+        Ok(ret)
+    }
+
+    async fn entry_insert_as_new(&self, entry: &Entry) -> Result<usize> {
+        let sql = "INSERT IGNORE INTO `entry` (`catalog`,`ext_id`,`ext_url`,`ext_name`,`ext_desc`,`q`,`user`,`timestamp`,`random`,`type`) VALUES (:catalog,:ext_id,:ext_url,:ext_name,:ext_desc,:q,:user,:timestamp,:random,:type_name)";
+        let params = params! {
+            "catalog" => entry.catalog,
+            "ext_id" => entry.ext_id.to_owned(),
+            "ext_url" => entry.ext_url.to_owned(),
+            "ext_name" => entry.ext_name.to_owned(),
+            "ext_desc" => entry.ext_desc.to_owned(),
+            "q" => entry.q,
+            "user" => entry.user,
+            "timestamp" => entry.timestamp.to_owned(),
+            "random" => entry.random,
+            "type_name" => entry.type_name.to_owned(),
+        };
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop(sql, params).await?;
+        let id = conn.last_insert_id().ok_or(EntryError::EntryInsertFailed)? as usize;
+        Ok(id)
+    }
+
+    async fn entry_delete(&self, entry_id: usize) -> Result<()> {
+        let mut conn = self.get_conn().await?;
+        for table in TABLES_WITH_ENTRY_ID_FIELDS {
+            let sql = format!("DELETE FROM `{}` WHERE `entry_id`=:entry_id", table);
+            conn.exec_drop(sql, params! {entry_id}).await?;
+        }
+        let sql = "DELETE FROM `entry` WHERE `id`=:entry_id";
+        conn.exec_drop(sql, params! {entry_id}).await?;
+        Ok(())
+    }
+
+    async fn entry_get_creation_time(&self, entry_id: usize) -> Option<String> {
+        let mut conn = self.get_conn().await.ok()?;
+        let results = conn
+            .exec_iter(
+                r"SELECT `timestamp` FROM `entry_creation` WHERE `entry_id`=:entry_id",
+                params! {entry_id},
+            )
+            .await
+            .ok()?
+            .map_and_drop(from_row::<String>)
+            .await
+            .ok()?;
+        results.first().map(|s| s.to_owned())
+    }
+
+    async fn entry_set_ext_name(&self, ext_name: &str, entry_id: usize) -> Result<()> {
+        let sql = "UPDATE `entry` SET `ext_name`=:ext_name WHERE `id`=:entry_id";
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop(sql, params! {ext_name,entry_id}).await?;
+        Ok(())
+    }
+
+    async fn entry_set_auxiliary_in_wikidata(
+        &self,
+        in_wikidata: bool,
+        aux_id: usize,
+    ) -> Result<()> {
+        let sql = "UPDATE `auxiliary` SET `in_wikidata`=:in_wikidata WHERE `id`=:aux_id AND `in_wikidata`!=:in_wikidata";
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop(sql, params! {in_wikidata,aux_id}).await?;
+        Ok(())
+    }
+
+    async fn entry_set_ext_desc(&self, ext_desc: &str, entry_id: usize) -> Result<()> {
+        let sql = "UPDATE `entry` SET `ext_desc`=:ext_desc WHERE `id`=:entry_id";
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop(sql, params! {ext_desc,entry_id}).await?;
+        Ok(())
+    }
+
+    async fn entry_set_ext_id(&self, ext_id: &str, entry_id: usize) -> Result<()> {
+        let sql = "UPDATE `entry` SET `ext_id`=:ext_id WHERE `id`=:entry_id";
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop(sql, params! {ext_id,entry_id}).await?;
+        Ok(())
+    }
+
+    async fn entry_set_ext_url(&self, ext_url: &str, entry_id: usize) -> Result<()> {
+        let sql = "UPDATE `entry` SET `ext_url`=:ext_url WHERE `id`=:entry_id";
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop(sql, params! {ext_url,entry_id}).await?;
+        Ok(())
+    }
+
+    async fn entry_set_type_name(&self, type_name: Option<String>, entry_id: usize) -> Result<()> {
+        let sql = "UPDATE `entry` SET `type`=:type_name WHERE `id`=:entry_id";
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop(sql, params! {type_name,entry_id}).await?;
+        Ok(())
+    }
+
+    async fn entry_delete_person_dates(&self, entry_id: usize) -> Result<()> {
+        let sql = "DELETE FROM `person_dates` WHERE `entry_id`=:entry_id";
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop(sql, params! {entry_id}).await?;
+        Ok(())
+    }
+
+    async fn entry_set_person_dates(
+        &self,
+        entry_id: usize,
+        born: String,
+        died: String,
+    ) -> Result<()> {
+        let sql =
+            "REPLACE INTO `person_dates` (`entry_id`,`born`,`died`) VALUES (:entry_id,:born,:died)";
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop(sql, params! {entry_id,born,died}).await?;
+        Ok(())
+    }
+
+    async fn entry_get_person_dates(
+        &self,
+        entry_id: usize,
+    ) -> Result<(Option<String>, Option<String>)> {
+        let mut conn = self.get_conn().await?;
+        let mut rows: Vec<(String, String)> = conn
+            .exec_iter(
+                r"SELECT `born`,`died` FROM `person_dates` WHERE `entry_id`=:entry_id LIMIT 1",
+                params! {entry_id},
+            )
+            .await?
+            .map_and_drop(from_row::<(String, String)>)
+            .await?;
+        match rows.pop() {
+            Some(bd) => {
+                let born = if bd.0.is_empty() { None } else { Some(bd.0) };
+                let died = if bd.1.is_empty() { None } else { Some(bd.1) };
+                Ok((born, died))
+            }
+            None => Ok((None, None)),
+        }
+    }
+
+    async fn entry_remove_language_description(
+        &self,
+        entry_id: usize,
+        language: &str,
+    ) -> Result<()> {
+        let sql = "DELETE FROM `descriptions` WHERE `entry_id`=:entry_id AND `language`=:language";
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop(sql, params! {entry_id,language}).await?;
+        Ok(())
+    }
+
+    async fn entry_set_language_description(
+        &self,
+        entry_id: usize,
+        language: &str,
+        text: String,
+    ) -> Result<()> {
+        let sql = "REPLACE INTO `descriptions` (`entry_id`,`language`,`label`) VALUES (:entry_id,:language,:text)";
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop(sql, params! {entry_id,language,text})
+            .await?;
+        Ok(())
+    }
+
+    /// Returns a LocaleString Vec of all aliases of the entry
+    async fn entry_get_aliases(&self, entry_id: usize) -> Result<Vec<LocaleString>> {
+        let mut conn = self.get_conn().await?;
+        let rows: Vec<(String, String)> = conn
+            .exec_iter(
+                r"SELECT `language`,`label` FROM `aliases` WHERE `entry_id`=:entry_id",
+                params! {entry_id},
+            )
+            .await?
+            .map_and_drop(from_row::<(String, String)>)
+            .await?;
+        let mut ret: Vec<LocaleString> = vec![];
+        rows.iter().for_each(|(k, v)| {
+            ret.push(LocaleString::new(k, v));
+        });
+        Ok(ret)
+    }
+
+    async fn entry_add_alias(&self, entry_id: usize, language: &str, label: &str) -> Result<()> {
+        let sql = "INSERT IGNORE INTO `aliases` (`entry_id`,`language`,`label`) VALUES (:entry_id,:language,:label)";
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop(sql, params! {entry_id,language,label})
+            .await?;
+        Ok(())
+    }
+
+    async fn entry_get_language_descriptions(
+        &self,
+        entry_id: usize,
+    ) -> Result<HashMap<String, String>> {
+        let mut conn = self.get_conn().await?;
+        let rows: Vec<(String, String)> = conn
+            .exec_iter(
+                r"SELECT `language`,`label` FROM `descriptions` WHERE `entry_id`=:entry_id",
+                params! {entry_id},
+            )
+            .await?
+            .map_and_drop(from_row::<(String, String)>)
+            .await?;
+        let mut map: HashMap<String, String> = HashMap::new();
+        rows.iter().for_each(|(k, v)| {
+            map.insert(k.to_string(), v.to_string());
+        });
+        Ok(map)
+    }
+
+    async fn entry_remove_auxiliary(&self, entry_id: usize, prop_numeric: usize) -> Result<()> {
+        let sql = "DELETE FROM `auxiliary` WHERE `entry_id`=:entry_id AND `aux_p`=:prop_numeric";
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop(sql, params! {entry_id,prop_numeric}).await?;
+        Ok(())
+    }
+
+    async fn entry_set_auxiliary(
+        &self,
+        entry_id: usize,
+        prop_numeric: usize,
+        value: String,
+    ) -> Result<()> {
+        let sql = "REPLACE INTO `auxiliary` (`entry_id`,`aux_p`,`aux_name`) VALUES (:entry_id,:prop_numeric,:value)";
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop(sql, params! {entry_id,prop_numeric,value})
+            .await?;
+        Ok(())
+    }
+
+    async fn entry_remove_coordinate_location(&self, entry_id: usize) -> Result<()> {
+        let sql = "DELETE FROM `location` WHERE `entry_id`=:entry_id";
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop(sql, params! {entry_id}).await?;
+        Ok(())
+    }
+
+    async fn entry_set_coordinate_location(
+        &self,
+        entry_id: usize,
+        lat: f64,
+        lon: f64,
+    ) -> Result<()> {
+        let sql = "REPLACE INTO `location` (`entry_id`,`lat`,`lon`) VALUES (:entry_id,:lat,:lon)";
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop(sql, params! {entry_id,lat,lon}).await?;
+        Ok(())
+    }
+
+    async fn entry_get_coordinate_location(
+        &self,
+        entry_id: usize,
+    ) -> Result<Option<CoordinateLocation>> {
+        let mut conn = self.get_conn().await?;
+        let ret = conn
+            .exec_iter(
+                r"SELECT `lat`,`lon` FROM `location` WHERE `entry_id`=:entry_id LIMIT 1",
+                params! {entry_id},
+            )
+            .await?
+            .map_and_drop(from_row::<(f64, f64)>)
+            .await?
+            .pop()
+            .map(|(lat, lon)| CoordinateLocation { lat, lon });
+        Ok(ret)
+    }
+
+    async fn entry_get_aux(&self, entry_id: usize) -> Result<Vec<AuxiliaryRow>> {
+        let mut conn = self.get_conn().await?;
+        let ret = conn
+            .exec_iter(r"SELECT `id`,`aux_p`,`aux_name`,`in_wikidata`,`entry_is_matched` FROM `auxiliary` WHERE `entry_id`=:entry_id",params! {entry_id}).await?
+            .map_and_drop(|row| AuxiliaryRow::from_row(&row)).await?
+            .iter().filter_map(|row|row.to_owned()).collect();
+        Ok(ret)
+    }
+
+    // Returns "was changed" (true/false)
+    async fn entry_set_match(
+        &self,
+        entry: &Entry,
+        user_id: usize,
+        q_numeric: isize,
+        timestamp: &str,
+    ) -> Result<bool> {
+        let entry_id = entry.id;
+        let mut conn = self.get_conn().await?;
+        let mut sql = "UPDATE `entry` SET `q`=:q_numeric,`user`=:user_id,`timestamp`=:timestamp WHERE `id`=:entry_id AND (`q` IS NULL OR `q`!=:q_numeric OR `user`!=:user_id)".to_string();
+        if user_id == USER_AUTO {
+            if self.avoid_auto_match(entry_id, Some(q_numeric)).await? {
+                return Ok(false); // Nothing wrong but shouldn't be matched
+            }
+            sql += &MatchState::not_fully_matched().get_sql();
+        }
+        conn.exec_drop(sql, params! {q_numeric,user_id,timestamp,entry_id})
+            .await?;
+        let nothing_changed = conn.affected_rows() == 0;
+        if nothing_changed {
+            return Ok(false);
+        }
+        drop(conn);
+
+        // Update overview table and misc cleanup
+        self.update_overview_table(entry, Some(user_id), Some(q_numeric))
+            .await?;
+        let is_full_match = user_id > 0 && q_numeric > 0;
+        let is_matched = if is_full_match { 1 } else { 0 };
+        self.entry_set_match_status(entry_id, "UNKNOWN", is_matched)
+            .await?;
+        if user_id != USER_AUTO {
+            self.entry_remove_multi_match(entry_id).await?;
+        }
+        self.queue_reference_fixer(q_numeric).await?;
+        Ok(true)
+    }
+
+    async fn entry_set_match_status(
+        &self,
+        entry_id: usize,
+        status: &str,
+        is_matched: i32,
+    ) -> Result<()> {
+        let timestamp = TimeStamp::now();
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop(r"INSERT INTO `wd_matches` (`entry_id`,`status`,`timestamp`,`catalog`) VALUES (:entry_id,:status,:timestamp,(SELECT entry.catalog FROM entry WHERE entry.id=:entry_id)) ON DUPLICATE KEY UPDATE `status`=:status,`timestamp`=:timestamp",params! {entry_id,status,timestamp}).await?;
+        conn.exec_drop(
+            r"UPDATE `person_dates` SET is_matched=:is_matched WHERE entry_id=:entry_id",
+            params! {is_matched,entry_id},
+        )
+        .await?;
+        conn.exec_drop(
+            r"UPDATE `auxiliary` SET entry_is_matched=:is_matched WHERE entry_id=:entry_id",
+            params! {is_matched,entry_id},
+        )
+        .await?;
+        conn.exec_drop(
+            r"UPDATE `statement_text` SET entry_is_matched=:is_matched WHERE entry_id=:entry_id",
+            params! {is_matched,entry_id},
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Removes multi-matches for an entry, eg when the entry has been fully matched.
+    async fn entry_remove_multi_match(&self, entry_id: usize) -> Result<()> {
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop(
+            r"DELETE FROM multi_match WHERE entry_id=:entry_id",
+            params! {entry_id},
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn entry_unmatch(&self, entry_id: usize) -> Result<()> {
+        self.get_conn()
+            .await?
+            .exec_drop(
+                r"UPDATE `entry` SET `q`=NULL,`user`=NULL,`timestamp`=NULL WHERE `id`=:entry_id",
+                params! {entry_id},
+            )
+            .await?;
+        self.entry_set_match_status(entry_id, "UNKNOWN", 0).await?;
+        Ok(())
+    }
+
+    async fn entry_get_multi_matches(&self, entry_id: usize) -> Result<Vec<String>> {
+        Ok(self
+            .get_conn()
+            .await?
+            .exec_iter(
+                r"SELECT candidates FROM multi_match WHERE entry_id=:entry_id",
+                params! {entry_id},
+            )
+            .await?
+            .map_and_drop(from_row::<String>)
+            .await?)
+    }
+
+    async fn entry_set_multi_match(
+        &self,
+        entry_id: usize,
+        candidates: String,
+        candidates_count: usize,
+    ) -> Result<()> {
+        let sql = r"REPLACE INTO `multi_match` (entry_id,catalog,candidates,candidate_count) VALUES (:entry_id,(SELECT catalog FROM entry WHERE id=:entry_id),:candidates,:candidates_count)";
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop(sql, params! {entry_id,candidates,candidates_count})
+            .await?;
+        Ok(())
     }
 }
 
