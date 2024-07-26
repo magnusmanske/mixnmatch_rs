@@ -2,7 +2,6 @@ use crate::catalog::Catalog;
 use crate::entry::*;
 use crate::job::*;
 use crate::mixnmatch::*;
-use crate::storage::Storage;
 use anyhow::Result;
 use lazy_static::lazy_static;
 use regex::{Regex, RegexBuilder};

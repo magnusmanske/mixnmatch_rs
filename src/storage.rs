@@ -18,7 +18,7 @@ use wikimisc::wikibase::LocaleString;
 // use serde_json::Value;
 
 #[async_trait]
-pub trait Storage {
+pub trait Storage: std::fmt::Debug + Send + Sync {
     // fn new(j: &Value) -> impl Storage;
     async fn disconnect(&self) -> Result<()>;
 
@@ -329,4 +329,5 @@ pub trait Storage {
         candidates: String,
         candidates_count: usize,
     ) -> Result<()>;
+    async fn app_state_seppuku_get_running(&self, ts: &str) -> (usize, usize);
 }

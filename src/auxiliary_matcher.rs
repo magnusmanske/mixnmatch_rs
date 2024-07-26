@@ -3,7 +3,6 @@ use crate::entry::*;
 use crate::issue::*;
 use crate::job::*;
 use crate::mixnmatch::*;
-use crate::storage::Storage;
 use crate::wikidata_commands::*;
 use anyhow::Result;
 use futures::future::join_all;

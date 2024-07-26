@@ -1,6 +1,5 @@
 use crate::entry::Entry;
 use crate::mixnmatch::USER_LOCATION_MATCH;
-use crate::storage::Storage;
 use crate::{
     job::{Job, Jobbable},
     mixnmatch::MixNMatch,

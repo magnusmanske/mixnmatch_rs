@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::entry::AuxiliaryRow;
 use crate::mixnmatch::*;
@@ -97,7 +98,7 @@ impl Catalog {
     // TODO test
     pub async fn set_taxon_run(
         &mut self,
-        storage: &impl Storage,
+        storage: &Arc<Box<dyn Storage>>,
         new_taxon_run: bool,
     ) -> Result<()> {
         if self.taxon_run != new_taxon_run {

@@ -4,7 +4,6 @@ use crate::entry::*;
 use crate::job::*;
 use crate::maintenance::*;
 use crate::mixnmatch::*;
-use crate::storage::Storage;
 use anyhow::Result;
 use serde_json::Value;
 use std::collections::HashMap;

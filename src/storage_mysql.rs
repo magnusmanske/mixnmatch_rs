@@ -22,7 +22,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use wikimisc::{timestamp::TimeStamp, wikibase::LocaleString};
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct StorageMySQL {
     pool: mysql_async::Pool,
 }
@@ -1592,6 +1592,23 @@ impl Storage for StorageMySQL {
         conn.exec_drop(sql, params! {entry_id,candidates,candidates_count})
             .await?;
         Ok(())
+    }
+
+    async fn app_state_seppuku_get_running(&self, ts: &str) -> (usize, usize) {
+        let sql = format!("SELECT
+                        (SELECT count(*) FROM jobs WHERE `status` IN ('RUNNING')) AS running,
+                        (SELECT count(*) FROM jobs WHERE `status` IN ('RUNNING') AND last_ts>='{ts}') AS running_recent");
+        let mut conn = self.get_conn().await.expect("seppuku: No DB connection");
+        let (running, running_recent) = *conn
+            .exec_iter(sql, ())
+            .await
+            .expect("seppuku: No results")
+            .map_and_drop(from_row::<(usize, usize)>)
+            .await
+            .expect("seppuku: Result retrieval failure")
+            .first()
+            .expect("seppuku: No DB results");
+        (running, running_recent)
     }
 }
 

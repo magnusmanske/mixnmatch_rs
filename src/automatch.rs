@@ -3,7 +3,6 @@ use crate::entry::*;
 use crate::issue::*;
 use crate::job::*;
 use crate::mixnmatch::*;
-use crate::storage::Storage;
 use anyhow::{anyhow, Result};
 use chrono::prelude::*;
 use chrono::{NaiveDateTime, Utc};

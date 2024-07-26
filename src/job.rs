@@ -6,7 +6,6 @@ use crate::maintenance::*;
 use crate::microsync::*;
 use crate::mixnmatch::*;
 use crate::php_wrapper::*;
-use crate::storage::Storage;
 use crate::taxon_matcher::*;
 use crate::update_catalog::*;
 use anyhow::{anyhow, Result};

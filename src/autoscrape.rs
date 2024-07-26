@@ -2,7 +2,6 @@ use crate::catalog::Catalog;
 use crate::entry::*;
 use crate::job::*;
 use crate::mixnmatch::MixNMatch;
-use crate::storage::Storage;
 use crate::update_catalog::ExtendedEntry;
 use anyhow::Result;
 use async_trait::async_trait;

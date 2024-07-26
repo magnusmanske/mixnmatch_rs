@@ -10,7 +10,7 @@ use regex::Regex;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use urlencoding::encode;
 use wikimisc::wikibase::{EntityTrait, ItemEntity};
@@ -161,7 +161,7 @@ impl MixNMatch {
         }
     }
 
-    pub fn get_storage(&self) -> &impl Storage {
+    pub fn get_storage(&self) -> &Arc<Box<dyn Storage>> {
         self.app.get_storage()
     }
 

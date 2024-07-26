@@ -1,6 +1,5 @@
 use crate::catalog::Catalog;
 use crate::mixnmatch::*;
-use crate::storage::Storage;
 use anyhow::{anyhow, Result};
 use mysql_async::{Row, Value};
 use rand::prelude::*;
