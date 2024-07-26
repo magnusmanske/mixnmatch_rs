@@ -190,9 +190,9 @@ impl MixNMatch {
         items.dedup();
         let mut sql = "SELECT DISTINCT page_title FROM page,pagelinks,linktarget WHERE page_namespace=0 AND page_title IN ('".to_string() ;
         sql += &items.join("','");
-        sql += "') AND pl_from=page_id AND lt_title IN ('";
+        sql += "') AND pl_from=page_id AND lt_id=pl_target_id AND lt_title IN ('";
         sql += &META_ITEMS.join("','");
-        sql += "')";
+        sql += "') AND lt_namespace=0";
 
         let meta_items = self
             .app

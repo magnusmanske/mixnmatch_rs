@@ -255,6 +255,7 @@ impl AutoMatch {
                 if search_results.is_empty() {
                     continue;
                 }
+                // println!("Serch results: {search_results:?}");
 
                 // Remove meta items
                 let mut no_meta_items = search_results
@@ -262,8 +263,10 @@ impl AutoMatch {
                     .map(|(_entry_id, q)| q)
                     .cloned()
                     .collect_vec();
+                // println!("no_meta_items: {no_meta_items:?}");
                 let _ = self.mnm.remove_meta_items(&mut no_meta_items).await;
                 search_results.retain(|(_entry_id, q)| no_meta_items.contains(q));
+                // println!("Serch results, filtered: {search_results:?}");
 
                 // Build entry ID to item IDs Hashmap
                 let mut entry_id2items: HashMap<usize, Vec<String>> = HashMap::new();
@@ -271,7 +274,7 @@ impl AutoMatch {
                     entry_id2items.entry(entry_id).or_default().push(q);
                 }
 
-                // println!("Matching {} entries",entry_id2items.len());
+                // println!("Matching {} entries", entry_id2items.len());
                 let _ = self.match_entries_to_items(&entry_id2items).await;
                 // println!("automatch_by_search [{catalog_id}]: Result batch completed.");
             }
@@ -796,6 +799,11 @@ mod tests {
             .unmatch()
             .await
             .unwrap();
+
+        assert!(Entry::from_id(TEST_ENTRY_ID, &mnm)
+            .await
+            .unwrap()
+            .is_unmatched());
 
         // Run automatch
         let mut am = AutoMatch::new(&mnm);
