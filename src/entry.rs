@@ -377,7 +377,7 @@ impl Entry {
         // Auxiliary
         let auxiliary = self.get_aux().await?;
         if !auxiliary.is_empty() {
-            let api = self.mnm()?.get_mw_api().await?;
+            let api = self.mnm()?.app.wikidata().get_mw_api().await?;
             let ec = EntityContainer::new();
             let props2load: Vec<String> = auxiliary
                 .iter()

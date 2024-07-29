@@ -231,7 +231,7 @@ impl Maintenance {
         property: usize,
         entity_ids: Vec<String>,
     ) -> Option<HashMap<String, isize>> {
-        let api = self.mnm.get_mw_api().await.ok()?;
+        let api = self.mnm.app.wikidata().get_mw_api().await.ok()?;
         let entities = wikimisc::wikibase::entity_container::EntityContainer::new();
         entities.load_entities(&api, &entity_ids).await.ok()?;
         let mut propval2item: HashMap<String, Vec<isize>> = HashMap::new();

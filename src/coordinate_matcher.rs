@@ -77,7 +77,7 @@ impl Jobbable for CoordinateMatcher {
 
 impl CoordinateMatcher {
     pub async fn new(mnm: &MixNMatch, catalog_id: Option<usize>) -> Result<Self> {
-        let mw_api = mnm.get_mw_api().await?;
+        let mw_api = mnm.app.wikidata().get_mw_api().await?;
         let mut ret = Self {
             mnm: mnm.clone(),
             mw_api,

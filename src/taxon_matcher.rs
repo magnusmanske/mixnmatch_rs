@@ -88,7 +88,7 @@ impl TaxonMatcher {
     /// Tries to find full matches for entries that are a taxon
     pub async fn match_taxa(&mut self, catalog_id: usize) -> Result<()> {
         let mut catalog = Catalog::from_id(catalog_id, &self.mnm).await?;
-        let mw_api = self.mnm.get_mw_api().await?;
+        let mw_api = self.mnm.app.wikidata().get_mw_api().await?;
         let use_desc = USE_DESCRIPTIONS_FOR_TAXON_NAME_CATALOGS.contains(&catalog_id);
         let mut ranks: Vec<&str> = TAXON_RANKS.clone().into_values().collect();
         ranks.push("Q16521"); // taxon item
