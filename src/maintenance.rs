@@ -402,18 +402,11 @@ impl Maintenance {
 
     /// Finds redirects in a batch of items, and changes MnM matches to their respective targets.
     async fn fix_redirected_items_batch(&self, unique_qs: &Vec<String>) -> Result<()> {
-        let placeholders = MixNMatch::sql_placeholders(unique_qs.len());
-        let sql = format!("SELECT page_title,rd_title FROM `page`,`redirect`
-            WHERE `page_id`=`rd_from` AND `rd_namespace`=0 AND `page_is_redirect`=1 AND `page_namespace`=0
-            AND `page_title` IN ({})",placeholders);
         let page2rd = self
             .mnm
             .app
-            .get_wd_conn()
-            .await?
-            .exec_iter(sql, unique_qs)
-            .await?
-            .map_and_drop(from_row::<(String, String)>)
+            .wikidata()
+            .get_redirected_items(unique_qs)
             .await?;
         for (from, to) in &page2rd {
             if let (Some(from), Some(to)) = (self.mnm.item2numeric(from), self.mnm.item2numeric(to))
@@ -431,42 +424,14 @@ impl Maintenance {
 
     /// Finds deleted items in a batch of items, and unlinks MnM matches to them.
     async fn unlink_deleted_items_batch(&self, unique_qs: &[String]) -> Result<()> {
-        let placeholders = MixNMatch::sql_placeholders(unique_qs.len());
-        let sql = format!(
-            "SELECT page_title FROM `page` WHERE `page_namespace`=0 AND `page_title` IN ({})",
-            placeholders
-        );
-        let found_items = self
-            .mnm
-            .app
-            .get_wd_conn()
-            .await?
-            .exec_iter(sql, unique_qs.to_vec())
-            .await?
-            .map_and_drop(from_row::<String>)
-            .await?;
-        let not_found: Vec<String> = unique_qs
-            .iter()
-            .filter(|q| !found_items.contains(q))
-            .cloned()
-            .collect();
+        let not_found = self.mnm.app.wikidata().get_deleted_items(unique_qs).await?;
         self.unlink_item_matches(&not_found).await?;
         Ok(())
     }
 
     /// Finds meta items (disambig etc) in a batch of items, and unlinks MnM matches to them.
-    async fn unlink_meta_items_batch(&self, unique_qs: &[String]) -> Result<()> {
-        let placeholders = MixNMatch::sql_placeholders(unique_qs.len());
-        let sql = format!("SELECT DISTINCT page_title AS page_title FROM page,pagelinks,linktarget WHERE page_namespace=0 AND page_title IN ({}) AND pl_from=page_id AND lt_id=pl_target_id AND lt_title IN ('{}')",&placeholders,&META_ITEMS.join("','"));
-        let meta_items = self
-            .mnm
-            .app
-            .get_wd_conn()
-            .await?
-            .exec_iter(sql, unique_qs.to_vec())
-            .await?
-            .map_and_drop(from_row::<String>)
-            .await?;
+    async fn unlink_meta_items_batch(&self, unique_qs: &Vec<String>) -> Result<()> {
+        let meta_items = self.mnm.app.wikidata().get_meta_items(unique_qs).await?;
         self.unlink_item_matches(&meta_items).await?;
         Ok(())
     }

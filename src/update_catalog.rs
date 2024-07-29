@@ -825,11 +825,10 @@ impl UpdateCatalog {
         if ext_ids.is_empty() {
             return Ok(ret);
         }
-        let placeholders = MixNMatch::sql_placeholders(ext_ids.len());
         let existing_ext_ids = self
             .mnm
             .get_storage()
-            .get_existing_ext_ids(placeholders, catalog_id, ext_ids)
+            .get_existing_ext_ids(catalog_id, ext_ids)
             .await?;
         existing_ext_ids.iter().for_each(|ext_id| {
             ret.insert(ext_id.to_owned());

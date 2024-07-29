@@ -2,6 +2,7 @@ use crate::job::*;
 use crate::mixnmatch::*;
 use crate::storage::Storage;
 use crate::storage_mysql::StorageMySQL;
+use crate::wikidata::Wikidata;
 use anyhow::Result;
 use core::time::Duration;
 use dashmap::DashMap;
@@ -21,7 +22,8 @@ pub const DB_POOL_KEEP_SEC: u64 = 120;
 
 #[derive(Debug, Clone)]
 pub struct AppState {
-    wd_pool: mysql_async::Pool,
+    // wd_pool: mysql_async::Pool,
+    wikidata: Wikidata,
     wdrc_pool: mysql_async::Pool,
     storage: Arc<Box<dyn Storage>>,
     pub import_file_path: String,
@@ -53,7 +55,8 @@ impl AppState {
         // let thread_stack_factor = config["thread_stack_factor"].as_u64().unwrap_or(64) as usize;
         // let default_threads= config["default_threads"].as_u64().unwrap_or(64) as usize;
         let ret = Self {
-            wd_pool: Self::create_pool(&config["wikidata"]),
+            // wd_pool: Self::create_pool(&config["wikidata"]),
+            wikidata: Wikidata::new(&config["wikidata"]),
             storage: Arc::new(Box::new(StorageMySQL::new(&config["mixnmatch"]))),
             wdrc_pool: Self::create_pool(&config["wdrc"]),
             import_file_path: config["import_file_path"].as_str().unwrap().to_string(),
@@ -91,9 +94,8 @@ impl AppState {
         &self.storage
     }
 
-    /// Returns a connection to the Wikidata DB replica
-    pub async fn get_wd_conn(&self) -> Result<Conn, mysql_async::Error> {
-        self.wd_pool.get_conn().await
+    pub fn wikidata(&self) -> &Wikidata {
+        &self.wikidata
     }
 
     /// Returns a connection to the WDRC tool database
@@ -102,8 +104,8 @@ impl AppState {
     }
 
     pub async fn disconnect(&self) -> Result<()> {
-        self.wd_pool.clone().disconnect().await?;
-        self.storage.disconnect().await?; // TODO FIXME
+        self.wikidata.disconnect().await?;
+        self.storage.disconnect().await?; // TODO FIXME?
         Ok(())
     }
 

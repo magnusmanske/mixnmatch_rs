@@ -1,11 +1,11 @@
 use crate::app_state::*;
 use crate::error::MnMError;
 use crate::storage::Storage;
+use crate::wikidata::META_ITEMS;
 use crate::wikidata_commands::WikidataCommand;
 use anyhow::{anyhow, Result};
 use itertools::Itertools;
 use lazy_static::lazy_static;
-use mysql_async::{from_row, prelude::*};
 use regex::Regex;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -61,14 +61,6 @@ pub const USER_DATE_MATCH: usize = 3;
 pub const USER_AUX_MATCH: usize = 4;
 pub const USER_LOCATION_MATCH: usize = 5;
 pub const WIKIDATA_API_URL: &str = "https://www.wikidata.org/w/api.php";
-pub const META_ITEMS: &[&str] = &[
-    "Q4167410",  // Wikimedia disambiguation page
-    "Q11266439", // Wikimedia template
-    "Q4167836",  // Wikimedia category
-    "Q13406463", // Wikimedia list article
-    "Q22808320", // Wikimedia human name disambiguation page
-    "Q17362920", // Wikimedia duplicated page
-];
 pub const WIKIDATA_USER_AGENT: &str = "MixNMmatch_RS/1.0";
 pub const TABLES_WITH_ENTRY_ID_FIELDS: &[&str] = &[
     "aliases",
@@ -188,21 +180,7 @@ impl MixNMatch {
         }
         items.sort();
         items.dedup();
-        let mut sql = "SELECT DISTINCT page_title FROM page,pagelinks,linktarget WHERE page_namespace=0 AND page_title IN ('".to_string() ;
-        sql += &items.join("','");
-        sql += "') AND pl_from=page_id AND lt_id=pl_target_id AND lt_title IN ('";
-        sql += &META_ITEMS.join("','");
-        sql += "') AND lt_namespace=0";
-
-        let meta_items = self
-            .app
-            .get_wd_conn()
-            .await?
-            .exec_iter(sql, ())
-            .await?
-            .map_and_drop(from_row::<String>)
-            .await?;
-
+        let meta_items = self.app.wikidata().get_meta_items(items).await?;
         items.retain(|item| !meta_items.iter().any(|q| q == item));
         Ok(())
     }
@@ -213,13 +191,6 @@ impl MixNMatch {
             .captures_iter(q)
             .next()
             .and_then(|cap| cap[1].parse::<isize>().ok())
-    }
-
-    //TODO remove (abstract WD SQL away)
-    pub fn sql_placeholders(num: usize) -> String {
-        let mut placeholders: Vec<String> = Vec::new();
-        placeholders.resize(num, "?".to_string());
-        placeholders.join(",")
     }
 
     /// Runs a Wikidata API text search, specifying a P31 value `type_q`.
@@ -251,25 +222,9 @@ impl MixNMatch {
             return Ok(vec![]);
         }
         let items = if type_q.is_empty() {
-            let sql = "SELECT concat('Q',wbit_item_id) AS q FROM wbt_text,wbt_item_terms,wbt_term_in_lang,wbt_text_in_lang WHERE wbit_term_in_lang_id=wbtl_id AND wbtl_text_in_lang_id=wbxl_id AND wbxl_text_id=wbx_id  AND wbx_text=:name GROUP BY name,q";
-            self.app
-                .get_wd_conn()
-                .await?
-                .exec_iter(sql, params! {name})
-                .await?
-                .map_and_drop(from_row::<String>)
-                .await?
+            self.app.wikidata().search_without_type(name).await?
         } else {
-            let sql = "SELECT concat('Q',wbit_item_id) AS q FROM wbt_text,wbt_item_terms,wbt_term_in_lang,wbt_text_in_lang WHERE wbit_term_in_lang_id=wbtl_id AND wbtl_text_in_lang_id=wbxl_id AND wbxl_text_id=wbx_id  AND wbx_text=:name
-            AND EXISTS (SELECT * FROM page,pagelinks,linktarget WHERE page_title=concat('Q',wbit_item_id) AND page_namespace=0 AND pl_target_id=lt_id AND pl_from=page_id AND lt_namespace=0 AND lt_title=:type_q)
-            GROUP BY name,q";
-            self.app
-                .get_wd_conn()
-                .await?
-                .exec_iter(sql, params! {name})
-                .await?
-                .map_and_drop(from_row::<String>)
-                .await?
+            self.app.wikidata().search_with_type(name).await?
         };
         Ok(items)
     }
@@ -544,13 +499,6 @@ mod tests {
         assert_eq!(mnm.item2numeric("Q12345"), Some(12345));
         assert_eq!(mnm.item2numeric("Q12345X"), Some(12345));
         assert_eq!(mnm.item2numeric("Q12345X6"), Some(12345));
-    }
-
-    #[test]
-    fn test_sql_placeholders() {
-        assert_eq!(MixNMatch::sql_placeholders(0), "".to_string());
-        assert_eq!(MixNMatch::sql_placeholders(1), "?".to_string());
-        assert_eq!(MixNMatch::sql_placeholders(3), "?,?,?".to_string());
     }
 
     #[test]
