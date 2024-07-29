@@ -34,10 +34,6 @@ impl StorageMySQL {
         }
     }
 
-    pub fn pool(&self) -> &mysql_async::Pool {
-        &self.pool
-    }
-
     fn get_conn(&self) -> GetConn {
         self.pool.get_conn()
     }

@@ -215,7 +215,7 @@ impl MixNMatch {
             .and_then(|cap| cap[1].parse::<isize>().ok())
     }
 
-    //TODO test
+    //TODO remove (abstract WD SQL away)
     pub fn sql_placeholders(num: usize) -> String {
         let mut placeholders: Vec<String> = Vec::new();
         placeholders.resize(num, "?".to_string());
