@@ -171,7 +171,7 @@ impl AuxiliaryMatcher {
 
     //TODO test
     async fn get_properties_using_items(mnm: &MixNMatch) -> Result<Vec<String>> {
-        let mw_api = mnm.get_mw_api().await?;
+        let mw_api = mnm.app.wikidata().get_mw_api().await?;
         let sparql = "SELECT ?p WHERE { ?p rdf:type wikibase:Property; wikibase:propertyType wikibase:WikibaseItem }";
         let sparql_results = mw_api.sparql_query(sparql).await?;
         Ok(mw_api.entities_from_sparql_result(&sparql_results, "p"))
@@ -179,7 +179,7 @@ impl AuxiliaryMatcher {
 
     //TODO test
     async fn get_properties_that_have_external_ids(mnm: &MixNMatch) -> Result<Vec<String>> {
-        let mw_api = mnm.get_mw_api().await?;
+        let mw_api = mnm.app.wikidata().get_mw_api().await?;
         let sparql = "SELECT ?p WHERE { ?p rdf:type wikibase:Property; wikibase:propertyType wikibase:ExternalId }";
         let sparql_results = mw_api.sparql_query(sparql).await?;
         Ok(mw_api.entities_from_sparql_result(&sparql_results, "p"))
@@ -225,7 +225,7 @@ impl AuxiliaryMatcher {
             .task_specific_usize()
             .get("auxiliary_matcher_search_batch_size")
             .unwrap_or(&50);
-        let mw_api = self.mnm.get_mw_api().await?;
+        let mw_api = self.mnm.app.wikidata().get_mw_api().await?;
         loop {
             // println!("Catalog {catalog_id} running {batch_size} entries from {offset}");
             let results = self
@@ -351,7 +351,7 @@ impl AuxiliaryMatcher {
 
         let mut offset = self.get_last_job_offset().await;
         let batch_size = 500;
-        let mw_api = self.mnm.get_mw_api().await?;
+        let mw_api = self.mnm.app.wikidata().get_mw_api().await?;
 
         loop {
             let results = self
@@ -378,7 +378,7 @@ impl AuxiliaryMatcher {
             for data in aux.values() {
                 commands.append(&mut self.aux2wd_process_item(data, &sources, &entities).await);
             }
-            let _ = self.mnm.execute_commands(commands).await;
+            let _ = self.mnm.app.wikidata_mut().execute_commands(commands).await;
 
             if results.len() < batch_size {
                 break;
@@ -613,7 +613,7 @@ impl AuxiliaryMatcher {
             if stated_in.is_empty() {
                 let prop = format!("P{}", wd_prop);
                 if !self.properties.has_entity(prop.to_owned()) {
-                    let mw_api = self.mnm.get_mw_api().await.ok()?;
+                    let mw_api = self.mnm.app.wikidata().get_mw_api().await.ok()?;
                     let _ = self.properties.load_entity(&mw_api, prop.to_owned()).await;
                 }
                 if let Some(prop_entity) = self.properties.get_entity(prop) {
@@ -677,7 +677,7 @@ mod tests {
     #[tokio::test]
     async fn test_is_statement_in_entity() {
         let mnm = get_test_mnm();
-        let mw_api = mnm.get_mw_api().await.unwrap();
+        let mw_api = mnm.app.wikidata().get_mw_api().await.unwrap();
         let entities = EntityContainer::new();
         let entity = entities.load_entity(&mw_api, "Q13520818").await.unwrap();
         let am = AuxiliaryMatcher::new(&mnm);
@@ -689,7 +689,7 @@ mod tests {
     #[tokio::test]
     async fn test_entity_already_has_property() {
         let mnm = get_test_mnm();
-        let mw_api = mnm.get_mw_api().await.unwrap();
+        let mw_api = mnm.app.wikidata().get_mw_api().await.unwrap();
         let entities = EntityContainer::new();
         let entity = entities.load_entity(&mw_api, "Q13520818").await.unwrap();
         let aux = AuxiliaryResults {

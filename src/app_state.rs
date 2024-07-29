@@ -21,8 +21,6 @@ pub struct AppState {
     wdrc: WDRC,
     storage: Arc<Box<dyn Storage>>,
     import_file_path: String,
-    bot_name: String,
-    bot_password: String,
     task_specific_usize: HashMap<String, usize>,
     max_concurrent_jobs: usize,
 }
@@ -41,14 +39,6 @@ impl AppState {
         &self.import_file_path
     }
 
-    pub fn bot_name(&self) -> &str {
-        &self.bot_name
-    }
-
-    pub fn bot_password(&self) -> &str {
-        &self.bot_password
-    }
-
     pub fn task_specific_usize(&self) -> &HashMap<String, usize> {
         &self.task_specific_usize
     }
@@ -64,13 +54,13 @@ impl AppState {
         let max_concurrent_jobs = config["max_concurrent_jobs"].as_u64().unwrap_or(10) as usize;
         // let thread_stack_factor = config["thread_stack_factor"].as_u64().unwrap_or(64) as usize;
         // let default_threads= config["default_threads"].as_u64().unwrap_or(64) as usize;
+        let bot_name = config["bot_name"].as_str().unwrap().to_string();
+        let bot_password = config["bot_password"].as_str().unwrap().to_string();
         let ret = Self {
-            wikidata: Wikidata::new(&config["wikidata"]),
+            wikidata: Wikidata::new(&config["wikidata"], bot_name, bot_password),
             wdrc: WDRC::new(&config["wdrc"]),
             storage: Arc::new(Box::new(StorageMySQL::new(&config["mixnmatch"]))),
             import_file_path: config["import_file_path"].as_str().unwrap().to_string(),
-            bot_name: config["bot_name"].as_str().unwrap().to_string(),
-            bot_password: config["bot_password"].as_str().unwrap().to_string(),
             task_specific_usize,
             max_concurrent_jobs,
             // runtime: Arc::new(Self::create_runtime(max_concurrent_jobs, default_threads, thread_stack_factor)),
@@ -84,6 +74,10 @@ impl AppState {
 
     pub fn wikidata(&self) -> &Wikidata {
         &self.wikidata
+    }
+
+    pub fn wikidata_mut(&mut self) -> &mut Wikidata {
+        &mut self.wikidata
     }
 
     pub fn wdrc(&self) -> &WDRC {

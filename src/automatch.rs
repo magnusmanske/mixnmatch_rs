@@ -436,7 +436,7 @@ impl AutoMatch {
     }
 
     pub async fn match_person_by_dates(&mut self, catalog_id: usize) -> Result<()> {
-        let mw_api = self.mnm.get_mw_api().await?;
+        let mw_api = self.mnm.app.wikidata().get_mw_api().await?;
         let mut offset = self.get_last_job_offset().await;
         let batch_size = 5000;
         loop {
@@ -515,7 +515,7 @@ impl AutoMatch {
         } else {
             "P570"
         };
-        let mw_api = self.mnm.get_mw_api().await?;
+        let mw_api = self.mnm.app.wikidata().get_mw_api().await?;
         // CAUTION: Do NOT use views in the SQL statement, it will/might throw an "Prepared statement needs to be re-prepared" error
         let mut offset = self.get_last_job_offset().await;
         let batch_size = 100;
@@ -646,13 +646,18 @@ impl AutoMatch {
             .map(|(_, label)| format!("\"{}\"", label.replace('"', "")))
             .collect();
         let query = query.join(" OR ");
-        let mut search_results = self.mnm.wd_search_with_limit(&query, Some(500)).await?;
+        let mut search_results = self
+            .mnm
+            .app
+            .wikidata()
+            .search_with_limit(&query, Some(500))
+            .await?;
         if search_results.is_empty() {
             return Ok(());
         }
         search_results.sort();
         search_results.dedup();
-        let api = self.mnm.get_mw_api().await?;
+        let api = self.mnm.app.wikidata().get_mw_api().await?;
 
         let entry_ids = el_chunk.iter().map(|(entry_id, _)| *entry_id).collect_vec();
         let mut entries = Entry::multiple_from_ids(&entry_ids, &self.mnm).await?;

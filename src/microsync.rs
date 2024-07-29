@@ -135,6 +135,8 @@ impl Microsync {
         let day = &TimeStamp::now()[0..8];
         let comment = format!("Update {}", day);
         self.mnm
+            .app
+            .wikidata_mut()
             .set_wikipage_text(&page_title, wikitext, &comment)
             .await?;
         Ok(())
@@ -296,7 +298,7 @@ impl Microsync {
         &self,
         property: usize,
     ) -> Result<Vec<MultipleExtIdInWikidata>> {
-        let mw_api = self.mnm.get_mw_api().await?;
+        let mw_api = self.mnm.app.wikidata().get_mw_api().await?;
         // TODO: lcase?
         let sparql = format!(
             "SELECT ?extid (count(?q) AS ?cnt) (GROUP_CONCAT(?q; SEPARATOR = '|') AS ?items)
@@ -369,7 +371,7 @@ impl Microsync {
         case_insensitive: bool,
         batch_size: usize,
     ) -> Result<Vec<(isize, String)>> {
-        let mw_api = self.mnm.get_mw_api().await?;
+        let mw_api = self.mnm.app.wikidata().get_mw_api().await?;
         Ok(reader
             .records()
             .filter_map(|r| r.ok())
