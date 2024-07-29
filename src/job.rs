@@ -1,10 +1,11 @@
+use crate::app_state::AppState;
 use crate::automatch::*;
 use crate::autoscrape::*;
 use crate::auxiliary_matcher::*;
 use crate::coordinate_matcher::CoordinateMatcher;
 use crate::maintenance::*;
+use crate::match_state::MatchState;
 use crate::microsync::*;
-use crate::mixnmatch::*;
 use crate::php_wrapper::*;
 use crate::taxon_matcher::*;
 use crate::update_catalog::*;
@@ -249,15 +250,15 @@ impl JobRow {
 #[derive(Debug, Clone)]
 pub struct Job {
     pub data: JobRow,
-    pub mnm: Arc<MixNMatch>,
+    pub app: Arc<AppState>,
     pub skip_actions: Vec<String>,
 }
 
 impl Job {
-    pub fn new(mnm: &MixNMatch) -> Self {
+    pub fn new(app: &AppState) -> Self {
         Self {
             data: JobRow::default(),
-            mnm: Arc::new(mnm.clone()),
+            app: Arc::new(app.clone()),
             skip_actions: vec![],
         }
     }
@@ -271,7 +272,7 @@ impl Job {
     }
 
     pub async fn set_from_id(&mut self, job_id: usize) -> Result<bool> {
-        match self.mnm.get_storage().jobs_row_from_id(job_id).await {
+        match self.app.storage().jobs_row_from_id(job_id).await {
             Ok(row) => {
                 self.data = row;
                 Ok(true)
@@ -313,8 +314,8 @@ impl Job {
     pub async fn set_status(&mut self, status: JobStatus) -> Result<()> {
         let job_id = self.get_id().await?;
         let timestamp = TimeStamp::now();
-        self.mnm
-            .get_storage()
+        self.app
+            .storage()
             .jobs_set_status(&status, job_id, timestamp)
             .await?;
         self.put_status(status).await?;
@@ -324,7 +325,7 @@ impl Job {
     //TODO test
     pub async fn set_note(&mut self, note: Option<String>) -> Result<()> {
         let job_id = self.get_id().await?;
-        let note_cloned = self.mnm.get_storage().jobs_set_note(note, job_id).await?;
+        let note_cloned = self.app.storage().jobs_set_note(note, job_id).await?;
         self.put_note(note_cloned).await?;
         Ok(())
     }
@@ -338,7 +339,7 @@ impl Job {
             return Some(job_id);
         }
 
-        let mut tasks = self.mnm.get_storage().jobs_get_tasks().await.ok()?;
+        let mut tasks = self.app.storage().jobs_get_tasks().await.ok()?;
         let mut level: u8 = 0;
         while !tasks.is_empty() {
             tasks.retain(|_action, size| size.value() > level);
@@ -369,12 +370,12 @@ impl Job {
 
     //TODO test
     pub async fn queue_simple_job(
-        mnm: &MixNMatch,
+        app: &AppState,
         catalog_id: usize,
         action: &str,
         depends_on: Option<usize>,
     ) -> Result<usize> {
-        mnm.get_storage()
+        app.storage()
             .jobs_queue_simple_job(catalog_id, action, depends_on, "TODO", TimeStamp::now())
             .await
     }
@@ -388,15 +389,15 @@ impl Job {
             Some(json) => {
                 let json_string = json.to_string();
                 self.put_json(Some(json_string.clone())).await?;
-                self.mnm
-                    .get_storage()
+                self.app
+                    .storage()
                     .jobs_set_json(job_id, json_string, &timestamp)
                     .await?;
             }
             None => {
                 self.put_json(None).await?;
-                self.mnm
-                    .get_storage()
+                self.app
+                    .storage()
                     .jobs_reset_json(job_id, timestamp)
                     .await?;
             }
@@ -417,83 +418,83 @@ impl Job {
         let catalog_id = self.get_catalog().await?;
         match self.get_action().await?.as_str() {
             "automatch" => {
-                let mut am = AutoMatch::new(&self.mnm);
+                let mut am = AutoMatch::new(&self.app);
                 am.set_current_job(self);
                 am.automatch_simple(catalog_id).await
             }
             "automatch_by_search" => {
-                let mut am = AutoMatch::new(&self.mnm);
+                let mut am = AutoMatch::new(&self.app);
                 am.set_current_job(self);
                 am.automatch_by_search(catalog_id).await
             }
             "automatch_from_other_catalogs" => {
-                let mut am = AutoMatch::new(&self.mnm);
+                let mut am = AutoMatch::new(&self.app);
                 am.set_current_job(self);
                 am.automatch_from_other_catalogs(catalog_id).await
             }
             "automatch_by_sitelink" => {
-                let mut am = AutoMatch::new(&self.mnm);
+                let mut am = AutoMatch::new(&self.app);
                 am.set_current_job(self);
                 am.automatch_by_sitelink(catalog_id).await
             }
             "automatch_creations" => {
-                let mut am = AutoMatch::new(&self.mnm);
+                let mut am = AutoMatch::new(&self.app);
                 am.set_current_job(self);
                 am.automatch_creations(catalog_id).await
             }
             "automatch_complex" => {
-                let mut am = AutoMatch::new(&self.mnm);
+                let mut am = AutoMatch::new(&self.app);
                 am.set_current_job(self);
                 am.automatch_complex(catalog_id).await
             }
             "purge_automatches" => {
-                let mut am = AutoMatch::new(&self.mnm);
+                let mut am = AutoMatch::new(&self.app);
                 am.set_current_job(self);
                 am.purge_automatches(catalog_id).await
             }
             "match_person_dates" => {
-                let mut am = AutoMatch::new(&self.mnm);
+                let mut am = AutoMatch::new(&self.app);
                 am.set_current_job(self);
                 am.match_person_by_dates(catalog_id).await
             }
             "match_on_birthdate" => {
-                let mut am = AutoMatch::new(&self.mnm);
+                let mut am = AutoMatch::new(&self.app);
                 am.set_current_job(self);
                 am.match_person_by_single_date(catalog_id).await
             }
             "autoscrape" => {
-                let mut autoscrape = Autoscrape::new(catalog_id, &self.mnm).await?;
+                let mut autoscrape = Autoscrape::new(catalog_id, &self.app).await?;
                 autoscrape.set_current_job(self);
                 autoscrape.run().await
             }
             "aux2wd" => {
-                let mut am = AuxiliaryMatcher::new(&self.mnm);
+                let mut am = AuxiliaryMatcher::new(&self.app);
                 am.set_current_job(self);
                 am.add_auxiliary_to_wikidata(catalog_id).await
             }
             "auxiliary_matcher" => {
-                let mut am = AuxiliaryMatcher::new(&self.mnm);
+                let mut am = AuxiliaryMatcher::new(&self.app);
                 am.set_current_job(self);
                 am.match_via_auxiliary(catalog_id).await
             }
             "taxon_matcher" => {
-                let mut tm = TaxonMatcher::new(&self.mnm);
+                let mut tm = TaxonMatcher::new(&self.app);
                 tm.set_current_job(self);
                 tm.match_taxa(catalog_id).await
             }
             "update_from_tabbed_file" => {
-                let mut uc = UpdateCatalog::new(&self.mnm);
+                let mut uc = UpdateCatalog::new(&self.app);
                 uc.set_current_job(self);
                 uc.update_from_tabbed_file(catalog_id).await
             }
             "microsync" => {
-                let mut ms = Microsync::new(&self.mnm);
+                let mut ms = Microsync::new(&self.app);
                 ms.set_current_job(self);
                 let catalog_id = match catalog_id {
                     0 => {
                         match self
-                            .mnm
-                            .get_storage()
+                            .app
+                            .storage()
                             .get_random_active_catalog_id_with_property()
                             .await
                         {
@@ -506,34 +507,34 @@ impl Job {
                 ms.check_catalog(catalog_id).await
             }
             "fix_disambig" => {
-                let maintenance = Maintenance::new(&self.mnm);
+                let maintenance = Maintenance::new(&self.app);
                 maintenance
                     .unlink_meta_items(catalog_id, &MatchState::any_matched())
                     .await
             }
             "fix_redirected_items_in_catalog" => {
-                let maintenance = Maintenance::new(&self.mnm);
+                let maintenance = Maintenance::new(&self.app);
                 maintenance
                     .fix_redirects(catalog_id, &MatchState::any_matched())
                     .await
             }
 
             "maintenance_automatch" => {
-                let maintenance = Maintenance::new(&self.mnm);
+                let maintenance = Maintenance::new(&self.app);
                 maintenance.maintenance_automatch().await
             }
 
             "remove_p17_for_humans" => {
-                let maintenance = Maintenance::new(&self.mnm);
+                let maintenance = Maintenance::new(&self.app);
                 maintenance.remove_p17_for_humans().await
             }
 
             "cleanup_mnm_relations" => {
-                let maintenance = Maintenance::new(&self.mnm);
+                let maintenance = Maintenance::new(&self.app);
                 maintenance.cleanup_mnm_relations().await
             }
 
-            "wdrc_sync" => Maintenance::new(&self.mnm).wdrc_sync().await,
+            "wdrc_sync" => Maintenance::new(&self.app).wdrc_sync().await,
 
             "update_person_dates" => PhpWrapper::update_person_dates(catalog_id),
             "generate_aux_from_description" => {
@@ -543,7 +544,7 @@ impl Job {
             "import_aux_from_url" => PhpWrapper::import_aux_from_url(catalog_id),
             "update_descriptions_from_url" => PhpWrapper::update_descriptions_from_url(catalog_id),
             "match_by_coordinates" => {
-                let cm = CoordinateMatcher::new(&self.mnm, Some(catalog_id)).await?;
+                let cm = CoordinateMatcher::new(&self.app, Some(catalog_id)).await?;
                 cm.run().await
             }
 
@@ -615,8 +616,8 @@ impl Job {
         let next_ts = self.get_next_ts().await?;
         let job_id = self.get_id().await?;
         self.put_next_ts(&next_ts).await?;
-        self.mnm
-            .get_storage()
+        self.app
+            .storage()
             .jobs_update_next_ts(job_id, next_ts)
             .await?;
         Ok(())
@@ -624,24 +625,24 @@ impl Job {
 
     //TODO test
     pub async fn get_next_high_priority_job(&self) -> Option<usize> {
-        self.mnm
-            .get_storage()
+        self.app
+            .storage()
             .jobs_get_next_job(JobStatus::HighPriority, None, &self.skip_actions, None)
             .await
     }
 
     //TODO test
     async fn get_next_low_priority_job(&self) -> Option<usize> {
-        self.mnm
-            .get_storage()
+        self.app
+            .storage()
             .jobs_get_next_job(JobStatus::LowPriority, None, &self.skip_actions, None)
             .await
     }
 
     //TODO test
     async fn get_next_dependent_job(&self) -> Option<usize> {
-        self.mnm
-            .get_storage()
+        self.app
+            .storage()
             .jobs_get_next_job(
                 JobStatus::Todo,
                 Some(JobStatus::Done),
@@ -658,16 +659,16 @@ impl Job {
         }
         let mut skip = avoid.to_vec();
         skip.append(&mut self.skip_actions.clone());
-        self.mnm
-            .get_storage()
+        self.app
+            .storage()
             .jobs_get_next_job(JobStatus::Todo, None, &skip, None)
             .await
     }
 
     //TODO test
     async fn get_next_initial_job(&self) -> Option<usize> {
-        self.mnm
-            .get_storage()
+        self.app
+            .storage()
             .jobs_get_next_job(JobStatus::Todo, None, &self.skip_actions, None)
             .await
     }
@@ -675,8 +676,8 @@ impl Job {
     //TODO test
     async fn get_next_scheduled_job(&self) -> Option<usize> {
         let timestamp = TimeStamp::now();
-        self.mnm
-            .get_storage()
+        self.app
+            .storage()
             .jobs_get_next_job(JobStatus::Done, None, &self.skip_actions, Some(timestamp))
             .await
     }
@@ -684,16 +685,16 @@ impl Job {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
+    use crate::app_state::get_test_app;
 
     const _TEST_CATALOG_ID: usize = 5526;
     const _TEST_ENTRY_ID: usize = 143962196;
 
     #[tokio::test]
     async fn test_set_from_id() {
-        let mnm = get_test_mnm();
-        let mut job = Job::new(&mnm);
+        let app = get_test_app();
+        let mut job = Job::new(&app);
         job.set_from_id(1).await.unwrap();
         assert_eq!(job.get_id().await.unwrap(), 1);
         assert_eq!(job.get_catalog().await.unwrap(), 2930);
@@ -702,8 +703,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_next_ts() {
-        let mnm = get_test_mnm();
-        let mut job = Job::new(&mnm);
+        let app = get_test_app();
+        let mut job = Job::new(&app);
         let mut job_row = JobRow::new("test_action", 0);
         job_row.last_ts = "20221027000000".to_string();
         job_row.repeat_after_sec = Some(61);

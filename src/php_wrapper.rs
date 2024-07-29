@@ -1,4 +1,4 @@
-use crate::mixnmatch::MixNMatch;
+use crate::app_state::AppState;
 use anyhow::Result;
 use chrono::Utc;
 use std::process::Command;
@@ -7,8 +7,8 @@ pub struct PhpWrapper {}
 
 impl PhpWrapper {
     fn new_command(script: &str) -> Command {
-        let root_dir = MixNMatch::tool_root_dir();
-        let mut ret = if MixNMatch::is_on_toolforge() {
+        let root_dir = AppState::tool_root_dir();
+        let mut ret = if AppState::is_on_toolforge() {
             let mut ret = Command::new("php8.1");
             let _ = ret.arg("-c");
             let _ = ret.arg(format!("{root_dir}/mixnmatch_rs/php.ini"));

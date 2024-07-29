@@ -1,5 +1,6 @@
+use crate::app_state::{AppState, USER_AUTO};
 use crate::catalog::Catalog;
-use crate::mixnmatch::*;
+use crate::person::Person;
 use anyhow::{anyhow, Result};
 use mysql_async::{Row, Value};
 use rand::prelude::*;
@@ -118,15 +119,15 @@ pub struct Entry {
     pub timestamp: Option<String>,
     pub random: f64,
     pub type_name: Option<String>,
-    pub mnm: Option<MixNMatch>,
+    pub app: Option<AppState>,
 }
 
 impl Entry {
     /// Returns an Entry object for a given entry ID.
     //TODO test
-    pub async fn from_id(entry_id: usize, mnm: &MixNMatch) -> Result<Self> {
-        let mut ret = mnm.get_storage().entry_from_id(entry_id).await?;
-        ret.set_mnm(mnm);
+    pub async fn from_id(entry_id: usize, app: &AppState) -> Result<Self> {
+        let mut ret = app.storage().entry_from_id(entry_id).await?;
+        ret.set_app(app);
         Ok(ret)
     }
 
@@ -143,28 +144,25 @@ impl Entry {
             timestamp: None,
             random: rand::thread_rng().gen(),
             type_name: None,
-            mnm: None,
+            app: None,
         }
     }
 
     /// Returns an Entry object for a given external ID in a catalog.
     //TODO test
-    pub async fn from_ext_id(catalog_id: usize, ext_id: &str, mnm: &MixNMatch) -> Result<Entry> {
-        let mut ret = mnm
-            .get_storage()
-            .entry_from_ext_id(catalog_id, ext_id)
-            .await?;
-        ret.set_mnm(mnm);
+    pub async fn from_ext_id(catalog_id: usize, ext_id: &str, app: &AppState) -> Result<Entry> {
+        let mut ret = app.storage().entry_from_ext_id(catalog_id, ext_id).await?;
+        ret.set_app(app);
         Ok(ret)
     }
 
     pub async fn multiple_from_ids(
         entry_ids: &[usize],
-        mnm: &MixNMatch,
+        app: &AppState,
     ) -> Result<HashMap<usize, Self>> {
-        let mut ret = mnm.get_storage().multiple_from_ids(entry_ids).await?;
+        let mut ret = app.storage().multiple_from_ids(entry_ids).await?;
         ret.iter_mut().for_each(|(_id, entry)| {
-            entry.set_mnm(mnm);
+            entry.set_app(app);
         });
         Ok(ret)
     }
@@ -175,7 +173,7 @@ impl Entry {
         if self.id != ENTRY_NEW_ID {
             return Err(EntryError::TryingToInsertExistingEntry.into());
         }
-        self.id = self.mnm()?.get_storage().entry_insert_as_new(self).await?;
+        self.id = self.app()?.storage().entry_insert_as_new(self).await?;
         Ok(())
     }
 
@@ -184,7 +182,7 @@ impl Entry {
     pub async fn delete(&mut self) -> Result<()> {
         self.check_valid_id()?;
         let entry_id = self.id;
-        self.mnm()?.get_storage().entry_delete(entry_id).await?;
+        self.app()?.storage().entry_delete(entry_id).await?;
         // TODO overview table?
         self.id = ENTRY_NEW_ID;
         Ok(())
@@ -233,23 +231,23 @@ impl Entry {
             .map(|q| format!("https://www.wikidata.org/wiki/Q{q}"))
     }
 
-    /// Sets the MixNMatch object. Automatically done when created via from_id().
-    pub fn set_mnm(&mut self, mnm: &MixNMatch) {
-        self.mnm = Some(mnm.clone());
+    /// Sets the AppState object. Automatically done when created via from_id().
+    pub fn set_app(&mut self, app: &AppState) {
+        self.app = Some(app.clone());
     }
 
     /// Returns the MixNMatch object reference.
-    pub fn mnm(&self) -> Result<&MixNMatch> {
-        let mnm = self.mnm.as_ref().ok_or(anyhow!("Entry: No mnm set"))?;
-        Ok(mnm)
+    pub fn app(&self) -> Result<&AppState> {
+        let app = self.app.as_ref().ok_or(anyhow!("Entry: No app set"))?;
+        Ok(app)
     }
 
     pub async fn get_creation_time(&self) -> Option<String> {
         self.check_valid_id().ok()?;
         let entry_id = self.id;
-        self.mnm()
+        self.app()
             .ok()?
-            .get_storage()
+            .storage()
             .entry_get_creation_time(entry_id)
             .await
     }
@@ -260,8 +258,8 @@ impl Entry {
         if self.ext_name != ext_name {
             self.check_valid_id()?;
             self.ext_name = ext_name.to_string();
-            self.mnm()?
-                .get_storage()
+            self.app()?
+                .storage()
                 .entry_set_ext_name(ext_name, self.id)
                 .await?;
         }
@@ -270,8 +268,8 @@ impl Entry {
 
     //TODO test
     pub async fn set_auxiliary_in_wikidata(&self, aux_id: usize, in_wikidata: bool) -> Result<()> {
-        self.mnm()?
-            .get_storage()
+        self.app()?
+            .storage()
             .entry_set_auxiliary_in_wikidata(in_wikidata, aux_id)
             .await
     }
@@ -282,8 +280,8 @@ impl Entry {
         if self.ext_desc != ext_desc {
             self.check_valid_id()?;
             self.ext_desc = ext_desc.to_string();
-            self.mnm()?
-                .get_storage()
+            self.app()?
+                .storage()
                 .entry_set_ext_desc(ext_desc, self.id)
                 .await?;
         }
@@ -291,7 +289,7 @@ impl Entry {
     }
 
     pub async fn add_to_item(&self, item: &mut ItemEntity) -> Result<()> {
-        let catalog = Catalog::from_id(self.catalog, self.mnm()?).await?;
+        let catalog = Catalog::from_id(self.catalog, self.app()?).await?;
         let references = catalog.references(self).await;
 
         // Own prop if any
@@ -315,8 +313,7 @@ impl Entry {
         let language = catalog.search_wp.to_owned();
         let mut aliases = self.get_aliases().await?;
         let name = &self.ext_name;
-        let name = MixNMatch::sanitize_person_name(name);
-        let name = MixNMatch::simplify_person_name(&name);
+        let name = Person::sanitize_simplify_name(name);
         let locale_string = LocaleString::new(&language, &name);
         let mut names = vec![locale_string.to_owned()];
         if self.type_name == Some("Q5".into()) && WESTERN_LANGUAGES.contains(&language.as_str()) {
@@ -377,7 +374,7 @@ impl Entry {
         // Auxiliary
         let auxiliary = self.get_aux().await?;
         if !auxiliary.is_empty() {
-            let api = self.mnm()?.get_mw_api().await?;
+            let api = self.app()?.wikidata().get_mw_api().await?;
             let ec = EntityContainer::new();
             let props2load: Vec<String> = auxiliary
                 .iter()
@@ -452,8 +449,8 @@ impl Entry {
         if self.ext_id != ext_id {
             self.check_valid_id()?;
             self.ext_id = ext_id.to_string();
-            self.mnm()?
-                .get_storage()
+            self.app()?
+                .storage()
                 .entry_set_ext_id(ext_id, self.id)
                 .await?;
         }
@@ -467,8 +464,8 @@ impl Entry {
             self.check_valid_id()?;
             let entry_id = self.id;
             self.ext_url = ext_url.to_string();
-            self.mnm()?
-                .get_storage()
+            self.app()?
+                .storage()
                 .entry_set_ext_url(ext_url, entry_id)
                 .await?;
         }
@@ -482,8 +479,8 @@ impl Entry {
             self.check_valid_id()?;
             let entry_id = self.id;
             self.type_name = type_name.clone();
-            self.mnm()?
-                .get_storage()
+            self.app()?
+                .storage()
                 .entry_set_type_name(type_name, entry_id)
                 .await?;
         }
@@ -500,15 +497,15 @@ impl Entry {
         if already_born != *born || already_died != *died {
             let entry_id = self.id;
             if born.is_none() && died.is_none() {
-                self.mnm()?
-                    .get_storage()
+                self.app()?
+                    .storage()
                     .entry_delete_person_dates(entry_id)
                     .await?;
             } else {
                 let born = born.to_owned().unwrap_or("".to_string());
                 let died = died.to_owned().unwrap_or("".to_string());
-                self.mnm()?
-                    .get_storage()
+                self.app()?
+                    .storage()
                     .entry_set_person_dates(entry_id, born, died)
                     .await?;
             }
@@ -520,10 +517,7 @@ impl Entry {
     /// Born/died are Option<String>
     pub async fn get_person_dates(&self) -> Result<(Option<String>, Option<String>)> {
         self.check_valid_id()?;
-        self.mnm()?
-            .get_storage()
-            .entry_get_person_dates(self.id)
-            .await
+        self.app()?.storage().entry_get_person_dates(self.id).await
     }
 
     //TODO test
@@ -536,14 +530,14 @@ impl Entry {
         let entry_id = self.id;
         match text {
             Some(text) => {
-                self.mnm()?
-                    .get_storage()
+                self.app()?
+                    .storage()
                     .entry_set_language_description(entry_id, language, text)
                     .await?;
             }
             None => {
-                self.mnm()?
-                    .get_storage()
+                self.app()?
+                    .storage()
                     .entry_remove_language_description(entry_id, language)
                     .await?;
             }
@@ -555,7 +549,7 @@ impl Entry {
     //TODO test
     pub async fn get_aliases(&self) -> Result<Vec<LocaleString>> {
         self.check_valid_id()?;
-        self.mnm()?.get_storage().entry_get_aliases(self.id).await
+        self.app()?.storage().entry_get_aliases(self.id).await
     }
 
     pub async fn add_alias(&self, s: &LocaleString) -> Result<()> {
@@ -563,8 +557,8 @@ impl Entry {
         let entry_id = self.id;
         let language = s.language();
         let label = s.value();
-        self.mnm()?
-            .get_storage()
+        self.app()?
+            .storage()
             .entry_add_alias(entry_id, language, label)
             .await?;
         Ok(())
@@ -574,8 +568,8 @@ impl Entry {
     //TODO test
     pub async fn get_language_descriptions(&self) -> Result<HashMap<String, String>> {
         self.check_valid_id()?;
-        self.mnm()?
-            .get_storage()
+        self.app()?
+            .storage()
             .entry_get_language_descriptions(self.id)
             .await
     }
@@ -587,15 +581,15 @@ impl Entry {
         match value {
             Some(value) => {
                 if !value.is_empty() {
-                    self.mnm()?
-                        .get_storage()
+                    self.app()?
+                        .storage()
                         .entry_set_auxiliary(entry_id, prop_numeric, value)
                         .await?;
                 }
             }
             None => {
-                self.mnm()?
-                    .get_storage()
+                self.app()?
+                    .storage()
                     .entry_remove_auxiliary(entry_id, prop_numeric)
                     .await?;
             }
@@ -610,14 +604,14 @@ impl Entry {
             let entry_id = self.id;
             match cl {
                 Some(cl) => {
-                    self.mnm()?
-                        .get_storage()
+                    self.app()?
+                        .storage()
                         .entry_set_coordinate_location(entry_id, cl.lat, cl.lon)
                         .await?;
                 }
                 None => {
-                    self.mnm()?
-                        .get_storage()
+                    self.app()?
+                        .storage()
                         .entry_remove_coordinate_location(entry_id)
                         .await?;
                 }
@@ -629,8 +623,8 @@ impl Entry {
     /// Returns the coordinate locationm or None
     pub async fn get_coordinate_location(&self) -> Result<Option<CoordinateLocation>> {
         self.check_valid_id()?;
-        self.mnm()?
-            .get_storage()
+        self.app()?
+            .storage()
             .entry_get_coordinate_location(self.id)
             .await
     }
@@ -639,7 +633,7 @@ impl Entry {
     //TODO test
     pub async fn get_aux(&self) -> Result<Vec<AuxiliaryRow>> {
         self.check_valid_id()?;
-        self.mnm()?.get_storage().entry_get_aux(self.id).await
+        self.app()?.storage().entry_get_aux(self.id).await
     }
 
     /// Before q query or an update to the entry in the database, checks if this is a valid entry ID (eg not a new entry)
@@ -653,15 +647,12 @@ impl Entry {
     /// Sets a match for the entry, and marks the entry as matched in other tables.
     pub async fn set_match(&mut self, q: &str, user_id: usize) -> Result<bool> {
         self.check_valid_id()?;
-        let mnm = self.mnm()?;
-        let q_numeric = mnm
-            .item2numeric(q)
-            .ok_or(anyhow!("'{}' is not a valid item", &q))?;
+        let q_numeric = AppState::item2numeric(q).ok_or(anyhow!("'{}' is not a valid item", &q))?;
 
         let timestamp = TimeStamp::now();
         if self
-            .mnm()?
-            .get_storage()
+            .app()?
+            .storage()
             .entry_set_match(self, user_id, q_numeric, &timestamp)
             .await?
         {
@@ -676,7 +667,7 @@ impl Entry {
     // Removes the current match from the entry, and marks the entry as unmatched in other tables.
     pub async fn unmatch(&mut self) -> Result<()> {
         let entry_id = self.id;
-        self.mnm()?.get_storage().entry_unmatch(entry_id).await?;
+        self.app()?.storage().entry_unmatch(entry_id).await?;
         self.user = None;
         self.timestamp = None;
         self.q = None;
@@ -688,8 +679,8 @@ impl Entry {
     pub async fn set_match_status(&self, status: &str, is_matched: bool) -> Result<()> {
         let entry_id = self.id;
         let is_matched = if is_matched { 1 } else { 0 };
-        self.mnm()?
-            .get_storage()
+        self.app()?
+            .storage()
             .entry_set_match_status(entry_id, status, is_matched)
             .await
     }
@@ -698,8 +689,8 @@ impl Entry {
     //TODO test
     pub async fn get_multi_match(&self) -> Result<Vec<String>> {
         let rows: Vec<String> = self
-            .mnm()?
-            .get_storage()
+            .app()?
+            .storage()
             .entry_get_multi_matches(self.id)
             .await?;
         if rows.len() != 1 {
@@ -717,8 +708,10 @@ impl Entry {
 
     /// Sets auto-match and multi-match for an entry
     pub async fn set_auto_and_multi_match(&mut self, items: &[String]) -> Result<()> {
-        let mnm = self.mnm()?;
-        let mut qs_numeric: Vec<isize> = items.iter().filter_map(|q| mnm.item2numeric(q)).collect();
+        let mut qs_numeric: Vec<isize> = items
+            .iter()
+            .filter_map(|q| AppState::item2numeric(q))
+            .collect();
         if qs_numeric.is_empty() {
             return Ok(());
         }
@@ -738,10 +731,10 @@ impl Entry {
     /// Sets multi-matches for an entry
     pub async fn set_multi_match(&self, items: &[String]) -> Result<()> {
         let entry_id = self.id;
-        let mnm = self.mnm()?;
+        let app = self.app()?;
         let qs_numeric: Vec<String> = items
             .iter()
-            .filter_map(|q| mnm.item2numeric(q))
+            .filter_map(|q| AppState::item2numeric(q))
             .map(|q| q.to_string())
             .collect();
         if qs_numeric.is_empty() || qs_numeric.len() > 10 {
@@ -750,7 +743,7 @@ impl Entry {
         let candidates = qs_numeric.join(",");
         let candidates_count = qs_numeric.len();
 
-        mnm.get_storage()
+        app.storage()
             .entry_set_multi_match(entry_id, candidates, candidates_count)
             .await?;
         Ok(())
@@ -758,8 +751,8 @@ impl Entry {
 
     /// Removes multi-matches for an entry, eg when the entry has been fully matched.
     pub async fn remove_multi_match(&self) -> Result<()> {
-        self.mnm()?
-            .get_storage()
+        self.app()?
+            .storage()
             .entry_remove_multi_match(self.id)
             .await
     }
@@ -785,8 +778,8 @@ impl Entry {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
+    use crate::app_state::{get_test_app, TEST_MUTEX};
 
     const _TEST_CATALOG_ID: usize = 5526;
     const TEST_ENTRY_ID: usize = 143962196;
@@ -794,8 +787,8 @@ mod tests {
     #[tokio::test]
     async fn test_person_dates() {
         let _test_lock = TEST_MUTEX.lock();
-        let mnm = get_test_mnm();
-        let entry = Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        let app = get_test_app();
+        let entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
         let born = Some("1974-05-24".to_string());
         let died = Some("2000-01-01".to_string());
         assert_eq!(
@@ -832,8 +825,8 @@ mod tests {
     #[tokio::test]
     async fn test_coordinate_location() {
         let _test_lock = TEST_MUTEX.lock();
-        let mnm = get_test_mnm();
-        let entry = Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        let app = get_test_app();
+        let entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
         let cl = CoordinateLocation {
             lat: 1.234,
             lon: -5.678,
@@ -869,10 +862,10 @@ mod tests {
     #[tokio::test]
     async fn test_match() {
         let _test_lock = TEST_MUTEX.lock();
-        let mnm = get_test_mnm();
+        let app = get_test_app();
 
         // Clear
-        Entry::from_id(TEST_ENTRY_ID, &mnm)
+        Entry::from_id(TEST_ENTRY_ID, &app)
             .await
             .unwrap()
             .unmatch()
@@ -880,7 +873,7 @@ mod tests {
             .unwrap();
 
         // Check if clear
-        let mut entry = Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
         assert!(entry.q.is_none());
         assert!(entry.user.is_none());
         assert!(entry.timestamp.is_none());
@@ -892,7 +885,7 @@ mod tests {
         assert!(!entry.timestamp.is_none());
 
         // Check in-database changes
-        let mut entry = Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
         assert_eq!(entry.q, Some(1));
         assert_eq!(entry.user, Some(4));
         assert!(!entry.timestamp.is_none());
@@ -904,7 +897,7 @@ mod tests {
         assert!(entry.timestamp.is_none());
 
         // Check in-database changes
-        let entry = Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        let entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
         assert!(entry.q.is_none());
         assert!(entry.user.is_none());
         assert!(entry.timestamp.is_none());
@@ -912,16 +905,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_utf8() {
-        let mnm = get_test_mnm();
-        let entry = Entry::from_id(102826400, &mnm).await.unwrap();
+        let app = get_test_app();
+        let entry = Entry::from_id(102826400, &app).await.unwrap();
         assert_eq!("이희정", &entry.ext_name);
     }
 
     #[tokio::test]
     async fn test_multimatch() {
         let _test_lock = TEST_MUTEX.lock();
-        let mnm = get_test_mnm();
-        let mut entry = Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        let app = get_test_app();
+        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
         entry.unmatch().await.unwrap();
         let items: Vec<String> = ["Q1", "Q23456", "Q7"]
             .iter()
@@ -939,8 +932,8 @@ mod tests {
     #[tokio::test]
     async fn test_get_item_url() {
         let _test_lock = TEST_MUTEX.lock();
-        let mnm = get_test_mnm();
-        let mut entry = Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        let app = get_test_app();
+        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
         entry.set_match("Q12345", 4).await.unwrap();
         assert_eq!(
             entry.get_item_url(),
@@ -953,8 +946,8 @@ mod tests {
     #[tokio::test]
     async fn test_get_entry_url() {
         let _test_lock = TEST_MUTEX.lock();
-        let mnm = get_test_mnm();
-        let entry = Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        let app = get_test_app();
+        let entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
         assert_eq!(
             entry.get_entry_url(),
             Some(format!(
@@ -985,8 +978,8 @@ mod tests {
     #[tokio::test]
     async fn test_is_unmatched() {
         let _test_lock = TEST_MUTEX.lock();
-        let mnm = get_test_mnm();
-        let mut entry = Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        let app = get_test_app();
+        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
         entry.set_match("Q12345", 4).await.unwrap();
         assert!(!entry.is_unmatched());
         entry.unmatch().await.unwrap();
@@ -996,8 +989,8 @@ mod tests {
     #[tokio::test]
     async fn test_is_partially_matched() {
         let _test_lock = TEST_MUTEX.lock();
-        let mnm = get_test_mnm();
-        let mut entry = Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        let app = get_test_app();
+        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
         entry.set_match("Q12345", 0).await.unwrap();
         assert!(entry.is_partially_matched());
         entry.unmatch().await.unwrap();
@@ -1007,8 +1000,8 @@ mod tests {
     #[tokio::test]
     async fn is_fully_matched() {
         let _test_lock = TEST_MUTEX.lock();
-        let mnm = get_test_mnm();
-        let mut entry = Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        let app = get_test_app();
+        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
         entry.set_match("Q12345", 4).await.unwrap();
         assert!(entry.is_fully_matched());
         entry.unmatch().await.unwrap();
@@ -1018,8 +1011,8 @@ mod tests {
     #[tokio::test]
     async fn test_check_valid_id() {
         let _test_lock = TEST_MUTEX.lock();
-        let mnm = get_test_mnm();
-        let entry = Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        let app = get_test_app();
+        let entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
         assert!(entry.check_valid_id().is_ok());
         let entry = Entry::new_from_catalog_and_ext_id(1, "234");
         assert!(entry.check_valid_id().is_err());
@@ -1028,8 +1021,8 @@ mod tests {
     #[tokio::test]
     async fn test_add_alias() {
         let _test_lock = TEST_MUTEX.lock();
-        let mnm = get_test_mnm();
-        let entry = Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        let app = get_test_app();
+        let entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
         let s = LocaleString::new("en", "test");
         entry.add_alias(&s).await.unwrap();
         assert!(entry.get_aliases().await.unwrap().contains(&s));

@@ -1,8 +1,10 @@
+use crate::app_state::AppState;
+use crate::app_state::USER_AUX_MATCH;
 use crate::catalog::*;
 use crate::entry::*;
 use crate::issue::*;
 use crate::job::*;
-use crate::mixnmatch::*;
+use crate::wikidata::META_ITEMS;
 use crate::wikidata_commands::*;
 use anyhow::Result;
 use futures::future::join_all;
@@ -131,7 +133,7 @@ pub struct AuxiliaryMatcher {
     properties_using_items: Vec<String>,
     properties_that_have_external_ids: Vec<String>,
     properties_with_coordinates: Vec<String>,
-    mnm: MixNMatch,
+    app: AppState,
     catalogs: HashMap<usize, Option<Catalog>>,
     properties: EntityContainer,
     aux2wd_skip_existing_property: bool,
@@ -155,12 +157,12 @@ impl Jobbable for AuxiliaryMatcher {
 
 impl AuxiliaryMatcher {
     //TODO test
-    pub fn new(mnm: &MixNMatch) -> Self {
+    pub fn new(app: &AppState) -> Self {
         Self {
             properties_using_items: vec![],
             properties_that_have_external_ids: vec![],
             properties_with_coordinates: vec!["P625".to_string()], // TODO load dynamically like the ones above
-            mnm: mnm.clone(),
+            app: app.clone(),
             catalogs: HashMap::new(),
             properties: EntityContainer::new(),
             aux2wd_skip_existing_property: true,
@@ -169,16 +171,16 @@ impl AuxiliaryMatcher {
     }
 
     //TODO test
-    async fn get_properties_using_items(mnm: &MixNMatch) -> Result<Vec<String>> {
-        let mw_api = mnm.get_mw_api().await?;
+    async fn get_properties_using_items(app: &AppState) -> Result<Vec<String>> {
+        let mw_api = app.wikidata().get_mw_api().await?;
         let sparql = "SELECT ?p WHERE { ?p rdf:type wikibase:Property; wikibase:propertyType wikibase:WikibaseItem }";
         let sparql_results = mw_api.sparql_query(sparql).await?;
         Ok(mw_api.entities_from_sparql_result(&sparql_results, "p"))
     }
 
     //TODO test
-    async fn get_properties_that_have_external_ids(mnm: &MixNMatch) -> Result<Vec<String>> {
-        let mw_api = mnm.get_mw_api().await?;
+    async fn get_properties_that_have_external_ids(app: &AppState) -> Result<Vec<String>> {
+        let mw_api = app.wikidata().get_mw_api().await?;
         let sparql = "SELECT ?p WHERE { ?p rdf:type wikibase:Property; wikibase:propertyType wikibase:ExternalId }";
         let sparql_results = mw_api.sparql_query(sparql).await?;
         Ok(mw_api.entities_from_sparql_result(&sparql_results, "p"))
@@ -189,7 +191,7 @@ impl AuxiliaryMatcher {
         aux: AuxiliaryResults,
     ) -> Option<(AuxiliaryResults, Vec<String>)> {
         let query = format!("haswbstatement:\"{}={}\"", aux.prop(), aux.value);
-        match self.mnm.wd_search(&query).await {
+        match self.app.wikidata().search_api(&query).await {
             Ok(results) => Some((aux, results)),
             Err(_) => None,
         }
@@ -202,7 +204,7 @@ impl AuxiliaryMatcher {
             .map(|u| format!("{}", u))
             .collect();
         self.properties_that_have_external_ids =
-            Self::get_properties_that_have_external_ids(&self.mnm).await?;
+            Self::get_properties_that_have_external_ids(&self.app).await?;
         let extid_props: Vec<String> = self
             .properties_that_have_external_ids
             .iter()
@@ -213,23 +215,21 @@ impl AuxiliaryMatcher {
 
         let mut offset = self.get_last_job_offset().await;
         let batch_size = *self
-            .mnm
             .app
-            .task_specific_usize
+            .task_specific_usize()
             .get("auxiliary_matcher_batch_size")
             .unwrap_or(&500);
         let search_batch_size = *self
-            .mnm
             .app
-            .task_specific_usize
+            .task_specific_usize()
             .get("auxiliary_matcher_search_batch_size")
             .unwrap_or(&50);
-        let mw_api = self.mnm.get_mw_api().await?;
+        let mw_api = self.app.wikidata().get_mw_api().await?;
         loop {
             // println!("Catalog {catalog_id} running {batch_size} entries from {offset}");
             let results = self
-                .mnm
-                .get_storage()
+                .app
+                .storage()
                 .auxiliary_matcher_match_via_aux(
                     catalog_id,
                     offset,
@@ -264,7 +264,7 @@ impl AuxiliaryMatcher {
                                     aux.entry_id,
                                     IssueType::WdDuplicate,
                                     json!(items),
-                                    &self.mnm,
+                                    &self.app,
                                 )
                                 .await?
                                 .insert()
@@ -281,7 +281,7 @@ impl AuxiliaryMatcher {
                         continue;
                     }
                     let query = format!("haswbstatement:\"{}={}\"", aux.prop(), aux.value);
-                    let search_results = match self.mnm.wd_search(&query).await {
+                    let search_results = match self.app.wikidata().search_api(&query).await {
                         Ok(result) => result,
                         Err(_) => continue, // Something went wrong, just skip this one
                     };
@@ -297,7 +297,7 @@ impl AuxiliaryMatcher {
                                 aux.entry_id,
                                 IssueType::WdDuplicate,
                                 json!(search_results),
-                                &self.mnm,
+                                &self.app,
                             )
                             .await?
                             .insert()
@@ -317,7 +317,7 @@ impl AuxiliaryMatcher {
             for (q, aux) in &items_to_check {
                 if let Some(entity) = &entities.get_entity(q.to_owned()) {
                     if aux.entity_has_statement(entity) {
-                        if let Ok(mut entry) = Entry::from_id(aux.entry_id, &self.mnm).await {
+                        if let Ok(mut entry) = Entry::from_id(aux.entry_id, &self.app).await {
                             let _ = entry.set_match(q, USER_AUX_MATCH).await;
                         }
                     }
@@ -331,7 +331,7 @@ impl AuxiliaryMatcher {
             let _ = self.remember_offset(offset).await;
         }
         let _ = self.clear_offset().await;
-        let _ = Job::queue_simple_job(&self.mnm, catalog_id, "aux2wd", None).await;
+        let _ = Job::queue_simple_job(&self.app, catalog_id, "aux2wd", None).await;
         Ok(())
     }
 
@@ -340,9 +340,9 @@ impl AuxiliaryMatcher {
         if AUX_DO_NOT_SYNC_CATALOG_TO_WIKIDATA.contains(&catalog_id) {
             return Err(AuxiliaryMatcherError::BlacklistedCatalog.into());
         }
-        self.properties_using_items = Self::get_properties_using_items(&self.mnm).await?;
+        self.properties_using_items = Self::get_properties_using_items(&self.app).await?;
         self.properties_that_have_external_ids =
-            Self::get_properties_that_have_external_ids(&self.mnm).await?;
+            Self::get_properties_that_have_external_ids(&self.app).await?;
         let blacklisted_properties: Vec<String> = AUX_BLACKLISTED_PROPERTIES
             .iter()
             .map(|u| format!("{}", u))
@@ -350,12 +350,12 @@ impl AuxiliaryMatcher {
 
         let mut offset = self.get_last_job_offset().await;
         let batch_size = 500;
-        let mw_api = self.mnm.get_mw_api().await?;
+        let mw_api = self.app.wikidata().get_mw_api().await?;
 
         loop {
             let results = self
-                .mnm
-                .get_storage()
+                .app
+                .storage()
                 .auxiliary_matcher_add_auxiliary_to_wikidata(
                     &blacklisted_properties,
                     catalog_id,
@@ -377,7 +377,13 @@ impl AuxiliaryMatcher {
             for data in aux.values() {
                 commands.append(&mut self.aux2wd_process_item(data, &sources, &entities).await);
             }
-            let _ = self.mnm.execute_commands(commands).await;
+            let _ = match self.app.wikidata_mut() {
+                Some(wd) => wd.execute_commands(commands).await,
+                None => {
+                    eprintln!("add_auxiliary_to_wikidata: wikidata_mut not available");
+                    continue;
+                }
+            };
 
             if results.len() < batch_size {
                 break;
@@ -419,7 +425,7 @@ impl AuxiliaryMatcher {
         }
         // Is that specific value in the entity?
         if self.is_statement_in_entity(entity, &aux.prop(), &aux.value) {
-            if let Ok(entry) = Entry::from_id(aux.entry_id, &self.mnm).await {
+            if let Ok(entry) = Entry::from_id(aux.entry_id, &self.app).await {
                 let _ = entry.set_auxiliary_in_wikidata(aux.aux_id, true).await;
             };
         }
@@ -466,8 +472,8 @@ impl AuxiliaryMatcher {
                 continue;
             }
             if let Ok(b) = self
-                .mnm
-                .get_storage()
+                .app
+                .storage()
                 .avoid_auto_match(aux.entry_id, Some(aux.q_numeric as isize))
                 .await
             {
@@ -510,7 +516,7 @@ impl AuxiliaryMatcher {
             return false;
         }
         let query = format!("haswbstatement:\"{}={}\"", aux.prop(), aux.value);
-        let search_results = match self.mnm.wd_search(&query).await {
+        let search_results = match self.app.wikidata().search_api(&query).await {
             Ok(result) => result,
             Err(_) => return true, // Something went wrong, just skip this one
         };
@@ -519,14 +525,14 @@ impl AuxiliaryMatcher {
             std::cmp::Ordering::Less => {}
             std::cmp::Ordering::Equal => {
                 if search_results[0] == aux.q() {
-                    if let Ok(entry) = Entry::from_id(aux.entry_id, &self.mnm).await {
+                    if let Ok(entry) = Entry::from_id(aux.entry_id, &self.app).await {
                         let _ = entry.set_auxiliary_in_wikidata(aux.aux_id, true).await;
                     }
                 } else if let Ok(issue) = Issue::new(
                     aux.entry_id,
                     IssueType::Mismatch,
                     json!([search_results[0], aux.q()]),
-                    &self.mnm,
+                    &self.app,
                 )
                 .await
                 {
@@ -537,8 +543,8 @@ impl AuxiliaryMatcher {
                 if let Ok(issue) = Issue::new(
                     aux.entry_id,
                     IssueType::Multiple,
-                    json!({"wd": search_results,"mnm": aux.value,}),
-                    &self.mnm,
+                    json!({"wd": search_results,"app": aux.value,}),
+                    &self.app,
                 )
                 .await
                 {
@@ -562,7 +568,7 @@ impl AuxiliaryMatcher {
         let mut sources: HashMap<String, WikidataCommandPropertyValueGroup> = HashMap::new();
 
         let entry_ids: Vec<usize> = results.iter().map(|r| r.entry_id).collect();
-        let entries = match Entry::multiple_from_ids(&entry_ids, &self.mnm).await {
+        let entries = match Entry::multiple_from_ids(&entry_ids, &self.app).await {
             Ok(entries) => entries,
             Err(_) => HashMap::new(), // Something went wrong, ignore
         };
@@ -590,7 +596,7 @@ impl AuxiliaryMatcher {
     ) -> Option<WikidataCommandPropertyValueGroup> {
         self.catalogs
             .entry(entry.catalog)
-            .or_insert(Catalog::from_id(entry.catalog, &self.mnm).await.ok());
+            .or_insert(Catalog::from_id(entry.catalog, &self.app).await.ok());
         let catalog = match self.catalogs.get(&entry.catalog) {
             Some(catalog) => catalog,
             None => return None, // No catalog, no source
@@ -612,7 +618,7 @@ impl AuxiliaryMatcher {
             if stated_in.is_empty() {
                 let prop = format!("P{}", wd_prop);
                 if !self.properties.has_entity(prop.to_owned()) {
-                    let mw_api = self.mnm.get_mw_api().await.ok()?;
+                    let mw_api = self.app.wikidata().get_mw_api().await.ok()?;
                     let _ = self.properties.load_entity(&mw_api, prop.to_owned()).await;
                 }
                 if let Some(prop_entity) = self.properties.get_entity(prop) {
@@ -664,10 +670,11 @@ impl AuxiliaryMatcher {
 
 #[cfg(test)]
 mod tests {
-
-    use crate::entry::Entry;
-
     use super::*;
+    use crate::{
+        app_state::{get_test_app, TEST_MUTEX},
+        entry::Entry,
+    };
 
     const TEST_CATALOG_ID: usize = 5526;
     const TEST_ENTRY_ID: usize = 143962196;
@@ -675,11 +682,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_is_statement_in_entity() {
-        let mnm = get_test_mnm();
-        let mw_api = mnm.get_mw_api().await.unwrap();
+        let app = get_test_app();
+        let mw_api = app.wikidata().get_mw_api().await.unwrap();
         let entities = EntityContainer::new();
         let entity = entities.load_entity(&mw_api, "Q13520818").await.unwrap();
-        let am = AuxiliaryMatcher::new(&mnm);
+        let am = AuxiliaryMatcher::new(&app);
         assert!(am.is_statement_in_entity(&entity, "P31", "Q5"));
         assert!(am.is_statement_in_entity(&entity, "P214", "30701597"));
         assert!(!am.is_statement_in_entity(&entity, "P214", "30701596"));
@@ -687,8 +694,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_entity_already_has_property() {
-        let mnm = get_test_mnm();
-        let mw_api = mnm.get_mw_api().await.unwrap();
+        let app = get_test_app();
+        let mw_api = app.wikidata().get_mw_api().await.unwrap();
         let entities = EntityContainer::new();
         let entity = entities.load_entity(&mw_api, "Q13520818").await.unwrap();
         let aux = AuxiliaryResults {
@@ -698,7 +705,7 @@ mod tests {
             property: 214,
             value: "30701597".to_string(),
         };
-        let am = AuxiliaryMatcher::new(&mnm);
+        let am = AuxiliaryMatcher::new(&app);
         assert!(am.entity_already_has_property(&aux, &entity).await);
         let aux = AuxiliaryResults {
             aux_id: 0,
@@ -721,8 +728,8 @@ mod tests {
     #[tokio::test]
     async fn test_add_auxiliary_to_wikidata() {
         let _test_lock = TEST_MUTEX.lock();
-        let mnm = get_test_mnm();
-        let mut entry = Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        let app = get_test_app();
+        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
         entry
             .set_auxiliary(214, Some("30701597".to_string()))
             .await
@@ -734,7 +741,7 @@ mod tests {
         entry.set_match("Q13520818", 2).await.unwrap();
 
         // Run matcher
-        let mut am = AuxiliaryMatcher::new(&mnm);
+        let mut am = AuxiliaryMatcher::new(&app);
         am.add_auxiliary_to_wikidata(TEST_CATALOG_ID).await.unwrap();
 
         // Check
@@ -750,9 +757,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_source_for_entry() {
-        let mnm = get_test_mnm();
-        let mut am = AuxiliaryMatcher::new(&mnm);
-        let entry = Entry::from_id(144507016, &mnm).await.unwrap();
+        let app = get_test_app();
+        let mut am = AuxiliaryMatcher::new(&app);
+        let entry = Entry::from_id(144507016, &app).await.unwrap();
         let res = am.get_source_for_entry(&entry).await;
         let x1 = WikidataCommandPropertyValue {
             property: 248,

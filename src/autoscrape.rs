@@ -1,7 +1,7 @@
+use crate::app_state::AppState;
 use crate::catalog::Catalog;
 use crate::entry::*;
 use crate::job::*;
-use crate::mixnmatch::MixNMatch;
 use crate::update_catalog::ExtendedEntry;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -795,7 +795,7 @@ impl AutoscrapeScraper {
                         timestamp: None,
                         random: rand::thread_rng().gen(),
                         type_name,
-                        mnm: Some(autoscrape.mnm.clone()),
+                        app: Some(autoscrape.app.clone()),
                     },
                     aux: self
                         .resolve_aux
@@ -825,7 +825,7 @@ pub struct Autoscrape {
     utf8_encode: bool,
     levels: Vec<AutoscrapeLevel>,
     scraper: AutoscrapeScraper,
-    mnm: MixNMatch,
+    app: AppState,
     job: Option<Job>,
     urls_loaded: usize,
     entry_batch: Vec<ExtendedEntry>,
@@ -848,11 +848,8 @@ impl Jobbable for Autoscrape {
 
 impl Autoscrape {
     //TODO test
-    pub async fn new(catalog_id: usize, mnm: &MixNMatch) -> Result<Self> {
-        let results = mnm
-            .get_storage()
-            .autoscrape_get_for_catalog(catalog_id)
-            .await?;
+    pub async fn new(catalog_id: usize, app: &AppState) -> Result<Self> {
+        let results = app.storage().autoscrape_get_for_catalog(catalog_id).await?;
         let (id, json) = results
             .first()
             .ok_or(AutoscrapeError::NoAutoscrapeForCatalog(catalog_id))?;
@@ -860,7 +857,7 @@ impl Autoscrape {
         let mut ret = Self {
             autoscrape_id: *id,
             catalog_id,
-            mnm: mnm.clone(),
+            app: app.clone(),
             simple_space: false,
             skip_failed: false,
             utf8_encode: false,
@@ -1031,8 +1028,8 @@ impl Autoscrape {
             .map(|e| e.entry.ext_id.to_owned())
             .collect();
         let existing_ext_ids = self
-            .mnm
-            .get_storage()
+            .app
+            .storage()
             .autoscrape_get_entry_ids_for_ext_ids(self.catalog_id, &ext_ids)
             .await?;
         let existing_ext_ids: HashMap<String, usize> = existing_ext_ids.into_iter().collect();
@@ -1044,7 +1041,7 @@ impl Autoscrape {
                     // TODO update?
                 }
                 None => {
-                    let _ = ex.insert_new(&self.mnm).await;
+                    let _ = ex.insert_new(&self.app).await;
                 }
             }
         }
@@ -1082,10 +1079,7 @@ impl Autoscrape {
     //TODO test
     pub async fn start(&mut self) -> Result<()> {
         let autoscrape_id = self.autoscrape_id;
-        self.mnm
-            .get_storage()
-            .autoscrape_start(autoscrape_id)
-            .await?;
+        self.app.storage().autoscrape_start(autoscrape_id).await?;
         if let Some(json) = self.get_last_job_data().await {
             if let Some(arr) = json.as_array() {
                 if arr.len() == self.levels.len() {
@@ -1103,16 +1097,16 @@ impl Autoscrape {
         let _ = self.add_batch().await; // Flush
         let autoscrape_id = self.autoscrape_id;
         let last_run_urls = self.urls_loaded;
-        self.mnm
-            .get_storage()
+        self.app
+            .storage()
             .autoscrape_finish(autoscrape_id, last_run_urls)
             .await?;
-        let catalog = Catalog::from_id(self.catalog_id, &self.mnm).await?;
+        let catalog = Catalog::from_id(self.catalog_id, &self.app).await?;
         let _ = catalog.refresh_overview_table().await;
         let _ = self.clear_offset().await;
         let _ =
-            Job::queue_simple_job(&self.mnm, self.catalog_id, "automatch_by_search", None).await;
-        let _ = Job::queue_simple_job(&self.mnm, self.catalog_id, "microsync", None).await;
+            Job::queue_simple_job(&self.app, self.catalog_id, "automatch_by_search", None).await;
+        let _ = Job::queue_simple_job(&self.app, self.catalog_id, "microsync", None).await;
         Ok(())
     }
 
@@ -1132,9 +1126,8 @@ impl Autoscrape {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
-    use crate::mixnmatch::*;
+    use crate::app_state::get_test_app;
 
     const TEST_CATALOG_ID: usize = 91; //5526 ;
     const _TEST_ENTRY_ID: usize = 143962196;
@@ -1149,7 +1142,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_autoscrape() {
-        let mnm = get_test_mnm();
+        let mnm = get_test_app();
         let mut autoscrape = Autoscrape::new(TEST_CATALOG_ID, &mnm).await.unwrap();
         let mut cnt: usize = 1;
         autoscrape.init().await;

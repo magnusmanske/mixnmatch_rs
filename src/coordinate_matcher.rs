@@ -1,9 +1,7 @@
+use crate::app_state::AppState;
+use crate::app_state::USER_LOCATION_MATCH;
 use crate::entry::Entry;
-use crate::mixnmatch::USER_LOCATION_MATCH;
-use crate::{
-    job::{Job, Jobbable},
-    mixnmatch::MixNMatch,
-};
+use crate::job::{Job, Jobbable};
 use anyhow::Result;
 use lazy_static::lazy_static;
 use mediawiki::api::Api;
@@ -53,7 +51,7 @@ pub struct LocationRow {
 
 #[derive(Debug, Clone)]
 pub struct CoordinateMatcher {
-    mnm: MixNMatch,
+    app: AppState,
     mw_api: Api,
     job: Option<Job>,
     catalog_id: Option<usize>,
@@ -76,10 +74,10 @@ impl Jobbable for CoordinateMatcher {
 }
 
 impl CoordinateMatcher {
-    pub async fn new(mnm: &MixNMatch, catalog_id: Option<usize>) -> Result<Self> {
-        let mw_api = mnm.get_mw_api().await?;
+    pub async fn new(app: &AppState, catalog_id: Option<usize>) -> Result<Self> {
+        let mw_api = app.wikidata().get_mw_api().await?;
         let mut ret = Self {
-            mnm: mnm.clone(),
+            app: app.clone(),
             mw_api,
             job: None,
             catalog_id, // Specific catalog ID, or None for random catalogs
@@ -93,8 +91,8 @@ impl CoordinateMatcher {
     pub async fn run(&self) -> Result<()> {
         self.check_bad_catalog()?;
         let rows = self
-            .mnm
-            .get_storage()
+            .app
+            .storage()
             .get_coordinate_matcher_rows(
                 &self.catalog_id,
                 &self.bad_catalogs,
@@ -178,13 +176,13 @@ impl CoordinateMatcher {
         if items.is_empty() {
             return false;
         }
-        let mut entry = match Entry::from_id(row.entry_id, &self.mnm).await {
+        let mut entry = match Entry::from_id(row.entry_id, &self.app).await {
             Ok(entry) => entry,
             Err(_) => return false,
         };
         if items.len() == 1 {
             let q = items.first().unwrap();
-            if entry.q == self.mnm.item2numeric(q) && entry.is_fully_matched() {
+            if entry.q == AppState::item2numeric(q) && entry.is_fully_matched() {
                 // Already the same match
                 return false;
             }
@@ -292,8 +290,8 @@ impl CoordinateMatcher {
 
     async fn load_permissions(&mut self) -> Result<()> {
         let results = self
-            .mnm
-            .get_storage()
+            .app
+            .storage()
             .get_coordinate_matcher_permissions()
             .await?;
         for (catalog_id, kv_key, kv_value) in results {
@@ -318,21 +316,21 @@ impl CoordinateMatcher {
 mod tests {
 
     use super::*;
-    use crate::mixnmatch::*;
+    use crate::app_state::*;
 
     const TEST_CATALOG_ID: usize = 5526;
     const TEST_ENTRY_ID: usize = 157175552;
 
     #[tokio::test]
     async fn test_match_by_coordinates() {
-        let mnm = get_test_mnm();
-        let mut entry = Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        let app = get_test_app();
+        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
         entry.unmatch().await.unwrap();
-        let cm = CoordinateMatcher::new(&mnm, Some(TEST_CATALOG_ID))
+        let cm = CoordinateMatcher::new(&app, Some(TEST_CATALOG_ID))
             .await
             .unwrap();
         cm.run().await.unwrap();
-        let mut entry = Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
         assert_eq!(entry.q, Some(12060465));
         entry.unmatch().await.unwrap();
     }

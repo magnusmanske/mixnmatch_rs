@@ -1,8 +1,8 @@
+use crate::app_state::AppState;
 use crate::autoscrape::Autoscrape;
 use crate::catalog::Catalog;
 use crate::entry::*;
 use crate::job::*;
-use crate::mixnmatch::*;
 use anyhow::{anyhow, Result};
 use lazy_static::lazy_static;
 use regex::Regex;
@@ -188,8 +188,8 @@ impl ExtendedEntry {
     }
 
     //TODO test
-    pub async fn update_existing(&mut self, entry: &mut Entry, mnm: &MixNMatch) -> Result<()> {
-        entry.set_mnm(mnm);
+    pub async fn update_existing(&mut self, entry: &mut Entry, app: &AppState) -> Result<()> {
+        entry.set_app(app);
 
         // TODO use update_existing_description
         // TODO use update_all_descriptions
@@ -272,8 +272,8 @@ impl ExtendedEntry {
 
     /// Inserts a new entry and its associated data into the database
     //TODO test
-    pub async fn insert_new(&mut self, mnm: &MixNMatch) -> Result<()> {
-        self.entry.set_mnm(mnm);
+    pub async fn insert_new(&mut self, app: &AppState) -> Result<()> {
+        self.entry.set_app(app);
         self.entry.insert_as_new().await?;
 
         // TODO use update_existing_description
@@ -585,15 +585,15 @@ impl DataSource {
     }
 
     //TODO test
-    async fn get_reader(&mut self, mnm: &MixNMatch) -> Result<csv::Reader<File>> {
+    async fn get_reader(&mut self, app: &AppState) -> Result<csv::Reader<File>> {
         let mut builder = csv::ReaderBuilder::new();
         let builder = builder.flexible(true).has_headers(false);
-        let builder = match self.get_source_type(mnm).await? {
+        let builder = match self.get_source_type(app).await? {
             DataSourceType::Csv => builder.delimiter(b','),
             DataSourceType::Tsv => builder.delimiter(b'\t'),
             DataSourceType::Unknown => return Err(UpdateCatalogError::MissingDataSourceType.into()),
         };
-        match self.get_source_location(mnm)? {
+        match self.get_source_location(app)? {
             DataSourceLocation::Url(url) => {
                 let mut full_path = temp_dir();
                 let file_name = format!("{}.tmp", Uuid::new_v4());
@@ -609,7 +609,7 @@ impl DataSource {
         }
     }
 
-    fn get_source_location(&self, mnm: &MixNMatch) -> Result<DataSourceLocation> {
+    fn get_source_location(&self, app: &AppState) -> Result<DataSourceLocation> {
         if let Some(url) = self.json.get("source_url") {
             if let Some(url) = url.as_str() {
                 return Ok(DataSourceLocation::Url(url.to_string()));
@@ -617,7 +617,7 @@ impl DataSource {
         };
         if let Some(uuid) = self.json.get("file_uuid") {
             if let Some(uuid) = uuid.as_str() {
-                let path = format!("{}/{}", mnm.import_file_path(), uuid);
+                let path = format!("{}/{}", app.import_file_path(), uuid);
                 return Ok(DataSourceLocation::FilePath(path));
             }
         };
@@ -625,16 +625,13 @@ impl DataSource {
     }
 
     //TODO test
-    async fn get_source_type(&self, mnm: &MixNMatch) -> Result<DataSourceType> {
+    async fn get_source_type(&self, app: &AppState) -> Result<DataSourceType> {
         if let Some(s) = self.json.get("data_format") {
             return Ok(DataSourceType::from_str(s.as_str().unwrap_or("")));
         };
         if let Some(file_uuid_value) = self.json.get("file_uuid") {
             if let Some(uuid) = file_uuid_value.as_str() {
-                let mut results = mnm
-                    .get_storage()
-                    .get_data_source_type_for_uuid(uuid)
-                    .await?;
+                let mut results = app.storage().get_data_source_type_for_uuid(uuid).await?;
                 if let Some(type_name) = results.pop() {
                     return Ok(DataSourceType::from_str(&type_name));
                 }
@@ -661,14 +658,14 @@ impl Jobbable for UpdateCatalog {
 
 #[derive(Debug, Clone)]
 pub struct UpdateCatalog {
-    mnm: MixNMatch,
+    app: AppState,
     job: Option<Job>,
 }
 
 impl UpdateCatalog {
-    pub fn new(mnm: &MixNMatch) -> Self {
+    pub fn new(app: &AppState) -> Self {
         Self {
-            mnm: mnm.clone(),
+            app: app.clone(),
             job: None,
         }
     }
@@ -680,12 +677,12 @@ impl UpdateCatalog {
         let mut datasource = DataSource::new(catalog_id, &json)?;
         let offset = self.get_last_job_offset().await;
         let batch_size = 5000;
-        let catalog = Catalog::from_id(catalog_id, &self.mnm).await?;
+        let catalog = Catalog::from_id(catalog_id, &self.app).await?;
         let entries_already_in_catalog = catalog.number_of_entries().await?;
 
         let mut rows_to_skip = datasource.num_header_rows + datasource.skip_first_rows;
         datasource.just_add = entries_already_in_catalog == 0 || datasource.just_add;
-        let mut reader = datasource.get_reader(&self.mnm).await?;
+        let mut reader = datasource.get_reader(&self.app).await?;
 
         let mut row_cache = vec![];
         while let Some(result) = reader.records().next() {
@@ -743,9 +740,9 @@ impl UpdateCatalog {
         let _ = self.clear_offset().await;
 
         /*
-               $this->mnm->queue_job($this->catalog_id(),'microsync');
-               $this->mnm->queue_job($this->catalog_id(),'automatch_by_search');
-               if ( $this->has_born_died ) $this->mnm->queue_job($this->catalog_id(),'match_person_dates');
+               $this->app->queue_job($this->catalog_id(),'microsync');
+               $this->app->queue_job($this->catalog_id(),'automatch_by_search');
+               if ( $this->has_born_died ) $this->app->queue_job($this->catalog_id(),'match_person_dates');
         */
         Ok(())
     }
@@ -798,18 +795,18 @@ impl UpdateCatalog {
             Some(ext_id) => ext_id,
             None => return Ok(()), // TODO ???
         };
-        match Entry::from_ext_id(datasource.catalog_id, ext_id, &self.mnm).await {
+        match Entry::from_ext_id(datasource.catalog_id, ext_id, &self.app).await {
             Ok(mut entry) => {
                 if !datasource.just_add {
                     let mut extended_entry = ExtendedEntry::from_row(row, datasource)?;
                     extended_entry
-                        .update_existing(&mut entry, &self.mnm)
+                        .update_existing(&mut entry, &self.app)
                         .await?;
                 }
             }
             _ => {
                 let mut extended_entry = ExtendedEntry::from_row(row, datasource)?;
-                extended_entry.insert_new(&self.mnm).await?;
+                extended_entry.insert_new(&self.app).await?;
             }
         }
         Ok(())
@@ -825,11 +822,10 @@ impl UpdateCatalog {
         if ext_ids.is_empty() {
             return Ok(ret);
         }
-        let placeholders = MixNMatch::sql_placeholders(ext_ids.len());
         let existing_ext_ids = self
-            .mnm
-            .get_storage()
-            .get_existing_ext_ids(placeholders, catalog_id, ext_ids)
+            .app
+            .storage()
+            .get_existing_ext_ids(catalog_id, ext_ids)
             .await?;
         existing_ext_ids.iter().for_each(|ext_id| {
             ret.insert(ext_id.to_owned());
@@ -839,8 +835,8 @@ impl UpdateCatalog {
 
     async fn get_update_info(&self, catalog_id: usize) -> Result<UpdateInfo> {
         let mut results = self
-            .mnm
-            .get_storage()
+            .app
+            .storage()
             .update_catalog_get_update_info(catalog_id)
             .await?;
         results
@@ -851,14 +847,14 @@ impl UpdateCatalog {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
+    use crate::app_state::{get_test_app, TEST_MUTEX};
 
     const TEST_CATALOG_ID: usize = 5526; // was 4175
 
     #[tokio::test]
     async fn test_get_source_location() {
-        let mnm = get_test_mnm();
+        let app = get_test_app();
 
         let url = "http://www.example.org".to_string();
         let ds = DataSource::new(
@@ -867,7 +863,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            ds.get_source_location(&mnm).unwrap(),
+            ds.get_source_location(&app).unwrap(),
             DataSourceLocation::Url(url)
         );
 
@@ -878,15 +874,15 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            ds.get_source_location(&mnm).unwrap(),
-            DataSourceLocation::FilePath(format!("{}/{}", mnm.import_file_path(), uuid))
+            ds.get_source_location(&app).unwrap(),
+            DataSourceLocation::FilePath(format!("{}/{}", app.import_file_path(), uuid))
         );
     }
 
     #[tokio::test]
     async fn test_get_update_info() {
-        let mnm = get_test_mnm();
-        let uc = UpdateCatalog::new(&mnm);
+        let app = get_test_app();
+        let uc = UpdateCatalog::new(&app);
         let info = uc.get_update_info(TEST_CATALOG_ID).await.unwrap();
         let json = info.json().unwrap();
         let type_name = json.get("default_type").unwrap().as_str().unwrap();
@@ -921,19 +917,19 @@ mod tests {
     #[tokio::test]
     async fn test_update_from_tabbed_file() {
         let _test_lock = TEST_MUTEX.lock();
-        let mnm = get_test_mnm();
+        let app = get_test_app();
 
         // Delete the entry if it exists
-        if let Ok(mut entry) = Entry::from_ext_id(TEST_CATALOG_ID, "n2014191777", &mnm).await {
+        if let Ok(mut entry) = Entry::from_ext_id(TEST_CATALOG_ID, "n2014191777", &app).await {
             entry.delete().await.unwrap();
         }
 
         // Import single entry
-        let mut uc = UpdateCatalog::new(&mnm);
+        let mut uc = UpdateCatalog::new(&app);
         uc.update_from_tabbed_file(TEST_CATALOG_ID).await.unwrap();
 
         // Get new entry
-        let mut entry = Entry::from_ext_id(TEST_CATALOG_ID, "n2014191777", &mnm)
+        let mut entry = Entry::from_ext_id(TEST_CATALOG_ID, "n2014191777", &app)
             .await
             .unwrap();
 
