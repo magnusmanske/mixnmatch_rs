@@ -3,6 +3,7 @@ use crate::catalog::*;
 use crate::entry::*;
 use crate::job::*;
 use crate::maintenance::*;
+use crate::match_state::MatchState;
 use crate::mixnmatch::*;
 use anyhow::Result;
 use serde_json::Value;
@@ -12,9 +13,10 @@ use std::fmt;
 use std::fs::File;
 use wikimisc::timestamp::TimeStamp;
 
-const MAX_WIKI_ROWS: usize = 400;
 pub const EXT_URL_UNIQUE_SEPARATOR: &str = "!@£$%^&|";
+const MAX_WIKI_ROWS: usize = 400;
 const BLACKLISTED_CATALOGS: &[usize] = &[506];
+const MNM_SITE_URL: &str = "https://mix-n-match.toolforge.org";
 
 #[derive(Debug)]
 pub enum MicrosyncError {

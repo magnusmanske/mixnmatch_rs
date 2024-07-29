@@ -142,7 +142,13 @@ impl AutoMatch {
         name: &str,
         type_q: &str,
     ) -> Option<(usize, Vec<String>)> {
-        let mut items = match self.mnm.wd_search_with_type(name, type_q).await {
+        let mut items = match self
+            .mnm
+            .app
+            .wikidata()
+            .search_with_type_api(name, type_q)
+            .await
+        {
             Ok(items) => items,
             Err(_e) => {
                 // eprintln!("search_with_type_and_entity_id: {e}");
@@ -598,7 +604,11 @@ impl AutoMatch {
     async fn search_person(&self, name: &str) -> Result<Vec<String>> {
         let name = MixNMatch::sanitize_person_name(name);
         let name = MixNMatch::simplify_person_name(&name);
-        self.mnm.wd_search_with_type(&name, "Q5").await
+        self.mnm
+            .app
+            .wikidata()
+            .search_with_type_api(&name, "Q5")
+            .await
     }
 
     //TODO test
