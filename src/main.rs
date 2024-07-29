@@ -10,6 +10,7 @@ pub mod error;
 pub mod issue;
 pub mod job;
 pub mod maintenance;
+pub mod match_state;
 pub mod microsync;
 pub mod mixnmatch;
 pub mod mysql_misc;

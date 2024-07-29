@@ -1,14 +1,13 @@
 use crate::{error::MnMError, mysql_misc::MySQLMisc, wikidata_commands::WikidataCommand};
 use anyhow::{anyhow, Result};
 use itertools::Itertools;
-use mysql_async::{from_row, futures::GetConn, prelude::*};
+use mysql_async::{from_row, prelude::*};
 use serde_json::{json, Value};
 use std::{
     collections::{HashMap, HashSet},
     time::Duration,
 };
 use urlencoding::encode;
-// use wikimisc::wikibase::{EntityTrait, ItemEntity};
 
 pub const WIKIDATA_API_URL: &str = "https://www.wikidata.org/w/api.php";
 pub const META_ITEMS: &[&str] = &[
@@ -44,14 +43,11 @@ impl Wikidata {
         }
     }
 
-    pub fn get_conn(&self) -> GetConn {
-        self.pool.get_conn()
+    fn testing() -> bool {
+        *crate::mixnmatch::TESTING.lock().unwrap()
     }
 
-    pub async fn disconnect(&self) -> Result<()> {
-        self.pool.clone().disconnect().await?;
-        Ok(())
-    }
+    // Database things
 
     pub async fn automatch_by_sitlinks_get_wd_matches(
         &self,
@@ -252,10 +248,6 @@ impl Wikidata {
         Ok(())
     }
 
-    fn testing() -> bool {
-        *crate::mixnmatch::TESTING.lock().unwrap()
-    }
-
     //TODO test
     pub async fn execute_commands(&mut self, commands: Vec<WikidataCommand>) -> Result<()> {
         if Self::testing() {
@@ -299,6 +291,30 @@ impl Wikidata {
 
         Ok(())
     }
+
+    /// Runs a Wikidata API text search, specifying a P31 value `type_q`.
+    /// This value can be blank, in which case a normal search is performed.
+    /// "Scholarly article" items are excluded from results, unless specifically asked for with Q13442814
+    /// Common "meta items" such as disambiguation items are excluded as well
+    pub async fn search_with_type_api(&self, name: &str, type_q: &str) -> Result<Vec<String>> {
+        if name.is_empty() {
+            return Ok(vec![]);
+        }
+        if type_q.is_empty() {
+            return self.search_with_limit(name, None).await;
+        }
+        let mut query = format!("{} haswbstatement:P31={}", name, type_q);
+        if type_q != "Q13442814" {
+            // Exclude "scholarly article"
+            query = format!("{} -haswbstatement:P31=Q13442814", query);
+        }
+        let meta_items: Vec<String> = META_ITEMS
+            .iter()
+            .map(|q| format!(" -haswbstatement:P31={}", q))
+            .collect();
+        query += &meta_items.join("");
+        self.search_with_limit(&query, None).await
+    }
 }
 
 #[cfg(test)]
@@ -319,6 +335,27 @@ mod tests {
         let mut mnm = get_test_mnm();
         let wd = mnm.app.wikidata_mut();
         wd.api_log_in().await.unwrap();
-        assert!(wd.get_mw_api().await.unwrap().user().logged_in());
+        let api = wd.mw_api.as_ref().unwrap();
+        assert!(api.user().logged_in());
+    }
+
+    #[tokio::test]
+    async fn test_wd_search() {
+        let mnm = get_test_mnm();
+        assert!(mnm.wd_search("").await.unwrap().is_empty());
+        assert_eq!(
+            mnm.wd_search("Magnus Manske haswbstatement:P31=Q5")
+                .await
+                .unwrap(),
+            vec!["Q13520818".to_string()]
+        );
+        assert_eq!(
+            mnm.app
+                .wikidata()
+                .search_with_type_api("Magnus Manske", "Q5")
+                .await
+                .unwrap(),
+            vec!["Q13520818".to_string()]
+        );
     }
 }

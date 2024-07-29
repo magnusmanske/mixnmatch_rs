@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use crate::{
     automatch::{ResultInOriginalCatalog, ResultInOtherCatalog},
     auxiliary_matcher::AuxiliaryResults,
@@ -8,14 +6,14 @@ use crate::{
     entry::{AuxiliaryRow, CoordinateLocation, Entry},
     issue::Issue,
     job::{JobRow, JobStatus, TaskSize},
-    mixnmatch::MatchState,
+    match_state::MatchState,
     taxon_matcher::{RankedNames, TaxonNameField},
     update_catalog::UpdateInfo,
 };
 use anyhow::Result;
 use async_trait::async_trait;
+use std::collections::HashMap;
 use wikimisc::wikibase::LocaleString;
-// use serde_json::Value;
 
 #[async_trait]
 pub trait Storage: std::fmt::Debug + Send + Sync {

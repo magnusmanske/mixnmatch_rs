@@ -1,13 +1,10 @@
 use crate::app_state::*;
 use crate::storage::Storage;
-use crate::wikidata::META_ITEMS;
 use anyhow::Result;
 use lazy_static::lazy_static;
 use regex::Regex;
 use std::fs::File;
 use std::sync::{Arc, Mutex};
-
-pub const MNM_SITE_URL: &str = "https://mix-n-match.toolforge.org";
 
 /// Global function for tests.
 pub fn get_test_mnm() -> MixNMatch {
@@ -53,81 +50,6 @@ pub const USER_AUTO: usize = 0;
 pub const USER_DATE_MATCH: usize = 3;
 pub const USER_AUX_MATCH: usize = 4;
 pub const USER_LOCATION_MATCH: usize = 5;
-pub const WIKIDATA_USER_AGENT: &str = "MixNMmatch_RS/1.0";
-pub const TABLES_WITH_ENTRY_ID_FIELDS: &[&str] = &[
-    "aliases",
-    "descriptions",
-    "auxiliary",
-    "issues",
-    "kv_entry",
-    "mnm_relation",
-    "multi_match",
-    "person_dates",
-    "location",
-    "log",
-    "entry_creation",
-    "entry2given_name",
-    "statement_text",
-];
-
-#[derive(Debug, Clone)]
-pub struct MatchState {
-    pub unmatched: bool,
-    pub partially_matched: bool,
-    pub fully_matched: bool,
-    // TODO N/A ?
-}
-
-impl MatchState {
-    pub fn unmatched() -> Self {
-        Self {
-            unmatched: true,
-            partially_matched: false,
-            fully_matched: false,
-        }
-    }
-
-    pub fn fully_matched() -> Self {
-        Self {
-            unmatched: false,
-            partially_matched: false,
-            fully_matched: true,
-        }
-    }
-
-    pub fn not_fully_matched() -> Self {
-        Self {
-            unmatched: true,
-            partially_matched: true,
-            fully_matched: false,
-        }
-    }
-
-    pub fn any_matched() -> Self {
-        Self {
-            unmatched: false,
-            partially_matched: true,
-            fully_matched: true,
-        }
-    }
-
-    pub fn get_sql(&self) -> String {
-        let mut parts = vec![];
-        if self.unmatched {
-            parts.push("(`q` IS NULL)")
-        }
-        if self.partially_matched {
-            parts.push("(`q`>0 AND `user`=0)")
-        }
-        if self.fully_matched {
-            parts.push("(`q`>0 AND `user`>0)")
-        }
-        if parts.is_empty() {
-            return "".to_string();
-        }
-        format!(" AND ({}) ", parts.join(" OR "))
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct MixNMatch {
@@ -166,30 +88,6 @@ impl MixNMatch {
             .captures_iter(q)
             .next()
             .and_then(|cap| cap[1].parse::<isize>().ok())
-    }
-
-    /// Runs a Wikidata API text search, specifying a P31 value `type_q`.
-    /// This value can be blank, in which case a normal search is performed.
-    /// "Scholarly article" items are excluded from results, unless specifically asked for with Q13442814
-    /// Common "meta items" such as disambiguation items are excluded as well
-    pub async fn wd_search_with_type(&self, name: &str, type_q: &str) -> Result<Vec<String>> {
-        if name.is_empty() {
-            return Ok(vec![]);
-        }
-        if type_q.is_empty() {
-            return self.wd_search(name).await;
-        }
-        let mut query = format!("{} haswbstatement:P31={}", name, type_q);
-        if type_q != "Q13442814" {
-            // Exclude "scholarly article"
-            query = format!("{} -haswbstatement:P31=Q13442814", query);
-        }
-        let meta_items: Vec<String> = META_ITEMS
-            .iter()
-            .map(|q| format!(" -haswbstatement:P31={}", q))
-            .collect();
-        query += &meta_items.join("");
-        self.wd_search(&query).await
     }
 
     pub async fn wd_search_with_type_db(&self, name: &str, type_q: &str) -> Result<Vec<String>> {
@@ -253,6 +151,8 @@ impl MixNMatch {
 #[cfg(test)]
 mod tests {
 
+    use crate::match_state::MatchState;
+
     use super::*;
 
     const _TEST_CATALOG_ID: usize = 5526;
@@ -293,24 +193,6 @@ mod tests {
             .collect();
         mnm.remove_meta_items(&mut items).await.unwrap();
         assert_eq!(items, ["Q1", "Q2"]);
-    }
-
-    #[tokio::test]
-    async fn test_wd_search() {
-        let mnm = get_test_mnm();
-        assert!(mnm.wd_search("").await.unwrap().is_empty());
-        assert_eq!(
-            mnm.wd_search("Magnus Manske haswbstatement:P31=Q5")
-                .await
-                .unwrap(),
-            vec!["Q13520818".to_string()]
-        );
-        assert_eq!(
-            mnm.wd_search_with_type("Magnus Manske", "Q5")
-                .await
-                .unwrap(),
-            vec!["Q13520818".to_string()]
-        );
     }
 
     #[test]

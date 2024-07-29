@@ -1,6 +1,6 @@
-use crate::catalog::Catalog;
 use crate::entry::Entry;
 use crate::mixnmatch::*;
+use crate::{catalog::Catalog, match_state::MatchState};
 use anyhow::{anyhow, Result};
 use futures::future::join_all;
 use itertools::Itertools;

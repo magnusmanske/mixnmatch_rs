@@ -12,7 +12,7 @@ pub trait MySQLMisc {
         self.pool().get_conn()
     }
 
-    async fn disconnect(&self) -> Result<()> {
+    async fn disconnect_db(&self) -> Result<()> {
         self.pool().clone().disconnect().await?;
         Ok(())
     }

@@ -1,5 +1,6 @@
 use crate::job::*;
 use crate::mixnmatch::*;
+use crate::mysql_misc::MySQLMisc;
 use crate::storage::Storage;
 use crate::storage_mysql::StorageMySQL;
 use crate::wdrc::WDRC;
@@ -85,8 +86,8 @@ impl AppState {
     }
 
     pub async fn disconnect(&self) -> Result<()> {
-        self.wikidata.disconnect().await?;
-        self.storage.disconnect().await?; // TODO FIXME?
+        self.wikidata.disconnect_db().await?;
+        self.storage.disconnect().await?;
         Ok(())
     }
 

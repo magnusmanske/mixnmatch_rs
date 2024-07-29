@@ -3,6 +3,7 @@ use crate::autoscrape::*;
 use crate::auxiliary_matcher::*;
 use crate::coordinate_matcher::CoordinateMatcher;
 use crate::maintenance::*;
+use crate::match_state::MatchState;
 use crate::microsync::*;
 use crate::mixnmatch::*;
 use crate::php_wrapper::*;

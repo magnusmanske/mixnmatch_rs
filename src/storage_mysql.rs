@@ -7,8 +7,9 @@ use crate::{
     entry::{AuxiliaryRow, CoordinateLocation, Entry, EntryError},
     issue::Issue,
     job::{JobRow, JobStatus, TaskSize},
+    match_state::MatchState,
     microsync::EXT_URL_UNIQUE_SEPARATOR,
-    mixnmatch::{MatchState, TABLES_WITH_ENTRY_ID_FIELDS, USER_AUTO},
+    mixnmatch::USER_AUTO,
     mysql_misc::MySQLMisc,
     taxon_matcher::{RankedNames, TaxonMatcher, TaxonNameField, TAXON_RANKS},
     update_catalog::UpdateInfo,
@@ -21,6 +22,22 @@ use rand::prelude::*;
 use serde_json::Value;
 use std::collections::HashMap;
 use wikimisc::{timestamp::TimeStamp, wikibase::LocaleString};
+
+pub const TABLES_WITH_ENTRY_ID_FIELDS: &[&str] = &[
+    "aliases",
+    "descriptions",
+    "auxiliary",
+    "issues",
+    "kv_entry",
+    "mnm_relation",
+    "multi_match",
+    "person_dates",
+    "location",
+    "log",
+    "entry_creation",
+    "entry2given_name",
+    "statement_text",
+];
 
 #[derive(Debug)]
 pub struct StorageMySQL {
@@ -179,7 +196,7 @@ impl StorageMySQL {
 #[async_trait]
 impl Storage for StorageMySQL {
     async fn disconnect(&self) -> Result<()> {
-        self.pool.clone().disconnect().await?;
+        self.disconnect_db().await?;
         Ok(())
     }
 
