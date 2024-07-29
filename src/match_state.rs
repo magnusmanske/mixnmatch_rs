@@ -56,3 +56,34 @@ impl MatchState {
         format!(" AND ({}) ", parts.join(" OR "))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_sql() {
+        let ms = MatchState {
+            unmatched: false,
+            fully_matched: false,
+            partially_matched: false,
+        };
+        assert_eq!(ms.get_sql().as_str(), "");
+        assert_eq!(
+            MatchState::unmatched().get_sql().as_str(),
+            " AND ((`q` IS NULL)) "
+        );
+        assert_eq!(
+            MatchState::fully_matched().get_sql().as_str(),
+            " AND ((`q`>0 AND `user`>0)) "
+        );
+        assert_eq!(
+            MatchState::not_fully_matched().get_sql().as_str(),
+            " AND ((`q` IS NULL) OR (`q`>0 AND `user`=0)) "
+        );
+        assert_eq!(
+            MatchState::any_matched().get_sql().as_str(),
+            " AND ((`q`>0 AND `user`=0) OR (`q`>0 AND `user`>0)) "
+        );
+    }
+}

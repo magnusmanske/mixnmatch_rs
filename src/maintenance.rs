@@ -1,5 +1,5 @@
+use crate::app_state::{AppState, USER_AUX_MATCH};
 use crate::entry::Entry;
-use crate::mixnmatch::*;
 use crate::{catalog::Catalog, match_state::MatchState};
 use anyhow::{anyhow, Result};
 use futures::future::join_all;
@@ -8,12 +8,12 @@ use std::collections::HashMap;
 use wikimisc::timestamp::TimeStamp;
 
 pub struct Maintenance {
-    mnm: MixNMatch,
+    app: AppState,
 }
 
 impl Maintenance {
-    pub fn new(mnm: &MixNMatch) -> Self {
-        Self { mnm: mnm.clone() }
+    pub fn new(app: &AppState) -> Self {
+        Self { app: app.clone() }
     }
 
     /// Iterates over blocks of (fully or partially) matched Wikidata items, and replaces redirects with their targets.
@@ -21,8 +21,8 @@ impl Maintenance {
         let mut offset = 0;
         loop {
             let unique_qs = self
-                .mnm
-                .get_storage()
+                .app
+                .storage()
                 .get_items(catalog_id, offset, state)
                 .await?;
             if unique_qs.is_empty() {
@@ -38,8 +38,8 @@ impl Maintenance {
         let mut offset = 0;
         loop {
             let unique_qs = self
-                .mnm
-                .get_storage()
+                .app
+                .storage()
                 .get_items(catalog_id, offset, state)
                 .await?;
             if unique_qs.is_empty() {
@@ -55,8 +55,8 @@ impl Maintenance {
         let mut offset = 0;
         loop {
             let unique_qs = self
-                .mnm
-                .get_storage()
+                .app
+                .storage()
                 .get_items(catalog_id, offset, state)
                 .await?;
             if unique_qs.is_empty() {
@@ -73,8 +73,8 @@ impl Maintenance {
         let mut offset = 0;
         loop {
             let unique_qs = self
-                .mnm
-                .get_storage()
+                .app
+                .storage()
                 .get_items(catalog_id, offset, state)
                 .await?;
             if unique_qs.is_empty() {
@@ -89,11 +89,11 @@ impl Maintenance {
 
     /// Removes P17 auxiliary values for entryies of type Q5 (human)
     pub async fn remove_p17_for_humans(&self) -> Result<()> {
-        self.mnm.get_storage().remove_p17_for_humans().await
+        self.app.storage().remove_p17_for_humans().await
     }
 
     pub async fn cleanup_mnm_relations(&self) -> Result<()> {
-        self.mnm.get_storage().cleanup_mnm_relations().await
+        self.app.storage().cleanup_mnm_relations().await
     }
 
     // WDRC sync stuff
@@ -123,8 +123,8 @@ impl Maintenance {
 
     async fn wdrc_sync_redirects(&self) -> Result<()> {
         let last_ts = self
-            .mnm
-            .get_storage()
+            .app
+            .storage()
             .get_kv_value("wdrc_sync_redirects")
             .await?
             .unwrap_or_else(|| self.yesterday());
@@ -136,12 +136,12 @@ impl Maintenance {
         {
             let from = j["item"]
                 .as_str()
-                .map(|s| self.mnm.item2numeric(s))
+                .map(|s| AppState::item2numeric(s))
                 .and_then(|i| i)
                 .unwrap_or(0);
             let to = j["target"]
                 .as_str()
-                .map(|s| self.mnm.item2numeric(s))
+                .map(|s| AppState::item2numeric(s))
                 .and_then(|i| i)
                 .unwrap_or(0);
             let ts = j["timestamp"]
@@ -154,12 +154,12 @@ impl Maintenance {
             }
         }
         redirects.retain(|old_q, new_q| *old_q > 0 && *new_q > 0 && *old_q != *new_q); // Paranoia
-        self.mnm
-            .get_storage()
+        self.app
+            .storage()
             .maintenance_sync_redirects(redirects)
             .await?;
-        self.mnm
-            .get_storage()
+        self.app
+            .storage()
             .set_kv_value("wdrc_sync_redirects", &new_ts)
             .await?;
         Ok(())
@@ -167,8 +167,8 @@ impl Maintenance {
 
     async fn wdrc_apply_deletions(&self) -> Result<()> {
         let last_ts = self
-            .mnm
-            .get_storage()
+            .app
+            .storage()
             .get_kv_value("wdrc_apply_deletions")
             .await?
             .unwrap_or_else(|| self.yesterday());
@@ -180,7 +180,7 @@ impl Maintenance {
         {
             let item = j["item"]
                 .as_str()
-                .map(|s| self.mnm.item2numeric(s))
+                .map(|s| AppState::item2numeric(s))
                 .and_then(|i| i)
                 .unwrap_or(0);
             let ts = j["timestamp"]
@@ -197,17 +197,17 @@ impl Maintenance {
         deletions.retain(|q| *q > 0);
         if !deletions.is_empty() {
             let catalog_ids = self
-                .mnm
-                .get_storage()
+                .app
+                .storage()
                 .maintenance_apply_deletions(deletions)
                 .await?;
             for catalog_id in catalog_ids {
-                let catalog = Catalog::from_id(catalog_id, &self.mnm).await?;
+                let catalog = Catalog::from_id(catalog_id, &self.app).await?;
                 let _ = catalog.refresh_overview_table().await;
             }
         }
-        self.mnm
-            .get_storage()
+        self.app
+            .storage()
             .set_kv_value("wdrc_apply_deletions", &new_ts)
             .await?;
         Ok(())
@@ -216,8 +216,8 @@ impl Maintenance {
     async fn wdrc_get_prop2catalog_ids(&self) -> Result<HashMap<usize, Vec<usize>>> {
         let mut ret: HashMap<usize, Vec<usize>> = HashMap::new();
         let results = self
-            .mnm
-            .get_storage()
+            .app
+            .storage()
             .maintenance_get_prop2catalog_ids()
             .await?;
         for (catalog_id, property) in results {
@@ -231,12 +231,12 @@ impl Maintenance {
         property: usize,
         entity_ids: Vec<String>,
     ) -> Option<HashMap<String, isize>> {
-        let api = self.mnm.app.wikidata().get_mw_api().await.ok()?;
+        let api = self.app.wikidata().get_mw_api().await.ok()?;
         let entities = wikimisc::wikibase::entity_container::EntityContainer::new();
         entities.load_entities(&api, &entity_ids).await.ok()?;
         let mut propval2item: HashMap<String, Vec<isize>> = HashMap::new();
         for q in entity_ids {
-            let q_num = match self.mnm.item2numeric(&q) {
+            let q_num = match AppState::item2numeric(&q) {
                 Some(q_num) => q_num,
                 None => continue,
             };
@@ -303,8 +303,8 @@ impl Maintenance {
             .collect();
 
         let results = self
-            .mnm
-            .get_storage()
+            .app
+            .storage()
             .maintenance_sync_property(catalogs, &propval2item, params)
             .await?;
         for (id, ext_id, user, _mnm_q) in results {
@@ -313,7 +313,7 @@ impl Maintenance {
                 None => continue,
             };
             if user.is_none() || user == Some(0) {
-                match Entry::from_id(id, &self.mnm).await {
+                match Entry::from_id(id, &self.app).await {
                     Ok(mut entry) => {
                         if entry.q != Some(*wd_item_q) || !entry.is_fully_matched() {
                             // Only if something is different
@@ -332,14 +332,13 @@ impl Maintenance {
 
     pub async fn wdrc_sync_properties(&self) -> Result<()> {
         let last_ts = self
-            .mnm
-            .get_storage()
+            .app
+            .storage()
             .get_kv_value("wdrc_sync_properties")
             .await?
             .unwrap_or_else(|| self.yesterday());
         let prop2catalog_ids = self.wdrc_get_prop2catalog_ids().await?;
         let results = self
-            .mnm
             .app
             .wdrc()
             .get_item_property_ts(&prop2catalog_ids, &last_ts)
@@ -349,7 +348,6 @@ impl Maintenance {
             None => return Ok(()), // No results
         };
         let batch_size = *self
-            .mnm
             .app
             .task_specific_usize()
             .get("wdrc_sync_properties_batch_size")
@@ -376,8 +374,8 @@ impl Maintenance {
                 return Err(anyhow!("{e}"));
             }
         }
-        self.mnm
-            .get_storage()
+        self.app
+            .storage()
             .set_kv_value("wdrc_sync_properties", &new_ts)
             .await?;
         Ok(())
@@ -392,20 +390,16 @@ impl Maintenance {
 
     // END WDRC STUFF
 
-    /// Finds redirects in a batch of items, and changes MnM matches to their respective targets.
+    /// Finds redirects in a batch of items, and changes app matches to their respective targets.
     async fn fix_redirected_items_batch(&self, unique_qs: &Vec<String>) -> Result<()> {
-        let page2rd = self
-            .mnm
-            .app
-            .wikidata()
-            .get_redirected_items(unique_qs)
-            .await?;
+        let page2rd = self.app.wikidata().get_redirected_items(unique_qs).await?;
         for (from, to) in &page2rd {
-            if let (Some(from), Some(to)) = (self.mnm.item2numeric(from), self.mnm.item2numeric(to))
+            if let (Some(from), Some(to)) =
+                (AppState::item2numeric(from), AppState::item2numeric(to))
             {
                 if from > 0 && to > 0 {
-                    self.mnm
-                        .get_storage()
+                    self.app
+                        .storage()
                         .maintenance_fix_redirects(from, to)
                         .await?;
                 }
@@ -414,31 +408,31 @@ impl Maintenance {
         Ok(())
     }
 
-    /// Finds deleted items in a batch of items, and unlinks MnM matches to them.
+    /// Finds deleted items in a batch of items, and unlinks app matches to them.
     async fn unlink_deleted_items_batch(&self, unique_qs: &[String]) -> Result<()> {
-        let not_found = self.mnm.app.wikidata().get_deleted_items(unique_qs).await?;
+        let not_found = self.app.wikidata().get_deleted_items(unique_qs).await?;
         self.unlink_item_matches(&not_found).await?;
         Ok(())
     }
 
-    /// Finds meta items (disambig etc) in a batch of items, and unlinks MnM matches to them.
+    /// Finds meta items (disambig etc) in a batch of items, and unlinks app matches to them.
     async fn unlink_meta_items_batch(&self, unique_qs: &Vec<String>) -> Result<()> {
-        let meta_items = self.mnm.app.wikidata().get_meta_items(unique_qs).await?;
+        let meta_items = self.app.wikidata().get_meta_items(unique_qs).await?;
         self.unlink_item_matches(&meta_items).await?;
         Ok(())
     }
 
-    /// Unlinks MnM matches to items in a list.
+    /// Unlinks app matches to items in a list.
     pub async fn unlink_item_matches(&self, items: &[String]) -> Result<()> {
         let items: Vec<isize> = items
             .iter()
-            .filter_map(|q| self.mnm.item2numeric(q))
+            .filter_map(|q| AppState::item2numeric(q))
             .collect();
 
         if !items.is_empty() {
             let items: Vec<String> = items.iter().map(|q| format!("{}", q)).collect();
-            self.mnm
-                .get_storage()
+            self.app
+                .storage()
                 .maintenance_unlink_item_matches(items)
                 .await?;
         }
@@ -448,14 +442,17 @@ impl Maintenance {
     /// Finds some unmatched (Q5) entries where there is a (unique) full match for that name,
     /// and uses it as an auto-match
     pub async fn maintenance_automatch(&self) -> Result<()> {
-        self.mnm.get_storage().maintenance_automatch().await
+        self.app.storage().maintenance_automatch().await
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entry::Entry;
+    use crate::{
+        app_state::{get_test_app, TEST_MUTEX},
+        entry::Entry,
+    };
 
     const TEST_CATALOG_ID: usize = 5526;
     const TEST_ENTRY_ID: usize = 143962196;
@@ -463,56 +460,56 @@ mod tests {
     #[tokio::test]
     async fn test_unlink_meta_items() {
         let _test_lock = TEST_MUTEX.lock();
-        let mnm = get_test_mnm();
+        let app = get_test_app();
 
         // Set a match to a disambiguation item
-        let mut entry = Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
         entry.set_match("Q16456", 2).await.unwrap();
 
         // Remove matches to disambiguation items
-        let maintenance = Maintenance::new(&mnm);
+        let maintenance = Maintenance::new(&app);
         maintenance
             .unlink_meta_items(TEST_CATALOG_ID, &MatchState::any_matched())
             .await
             .unwrap();
 
         // Check that removal was successful
-        assert_eq!(Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap().q, None);
+        assert_eq!(Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap().q, None);
     }
 
     #[tokio::test]
     async fn test_fix_redirects() {
         let _test_lock = TEST_MUTEX.lock();
-        let mnm = get_test_mnm();
-        Entry::from_id(TEST_ENTRY_ID, &mnm)
+        let app = get_test_app();
+        Entry::from_id(TEST_ENTRY_ID, &app)
             .await
             .unwrap()
             .set_match("Q100000067", 2)
             .await
             .unwrap();
-        let ms = Maintenance::new(&mnm);
+        let ms = Maintenance::new(&app);
         ms.fix_redirects(TEST_CATALOG_ID, &MatchState::fully_matched())
             .await
             .unwrap();
-        let entry = Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        let entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
         assert_eq!(entry.q, Some(91013264));
     }
 
     #[tokio::test]
     async fn test_unlink_deleted_items() {
         let _test_lock = TEST_MUTEX.lock();
-        let mnm = get_test_mnm();
-        Entry::from_id(TEST_ENTRY_ID, &mnm)
+        let app = get_test_app();
+        Entry::from_id(TEST_ENTRY_ID, &app)
             .await
             .unwrap()
             .set_match("Q115205673", 2)
             .await
             .unwrap();
-        let ms = Maintenance::new(&mnm);
+        let ms = Maintenance::new(&app);
         ms.unlink_deleted_items(TEST_CATALOG_ID, &MatchState::fully_matched())
             .await
             .unwrap();
-        let entry = Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        let entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
         assert_eq!(entry.q, None);
     }
 }

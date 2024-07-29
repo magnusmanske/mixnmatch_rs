@@ -1,5 +1,6 @@
 pub use crate::storage::Storage;
 use crate::{
+    app_state::USER_AUTO,
     automatch::{ResultInOriginalCatalog, ResultInOtherCatalog},
     auxiliary_matcher::AuxiliaryResults,
     catalog::Catalog,
@@ -9,7 +10,6 @@ use crate::{
     job::{JobRow, JobStatus, TaskSize},
     match_state::MatchState,
     microsync::EXT_URL_UNIQUE_SEPARATOR,
-    mixnmatch::USER_AUTO,
     mysql_misc::MySQLMisc,
     taxon_matcher::{RankedNames, TaxonMatcher, TaxonNameField, TAXON_RANKS},
     update_catalog::UpdateInfo,
@@ -113,7 +113,7 @@ impl StorageMySQL {
             source_item: row.get(11)?,
             has_person_date: row.get(12)?,
             taxon_run: row.get(13)?,
-            mnm: None,
+            app: None,
         })
     }
 
@@ -186,7 +186,7 @@ impl StorageMySQL {
             timestamp: Entry::value2opt_string(row.get(8)?).ok()?,
             random: row.get(9).unwrap_or(0.0), // random might be null, who cares
             type_name: Entry::value2opt_string(row.get(10)?).ok()?,
-            mnm: None,
+            app: None,
         })
     }
 }

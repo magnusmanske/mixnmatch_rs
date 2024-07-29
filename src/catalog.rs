@@ -1,10 +1,9 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-
+use crate::app_state::AppState;
 use crate::entry::AuxiliaryRow;
-use crate::mixnmatch::*;
 use crate::storage::Storage;
 use anyhow::{anyhow, Result};
+use std::collections::HashMap;
+use std::sync::Arc;
 use wikimisc::wikibase::Reference;
 use wikimisc::wikibase::Snak;
 
@@ -24,42 +23,42 @@ pub struct Catalog {
     pub source_item: Option<usize>,
     pub has_person_date: String,
     pub taxon_run: bool,
-    pub mnm: Option<MixNMatch>,
+    pub app: Option<AppState>,
 }
 
 impl Catalog {
     /// Returns a Catalog object for a given entry ID.
-    pub async fn from_id(catalog_id: usize, mnm: &MixNMatch) -> Result<Self> {
-        let mut ret = mnm.get_storage().get_catalog_from_id(catalog_id).await?;
-        ret.set_mnm(mnm);
+    pub async fn from_id(catalog_id: usize, app: &AppState) -> Result<Self> {
+        let mut ret = app.storage().get_catalog_from_id(catalog_id).await?;
+        ret.set_mnm(app);
         Ok(ret)
     }
 
     /// Returns a HashMap of key-value pairs for the catalog.
     pub async fn get_key_value_pairs(&self) -> Result<HashMap<String, String>> {
-        self.mnm()?
-            .get_storage()
+        self.app()?
+            .storage()
             .get_catalog_key_value_pairs(self.id)
             .await
     }
 
     /// Sets the MixNMatch object. Automatically done when created via from_id().
     //TODO test
-    pub fn set_mnm(&mut self, mnm: &MixNMatch) {
-        self.mnm = Some(mnm.clone());
+    pub fn set_mnm(&mut self, app: &AppState) {
+        self.app = Some(app.clone());
     }
 
-    fn mnm(&self) -> Result<&MixNMatch> {
-        match &self.mnm {
-            Some(mnm) => Ok(mnm),
-            None => Err(anyhow!("Catalog {}: MnM not set", self.id)),
+    fn app(&self) -> Result<&AppState> {
+        match &self.app {
+            Some(app) => Ok(app),
+            None => Err(anyhow!("Catalog {}: app not set", self.id)),
         }
     }
 
     //TODO test
     pub async fn refresh_overview_table(&self) -> Result<()> {
-        self.mnm()?
-            .get_storage()
+        self.app()?
+            .storage()
             .catalog_refresh_overview_table(self.id)
             .await
     }
@@ -112,8 +111,8 @@ impl Catalog {
 
     pub async fn number_of_entries(&self) -> Result<usize> {
         let ret = self
-            .mnm()?
-            .get_storage()
+            .app()?
+            .storage()
             .number_of_entries_in_catalog(self.id)
             .await?;
         Ok(ret)
@@ -122,16 +121,16 @@ impl Catalog {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
+    use crate::app_state::get_test_app;
 
     const TEST_CATALOG_ID: usize = 5526;
     const _TEST_ENTRY_ID: usize = 143962196;
 
     #[tokio::test]
     async fn test_catalog_from_id() {
-        let mnm = get_test_mnm();
-        let catalog = Catalog::from_id(TEST_CATALOG_ID, &mnm).await.unwrap();
+        let app = get_test_app();
+        let catalog = Catalog::from_id(TEST_CATALOG_ID, &app).await.unwrap();
         assert_eq!(catalog.name.unwrap(), "TEST CATALOG");
     }
 }

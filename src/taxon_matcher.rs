@@ -1,7 +1,8 @@
+use crate::app_state::AppState;
+use crate::app_state::USER_AUX_MATCH;
 use crate::catalog::Catalog;
 use crate::entry::*;
 use crate::job::*;
-use crate::mixnmatch::*;
 use anyhow::Result;
 use lazy_static::lazy_static;
 use regex::{Regex, RegexBuilder};
@@ -53,14 +54,14 @@ impl Jobbable for TaxonMatcher {
 
 #[derive(Debug, Clone)]
 pub struct TaxonMatcher {
-    mnm: MixNMatch,
+    app: AppState,
     job: Option<Job>,
 }
 
 impl TaxonMatcher {
-    pub fn new(mnm: &MixNMatch) -> Self {
+    pub fn new(app: &AppState) -> Self {
         Self {
-            mnm: mnm.clone(),
+            app: app.clone(),
             job: None,
         }
     }
@@ -87,8 +88,8 @@ impl TaxonMatcher {
 
     /// Tries to find full matches for entries that are a taxon
     pub async fn match_taxa(&mut self, catalog_id: usize) -> Result<()> {
-        let mut catalog = Catalog::from_id(catalog_id, &self.mnm).await?;
-        let mw_api = self.mnm.app.wikidata().get_mw_api().await?;
+        let mut catalog = Catalog::from_id(catalog_id, &self.app).await?;
+        let mw_api = self.app.wikidata().get_mw_api().await?;
         let use_desc = USE_DESCRIPTIONS_FOR_TAXON_NAME_CATALOGS.contains(&catalog_id);
         let mut ranks: Vec<&str> = TAXON_RANKS.clone().into_values().collect();
         ranks.push("Q16521"); // taxon item
@@ -101,8 +102,8 @@ impl TaxonMatcher {
         let batch_size = 5000;
         loop {
             let (results_len, ranked_names) = self
-                .mnm
-                .get_storage()
+                .app
+                .storage()
                 .match_taxa_get_ranked_names_batch(
                     &ranks,
                     &taxon_name_field,
@@ -125,7 +126,7 @@ impl TaxonMatcher {
         let _ = self.clear_offset().await;
 
         // Update catalog as "done at least once" if necessary
-        catalog.set_taxon_run(self.mnm.get_storage(), true).await?;
+        catalog.set_taxon_run(self.app.storage(), true).await?;
         Ok(())
     }
 
@@ -187,14 +188,14 @@ impl TaxonMatcher {
                     std::cmp::Ordering::Less => {}
                     std::cmp::Ordering::Equal => {
                         if let Some(q) = qs.pop() {
-                            let _ = Entry::from_id(*entry_id, &self.mnm)
+                            let _ = Entry::from_id(*entry_id, &self.app)
                                 .await?
                                 .set_match(&q, USER_AUX_MATCH)
                                 .await;
                         }
                     }
                     std::cmp::Ordering::Greater => {
-                        let _ = Entry::from_id(*entry_id, &self.mnm)
+                        let _ = Entry::from_id(*entry_id, &self.app)
                             .await?
                             .set_multi_match(&qs)
                             .await;
@@ -208,8 +209,8 @@ impl TaxonMatcher {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
+    use crate::app_state::get_test_app;
 
     const TEST_CATALOG_ID: usize = 5526;
     //const _TEST_ENTRY_ID1: usize = 144000951 ; // Britannica-style, akin to catalog 169
@@ -234,18 +235,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_match_taxa() {
-        let mnm = get_test_mnm();
-        let mut tm = TaxonMatcher::new(&mnm);
+        let app = get_test_app();
+        let mut tm = TaxonMatcher::new(&app);
 
         // Clear entry
-        let mut entry = Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
         entry.unmatch().await.unwrap();
 
         // Run matching
         tm.match_taxa(TEST_CATALOG_ID).await.unwrap();
 
         // Check matching and clear
-        let mut entry = Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
         assert_eq!(entry.q, Some(2940133));
         assert_eq!(entry.user, Some(4));
         entry.unmatch().await.unwrap();
