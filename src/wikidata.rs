@@ -141,15 +141,18 @@ impl Wikidata {
             "SELECT page_title FROM `page` WHERE `page_namespace`=0 AND `page_title` IN ({})",
             placeholders
         );
-        let mut conn = self.get_conn().await?;
-        let found_items = conn
+        let found_items: HashSet<String> = self
+            .get_conn()
+            .await?
             .exec_iter(sql, unique_qs.to_vec())
             .await?
             .map_and_drop(from_row::<String>)
-            .await?;
+            .await?
+            .into_iter()
+            .collect();
         let not_found: Vec<String> = unique_qs
             .iter()
-            .filter(|q| !found_items.contains(q))
+            .filter(|q| !found_items.contains(*q))
             .cloned()
             .collect();
         Ok(not_found)
