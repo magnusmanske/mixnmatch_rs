@@ -1,6 +1,6 @@
 pub use crate::storage::Storage;
 use crate::{
-    app_state::AppState,
+    app_state::USER_AUTO,
     automatch::{ResultInOriginalCatalog, ResultInOtherCatalog},
     auxiliary_matcher::AuxiliaryResults,
     catalog::Catalog,
@@ -8,8 +8,9 @@ use crate::{
     entry::{AuxiliaryRow, CoordinateLocation, Entry, EntryError},
     issue::Issue,
     job::{JobRow, JobStatus, TaskSize},
+    match_state::MatchState,
     microsync::EXT_URL_UNIQUE_SEPARATOR,
-    mixnmatch::{MatchState, TABLES_WITH_ENTRY_ID_FIELDS, USER_AUTO},
+    mysql_misc::MySQLMisc,
     taxon_matcher::{RankedNames, TaxonMatcher, TaxonNameField, TAXON_RANKS},
     update_catalog::UpdateInfo,
 };
@@ -22,26 +23,42 @@ use serde_json::Value;
 use std::collections::HashMap;
 use wikimisc::{timestamp::TimeStamp, wikibase::LocaleString};
 
+pub const TABLES_WITH_ENTRY_ID_FIELDS: &[&str] = &[
+    "aliases",
+    "descriptions",
+    "auxiliary",
+    "issues",
+    "kv_entry",
+    "mnm_relation",
+    "multi_match",
+    "person_dates",
+    "location",
+    "log",
+    "entry_creation",
+    "entry2given_name",
+    "statement_text",
+];
+
 #[derive(Debug)]
 pub struct StorageMySQL {
     pool: mysql_async::Pool,
 }
 
+impl MySQLMisc for StorageMySQL {
+    fn pool(&self) -> &mysql_async::Pool {
+        &self.pool
+    }
+}
+
 impl StorageMySQL {
     pub fn new(j: &Value) -> Self {
         Self {
-            pool: AppState::create_pool(j),
+            pool: Self::create_pool(j),
         }
     }
 
     fn get_conn(&self) -> GetConn {
         self.pool.get_conn()
-    }
-
-    fn sql_placeholders(num: usize) -> String {
-        let mut placeholders: Vec<String> = Vec::new();
-        placeholders.resize(num, "?".to_string());
-        placeholders.join(",")
     }
 
     fn coordinate_matcher_main_query_sql(
@@ -96,7 +113,7 @@ impl StorageMySQL {
             source_item: row.get(11)?,
             has_person_date: row.get(12)?,
             taxon_run: row.get(13)?,
-            mnm: None,
+            app: None,
         })
     }
 
@@ -169,7 +186,7 @@ impl StorageMySQL {
             timestamp: Entry::value2opt_string(row.get(8)?).ok()?,
             random: row.get(9).unwrap_or(0.0), // random might be null, who cares
             type_name: Entry::value2opt_string(row.get(10)?).ok()?,
-            mnm: None,
+            app: None,
         })
     }
 }
@@ -179,7 +196,7 @@ impl StorageMySQL {
 #[async_trait]
 impl Storage for StorageMySQL {
     async fn disconnect(&self) -> Result<()> {
-        self.pool.clone().disconnect().await?;
+        self.disconnect_db().await?;
         Ok(())
     }
 
@@ -284,16 +301,16 @@ impl Storage for StorageMySQL {
 
     async fn get_existing_ext_ids(
         &self,
-        placeholders: String,
         catalog_id: usize,
         ext_ids: &[String],
     ) -> Result<Vec<String>> {
+        let placeholders = Self::sql_placeholders(ext_ids.len());
         let sql = format!(
             "SELECT `ext_id` FROM entry WHERE `ext_id` IN ({}) AND `catalog`={}",
             &placeholders, catalog_id
         );
         let existing_ext_ids = sql
-            .with(ext_ids.to_vec())
+            .with(ext_ids.to_vec()) // TODO don't convert to Vec
             .map(self.get_conn().await?, |ext_id| ext_id)
             .await?;
         Ok(existing_ext_ids)
@@ -1621,7 +1638,7 @@ mod tests {
         let file = File::open(&path).unwrap();
         let config: Value = serde_json::from_reader(file).unwrap();
         let storage = StorageMySQL {
-            pool: AppState::create_pool(&config["wikidata"]),
+            pool: StorageMySQL::create_pool(&config["wikidata"]),
         };
 
         // High priority

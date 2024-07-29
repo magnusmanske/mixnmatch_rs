@@ -1,10 +1,11 @@
+use crate::app_state::AppState;
 use crate::auxiliary_matcher::*;
 use crate::catalog::*;
 use crate::entry::*;
 use crate::job::*;
 use crate::maintenance::*;
-use crate::mixnmatch::*;
-use anyhow::Result;
+use crate::match_state::MatchState;
+use anyhow::{anyhow, Result};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::error::Error;
@@ -12,9 +13,10 @@ use std::fmt;
 use std::fs::File;
 use wikimisc::timestamp::TimeStamp;
 
-const MAX_WIKI_ROWS: usize = 400;
 pub const EXT_URL_UNIQUE_SEPARATOR: &str = "!@£$%^&|";
+const MAX_WIKI_ROWS: usize = 400;
 const BLACKLISTED_CATALOGS: &[usize] = &[506];
+const MNM_SITE_URL: &str = "https://mix-n-match.toolforge.org";
 
 #[derive(Debug)]
 pub enum MicrosyncError {
@@ -70,7 +72,7 @@ struct ExtIdNoMnM {
 
 #[derive(Debug, Clone)]
 pub struct Microsync {
-    mnm: MixNMatch,
+    app: AppState,
     job: Option<Job>,
 }
 
@@ -90,9 +92,9 @@ impl Jobbable for Microsync {
 }
 
 impl Microsync {
-    pub fn new(mnm: &MixNMatch) -> Self {
+    pub fn new(app: &AppState) -> Self {
         Self {
-            mnm: mnm.clone(),
+            app: app.clone(),
             job: None,
         }
     }
@@ -101,13 +103,13 @@ impl Microsync {
         if BLACKLISTED_CATALOGS.contains(&catalog_id) {
             return Ok(()); // TODO error?
         }
-        let catalog = Catalog::from_id(catalog_id, &self.mnm).await?;
+        let catalog = Catalog::from_id(catalog_id, &self.app).await?;
         let property = match (catalog.wd_prop, catalog.wd_qual) {
             (Some(prop), None) => prop,
             //_ => return Err(Box::new(MicrosyncError::UnsuitableCatalogProperty))
             _ => return Ok(()), // Don't fail this job, just silently close it
         };
-        let maintenance = Maintenance::new(&self.mnm);
+        let maintenance = Maintenance::new(&self.app);
         maintenance
             .fix_matched_items(catalog_id, &MatchState::fully_matched())
             .await?;
@@ -134,9 +136,18 @@ impl Microsync {
         let page_title = format!("User:Magnus Manske/Mix'n'match report/{}", catalog_id);
         let day = &TimeStamp::now()[0..8];
         let comment = format!("Update {}", day);
-        self.mnm
-            .set_wikipage_text(&page_title, wikitext, &comment)
-            .await?;
+        match self.app.wikidata_mut() {
+            Some(wd) => {
+                wd.set_wikipage_text(&page_title, wikitext, &comment)
+                    .await?
+            }
+            None => {
+                return Err(anyhow!(
+                    "add_auxiliary_to_wikidata: wikidata_mut not available"
+                ));
+            }
+        };
+
         Ok(())
         //mw_api.
     }
@@ -187,8 +198,8 @@ impl Microsync {
             } else {
                 let entry_ids: Vec<usize> = match_differs.iter().map(|e| e.entry_id).collect();
                 let entry2name = self
-                    .mnm
-                    .get_storage()
+                    .app
+                    .storage()
                     .microsync_load_entry_names(&entry_ids)
                     .await?;
                 ret += "{| class='wikitable'\n! External ID !! External label !! Item in Wikidata !! Item in Mix'n'Match !! Mix'n'match entry\n" ;
@@ -214,8 +225,8 @@ impl Microsync {
                     .flat_map(|e| e.entry2ext_id.iter().map(|x| x.0))
                     .collect();
                 let entry2name = self
-                    .mnm
-                    .get_storage()
+                    .app
+                    .storage()
                     .microsync_load_entry_names(&entry_ids)
                     .await?;
                 ret += "{| class='wikitable'\n! Item in Mix'n'Match !! Mix'n'match entry !! External ID !! External label\n" ;
@@ -296,7 +307,7 @@ impl Microsync {
         &self,
         property: usize,
     ) -> Result<Vec<MultipleExtIdInWikidata>> {
-        let mw_api = self.mnm.get_mw_api().await?;
+        let mw_api = self.app.wikidata().get_mw_api().await?;
         // TODO: lcase?
         let sparql = format!(
             "SELECT ?extid (count(?q) AS ?cnt) (GROUP_CONCAT(?q; SEPARATOR = '|') AS ?items)
@@ -306,7 +317,8 @@ impl Microsync {
             property
         );
         Ok(self
-            .mnm
+            .app
+            .wikidata()
             .load_sparql_csv(&sparql)
             .await?
             .records()
@@ -334,8 +346,8 @@ impl Microsync {
 
     async fn get_multiple_q_in_mnm(&self, catalog_id: usize) -> Result<Vec<ExtIdWithMutipleQ>> {
         let results = self
-            .mnm
-            .get_storage()
+            .app
+            .storage()
             .microsync_get_multiple_q_in_mnm(catalog_id)
             .await?;
         let mut results: Vec<ExtIdWithMutipleQ> = results
@@ -369,13 +381,13 @@ impl Microsync {
         case_insensitive: bool,
         batch_size: usize,
     ) -> Result<Vec<(isize, String)>> {
-        let mw_api = self.mnm.get_mw_api().await?;
+        let mw_api = self.app.wikidata().get_mw_api().await?;
         Ok(reader
             .records()
             .filter_map(|r| r.ok())
             .filter_map(|r| {
                 let q = mw_api.extract_entity_from_uri(r.get(0)?).ok()?;
-                let q_numeric = self.mnm.item2numeric(&q)?;
+                let q_numeric = AppState::item2numeric(&q)?;
                 let value = r.get(1)?;
                 let value = if case_insensitive {
                     value.to_lowercase().to_string()
@@ -396,7 +408,7 @@ impl Microsync {
     ) -> Result<(Vec<ExtIdNoMnM>, Vec<MatchDiffers>)> {
         let case_insensitive = AUX_PROPERTIES_ALSO_USING_LOWERCASE.contains(&property);
         let sparql = format!("SELECT ?item ?value {{ ?item wdt:P{property} ?value }}"); // "ORDER BY ?item" unnecessary?
-        let mut reader = self.mnm.load_sparql_csv(&sparql).await?;
+        let mut reader = self.app.wikidata().load_sparql_csv(&sparql).await?;
         let mut extid_not_in_mnm: Vec<ExtIdNoMnM> = vec![];
         let mut match_differs = vec![];
         let batch_size: usize = 5000;
@@ -412,8 +424,8 @@ impl Microsync {
                 match ext_id2entry.get(ext_id) {
                     Some(entry) => {
                         if entry.user.is_none() || entry.user == Some(0) || entry.q.is_none() {
-                            // Found a match but not in MnM yet
-                            Entry::from_id(entry.id, &self.mnm)
+                            // Found a match but not in app yet
+                            Entry::from_id(entry.id, &self.app)
                                 .await?
                                 .set_match(&format!("Q{}", q), 4)
                                 .await?;
@@ -422,7 +434,7 @@ impl Microsync {
                             if let Some(entry_q) = entry.q {
                                 // Entry has N/A or Not In Wikidata, overwrite
                                 if entry_q <= 0 {
-                                    Entry::from_id(entry.id, &self.mnm)
+                                    Entry::from_id(entry.id, &self.app)
                                         .await?
                                         .set_match(&format!("Q{}", q), 4)
                                         .await?;
@@ -472,8 +484,8 @@ impl Microsync {
             return Ok(HashMap::new());
         }
         let results = self
-            .mnm
-            .get_storage()
+            .app
+            .storage()
             .microsync_get_entries_for_ext_ids(catalog_id, ext_ids)
             .await?;
         let case_insensitive = AUX_PROPERTIES_ALSO_USING_LOWERCASE.contains(&property);
@@ -502,9 +514,8 @@ impl Microsync {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
-    //use crate::entry::*;
+    use crate::app_state::{get_test_app, TEST_MUTEX};
 
     const TEST_CATALOG_ID: usize = 5526;
     const TEST_ENTRY_ID: usize = 143962196;
@@ -512,8 +523,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_multiple_extid_in_wikidata() {
-        let mnm = get_test_mnm();
-        let ms = Microsync::new(&mnm);
+        let app = get_test_app();
+        let ms = Microsync::new(&app);
         let result = ms.get_multiple_extid_in_wikidata(7889).await.unwrap();
         assert!(!result.is_empty());
     }
@@ -521,31 +532,31 @@ mod tests {
     #[tokio::test]
     async fn test_get_multiple_q_in_mnm() {
         let _test_lock = TEST_MUTEX.lock();
-        let mnm = get_test_mnm();
-        Entry::from_id(TEST_ENTRY_ID, &mnm)
+        let app = get_test_app();
+        Entry::from_id(TEST_ENTRY_ID, &app)
             .await
             .unwrap()
             .set_match("Q13520818", 2)
             .await
             .unwrap();
-        Entry::from_id(TEST_ENTRY_ID2, &mnm)
+        Entry::from_id(TEST_ENTRY_ID2, &app)
             .await
             .unwrap()
             .set_match("Q13520818", 2)
             .await
             .unwrap();
 
-        let ms = Microsync::new(&mnm);
+        let ms = Microsync::new(&app);
         let _results = ms.get_multiple_q_in_mnm(TEST_CATALOG_ID).await.unwrap();
 
         // Cleanup
-        Entry::from_id(TEST_ENTRY_ID, &mnm)
+        Entry::from_id(TEST_ENTRY_ID, &app)
             .await
             .unwrap()
             .unmatch()
             .await
             .unwrap();
-        Entry::from_id(TEST_ENTRY_ID2, &mnm)
+        Entry::from_id(TEST_ENTRY_ID2, &app)
             .await
             .unwrap()
             .unmatch()
@@ -571,9 +582,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_load_entry_names() {
-        let mnm = get_test_mnm();
-        let result = mnm
-            .get_storage()
+        let app = get_test_app();
+        let result = app
+            .storage()
             .microsync_load_entry_names(&vec![TEST_ENTRY_ID])
             .await
             .unwrap();
@@ -585,8 +596,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_format_ext_id() {
-        let mnm = get_test_mnm();
-        let ms = Microsync::new(&mnm);
+        let app = get_test_app();
+        let ms = Microsync::new(&app);
         assert_eq!(
             ms.format_ext_id("gazebo", "http://foo.bar", "http://foo.baz/$1"),
             "[http://foo.baz/gazebo gazebo]".to_string()
@@ -604,8 +615,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_check_catalog() {
-        let mnm = get_test_mnm();
-        let mut ms = Microsync::new(&mnm);
+        let app = get_test_app();
+        let mut ms = Microsync::new(&app);
         ms.check_catalog(22).await.unwrap();
     }
 }
