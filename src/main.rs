@@ -13,6 +13,9 @@ pub mod maintenance;
 pub mod microsync;
 pub mod mixnmatch;
 pub mod php_wrapper;
+pub mod storage;
+pub mod storage_mysql;
+// pub mod storage_wikibase;
 pub mod taxon_matcher;
 pub mod update_catalog;
 pub mod wikidata_commands;
@@ -38,16 +41,16 @@ async fn run() -> Result<()> {
             .await
         }
         Some("hpjob") => app.run_single_hp_job().await,
-        Some("from_props") => {
-            let props: Vec<u32> = argv
-                .get(3)
-                .expect("Comma-separated props as third parameter")
-                .split(',')
-                .filter_map(|s| s.parse::<u32>().ok())
-                .collect();
-            let min_entries = argv.get(4).and_then(|s| s.parse::<u16>().ok()).unwrap_or(2);
-            app.run_from_props(props, min_entries).await
-        }
+        // Some("from_props") => {
+        //     let props: Vec<u32> = argv
+        //         .get(3)
+        //         .expect("Comma-separated props as third parameter")
+        //         .split(',')
+        //         .filter_map(|s| s.parse::<u32>().ok())
+        //         .collect();
+        //     let min_entries = argv.get(4).and_then(|s| s.parse::<u16>().ok()).unwrap_or(2);
+        //     app.run_from_props(props, min_entries).await
+        // }
         Some("test") => {
             let mnm = crate::mixnmatch::MixNMatch::new(app.clone());
             let mut job = crate::job::Job::new(&mnm);

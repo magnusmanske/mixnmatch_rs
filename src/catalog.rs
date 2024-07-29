@@ -1,11 +1,10 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::entry::AuxiliaryRow;
 use crate::mixnmatch::*;
+use crate::storage::Storage;
 use anyhow::{anyhow, Result};
-use mysql_async::from_row;
-use mysql_async::prelude::*;
-use mysql_async::Row;
 use wikimisc::wikibase::Reference;
 use wikimisc::wikibase::Snak;
 
@@ -29,65 +28,19 @@ pub struct Catalog {
 }
 
 impl Catalog {
-    //TODO test
-    fn from_row(row: &Row) -> Option<Self> {
-        Some(Self {
-            id: row.get(0)?,
-            name: row.get(1)?,
-            url: row.get(2)?,
-            desc: row.get(3)?,
-            type_name: row.get(4)?,
-            wd_prop: row.get(5)?,
-            wd_qual: row.get(6)?,
-            search_wp: row.get(7)?,
-            active: row.get(8)?,
-            owner: row.get(9)?,
-            note: row.get(10)?,
-            source_item: row.get(11)?,
-            has_person_date: row.get(12)?,
-            taxon_run: row.get(13)?,
-            mnm: None,
-        })
-    }
-
     /// Returns a Catalog object for a given entry ID.
     pub async fn from_id(catalog_id: usize, mnm: &MixNMatch) -> Result<Self> {
-        let sql = r"SELECT id,`name`,url,`desc`,`type`,wd_prop,wd_qual,search_wp,active,owner,note,source_item,has_person_date,taxon_run FROM `catalog` WHERE `id`=:catalog_id";
-        let mut rows: Vec<Catalog> = mnm
-            .app
-            .get_mnm_conn()
-            .await?
-            .exec_iter(sql, params! {catalog_id})
-            .await?
-            .map_and_drop(|row| Self::from_row(&row))
-            .await?
-            .iter()
-            .filter_map(|row| row.to_owned())
-            .collect();
-        // `id` is a unique index, so there can be only zero or one row in rows.
-        let mut ret = rows
-            .pop()
-            .ok_or(anyhow!("No catalog #{}", catalog_id))?
-            .to_owned();
+        let mut ret = mnm.get_storage().get_catalog_from_id(catalog_id).await?;
         ret.set_mnm(mnm);
         Ok(ret)
     }
 
     /// Returns a HashMap of key-value pairs for the catalog.
     pub async fn get_key_value_pairs(&self) -> Result<HashMap<String, String>> {
-        let catalog_id = self.id;
-        let sql = r#"SELECT `kv_key`,`kv_value` FROM `kv_catalog` WHERE `catalog_id`=:catalog_id"#;
-        let results = self
-            .mnm()?
-            .app
-            .get_mnm_conn()
-            .await?
-            .exec_iter(sql, params! {catalog_id})
-            .await?
-            .map_and_drop(from_row::<(String, String)>)
-            .await?;
-        let ret: HashMap<String, String> = results.into_iter().collect();
-        Ok(ret)
+        self.mnm()?
+            .get_storage()
+            .get_catalog_key_value_pairs(self.id)
+            .await
     }
 
     /// Sets the MixNMatch object. Automatically done when created via from_id().
@@ -105,25 +58,10 @@ impl Catalog {
 
     //TODO test
     pub async fn refresh_overview_table(&self) -> Result<()> {
-        let catalog_id = self.id;
-        let sql = r"REPLACE INTO `overview` (catalog,total,noq,autoq,na,manual,nowd,multi_match,types) VALUES (
-            :catalog_id,
-            (SELECT count(*) FROM `entry` WHERE `catalog`=:catalog_id),
-            (SELECT count(*) FROM `entry` WHERE `catalog`=:catalog_id AND `q` IS NULL),
-            (SELECT count(*) FROM `entry` WHERE `catalog`=:catalog_id AND `user`=0),
-            (SELECT count(*) FROM `entry` WHERE `catalog`=:catalog_id AND `q`=0),
-            (SELECT count(*) FROM `entry` WHERE `catalog`=:catalog_id AND `q` IS NOT NULL AND `user`>0),
-            (SELECT count(*) FROM `entry` WHERE `catalog`=:catalog_id AND `q`=-1),
-            (SELECT count(*) FROM `multi_match` WHERE `catalog`=:catalog_id),
-            (SELECT group_concat(DISTINCT `type` SEPARATOR '|') FROM `entry` WHERE `catalog`=:catalog_id)
-            )";
         self.mnm()?
-            .app
-            .get_mnm_conn()
-            .await?
-            .exec_drop(sql, params! {catalog_id})
-            .await?;
-        Ok(())
+            .get_storage()
+            .catalog_refresh_overview_table(self.id)
+            .await
     }
 
     pub async fn references(&self, entry: &crate::entry::Entry) -> Vec<Reference> {
@@ -155,6 +93,30 @@ impl Catalog {
         }
         let reference = Reference::new(snaks);
         vec![reference]
+    }
+
+    // TODO test
+    pub async fn set_taxon_run(
+        &mut self,
+        storage: &Arc<Box<dyn Storage>>,
+        new_taxon_run: bool,
+    ) -> Result<()> {
+        if self.taxon_run != new_taxon_run {
+            storage
+                .set_catalog_taxon_run(self.id, new_taxon_run)
+                .await?;
+            self.taxon_run = new_taxon_run;
+        }
+        Ok(())
+    }
+
+    pub async fn number_of_entries(&self) -> Result<usize> {
+        let ret = self
+            .mnm()?
+            .get_storage()
+            .number_of_entries_in_catalog(self.id)
+            .await?;
+        Ok(ret)
     }
 }
 

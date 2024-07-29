@@ -1,16 +1,16 @@
 use crate::app_state::*;
-use crate::entry::*;
 use crate::error::MnMError;
+use crate::storage::Storage;
 use crate::wikidata_commands::WikidataCommand;
 use anyhow::{anyhow, Result};
 use itertools::Itertools;
 use lazy_static::lazy_static;
-use mysql_async::{from_row, prelude::*, Conn};
+use mysql_async::{from_row, prelude::*};
 use regex::Regex;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use urlencoding::encode;
 use wikimisc::wikibase::{EntityTrait, ItemEntity};
@@ -161,6 +161,10 @@ impl MixNMatch {
         }
     }
 
+    pub fn get_storage(&self) -> &Arc<Box<dyn Storage>> {
+        self.app.get_storage()
+    }
+
     pub async fn get_mw_api(
         &self,
     ) -> Result<mediawiki::api::Api, mediawiki::media_wiki_error::MediaWikiError> {
@@ -176,66 +180,6 @@ impl MixNMatch {
         mediawiki::api::Api::new_from_builder(WIKIDATA_API_URL, builder).await
     }
 
-    /// Computes the column of the overview table that is affected, given a user ID and item ID
-    pub fn get_overview_column_name_for_user_and_q(
-        &self,
-        user_id: &Option<usize>,
-        q: &Option<isize>,
-    ) -> &str {
-        match (user_id, q) {
-            (Some(0), _) => "autoq",
-            (Some(_), None) => "noq",
-            (Some(_), Some(0)) => "na",
-            (Some(_), Some(-1)) => "nowd",
-            (Some(_), _) => "manual",
-            _ => "noq",
-        }
-    }
-
-    /// Updates the overview table for a catalog, given the old Entry object, and the user ID and new item.
-    //TODO test
-    pub async fn update_overview_table(
-        &self,
-        old_entry: &Entry,
-        user_id: Option<usize>,
-        q: Option<isize>,
-    ) -> Result<()> {
-        let mut conn = self.app.get_mnm_conn().await?;
-        self.update_overview_table_db(old_entry, user_id, q, &mut conn)
-            .await
-    }
-
-    pub async fn update_overview_table_db(
-        &self,
-        old_entry: &Entry,
-        user_id: Option<usize>,
-        q: Option<isize>,
-        conn: &mut Conn,
-    ) -> Result<()> {
-        let add_column = self.get_overview_column_name_for_user_and_q(&user_id, &q);
-        let reduce_column =
-            self.get_overview_column_name_for_user_and_q(&old_entry.user, &old_entry.q);
-        let catalog_id = old_entry.catalog;
-        let sql = format!(
-            "UPDATE overview SET {}={}+1,{}={}-1 WHERE catalog=:catalog_id",
-            &add_column, &add_column, &reduce_column, &reduce_column
-        );
-        conn.exec_drop(sql, params! {catalog_id}).await?;
-        Ok(())
-    }
-
-    /// Adds the item into a queue for reference fixer. Possibly deprecated.
-    //TODO test
-    pub async fn queue_reference_fixer(&self, q_numeric: isize) -> Result<()> {
-        let mut conn = self.app.get_mnm_conn().await?;
-        self.queue_reference_fixer_db(q_numeric, &mut conn).await
-    }
-
-    pub async fn queue_reference_fixer_db(&self, q_numeric: isize, conn: &mut Conn) -> Result<()> {
-        conn.exec_drop(r"INSERT INTO `reference_fixer` (`q`,`done`) VALUES (:q_numeric,0) ON DUPLICATE KEY UPDATE `done`=0",params! {q_numeric}).await?;
-        Ok(())
-    }
-
     /// Removes "meta items" (eg disambiguation pages) from an item list.
     /// Items are in format "Qxxx".
     pub async fn remove_meta_items(&self, items: &mut Vec<String>) -> Result<()> {
@@ -246,9 +190,9 @@ impl MixNMatch {
         items.dedup();
         let mut sql = "SELECT DISTINCT page_title FROM page,pagelinks,linktarget WHERE page_namespace=0 AND page_title IN ('".to_string() ;
         sql += &items.join("','");
-        sql += "') AND pl_from=page_id AND lt_title IN ('";
+        sql += "') AND pl_from=page_id AND lt_id=pl_target_id AND lt_title IN ('";
         sql += &META_ITEMS.join("','");
-        sql += "')";
+        sql += "') AND lt_namespace=0";
 
         let meta_items = self
             .app
@@ -263,37 +207,6 @@ impl MixNMatch {
         Ok(())
     }
 
-    /// Checks if the log already has a removed match for this entry.
-    /// If a q_numeric item is given, and a specific one is in the log entry, it will only trigger on this combination.
-    //TODO test
-    pub async fn avoid_auto_match(
-        &self,
-        entry_id: usize,
-        q_numeric: Option<isize>,
-    ) -> Result<bool> {
-        let mut conn = self.app.get_mnm_conn().await?;
-        self.avoid_auto_match_db(entry_id, q_numeric, &mut conn)
-            .await
-    }
-
-    pub async fn avoid_auto_match_db(
-        &self,
-        entry_id: usize,
-        q_numeric: Option<isize>,
-        conn: &mut Conn,
-    ) -> Result<bool> {
-        let mut sql = r"SELECT id FROM `log` WHERE `entry_id`=:entry_id".to_string();
-        if let Some(q) = q_numeric {
-            sql += &format!(" AND (q IS NULL OR q={})", &q)
-        }
-        let rows = conn
-            .exec_iter(sql, params! {entry_id})
-            .await?
-            .map_and_drop(from_row::<usize>)
-            .await?;
-        Ok(!rows.is_empty())
-    }
-
     /// Converts a string like "Q12345" to the numeric 12334
     pub fn item2numeric(&self, q: &str) -> Option<isize> {
         RE_ITEM2NUMERIC
@@ -302,7 +215,7 @@ impl MixNMatch {
             .and_then(|cap| cap[1].parse::<isize>().ok())
     }
 
-    //TODO test
+    //TODO remove (abstract WD SQL away)
     pub fn sql_placeholders(num: usize) -> String {
         let mut placeholders: Vec<String> = Vec::new();
         placeholders.resize(num, "?".to_string());
@@ -428,23 +341,6 @@ impl MixNMatch {
     }
 
     //TODO test
-    pub async fn get_random_active_catalog_id_with_property(&self) -> Option<usize> {
-        let sql = "SELECT id FROM catalog WHERE active=1 AND wd_prop IS NOT NULL and wd_qual IS NULL ORDER by rand() LIMIT 1" ;
-        let ids = self
-            .app
-            .get_mnm_conn()
-            .await
-            .ok()?
-            .exec_iter(sql, ())
-            .await
-            .ok()?
-            .map_and_drop(from_row::<usize>)
-            .await
-            .ok()?;
-        ids.first().map(|x| x.to_owned())
-    }
-
-    //TODO test
     pub async fn set_wikipage_text(
         &mut self,
         title: &str,
@@ -561,29 +457,6 @@ impl MixNMatch {
         Ok(())
     }
 
-    pub async fn get_kv_value(&self, key: &str) -> Result<Option<String>> {
-        let sql = r"SELECT `kv_value` FROM `kv` WHERE `kv_key`=:key";
-        Ok(self
-            .app
-            .get_mnm_conn()
-            .await?
-            .exec_iter(sql, params! {key})
-            .await?
-            .map_and_drop(from_row::<String>)
-            .await?
-            .pop())
-    }
-
-    pub async fn set_kv_value(&self, key: &str, value: &str) -> Result<()> {
-        let sql = r"INSERT INTO `kv` (`kv_key`,`kv_value`) VALUES (:key,:value) ON DUPLICATE KEY UPDATE `kv_value`=:value";
-        self.app
-            .get_mnm_conn()
-            .await?
-            .exec_drop(sql, params! {key,value})
-            .await?;
-        Ok(())
-    }
-
     pub fn tool_root_dir() -> String {
         std::env::var("TOOL_DATA_DIR").unwrap_or("/data/project/mix-n-match".to_string())
     }
@@ -643,39 +516,6 @@ mod tests {
             .collect();
         mnm.remove_meta_items(&mut items).await.unwrap();
         assert_eq!(items, ["Q1", "Q2"]);
-    }
-
-    #[tokio::test]
-    async fn test_get_overview_column_name_for_user_and_q() {
-        let mnm = get_test_mnm();
-        assert_eq!(
-            mnm.get_overview_column_name_for_user_and_q(&Some(0), &None),
-            "autoq"
-        );
-        assert_eq!(
-            mnm.get_overview_column_name_for_user_and_q(&Some(2), &Some(1)),
-            "manual"
-        );
-        assert_eq!(
-            mnm.get_overview_column_name_for_user_and_q(&Some(2), &Some(0)),
-            "na"
-        );
-        assert_eq!(
-            mnm.get_overview_column_name_for_user_and_q(&Some(2), &Some(-1)),
-            "nowd"
-        );
-        assert_eq!(
-            mnm.get_overview_column_name_for_user_and_q(&Some(2), &None),
-            "noq"
-        );
-        assert_eq!(
-            mnm.get_overview_column_name_for_user_and_q(&None, &None),
-            "noq"
-        );
-        assert_eq!(
-            mnm.get_overview_column_name_for_user_and_q(&None, &Some(1)),
-            "noq"
-        );
     }
 
     #[tokio::test]

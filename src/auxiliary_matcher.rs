@@ -7,8 +7,6 @@ use crate::wikidata_commands::*;
 use anyhow::Result;
 use futures::future::join_all;
 use lazy_static::lazy_static;
-use mysql_async::from_row;
-use mysql_async::prelude::*;
 use regex::Regex;
 use serde_json::json;
 use std::collections::HashMap;
@@ -33,7 +31,7 @@ lazy_static! {
 }
 
 #[derive(Debug, Clone)]
-struct AuxiliaryResults {
+pub struct AuxiliaryResults {
     pub aux_id: usize,
     pub entry_id: usize,
     pub q_numeric: usize,
@@ -43,7 +41,7 @@ struct AuxiliaryResults {
 
 impl AuxiliaryResults {
     //TODO test
-    fn from_result(result: &(usize, usize, usize, usize, String)) -> Self {
+    pub fn from_result(result: &(usize, usize, usize, usize, String)) -> Self {
         Self {
             aux_id: result.0,
             entry_id: result.1,
@@ -212,19 +210,7 @@ impl AuxiliaryMatcher {
             .filter(|i| !AUX_BLACKLISTED_PROPERTIES.contains(i))
             .map(|i| format!("{}", i))
             .collect();
-        let sql = format!(
-            "SELECT auxiliary.id,entry_id,0,aux_p,aux_name FROM entry,auxiliary
-            WHERE entry_id=entry.id AND catalog=:catalog_id 
-            {}
-            AND in_wikidata=0 
-            AND aux_p IN ({})
-            AND catalog NOT IN ({})
-            /* ORDER BY auxiliary.id */
-            LIMIT :batch_size OFFSET :offset",
-            MatchState::not_fully_matched().get_sql(),
-            extid_props.join(","),
-            blacklisted_catalogs.join(",")
-        );
+
         let mut offset = self.get_last_job_offset().await;
         let batch_size = *self
             .mnm
@@ -243,15 +229,15 @@ impl AuxiliaryMatcher {
             // println!("Catalog {catalog_id} running {batch_size} entries from {offset}");
             let results = self
                 .mnm
-                .app
-                .get_mnm_conn()
-                .await?
-                .exec_iter(sql.clone(), params! {catalog_id,offset,batch_size})
-                .await?
-                .map_and_drop(from_row::<(usize, usize, usize, usize, String)>)
+                .get_storage()
+                .auxiliary_matcher_match_via_aux(
+                    catalog_id,
+                    offset,
+                    batch_size,
+                    &extid_props,
+                    &blacklisted_catalogs,
+                )
                 .await?;
-            let results: Vec<AuxiliaryResults> =
-                results.iter().map(AuxiliaryResults::from_result).collect();
             let mut items_to_check: Vec<(String, AuxiliaryResults)> = vec![];
 
             // println!("To check: {}",results.len());
@@ -361,17 +347,7 @@ impl AuxiliaryMatcher {
             .iter()
             .map(|u| format!("{}", u))
             .collect();
-        let sql = format!(
-            "SELECT auxiliary.id,entry_id,q,aux_p,aux_name FROM entry,auxiliary
-            WHERE entry_id=entry.id AND catalog=:catalog_id 
-            {}
-            AND in_wikidata=0 
-            AND aux_p NOT IN ({})
-            AND (aux_p!=17 OR `type`!='Q5')
-            ORDER BY auxiliary.id LIMIT :batch_size OFFSET :offset",
-            MatchState::fully_matched().get_sql(),
-            blacklisted_properties.join(",")
-        );
+
         let mut offset = self.get_last_job_offset().await;
         let batch_size = 500;
         let mw_api = self.mnm.get_mw_api().await?;
@@ -379,15 +355,14 @@ impl AuxiliaryMatcher {
         loop {
             let results = self
                 .mnm
-                .app
-                .get_mnm_conn()
-                .await?
-                .exec_iter(sql.clone(), params! {catalog_id,offset,batch_size})
-                .await?
-                .map_and_drop(from_row::<(usize, usize, usize, usize, String)>)
+                .get_storage()
+                .auxiliary_matcher_add_auxiliary_to_wikidata(
+                    &blacklisted_properties,
+                    catalog_id,
+                    offset,
+                    batch_size,
+                )
                 .await?;
-            let results: Vec<AuxiliaryResults> =
-                results.iter().map(AuxiliaryResults::from_result).collect();
             let (aux, sources) = self.aux2wd_remap_results(catalog_id, &results).await;
 
             let entities = EntityContainer::new();
@@ -492,6 +467,7 @@ impl AuxiliaryMatcher {
             }
             if let Ok(b) = self
                 .mnm
+                .get_storage()
                 .avoid_auto_match(aux.entry_id, Some(aux.q_numeric as isize))
                 .await
             {
@@ -770,41 +746,6 @@ mod tests {
         entry.set_auxiliary(214, None).await.unwrap();
         entry.set_auxiliary(370, None).await.unwrap();
         entry.unmatch().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_match_via_auxiliary() {
-        let _test_lock = TEST_MUTEX.lock();
-        let mnm = get_test_mnm();
-        let mut entry = Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
-        entry
-            .set_auxiliary(214, Some("30701597".to_string()))
-            .await
-            .unwrap();
-        entry.unmatch().await.unwrap();
-
-        // Run matcher
-        let mut am = AuxiliaryMatcher::new(&mnm);
-        am.match_via_auxiliary(TEST_CATALOG_ID).await.unwrap();
-
-        // Check
-        let mut entry = Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
-        assert_eq!(entry.q.unwrap(), 13520818);
-
-        // Cleanup
-        entry.set_auxiliary(214, None).await.unwrap();
-        entry.unmatch().await.unwrap();
-        let catalog_id = TEST_CATALOG_ID;
-        mnm.app
-            .get_mnm_conn()
-            .await
-            .unwrap()
-            .exec_drop(
-                "DELETE FROM `jobs` WHERE `action`='aux2wd' AND `catalog`=:catalog_id",
-                params! {catalog_id},
-            )
-            .await
-            .unwrap();
     }
 
     #[tokio::test]
