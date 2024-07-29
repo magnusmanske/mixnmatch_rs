@@ -457,7 +457,7 @@ impl Maintenance {
     /// Finds meta items (disambig etc) in a batch of items, and unlinks MnM matches to them.
     async fn unlink_meta_items_batch(&self, unique_qs: &[String]) -> Result<()> {
         let placeholders = MixNMatch::sql_placeholders(unique_qs.len());
-        let sql = format!("SELECT DISTINCT lt_title AS page_title FROM page,pagelinks,linktarget WHERE page_namespace=0 AND page_title IN ({}) AND pl_from=page_id AND lt_title IN ('{}')",&placeholders,&META_ITEMS.join("','"));
+        let sql = format!("SELECT DISTINCT page_title AS page_title FROM page,pagelinks,linktarget WHERE page_namespace=0 AND page_title IN ({}) AND pl_from=page_id AND lt_id=pl_target_id AND lt_title IN ('{}')",&placeholders,&META_ITEMS.join("','"));
         let meta_items = self
             .mnm
             .app
