@@ -933,13 +933,21 @@ mod tests {
     async fn test_get_item_url() {
         let _test_lock = TEST_MUTEX.lock();
         let app = get_test_app();
+
+        // !!
         let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+
+        // !!!!!
         entry.set_match("Q12345", 4).await.unwrap();
+
         assert_eq!(
             entry.get_item_url(),
             Some("https://www.wikidata.org/wiki/Q12345".to_string())
         );
+
+        // !!!!!
         entry.unmatch().await.unwrap();
+
         assert_eq!(entry.get_item_url(), None);
     }
 

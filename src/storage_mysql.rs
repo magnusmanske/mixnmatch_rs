@@ -237,6 +237,7 @@ impl Storage for StorageMySQL {
             .await?
             .map_and_drop(from_row::<(usize, String, String)>)
             .await?;
+        drop(conn);
         let mut ranked_names: RankedNames = HashMap::new();
         for result in &results {
             let entry_id = result.0;
@@ -348,6 +349,7 @@ impl Storage for StorageMySQL {
             .iter()
             .filter_map(|row| row.to_owned())
             .collect();
+        drop(conn);
         let ret = rows
             .pop()
             .ok_or(anyhow!("No catalog #{}", catalog_id))?
@@ -450,7 +452,6 @@ impl Storage for StorageMySQL {
         user_id: Option<usize>,
         q: Option<isize>,
     ) -> Result<()> {
-        let mut conn = self.get_conn().await?;
         let add_column = self.get_overview_column_name_for_user_and_q(&user_id, &q);
         let reduce_column =
             self.get_overview_column_name_for_user_and_q(&old_entry.user, &old_entry.q);
@@ -459,13 +460,13 @@ impl Storage for StorageMySQL {
             "UPDATE overview SET {}={}+1,{}={}-1 WHERE catalog=:catalog_id",
             &add_column, &add_column, &reduce_column, &reduce_column
         );
+        let mut conn = self.get_conn().await?;
         conn.exec_drop(sql, params! {catalog_id}).await?;
         Ok(())
     }
 
     async fn queue_reference_fixer(&self, q_numeric: isize) -> Result<()> {
-        let mut conn = self.get_conn().await?;
-        conn.exec_drop(r"INSERT INTO `reference_fixer` (`q`,`done`) VALUES (:q_numeric,0) ON DUPLICATE KEY UPDATE `done`=0",params! {q_numeric}).await?;
+        self.get_conn().await?.exec_drop(r"INSERT INTO `reference_fixer` (`q`,`done`) VALUES (:q_numeric,0) ON DUPLICATE KEY UPDATE `done`=0",params! {q_numeric}).await?;
         Ok(())
     }
 
@@ -476,33 +477,39 @@ impl Storage for StorageMySQL {
         if let Some(q) = q_numeric {
             sql += &format!(" AND (q IS NULL OR q={})", &q)
         }
-        let mut conn = self.get_conn().await?;
-        let rows = conn
+        sql += " LIMIT 1";
+        let has_rows = !self
+            .get_conn()
+            .await?
             .exec_iter(sql, params! {entry_id})
             .await?
             .map_and_drop(from_row::<usize>)
-            .await?;
-        Ok(!rows.is_empty())
+            .await?
+            .is_empty();
+        Ok(has_rows)
     }
 
     //TODO test
     async fn get_random_active_catalog_id_with_property(&self) -> Option<usize> {
         let sql = "SELECT id FROM catalog WHERE active=1 AND wd_prop IS NOT NULL and wd_qual IS NULL ORDER by rand() LIMIT 1" ;
-        let mut conn = self.get_conn().await.ok()?;
-        let ids = conn
+        self.get_conn()
+            .await
+            .ok()?
             .exec_iter(sql, ())
             .await
             .ok()?
             .map_and_drop(from_row::<usize>)
             .await
-            .ok()?;
-        ids.first().map(|x| x.to_owned())
+            .ok()?
+            .first()
+            .map(|x| x.to_owned())
     }
 
     async fn get_kv_value(&self, key: &str) -> Result<Option<String>> {
         let sql = r"SELECT `kv_value` FROM `kv` WHERE `kv_key`=:key";
-        let mut conn = self.get_conn().await?;
-        Ok(conn
+        Ok(self
+            .get_conn()
+            .await?
             .exec_iter(sql, params! {key})
             .await?
             .map_and_drop(from_row::<String>)
@@ -512,8 +519,10 @@ impl Storage for StorageMySQL {
 
     async fn set_kv_value(&self, key: &str, value: &str) -> Result<()> {
         let sql = r"INSERT INTO `kv` (`kv_key`,`kv_value`) VALUES (:key,:value) ON DUPLICATE KEY UPDATE `kv_value`=:value";
-        let mut conn = self.get_conn().await?;
-        conn.exec_drop(sql, params! {key,value}).await?;
+        self.get_conn()
+            .await?
+            .exec_drop(sql, params! {key,value})
+            .await?;
         Ok(())
     }
 
@@ -535,16 +544,16 @@ impl Storage for StorageMySQL {
     // Autoscrape
 
     async fn autoscrape_get_for_catalog(&self, catalog_id: usize) -> Result<Vec<(usize, String)>> {
-        let mut conn = self.get_conn().await?;
-        let results = conn
+        Ok(self
+            .get_conn()
+            .await?
             .exec_iter(
                 "SELECT `id`,`json` FROM `autoscrape` WHERE `catalog`=:catalog_id",
                 params! {catalog_id},
             )
             .await?
             .map_and_drop(from_row::<(usize, String)>)
-            .await?;
-        Ok(results)
+            .await?)
     }
 
     async fn autoscrape_get_entry_ids_for_ext_ids(
@@ -605,8 +614,9 @@ impl Storage for StorageMySQL {
             extid_props.join(","),
             blacklisted_catalogs.join(",")
         );
-        let mut conn = self.get_conn().await?;
-        let results = conn
+        let results = self
+            .get_conn()
+            .await?
             .exec_iter(sql, params! {catalog_id,offset,batch_size})
             .await?
             .map_and_drop(from_row::<(usize, usize, usize, usize, String)>)
@@ -634,8 +644,9 @@ impl Storage for StorageMySQL {
             MatchState::fully_matched().get_sql(),
             blacklisted_properties.join(",")
         );
-        let mut conn = self.get_conn().await?;
-        let results = conn
+        let results = self
+            .get_conn()
+            .await?
             .exec_iter(sql.clone(), params! {catalog_id,offset,batch_size})
             .await?
             .map_and_drop(from_row::<(usize, usize, usize, usize, String)>)
@@ -674,7 +685,6 @@ impl Storage for StorageMySQL {
     // Unlink deleted Wikidata items (item IDs in `deletions`).
     // Returns the catalog ID that were affected by this.
     async fn maintenance_apply_deletions(&self, deletions: Vec<isize>) -> Result<Vec<usize>> {
-        let mut conn = self.get_conn().await?;
         let deletions_string = deletions
             .iter()
             .map(|i| format!("{}", *i))
@@ -682,6 +692,7 @@ impl Storage for StorageMySQL {
             .join(",");
         let sql =
             format!("SELECT DISTINCT `catalog` FROM `entry` WHERE `q` IN ({deletions_string})");
+        let mut conn = self.get_conn().await?;
         let catalog_ids = conn
             .exec_iter(sql, ())
             .await?
@@ -783,8 +794,10 @@ impl Storage for StorageMySQL {
             .exec_iter(sql.clone(), params! {catalog_id,offset,batch_size})
             .await?
             .map_and_drop(from_row::<usize>)
-            .await?;
-        let ret = ret.iter().map(|q| format!("Q{}", q)).collect();
+            .await?
+            .iter()
+            .map(|q| format!("Q{}", q))
+            .collect();
         Ok(ret)
     }
 
@@ -1391,10 +1404,7 @@ impl Storage for StorageMySQL {
             .await?
             .map_and_drop(from_row::<(String, String)>)
             .await?;
-        let mut ret: Vec<LocaleString> = vec![];
-        rows.iter().for_each(|(k, v)| {
-            ret.push(LocaleString::new(k, v));
-        });
+        let ret = rows.iter().map(|(k, v)| LocaleString::new(k, v)).collect();
         Ok(ret)
     }
 
@@ -1410,8 +1420,9 @@ impl Storage for StorageMySQL {
         &self,
         entry_id: usize,
     ) -> Result<HashMap<String, String>> {
-        let mut conn = self.get_conn().await?;
-        let rows: Vec<(String, String)> = conn
+        let rows: Vec<(String, String)> = self
+            .get_conn()
+            .await?
             .exec_iter(
                 r"SELECT `language`,`label` FROM `descriptions` WHERE `entry_id`=:entry_id",
                 params! {entry_id},
@@ -1501,7 +1512,6 @@ impl Storage for StorageMySQL {
         timestamp: &str,
     ) -> Result<bool> {
         let entry_id = entry.id;
-        let mut conn = self.get_conn().await?;
         let mut sql = "UPDATE `entry` SET `q`=:q_numeric,`user`=:user_id,`timestamp`=:timestamp WHERE `id`=:entry_id AND (`q` IS NULL OR `q`!=:q_numeric OR `user`!=:user_id)".to_string();
         if user_id == USER_AUTO {
             if self.avoid_auto_match(entry_id, Some(q_numeric)).await? {
@@ -1509,13 +1519,14 @@ impl Storage for StorageMySQL {
             }
             sql += &MatchState::not_fully_matched().get_sql();
         }
+        let mut conn = self.get_conn().await?;
         conn.exec_drop(sql, params! {q_numeric,user_id,timestamp,entry_id})
             .await?;
         let nothing_changed = conn.affected_rows() == 0;
+        drop(conn);
         if nothing_changed {
             return Ok(false);
         }
-        drop(conn);
 
         // Update overview table and misc cleanup
         self.update_overview_table(entry, Some(user_id), Some(q_numeric))
@@ -1560,12 +1571,13 @@ impl Storage for StorageMySQL {
 
     /// Removes multi-matches for an entry, eg when the entry has been fully matched.
     async fn entry_remove_multi_match(&self, entry_id: usize) -> Result<()> {
-        let mut conn = self.get_conn().await?;
-        conn.exec_drop(
-            r"DELETE FROM multi_match WHERE entry_id=:entry_id",
-            params! {entry_id},
-        )
-        .await?;
+        self.get_conn()
+            .await?
+            .exec_drop(
+                r"DELETE FROM multi_match WHERE entry_id=:entry_id",
+                params! {entry_id},
+            )
+            .await?;
         Ok(())
     }
 
