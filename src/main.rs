@@ -12,12 +12,14 @@ pub mod job;
 pub mod maintenance;
 pub mod microsync;
 pub mod mixnmatch;
+pub mod mysql_misc;
 pub mod php_wrapper;
 pub mod storage;
 pub mod storage_mysql;
 // pub mod storage_wikibase;
 pub mod taxon_matcher;
 pub mod update_catalog;
+pub mod wdrc;
 pub mod wikidata;
 pub mod wikidata_commands;
 

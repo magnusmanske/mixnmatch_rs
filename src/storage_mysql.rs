@@ -1,6 +1,5 @@
 pub use crate::storage::Storage;
 use crate::{
-    app_state::AppState,
     automatch::{ResultInOriginalCatalog, ResultInOtherCatalog},
     auxiliary_matcher::AuxiliaryResults,
     catalog::Catalog,
@@ -10,6 +9,7 @@ use crate::{
     job::{JobRow, JobStatus, TaskSize},
     microsync::EXT_URL_UNIQUE_SEPARATOR,
     mixnmatch::{MatchState, TABLES_WITH_ENTRY_ID_FIELDS, USER_AUTO},
+    mysql_misc::MySQLMisc,
     taxon_matcher::{RankedNames, TaxonMatcher, TaxonNameField, TAXON_RANKS},
     update_catalog::UpdateInfo,
 };
@@ -27,21 +27,21 @@ pub struct StorageMySQL {
     pool: mysql_async::Pool,
 }
 
+impl MySQLMisc for StorageMySQL {
+    fn pool(&self) -> &mysql_async::Pool {
+        &self.pool
+    }
+}
+
 impl StorageMySQL {
     pub fn new(j: &Value) -> Self {
         Self {
-            pool: AppState::create_pool(j),
+            pool: Self::create_pool(j),
         }
     }
 
     fn get_conn(&self) -> GetConn {
         self.pool.get_conn()
-    }
-
-    fn sql_placeholders(num: usize) -> String {
-        let mut placeholders: Vec<String> = Vec::new();
-        placeholders.resize(num, "?".to_string());
-        placeholders.join(",")
     }
 
     fn coordinate_matcher_main_query_sql(
@@ -1621,7 +1621,7 @@ mod tests {
         let file = File::open(&path).unwrap();
         let config: Value = serde_json::from_reader(file).unwrap();
         let storage = StorageMySQL {
-            pool: AppState::create_pool(&config["wikidata"]),
+            pool: StorageMySQL::create_pool(&config["wikidata"]),
         };
 
         // High priority

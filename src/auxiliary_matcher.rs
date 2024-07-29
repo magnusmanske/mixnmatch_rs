@@ -216,13 +216,13 @@ impl AuxiliaryMatcher {
         let batch_size = *self
             .mnm
             .app
-            .task_specific_usize
+            .task_specific_usize()
             .get("auxiliary_matcher_batch_size")
             .unwrap_or(&500);
         let search_batch_size = *self
             .mnm
             .app
-            .task_specific_usize
+            .task_specific_usize()
             .get("auxiliary_matcher_search_batch_size")
             .unwrap_or(&50);
         let mw_api = self.mnm.get_mw_api().await?;

@@ -196,13 +196,13 @@ impl AutoMatch {
         let batch_size = *self
             .mnm
             .app
-            .task_specific_usize
+            .task_specific_usize()
             .get("automatch_by_search_batch_size")
             .unwrap_or(&5000);
         let search_batch_size = *self
             .mnm
             .app
-            .task_specific_usize
+            .task_specific_usize()
             .get("automatch_by_search_search_batch_size")
             .unwrap_or(&100);
 

@@ -291,8 +291,8 @@ impl MixNMatch {
         name.trim().to_string()
     }
 
-    pub fn import_file_path(&self) -> String {
-        self.app.import_file_path.to_owned()
+    pub fn import_file_path(&self) -> &str {
+        self.app.import_file_path()
     }
 
     //TODO test
@@ -405,8 +405,8 @@ impl MixNMatch {
         }
         mw_api
             .login(
-                self.app.bot_name.to_owned(),
-                self.app.bot_password.to_owned(),
+                self.app.bot_name().to_owned(),
+                self.app.bot_password().to_owned(),
             )
             .await?;
         Ok(())
