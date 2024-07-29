@@ -136,12 +136,12 @@ impl Maintenance {
         {
             let from = j["item"]
                 .as_str()
-                .map(|s| AppState::item2numeric(s))
+                .map(AppState::item2numeric)
                 .and_then(|i| i)
                 .unwrap_or(0);
             let to = j["target"]
                 .as_str()
-                .map(|s| AppState::item2numeric(s))
+                .map(AppState::item2numeric)
                 .and_then(|i| i)
                 .unwrap_or(0);
             let ts = j["timestamp"]
@@ -180,7 +180,7 @@ impl Maintenance {
         {
             let item = j["item"]
                 .as_str()
-                .map(|s| AppState::item2numeric(s))
+                .map(AppState::item2numeric)
                 .and_then(|i| i)
                 .unwrap_or(0);
             let ts = j["timestamp"]
