@@ -31,8 +31,7 @@ pub struct Person {}
 impl Person {
     pub fn sanitize_simplify_name(name: &str) -> String {
         let name = Self::sanitize_name(name);
-        let name = Self::simplify_name(&name);
-        name
+        Self::simplify_name(&name)
     }
 
     fn sanitize_name(name: &str) -> String {
