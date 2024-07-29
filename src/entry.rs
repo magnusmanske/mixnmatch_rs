@@ -1,8 +1,7 @@
 use crate::catalog::Catalog;
 use crate::mixnmatch::*;
 use anyhow::{anyhow, Result};
-use mysql_async::{from_row, Row, Value};
-use mysql_async::{prelude::*, Conn};
+use mysql_async::{Row, Value};
 use rand::prelude::*;
 use std::collections::HashMap;
 use std::error::Error;
@@ -123,7 +122,14 @@ pub struct Entry {
 }
 
 impl Entry {
+    /// Returns an Entry object for a given entry ID.
     //TODO test
+    pub async fn from_id(entry_id: usize, mnm: &MixNMatch) -> Result<Self> {
+        let mut ret = mnm.get_storage().entry_from_id(entry_id).await?;
+        ret.set_mnm(mnm);
+        Ok(ret)
+    }
+
     pub fn new_from_catalog_and_ext_id(catalog_id: usize, ext_id: &str) -> Self {
         Self {
             id: ENTRY_NEW_ID,
@@ -141,51 +147,13 @@ impl Entry {
         }
     }
 
-    /// Returns an Entry object for a given entry ID.
-    //TODO test
-    pub async fn from_id(entry_id: usize, mnm: &MixNMatch) -> Result<Self> {
-        let sql = format!("{} WHERE `id`=:entry_id", Self::sql_select());
-        let mut rows: Vec<Self> = mnm
-            .app
-            .get_mnm_conn()
-            .await?
-            .exec_iter(sql, params! {entry_id})
-            .await?
-            .map_and_drop(|row| Self::from_row(&row))
-            .await?
-            .iter()
-            .filter_map(|row| row.to_owned())
-            .collect();
-        // `id` is a unique index, so there can be only zero or one row in rows.
-        let mut ret = rows
-            .pop()
-            .ok_or(anyhow!("No entry #{}", entry_id))?
-            .to_owned();
-        ret.set_mnm(mnm);
-        Ok(ret)
-    }
-
     /// Returns an Entry object for a given external ID in a catalog.
     //TODO test
     pub async fn from_ext_id(catalog_id: usize, ext_id: &str, mnm: &MixNMatch) -> Result<Entry> {
-        let sql = format!(
-            "{} WHERE `catalog`=:catalog_id AND `ext_id`=:ext_id",
-            Self::sql_select()
-        );
-        let mut conn = mnm.app.get_mnm_conn().await?;
-        let mut rows: Vec<Entry> = conn
-            .exec_iter(sql, params! {catalog_id,ext_id})
-            .await?
-            .map_and_drop(|row| Self::from_row(&row))
-            .await?
-            .iter()
-            .filter_map(|row| row.to_owned())
-            .collect();
-        // `catalog`/`ext_id` comprises a unique index, so there can be only zero or one row in rows.
-        let mut ret = rows
-            .pop()
-            .ok_or(anyhow!("No entry '{}' in catalog #{}", ext_id, catalog_id))?
-            .to_owned();
+        let mut ret = mnm
+            .get_storage()
+            .entry_from_ext_id(catalog_id, ext_id)
+            .await?;
         ret.set_mnm(mnm);
         Ok(ret)
     }
@@ -194,53 +162,11 @@ impl Entry {
         entry_ids: &[usize],
         mnm: &MixNMatch,
     ) -> Result<HashMap<usize, Self>> {
-        if entry_ids.is_empty() {
-            return Ok(HashMap::new());
-        }
-        let entry_ids = entry_ids
-            .iter()
-            .map(|id| format!("{id}"))
-            .collect::<Vec<String>>()
-            .join(",");
-        let sql = format!("{} WHERE `id` IN ({})", Self::sql_select(), entry_ids);
-        let mut rows: Vec<Self> = mnm
-            .app
-            .get_mnm_conn()
-            .await?
-            .exec_iter(sql, ())
-            .await?
-            .map_and_drop(|row| Self::from_row(&row))
-            .await?
-            .iter()
-            .filter_map(|row| row.to_owned())
-            .collect();
-        for row in &mut rows {
-            row.set_mnm(mnm);
-        }
-        let ret = rows.into_iter().map(|entry| (entry.id, entry)).collect();
+        let mut ret = mnm.get_storage().multiple_from_ids(entry_ids).await?;
+        ret.iter_mut().for_each(|(_id, entry)| {
+            entry.set_mnm(mnm);
+        });
         Ok(ret)
-    }
-
-    fn sql_select() -> String {
-        r"SELECT id,catalog,ext_id,ext_url,ext_name,ext_desc,q,user,timestamp,if(isnull(random),rand(),random) as random,`type` FROM `entry`".into()
-    }
-
-    //TODO test
-    pub fn from_row(row: &Row) -> Option<Self> {
-        Some(Entry {
-            id: row.get(0)?,
-            catalog: row.get(1)?,
-            ext_id: row.get(2)?,
-            ext_url: row.get(3)?,
-            ext_name: row.get(4)?,
-            ext_desc: row.get(5)?,
-            q: Self::value2opt_isize(row.get(6)?).ok()?,
-            user: Self::value2opt_usize(row.get(7)?).ok()?,
-            timestamp: Self::value2opt_string(row.get(8)?).ok()?,
-            random: row.get(9).unwrap_or(0.0), // random might be null, who cares
-            type_name: Self::value2opt_string(row.get(10)?).ok()?,
-            mnm: None,
-        })
     }
 
     /// Inserts the current entry into the database. id must be ENTRY_NEW_ID.
@@ -249,22 +175,7 @@ impl Entry {
         if self.id != ENTRY_NEW_ID {
             return Err(EntryError::TryingToInsertExistingEntry.into());
         }
-        let sql = "INSERT IGNORE INTO `entry` (`catalog`,`ext_id`,`ext_url`,`ext_name`,`ext_desc`,`q`,`user`,`timestamp`,`random`,`type`) VALUES (:catalog,:ext_id,:ext_url,:ext_name,:ext_desc,:q,:user,:timestamp,:random,:type_name)";
-        let params = params! {
-            "catalog" => self.catalog,
-            "ext_id" => self.ext_id.to_owned(),
-            "ext_url" => self.ext_url.to_owned(),
-            "ext_name" => self.ext_name.to_owned(),
-            "ext_desc" => self.ext_desc.to_owned(),
-            "q" => self.q,
-            "user" => self.user,
-            "timestamp" => self.timestamp.to_owned(),
-            "random" => self.random,
-            "type_name" => self.type_name.to_owned(),
-        };
-        let mut conn = self.mnm()?.app.get_mnm_conn().await?;
-        conn.exec_drop(sql, params).await?;
-        self.id = conn.last_insert_id().ok_or(EntryError::EntryInsertFailed)? as usize;
+        self.id = self.mnm()?.get_storage().entry_insert_as_new(self).await?;
         Ok(())
     }
 
@@ -273,13 +184,7 @@ impl Entry {
     pub async fn delete(&mut self) -> Result<()> {
         self.check_valid_id()?;
         let entry_id = self.id;
-        let mut conn = self.mnm()?.app.get_mnm_conn().await?;
-        for table in TABLES_WITH_ENTRY_ID_FIELDS {
-            let sql = format!("DELETE FROM `{}` WHERE `entry_id`=:entry_id", table);
-            conn.exec_drop(sql, params! {entry_id}).await?;
-        }
-        let sql = "DELETE FROM `entry` WHERE `id`=:entry_id";
-        conn.exec_drop(sql, params! {entry_id}).await?;
+        self.mnm()?.get_storage().entry_delete(entry_id).await?;
         // TODO overview table?
         self.id = ENTRY_NEW_ID;
         Ok(())
@@ -287,7 +192,7 @@ impl Entry {
 
     /// Helper function for from_row().
     //TODO test
-    fn value2opt_string(value: mysql_async::Value) -> Result<Option<String>> {
+    pub fn value2opt_string(value: mysql_async::Value) -> Result<Option<String>> {
         match value {
             Value::Bytes(s) => Ok(Some(std::str::from_utf8(&s)?.to_owned())),
             _ => Ok(None),
@@ -296,7 +201,7 @@ impl Entry {
 
     /// Helper function for from_row().
     //TODO test
-    fn value2opt_isize(value: mysql_async::Value) -> Result<Option<isize>> {
+    pub fn value2opt_isize(value: mysql_async::Value) -> Result<Option<isize>> {
         match value {
             Value::Int(i) => Ok(Some(i.try_into()?)),
             _ => Ok(None),
@@ -305,7 +210,7 @@ impl Entry {
 
     /// Helper function for from_row().
     //TODO test
-    fn value2opt_usize(value: mysql_async::Value) -> Result<Option<usize>> {
+    pub fn value2opt_usize(value: mysql_async::Value) -> Result<Option<usize>> {
         match value {
             Value::Int(i) => Ok(Some(i.try_into()?)),
             _ => Ok(None),
@@ -342,22 +247,11 @@ impl Entry {
     pub async fn get_creation_time(&self) -> Option<String> {
         self.check_valid_id().ok()?;
         let entry_id = self.id;
-        let mnm = self.mnm().ok()?;
-        let results = mnm
-            .app
-            .get_mnm_conn()
-            .await
+        self.mnm()
             .ok()?
-            .exec_iter(
-                r"SELECT `timestamp` FROM `entry_creation` WHERE `entry_id`=:entry_id",
-                params! {entry_id},
-            )
+            .get_storage()
+            .entry_get_creation_time(entry_id)
             .await
-            .ok()?
-            .map_and_drop(from_row::<String>)
-            .await
-            .ok()?;
-        results.first().map(|s| s.to_owned())
     }
 
     /// Updates ext_name locally and in the database
@@ -365,14 +259,10 @@ impl Entry {
     pub async fn set_ext_name(&mut self, ext_name: &str) -> Result<()> {
         if self.ext_name != ext_name {
             self.check_valid_id()?;
-            let entry_id = self.id;
             self.ext_name = ext_name.to_string();
-            let sql = "UPDATE `entry` SET `ext_name`=:ext_name WHERE `id`=:entry_id";
             self.mnm()?
-                .app
-                .get_mnm_conn()
-                .await?
-                .exec_drop(sql, params! {ext_name,entry_id})
+                .get_storage()
+                .entry_set_ext_name(ext_name, self.id)
                 .await?;
         }
         Ok(())
@@ -380,14 +270,10 @@ impl Entry {
 
     //TODO test
     pub async fn set_auxiliary_in_wikidata(&self, aux_id: usize, in_wikidata: bool) -> Result<()> {
-        let sql = "UPDATE `auxiliary` SET `in_wikidata`=:in_wikidata WHERE `id`=:aux_id AND `in_wikidata`!=:in_wikidata";
         self.mnm()?
-            .app
-            .get_mnm_conn()
-            .await?
-            .exec_drop(sql, params! {in_wikidata,aux_id})
-            .await?;
-        Ok(())
+            .get_storage()
+            .entry_set_auxiliary_in_wikidata(in_wikidata, aux_id)
+            .await
     }
 
     /// Updates ext_desc locally and in the database
@@ -395,14 +281,10 @@ impl Entry {
     pub async fn set_ext_desc(&mut self, ext_desc: &str) -> Result<()> {
         if self.ext_desc != ext_desc {
             self.check_valid_id()?;
-            let entry_id = self.id;
             self.ext_desc = ext_desc.to_string();
-            let sql = "UPDATE `entry` SET `ext_desc`=:ext_desc WHERE `id`=:entry_id";
             self.mnm()?
-                .app
-                .get_mnm_conn()
-                .await?
-                .exec_drop(sql, params! {ext_desc,entry_id})
+                .get_storage()
+                .entry_set_ext_desc(ext_desc, self.id)
                 .await?;
         }
         Ok(())
@@ -569,14 +451,10 @@ impl Entry {
     pub async fn set_ext_id(&mut self, ext_id: &str) -> Result<()> {
         if self.ext_id != ext_id {
             self.check_valid_id()?;
-            let entry_id = self.id;
             self.ext_id = ext_id.to_string();
-            let sql = "UPDATE `entry` SET `ext_id`=:ext_id WHERE `id`=:entry_id";
             self.mnm()?
-                .app
-                .get_mnm_conn()
-                .await?
-                .exec_drop(sql, params! {ext_id,entry_id})
+                .get_storage()
+                .entry_set_ext_id(ext_id, self.id)
                 .await?;
         }
         Ok(())
@@ -589,12 +467,9 @@ impl Entry {
             self.check_valid_id()?;
             let entry_id = self.id;
             self.ext_url = ext_url.to_string();
-            let sql = "UPDATE `entry` SET `ext_url`=:ext_url WHERE `id`=:entry_id";
             self.mnm()?
-                .app
-                .get_mnm_conn()
-                .await?
-                .exec_drop(sql, params! {ext_url,entry_id})
+                .get_storage()
+                .entry_set_ext_url(ext_url, entry_id)
                 .await?;
         }
         Ok(())
@@ -607,12 +482,9 @@ impl Entry {
             self.check_valid_id()?;
             let entry_id = self.id;
             self.type_name = type_name.clone();
-            let sql = "UPDATE `entry` SET `type`=:type_name WHERE `id`=:entry_id";
             self.mnm()?
-                .app
-                .get_mnm_conn()
-                .await?
-                .exec_drop(sql, params! {type_name,entry_id})
+                .get_storage()
+                .entry_set_type_name(type_name, entry_id)
                 .await?;
         }
         Ok(())
@@ -628,22 +500,16 @@ impl Entry {
         if already_born != *born || already_died != *died {
             let entry_id = self.id;
             if born.is_none() && died.is_none() {
-                let sql = "DELETE FROM `person_dates` WHERE `entry_id`=:entry_id";
                 self.mnm()?
-                    .app
-                    .get_mnm_conn()
-                    .await?
-                    .exec_drop(sql, params! {entry_id})
+                    .get_storage()
+                    .entry_delete_person_dates(entry_id)
                     .await?;
             } else {
                 let born = born.to_owned().unwrap_or("".to_string());
                 let died = died.to_owned().unwrap_or("".to_string());
-                let sql = "REPLACE INTO `person_dates` (`entry_id`,`born`,`died`) VALUES (:entry_id,:born,:died)";
                 self.mnm()?
-                    .app
-                    .get_mnm_conn()
-                    .await?
-                    .exec_drop(sql, params! {entry_id,born,died})
+                    .get_storage()
+                    .entry_set_person_dates(entry_id, born, died)
                     .await?;
             }
         }
@@ -654,27 +520,10 @@ impl Entry {
     /// Born/died are Option<String>
     pub async fn get_person_dates(&self) -> Result<(Option<String>, Option<String>)> {
         self.check_valid_id()?;
-        let entry_id = self.id;
-        let mnm = self.mnm()?;
-        let mut rows: Vec<(String, String)> = mnm
-            .app
-            .get_mnm_conn()
-            .await?
-            .exec_iter(
-                r"SELECT `born`,`died` FROM `person_dates` WHERE `entry_id`=:entry_id LIMIT 1",
-                params! {entry_id},
-            )
-            .await?
-            .map_and_drop(from_row::<(String, String)>)
-            .await?;
-        match rows.pop() {
-            Some(bd) => {
-                let born = if bd.0.is_empty() { None } else { Some(bd.0) };
-                let died = if bd.1.is_empty() { None } else { Some(bd.1) };
-                Ok((born, died))
-            }
-            None => Ok((None, None)),
-        }
+        self.mnm()?
+            .get_storage()
+            .entry_get_person_dates(self.id)
+            .await
     }
 
     //TODO test
@@ -687,21 +536,15 @@ impl Entry {
         let entry_id = self.id;
         match text {
             Some(text) => {
-                let sql = "REPLACE INTO `descriptions` (`entry_id`,`language`,`label`) VALUES (:entry_id,:language,:text)";
                 self.mnm()?
-                    .app
-                    .get_mnm_conn()
-                    .await?
-                    .exec_drop(sql, params! {entry_id,language,text})
+                    .get_storage()
+                    .entry_set_language_description(entry_id, language, text)
                     .await?;
             }
             None => {
-                let sql = "DELETE FROM `descriptions` WHERE `entry_id`=:entry_id AND `language`=:language";
                 self.mnm()?
-                    .app
-                    .get_mnm_conn()
-                    .await?
-                    .exec_drop(sql, params! {entry_id,language})
+                    .get_storage()
+                    .entry_remove_language_description(entry_id, language)
                     .await?;
             }
         }
@@ -712,24 +555,7 @@ impl Entry {
     //TODO test
     pub async fn get_aliases(&self) -> Result<Vec<LocaleString>> {
         self.check_valid_id()?;
-        let entry_id = self.id;
-        let mnm = self.mnm()?;
-        let rows: Vec<(String, String)> = mnm
-            .app
-            .get_mnm_conn()
-            .await?
-            .exec_iter(
-                r"SELECT `language`,`label` FROM `aliases` WHERE `entry_id`=:entry_id",
-                params! {entry_id},
-            )
-            .await?
-            .map_and_drop(from_row::<(String, String)>)
-            .await?;
-        let mut ret: Vec<LocaleString> = vec![];
-        rows.iter().for_each(|(k, v)| {
-            ret.push(LocaleString::new(k, v));
-        });
-        Ok(ret)
+        self.mnm()?.get_storage().entry_get_aliases(self.id).await
     }
 
     pub async fn add_alias(&self, s: &LocaleString) -> Result<()> {
@@ -737,12 +563,9 @@ impl Entry {
         let entry_id = self.id;
         let language = s.language();
         let label = s.value();
-        let sql = "INSERT IGNORE INTO `aliases` (`entry_id`,`language`,`label`) VALUES (:entry_id,:language,:label)";
         self.mnm()?
-            .app
-            .get_mnm_conn()
-            .await?
-            .exec_drop(sql, params! {entry_id,language,label})
+            .get_storage()
+            .entry_add_alias(entry_id, language, label)
             .await?;
         Ok(())
     }
@@ -751,24 +574,10 @@ impl Entry {
     //TODO test
     pub async fn get_language_descriptions(&self) -> Result<HashMap<String, String>> {
         self.check_valid_id()?;
-        let entry_id = self.id;
-        let mnm = self.mnm()?;
-        let rows: Vec<(String, String)> = mnm
-            .app
-            .get_mnm_conn()
-            .await?
-            .exec_iter(
-                r"SELECT `language`,`label` FROM `descriptions` WHERE `entry_id`=:entry_id",
-                params! {entry_id},
-            )
-            .await?
-            .map_and_drop(from_row::<(String, String)>)
-            .await?;
-        let mut map: HashMap<String, String> = HashMap::new();
-        rows.iter().for_each(|(k, v)| {
-            map.insert(k.to_string(), v.to_string());
-        });
-        Ok(map)
+        self.mnm()?
+            .get_storage()
+            .entry_get_language_descriptions(self.id)
+            .await
     }
 
     //TODO test
@@ -778,23 +587,16 @@ impl Entry {
         match value {
             Some(value) => {
                 if !value.is_empty() {
-                    let sql = "REPLACE INTO `auxiliary` (`entry_id`,`aux_p`,`aux_name`) VALUES (:entry_id,:prop_numeric,:value)";
                     self.mnm()?
-                        .app
-                        .get_mnm_conn()
-                        .await?
-                        .exec_drop(sql, params! {entry_id,prop_numeric,value})
+                        .get_storage()
+                        .entry_set_auxiliary(entry_id, prop_numeric, value)
                         .await?;
                 }
             }
             None => {
-                let sql =
-                    "DELETE FROM `auxiliary` WHERE `entry_id`=:entry_id AND `aux_p`=:prop_numeric";
                 self.mnm()?
-                    .app
-                    .get_mnm_conn()
-                    .await?
-                    .exec_drop(sql, params! {entry_id,prop_numeric})
+                    .get_storage()
+                    .entry_remove_auxiliary(entry_id, prop_numeric)
                     .await?;
             }
         }
@@ -808,23 +610,15 @@ impl Entry {
             let entry_id = self.id;
             match cl {
                 Some(cl) => {
-                    let lat = cl.lat;
-                    let lon = cl.lon;
-                    let sql = "REPLACE INTO `location` (`entry_id`,`lat`,`lon`) VALUES (:entry_id,:lat,:lon)";
                     self.mnm()?
-                        .app
-                        .get_mnm_conn()
-                        .await?
-                        .exec_drop(sql, params! {entry_id,lat,lon})
+                        .get_storage()
+                        .entry_set_coordinate_location(entry_id, cl.lat, cl.lon)
                         .await?;
                 }
                 None => {
-                    let sql = "DELETE FROM `location` WHERE `entry_id`=:entry_id";
                     self.mnm()?
-                        .app
-                        .get_mnm_conn()
-                        .await?
-                        .exec_drop(sql, params! {entry_id})
+                        .get_storage()
+                        .entry_remove_coordinate_location(entry_id)
                         .await?;
                 }
             }
@@ -835,33 +629,17 @@ impl Entry {
     /// Returns the coordinate locationm or None
     pub async fn get_coordinate_location(&self) -> Result<Option<CoordinateLocation>> {
         self.check_valid_id()?;
-        let entry_id = self.id;
-        let mnm = self.mnm()?;
-        Ok(mnm
-            .app
-            .get_mnm_conn()
-            .await?
-            .exec_iter(
-                r"SELECT `lat`,`lon` FROM `location` WHERE `entry_id`=:entry_id LIMIT 1",
-                params! {entry_id},
-            )
-            .await?
-            .map_and_drop(from_row::<(f64, f64)>)
-            .await?
-            .pop()
-            .map(|(lat, lon)| CoordinateLocation { lat, lon }))
+        self.mnm()?
+            .get_storage()
+            .entry_get_coordinate_location(self.id)
+            .await
     }
 
     /// Returns auxiliary data for the entry
     //TODO test
     pub async fn get_aux(&self) -> Result<Vec<AuxiliaryRow>> {
         self.check_valid_id()?;
-        let entry_id = self.id;
-        let mnm = self.mnm()?;
-        Ok(mnm.app.get_mnm_conn().await?
-            .exec_iter(r"SELECT `id`,`aux_p`,`aux_name`,`in_wikidata`,`entry_is_matched` FROM `auxiliary` WHERE `entry_id`=:entry_id",params! {entry_id}).await?
-            .map_and_drop(|row| AuxiliaryRow::from_row(&row)).await?
-            .iter().filter_map(|row|row.to_owned()).collect())
+        self.mnm()?.get_storage().entry_get_aux(self.id).await
     }
 
     /// Before q query or an update to the entry in the database, checks if this is a valid entry ID (eg not a new entry)
@@ -874,56 +652,23 @@ impl Entry {
 
     /// Sets a match for the entry, and marks the entry as matched in other tables.
     pub async fn set_match(&mut self, q: &str, user_id: usize) -> Result<bool> {
-        let mut conn = self.mnm()?.app.get_mnm_conn().await?;
-        self.set_match_db(q, user_id, &mut conn).await
-    }
-
-    async fn set_match_db(&mut self, q: &str, user_id: usize, conn: &mut Conn) -> Result<bool> {
         self.check_valid_id()?;
-        let entry_id = self.id;
         let mnm = self.mnm()?;
         let q_numeric = mnm
             .item2numeric(q)
             .ok_or(anyhow!("'{}' is not a valid item", &q))?;
+
         let timestamp = TimeStamp::now();
-        let mut sql = "UPDATE `entry` SET `q`=:q_numeric,`user`=:user_id,`timestamp`=:timestamp WHERE `id`=:entry_id AND (`q` IS NULL OR `q`!=:q_numeric OR `user`!=:user_id)".to_string();
-        if user_id == USER_AUTO {
-            if mnm
-                .avoid_auto_match_db(entry_id, Some(q_numeric), conn)
-                .await?
-            {
-                return Ok(false); // Nothing wrong but shouldn't be matched
-            }
-            sql += &MatchState::not_fully_matched().get_sql();
+        if self
+            .mnm()?
+            .get_storage()
+            .entry_set_match(self, user_id, q_numeric, &timestamp)
+            .await?
+        {
+            self.user = Some(user_id);
+            self.timestamp = Some(timestamp);
+            self.q = Some(q_numeric);
         }
-        let preserve = (
-            Some(user_id.to_owned()),
-            Some(timestamp.clone()),
-            Some(q_numeric.to_owned()),
-        );
-        conn.exec_drop(sql, params! {q_numeric,user_id,timestamp,entry_id})
-            .await?;
-        let nothing_changed = conn.affected_rows() == 0;
-        if nothing_changed {
-            return Ok(false);
-        }
-
-        mnm.update_overview_table_db(self, Some(user_id), Some(q_numeric), conn)
-            .await?;
-
-        let is_full_match = user_id > 0 && q_numeric > 0;
-        self.set_match_status_db("UNKNOWN", is_full_match, conn)
-            .await?;
-
-        if user_id != USER_AUTO {
-            self.remove_multi_match_db(conn).await?;
-        }
-
-        mnm.queue_reference_fixer_db(q_numeric, conn).await?;
-
-        self.user = preserve.0;
-        self.timestamp = preserve.1;
-        self.q = preserve.2;
 
         Ok(true)
     }
@@ -931,16 +676,7 @@ impl Entry {
     // Removes the current match from the entry, and marks the entry as unmatched in other tables.
     pub async fn unmatch(&mut self) -> Result<()> {
         let entry_id = self.id;
-        let mnm = self.mnm()?;
-        mnm.app
-            .get_mnm_conn()
-            .await?
-            .exec_drop(
-                r"UPDATE `entry` SET `q`=NULL,`user`=NULL,`timestamp`=NULL WHERE `id`=:entry_id",
-                params! {entry_id},
-            )
-            .await?;
-        self.set_match_status("UNKNOWN", false).await?;
+        self.mnm()?.get_storage().entry_unmatch(entry_id).await?;
         self.user = None;
         self.timestamp = None;
         self.q = None;
@@ -950,54 +686,21 @@ impl Entry {
     /// Updates the entry matching status in multiple tables.
     //TODO test
     pub async fn set_match_status(&self, status: &str, is_matched: bool) -> Result<()> {
-        let mut conn = self.mnm()?.app.get_mnm_conn().await?;
-        self.set_match_status_db(status, is_matched, &mut conn)
-            .await
-    }
-
-    async fn set_match_status_db(
-        &self,
-        status: &str,
-        is_matched: bool,
-        conn: &mut Conn,
-    ) -> Result<()> {
         let entry_id = self.id;
         let is_matched = if is_matched { 1 } else { 0 };
-        let timestamp = TimeStamp::now();
-        conn.exec_drop(r"INSERT INTO `wd_matches` (`entry_id`,`status`,`timestamp`,`catalog`) VALUES (:entry_id,:status,:timestamp,(SELECT entry.catalog FROM entry WHERE entry.id=:entry_id)) ON DUPLICATE KEY UPDATE `status`=:status,`timestamp`=:timestamp",params! {entry_id,status,timestamp}).await?;
-        conn.exec_drop(
-            r"UPDATE `person_dates` SET is_matched=:is_matched WHERE entry_id=:entry_id",
-            params! {is_matched,entry_id},
-        )
-        .await?;
-        conn.exec_drop(
-            r"UPDATE `auxiliary` SET entry_is_matched=:is_matched WHERE entry_id=:entry_id",
-            params! {is_matched,entry_id},
-        )
-        .await?;
-        conn.exec_drop(
-            r"UPDATE `statement_text` SET entry_is_matched=:is_matched WHERE entry_id=:entry_id",
-            params! {is_matched,entry_id},
-        )
-        .await?;
-        Ok(())
+        self.mnm()?
+            .get_storage()
+            .entry_set_match_status(entry_id, status, is_matched)
+            .await
     }
 
     /// Retrieves the multi-matches for an entry
     //TODO test
     pub async fn get_multi_match(&self) -> Result<Vec<String>> {
-        let mnm = self.mnm()?;
-        let entry_id = self.id;
-        let rows: Vec<String> = mnm
-            .app
-            .get_mnm_conn()
-            .await?
-            .exec_iter(
-                r"SELECT candidates FROM multi_match WHERE entry_id=:entry_id",
-                params! {entry_id},
-            )
-            .await?
-            .map_and_drop(from_row::<String>)
+        let rows: Vec<String> = self
+            .mnm()?
+            .get_storage()
+            .entry_get_multi_matches(self.id)
             .await?;
         if rows.len() != 1 {
             Ok(vec![])
@@ -1024,23 +727,16 @@ impl Entry {
         if self.q == Some(qs_numeric[0]) {
             return Ok(()); // Automatch exists, skipping multimatch
         }
-        let mut conn = mnm.app.get_mnm_conn().await?;
-        self.set_match_db(&format!("Q{}", qs_numeric[0]), USER_AUTO, &mut conn)
+        self.set_match(&format!("Q{}", qs_numeric[0]), USER_AUTO)
             .await?;
         if qs_numeric.len() > 1 {
-            self.set_multi_match_db(items, &mut conn).await?;
+            self.set_multi_match(items).await?;
         }
         Ok(())
     }
 
     /// Sets multi-matches for an entry
     pub async fn set_multi_match(&self, items: &[String]) -> Result<()> {
-        let mut conn = self.mnm()?.app.get_mnm_conn().await?;
-        self.set_multi_match_db(items, &mut conn).await
-    }
-
-    /// Sets multi-matches for an entry
-    async fn set_multi_match_db(&self, items: &[String], conn: &mut Conn) -> Result<()> {
         let entry_id = self.id;
         let mnm = self.mnm()?;
         let qs_numeric: Vec<String> = items
@@ -1049,31 +745,23 @@ impl Entry {
             .map(|q| q.to_string())
             .collect();
         if qs_numeric.is_empty() || qs_numeric.len() > 10 {
-            return self.remove_multi_match_db(conn).await;
+            return self.remove_multi_match().await;
         }
         let candidates = qs_numeric.join(",");
         let candidates_count = qs_numeric.len();
-        let sql = r"REPLACE INTO `multi_match` (entry_id,catalog,candidates,candidate_count) VALUES (:entry_id,(SELECT catalog FROM entry WHERE id=:entry_id),:candidates,:candidates_count)";
-        conn.exec_drop(sql, params! {entry_id,candidates,candidates_count})
+
+        mnm.get_storage()
+            .entry_set_multi_match(entry_id, candidates, candidates_count)
             .await?;
         Ok(())
     }
 
     /// Removes multi-matches for an entry, eg when the entry has been fully matched.
     pub async fn remove_multi_match(&self) -> Result<()> {
-        let mut conn = self.mnm()?.app.get_mnm_conn().await?;
-        self.remove_multi_match_db(&mut conn).await
-    }
-
-    /// Removes multi-matches for an entry, eg when the entry has been fully matched.
-    async fn remove_multi_match_db(&self, conn: &mut Conn) -> Result<()> {
-        let entry_id = self.id;
-        conn.exec_drop(
-            r"DELETE FROM multi_match WHERE entry_id=:entry_id",
-            params! {entry_id},
-        )
-        .await?;
-        Ok(())
+        self.mnm()?
+            .get_storage()
+            .entry_remove_multi_match(self.id)
+            .await
     }
 
     /// Checks if the entry is unmatched

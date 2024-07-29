@@ -1,5 +1,5 @@
 use crate::entry::Entry;
-use crate::mixnmatch::{MatchState, USER_LOCATION_MATCH};
+use crate::mixnmatch::USER_LOCATION_MATCH;
 use crate::{
     job::{Job, Jobbable},
     mixnmatch::MixNMatch,
@@ -7,9 +7,6 @@ use crate::{
 use anyhow::Result;
 use lazy_static::lazy_static;
 use mediawiki::api::Api;
-use mysql_async::prelude::*;
-use mysql_async::{from_row, Row};
-use rand::prelude::*;
 use regex::{Regex, RegexBuilder};
 use std::collections::HashMap;
 use std::error::Error;
@@ -44,28 +41,14 @@ impl fmt::Display for CoordinateMatcherError {
 }
 
 #[derive(Debug, Clone)]
-struct LocationRow {
-    lat: f64,
-    lon: f64,
-    entry_id: usize,
-    catalog_id: usize,
-    ext_name: String,
-    entry_type: String,
-    q: Option<usize>,
-}
-
-impl LocationRow {
-    pub fn from_row(row: &Row) -> Option<Self> {
-        Some(Self {
-            lat: row.get(0)?,
-            lon: row.get(1)?,
-            entry_id: row.get(2)?,
-            catalog_id: row.get(3)?,
-            ext_name: row.get(4)?,
-            entry_type: row.get(5)?,
-            q: row.get(6)?,
-        })
-    }
+pub struct LocationRow {
+    pub lat: f64,
+    pub lon: f64,
+    pub entry_id: usize,
+    pub catalog_id: usize,
+    pub ext_name: String,
+    pub entry_type: String,
+    pub q: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -109,19 +92,15 @@ impl CoordinateMatcher {
 
     pub async fn run(&self) -> Result<()> {
         self.check_bad_catalog()?;
-        let sql = self.main_query_sql();
-        let rows: Vec<LocationRow> = self
+        let rows = self
             .mnm
-            .app
-            .get_mnm_conn()
-            .await?
-            .exec_iter(sql, ())
-            .await?
-            .map_and_drop(|row| LocationRow::from_row(&row))
-            .await?
-            .iter()
-            .filter_map(|row| row.to_owned())
-            .collect();
+            .get_storage()
+            .get_coordinate_matcher_rows(
+                &self.catalog_id,
+                &self.bad_catalogs,
+                MAX_RESULTS_FOR_RANDOM_CATALOG,
+            )
+            .await?;
         for row in &rows {
             let _ = self.process_row(row).await;
         }
@@ -227,10 +206,10 @@ impl CoordinateMatcher {
         };
         let sparql = format!(
             "SELECT DISTINCT ?place ?distance WHERE {{
-		    SERVICE wikibase:around {{ 
-		      ?place wdt:P625 ?location . 
-		      bd:serviceParam wikibase:center 'Point({} {})'^^geo:wktLiteral . 
-		      bd:serviceParam wikibase:radius '{max_distance}' . 
+		    SERVICE wikibase:around {{
+		      ?place wdt:P625 ?location .
+		      bd:serviceParam wikibase:center 'Point({} {})'^^geo:wktLiteral .
+		      bd:serviceParam wikibase:radius '{max_distance}' .
 		      bd:serviceParam wikibase:distance ?distance .
 		    }}
             {type_query}
@@ -312,15 +291,10 @@ impl CoordinateMatcher {
     }
 
     async fn load_permissions(&mut self) -> Result<()> {
-        let sql = r#"SELECT `catalog_id`,`kv_key`,`kv_value` FROM `kv_catalog`"#; // WHERE `kv_key` IN ('allow_location_match','allow_location_create','allow_location_operations','location_distance','location_force_same_type')"#;
         let results = self
             .mnm
-            .app
-            .get_mnm_conn()
-            .await?
-            .exec_iter(sql, ())
-            .await?
-            .map_and_drop(from_row::<(usize, String, String)>)
+            .get_storage()
+            .get_coordinate_matcher_permissions()
             .await?;
         for (catalog_id, kv_key, kv_value) in results {
             self.permissions
@@ -337,29 +311,6 @@ impl CoordinateMatcher {
             .map(|(catalog_id, _value)| *catalog_id)
             .collect();
         Ok(())
-    }
-
-    fn main_query_sql(&self) -> String {
-        let conditions = match self.catalog_id {
-            Some(catalog_id) => format!("`catalog`={catalog_id}"),
-            None => {
-                let r: f64 = rand::thread_rng().gen();
-                let mut sql = format!(
-                    "`random`>={r} ORDER BY `random` LIMIT {MAX_RESULTS_FOR_RANDOM_CATALOG}"
-                );
-                if !self.bad_catalogs.is_empty() {
-                    let s = self
-                        .bad_catalogs
-                        .iter()
-                        .map(|id| format!("{id}"))
-                        .collect::<Vec<String>>()
-                        .join(",");
-                    sql += &format!("AND `catalog` NOT IN ({s})");
-                }
-                sql
-            }
-        } + &MatchState::not_fully_matched().get_sql();
-        format!("SELECT `lat`,`lon`,`id`,`catalog`,`ext_name`,`type`,`q` FROM `vw_location` WHERE `ext_name`!='' AND {conditions}",)
     }
 }
 

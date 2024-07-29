@@ -1,11 +1,11 @@
-use crate::entry::Entry;
 use crate::job::*;
 use crate::mixnmatch::*;
-use anyhow::{anyhow, Result};
+use crate::storage::Storage;
+use crate::storage_mysql::StorageMySQL;
+use anyhow::Result;
 use core::time::Duration;
 use dashmap::DashMap;
-use mysql_async::prelude::*;
-use mysql_async::{from_row, Conn, Opts, OptsBuilder, PoolConstraints, PoolOpts};
+use mysql_async::{Conn, Opts, OptsBuilder, PoolConstraints, PoolOpts};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::env;
@@ -14,7 +14,6 @@ use std::sync::Arc;
 use std::{thread, time};
 use tokio::time::sleep;
 use wikimisc::timestamp::TimeStamp;
-use wikimisc::wikibase::ItemEntity;
 
 pub const DB_POOL_MIN: usize = 0;
 pub const DB_POOL_MAX: usize = 3;
@@ -23,8 +22,8 @@ pub const DB_POOL_KEEP_SEC: u64 = 120;
 #[derive(Debug, Clone)]
 pub struct AppState {
     wd_pool: mysql_async::Pool,
-    mnm_pool: mysql_async::Pool,
     wdrc_pool: mysql_async::Pool,
+    storage: Arc<Box<dyn Storage>>,
     pub import_file_path: String,
     pub bot_name: String,
     pub bot_password: String,
@@ -55,7 +54,7 @@ impl AppState {
         // let default_threads= config["default_threads"].as_u64().unwrap_or(64) as usize;
         let ret = Self {
             wd_pool: Self::create_pool(&config["wikidata"]),
-            mnm_pool: Self::create_pool(&config["mixnmatch"]),
+            storage: Arc::new(Box::new(StorageMySQL::new(&config["mixnmatch"]))),
             wdrc_pool: Self::create_pool(&config["wdrc"]),
             import_file_path: config["import_file_path"].as_str().unwrap().to_string(),
             bot_name: config["bot_name"].as_str().unwrap().to_string(),
@@ -68,7 +67,7 @@ impl AppState {
     }
 
     /// Helper function to create a DB pool from a JSON config object
-    fn create_pool(config: &Value) -> mysql_async::Pool {
+    pub fn create_pool(config: &Value) -> mysql_async::Pool {
         let min_connections = config["min_connections"]
             .as_u64()
             .expect("No min_connections value") as usize;
@@ -88,9 +87,8 @@ impl AppState {
         mysql_async::Pool::new(OptsBuilder::from_opts(wd_opts).pool_opts(pool_opts.clone()))
     }
 
-    /// Returns a connection to the Mix'n'Match tool database
-    pub async fn get_mnm_conn(&self) -> Result<Conn, mysql_async::Error> {
-        self.mnm_pool.get_conn().await
+    pub fn get_storage(&self) -> &Arc<Box<dyn Storage>> {
+        &self.storage
     }
 
     /// Returns a connection to the Wikidata DB replica
@@ -105,126 +103,126 @@ impl AppState {
 
     pub async fn disconnect(&self) -> Result<()> {
         self.wd_pool.clone().disconnect().await?;
-        self.mnm_pool.clone().disconnect().await?;
+        self.storage.disconnect().await?; // TODO FIXME
         Ok(())
     }
 
-    pub async fn run_from_props(&self, props: Vec<u32>, min_entries: u16) -> Result<()> {
-        if props.len() < 2 {
-            return Err(anyhow!("Minimum of two properties required."));
-        }
-        let mut mnm = MixNMatch::new(self.clone());
-        let first_prop = props.first().unwrap(); // Safe
-        let mut sql = format!(
-            r#"SELECT main_ext_id,group_concat(entry_id),count(DISTINCT entry_id) AS cnt
-            FROM ( SELECT entry_id,aux_name AS main_ext_id FROM auxiliary,entry WHERE aux_p={first_prop} and entry.id=entry_id AND (entry.q is null or entry.user=0)
-            UNION SELECT entry.id,ext_id FROM entry,catalog WHERE entry.catalog=catalog.id AND catalog.active=1 AND catalog.wd_prop={first_prop} AND (entry.q is null or entry.user=0) ) t1"#
-        );
-        for (num, prop) in props.iter().skip(1).enumerate() {
-            sql += if num == 0 { " WHERE" } else { " AND" };
-            sql += &format!(
-                r#" entry_id IN (SELECT entry_id FROM auxiliary,entry WHERE aux_p={prop} and entry.id=entry_id UNION SELECT entry.id FROM entry,catalog WHERE entry.catalog=catalog.id AND catalog.active=1 AND catalog.wd_prop={prop})"#
-            );
-        }
-        sql += &format!(r#"GROUP BY main_ext_id HAVING cnt>={min_entries}"#);
-        sql = sql.replace(['\n', '\t'], " ");
+    // pub async fn run_from_props(&self, props: Vec<u32>, min_entries: u16) -> Result<()> {
+    //     if props.len() < 2 {
+    //         return Err(anyhow!("Minimum of two properties required."));
+    //     }
+    //     let mut mnm = MixNMatch::new(self.clone());
+    //     let first_prop = props.first().unwrap(); // Safe
+    //     let mut sql = format!(
+    //         r#"SELECT main_ext_id,group_concat(entry_id),count(DISTINCT entry_id) AS cnt
+    //         FROM ( SELECT entry_id,aux_name AS main_ext_id FROM auxiliary,entry WHERE aux_p={first_prop} and entry.id=entry_id AND (entry.q is null or entry.user=0)
+    //         UNION SELECT entry.id,ext_id FROM entry,catalog WHERE entry.catalog=catalog.id AND catalog.active=1 AND catalog.wd_prop={first_prop} AND (entry.q is null or entry.user=0) ) t1"#
+    //     );
+    //     for (num, prop) in props.iter().skip(1).enumerate() {
+    //         sql += if num == 0 { " WHERE" } else { " AND" };
+    //         sql += &format!(
+    //             r#" entry_id IN (SELECT entry_id FROM auxiliary,entry WHERE aux_p={prop} and entry.id=entry_id UNION SELECT entry.id FROM entry,catalog WHERE entry.catalog=catalog.id AND catalog.active=1 AND catalog.wd_prop={prop})"#
+    //         );
+    //     }
+    //     sql += &format!(r#"GROUP BY main_ext_id HAVING cnt>={min_entries}"#);
+    //     sql = sql.replace(['\n', '\t'], " ");
 
-        let mut conn = self
-            .get_mnm_conn()
-            .await
-            .expect("run_from_props: No DB connection");
+    //     let mut conn = self
+    //         .get_mnm_conn()
+    //         .await
+    //         .expect("run_from_props: No DB connection");
 
-        let results: Vec<_> = conn
-            .exec_iter(sql, ())
-            .await
-            .expect("run_from_props: No results")
-            .map_and_drop(from_row::<(String, String, usize)>)
-            .await
-            .expect("run_from_props: Result retrieval failure");
+    //     let results: Vec<_> = conn
+    //         .exec_iter(sql, ())
+    //         .await
+    //         .expect("run_from_props: No results")
+    //         .map_and_drop(from_row::<(String, String, usize)>)
+    //         .await
+    //         .expect("run_from_props: Result retrieval failure");
 
-        let props_s = props
-            .iter()
-            .map(|p| format!("{p}"))
-            .collect::<Vec<String>>()
-            .join(",");
-        for (_primary_ext_id, entries_s, _cnt) in results {
-            let entries_v: Vec<_> = entries_s
-                .split(',')
-                .filter_map(|s| s.parse::<usize>().ok())
-                .collect();
-            self.create_item_from_entries(&entries_v, &props_s, &mut conn, &mut mnm)
-                .await?;
-        }
-        Ok(())
-    }
+    //     let props_s = props
+    //         .iter()
+    //         .map(|p| format!("{p}"))
+    //         .collect::<Vec<String>>()
+    //         .join(",");
+    //     for (_primary_ext_id, entries_s, _cnt) in results {
+    //         let entries_v: Vec<_> = entries_s
+    //             .split(',')
+    //             .filter_map(|s| s.parse::<usize>().ok())
+    //             .collect();
+    //         self.create_item_from_entries(&entries_v, &props_s, &mut conn, &mut mnm)
+    //             .await?;
+    //     }
+    //     Ok(())
+    // }
 
-    pub async fn create_item_from_entries(
-        &self,
-        entries_v: &[usize],
-        props_s: &str,
-        conn: &mut Conn,
-        mnm: &mut MixNMatch,
-    ) -> Result<()> {
-        let entries_s: Vec<_> = entries_v.iter().map(|id| format!("{id}")).collect();
-        let entries_s = entries_s.join(",");
-        let sql = format!(
-            r#"SELECT entry_id,aux_p,aux_name FROM auxiliary WHERE entry_id IN ({entries_s}) AND aux_p IN ({props_s}) UNION SELECT entry.id,catalog.wd_prop,ext_id FROM entry,catalog WHERE entry.catalog=catalog.id AND entry.id IN ({entries_s}) AND wd_prop IN ({props_s})"#
-        );
+    // pub async fn create_item_from_entries(
+    //     &self,
+    //     entries_v: &[usize],
+    //     props_s: &str,
+    //     conn: &mut Conn,
+    //     mnm: &mut MixNMatch,
+    // ) -> Result<()> {
+    //     let entries_s: Vec<_> = entries_v.iter().map(|id| format!("{id}")).collect();
+    //     let entries_s = entries_s.join(",");
+    //     let sql = format!(
+    //         r#"SELECT entry_id,aux_p,aux_name FROM auxiliary WHERE entry_id IN ({entries_s}) AND aux_p IN ({props_s}) UNION SELECT entry.id,catalog.wd_prop,ext_id FROM entry,catalog WHERE entry.catalog=catalog.id AND entry.id IN ({entries_s}) AND wd_prop IN ({props_s})"#
+    //     );
 
-        let entry_prop_values: Vec<_> = conn
-            .exec_iter(sql, ())
-            .await
-            .expect("run_from_props: No results")
-            .map_and_drop(from_row::<(usize, u32, String)>)
-            .await
-            .expect("run_from_props: Result retrieval failure");
+    //     let entry_prop_values: Vec<_> = conn
+    //         .exec_iter(sql, ())
+    //         .await
+    //         .expect("run_from_props: No results")
+    //         .map_and_drop(from_row::<(usize, u32, String)>)
+    //         .await
+    //         .expect("run_from_props: Result retrieval failure");
 
-        let prop_values = entry_prop_values
-            .iter()
-            .map(|(_entry_id, prop, value)| format!("P{prop}={value}"))
-            .collect::<Vec<String>>()
-            .join("|");
-        let query = format!(r#"haswbstatement:"{prop_values}""#);
-        let mut qs = mnm.wd_search(&query).await?;
-        if qs.is_empty() {
-            println!("Create new item from {entries_s}");
-            let mut new_item = ItemEntity::new_empty();
-            for entry_id in entries_v {
-                let entry = Entry::from_id(*entry_id, mnm).await?;
-                entry.add_to_item(&mut new_item).await?;
-            }
-            // println!("{:#?}", new_item);
-            match mnm.create_new_wikidata_item(new_item).await {
-                Ok(q) => {
-                    println!("Created https://www.wikidata.org/wiki/{q}");
-                    for entry_id in entries_v {
-                        let mut entry = Entry::from_id(*entry_id, mnm).await?;
-                        let _ = entry.set_match(&q, USER_AUX_MATCH).await;
-                    }
-                }
-                Err(e) => {
-                    // Ignore TODO try again with blank description?
-                    println!("ERROR: {e}");
-                    return Ok(());
-                }
-            }
-        } else {
-            qs.sort();
-            qs.dedup();
-            if qs.len() == 1 {
-                let q = qs.first().unwrap(); // Safe
-                for entry_id in entries_v {
-                    let mut entry = Entry::from_id(*entry_id, mnm).await?;
-                    if !entry.is_fully_matched() {
-                        let _ = entry.set_match(q, USER_AUX_MATCH).await?;
-                    }
-                }
-            } else {
-                println!("Multiple potential matches for {entries_s} {qs:?}, skipping");
-            }
-        }
-        Ok(())
-    }
+    //     let prop_values = entry_prop_values
+    //         .iter()
+    //         .map(|(_entry_id, prop, value)| format!("P{prop}={value}"))
+    //         .collect::<Vec<String>>()
+    //         .join("|");
+    //     let query = format!(r#"haswbstatement:"{prop_values}""#);
+    //     let mut qs = mnm.wd_search(&query).await?;
+    //     if qs.is_empty() {
+    //         println!("Create new item from {entries_s}");
+    //         let mut new_item = ItemEntity::new_empty();
+    //         for entry_id in entries_v {
+    //             let entry = Entry::from_id(*entry_id, mnm).await?;
+    //             entry.add_to_item(&mut new_item).await?;
+    //         }
+    //         // println!("{:#?}", new_item);
+    //         match mnm.create_new_wikidata_item(new_item).await {
+    //             Ok(q) => {
+    //                 println!("Created https://www.wikidata.org/wiki/{q}");
+    //                 for entry_id in entries_v {
+    //                     let mut entry = Entry::from_id(*entry_id, mnm).await?;
+    //                     let _ = entry.set_match(&q, USER_AUX_MATCH).await;
+    //                 }
+    //             }
+    //             Err(e) => {
+    //                 // Ignore TODO try again with blank description?
+    //                 println!("ERROR: {e}");
+    //                 return Ok(());
+    //             }
+    //         }
+    //     } else {
+    //         qs.sort();
+    //         qs.dedup();
+    //         if qs.len() == 1 {
+    //             let q = qs.first().unwrap(); // Safe
+    //             for entry_id in entries_v {
+    //                 let mut entry = Entry::from_id(*entry_id, mnm).await?;
+    //                 if !entry.is_fully_matched() {
+    //                     let _ = entry.set_match(q, USER_AUX_MATCH).await?;
+    //                 }
+    //             }
+    //         } else {
+    //             println!("Multiple potential matches for {entries_s} {qs:?}, skipping");
+    //         }
+    //     }
+    //     Ok(())
+    // }
 
     pub async fn run_single_hp_job(&self) -> Result<()> {
         let mnm = MixNMatch::new(self.clone());
@@ -263,22 +261,8 @@ impl AppState {
                 let min = chrono::Duration::try_minutes(max_age_min).unwrap();
                 let utc = chrono::Utc::now() - min;
                 let ts = TimeStamp::datetime(&utc);
-                let sql = format!("SELECT
-                    (SELECT count(*) FROM jobs WHERE `status` IN ('RUNNING')) AS running,
-                    (SELECT count(*) FROM jobs WHERE `status` IN ('RUNNING') AND last_ts>='{ts}') AS running_recent");
-                let (running, running_recent) = *mnm
-                    .app
-                    .get_mnm_conn()
-                    .await
-                    .expect("seppuku: No DB connection")
-                    .exec_iter(sql, ())
-                    .await
-                    .expect("seppuku: No results")
-                    .map_and_drop(from_row::<(usize, usize)>)
-                    .await
-                    .expect("seppuku: Result retrieval failure")
-                    .first()
-                    .expect("seppuku: No DB results");
+                let (running, running_recent) =
+                    mnm.get_storage().app_state_seppuku_get_running(&ts).await;
                 if running > 0 && running_recent == 0 {
                     println!("seppuku: {running} jobs running but no activity within {max_age_min} minutes, commiting seppuku");
                     std::process::exit(0);
@@ -293,8 +277,8 @@ impl AppState {
         let current_jobs: Arc<DashMap<usize, TaskSize>> = Arc::new(DashMap::new());
 
         // Reset old running&failed jobs
-        Job::new(&mnm).reset_running_jobs().await?;
-        Job::new(&mnm).reset_failed_jobs().await?;
+        mnm.get_storage().reset_running_jobs().await?;
+        mnm.get_storage().reset_failed_jobs().await?;
         println!("Old jobs reset, starting bot");
 
         self.seppuku();
@@ -312,7 +296,7 @@ impl AppState {
                 continue;
             }
             let mut job = Job::new(&mnm);
-            let task_size = job.get_tasks().await?;
+            let task_size = self.get_storage().jobs_get_tasks().await?;
             let big_jobs_running = (*current_jobs)
                 .clone()
                 .into_read_only()
@@ -326,13 +310,11 @@ impl AppState {
                 } else {
                     TaskSize::GINORMOUS
                 };
-            job.skip_actions = Some(
-                task_size
-                    .iter()
-                    .filter(|(_action, size)| **size > max_job_size)
-                    .map(|(action, _size)| action.to_string())
-                    .collect(),
-            );
+            job.skip_actions = task_size
+                .iter()
+                .filter(|(_action, size)| **size > max_job_size)
+                .map(|(action, _size)| action.to_string())
+                .collect();
             match job.set_next().await {
                 Ok(true) => {
                     let _ = job.set_status(JobStatus::Running).await;
