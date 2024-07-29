@@ -1,4 +1,4 @@
-use crate::app_state::AppState;
+use crate::mysql_misc::MySQLMisc;
 use anyhow::Result;
 use mysql_async::{from_row, futures::GetConn, prelude::*};
 use serde_json::Value;
@@ -17,21 +17,21 @@ pub struct Wikidata {
     pool: mysql_async::Pool,
 }
 
+impl MySQLMisc for Wikidata {
+    fn pool(&self) -> &mysql_async::Pool {
+        &self.pool
+    }
+}
+
 impl Wikidata {
     pub fn new(config: &Value) -> Self {
         Self {
-            pool: AppState::create_pool(config),
+            pool: Self::create_pool(config),
         }
     }
 
     pub fn get_conn(&self) -> GetConn {
         self.pool.get_conn()
-    }
-
-    fn sql_placeholders(num: usize) -> String {
-        let mut placeholders: Vec<String> = Vec::new();
-        placeholders.resize(num, "?".to_string());
-        placeholders.join(",")
     }
 
     pub async fn disconnect(&self) -> Result<()> {

@@ -4,8 +4,6 @@ use crate::mixnmatch::*;
 use anyhow::{anyhow, Result};
 use futures::future::join_all;
 use itertools::Itertools;
-use mysql_async::from_row;
-use mysql_async::prelude::*;
 use std::collections::HashMap;
 use wikimisc::timestamp::TimeStamp;
 
@@ -340,17 +338,11 @@ impl Maintenance {
             .await?
             .unwrap_or_else(|| self.yesterday());
         let prop2catalog_ids = self.wdrc_get_prop2catalog_ids().await?;
-        let properties = prop2catalog_ids.keys().cloned().collect_vec();
-        let props_str = properties.iter().map(|p| format!("{p}")).join(",");
-        let sql = format!("SELECT DISTINCT `item`,`property`,`timestamp` FROM `statements` WHERE `property` IN ({props_str}) AND `timestamp`>='{last_ts}'") ;
         let results = self
             .mnm
             .app
-            .get_wdrc_conn()
-            .await? // (item,property)
-            .exec_iter(sql, ())
-            .await?
-            .map_and_drop(from_row::<(usize, usize, String)>)
+            .wdrc()
+            .get_item_property_ts(&prop2catalog_ids, &last_ts)
             .await?;
         let new_ts = match results.iter().map(|(_item, _property, ts)| ts).max() {
             Some(ts) => ts.to_owned(),
@@ -359,7 +351,7 @@ impl Maintenance {
         let batch_size = *self
             .mnm
             .app
-            .task_specific_usize
+            .task_specific_usize()
             .get("wdrc_sync_properties_batch_size")
             .unwrap_or(&10);
         let all_results = results

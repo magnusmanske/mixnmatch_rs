@@ -2,11 +2,10 @@ use crate::job::*;
 use crate::mixnmatch::*;
 use crate::storage::Storage;
 use crate::storage_mysql::StorageMySQL;
+use crate::wdrc::WDRC;
 use crate::wikidata::Wikidata;
 use anyhow::Result;
-use core::time::Duration;
 use dashmap::DashMap;
-use mysql_async::{Conn, Opts, OptsBuilder, PoolConstraints, PoolOpts};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::env;
@@ -16,20 +15,15 @@ use std::{thread, time};
 use tokio::time::sleep;
 use wikimisc::timestamp::TimeStamp;
 
-pub const DB_POOL_MIN: usize = 0;
-pub const DB_POOL_MAX: usize = 3;
-pub const DB_POOL_KEEP_SEC: u64 = 120;
-
 #[derive(Debug, Clone)]
 pub struct AppState {
-    // wd_pool: mysql_async::Pool,
     wikidata: Wikidata,
-    wdrc_pool: mysql_async::Pool,
+    wdrc: WDRC,
     storage: Arc<Box<dyn Storage>>,
-    pub import_file_path: String,
-    pub bot_name: String,
-    pub bot_password: String,
-    pub task_specific_usize: HashMap<String, usize>,
+    import_file_path: String,
+    bot_name: String,
+    bot_password: String,
+    task_specific_usize: HashMap<String, usize>,
     max_concurrent_jobs: usize,
 }
 
@@ -41,6 +35,22 @@ impl AppState {
         let file = File::open(&path)?;
         let config: Value = serde_json::from_reader(file)?;
         Ok(Self::from_config(&config))
+    }
+
+    pub fn import_file_path(&self) -> &str {
+        &self.import_file_path
+    }
+
+    pub fn bot_name(&self) -> &str {
+        &self.bot_name
+    }
+
+    pub fn bot_password(&self) -> &str {
+        &self.bot_password
+    }
+
+    pub fn task_specific_usize(&self) -> &HashMap<String, usize> {
+        &self.task_specific_usize
     }
 
     /// Creatre an AppState object from a config JSON object
@@ -55,10 +65,9 @@ impl AppState {
         // let thread_stack_factor = config["thread_stack_factor"].as_u64().unwrap_or(64) as usize;
         // let default_threads= config["default_threads"].as_u64().unwrap_or(64) as usize;
         let ret = Self {
-            // wd_pool: Self::create_pool(&config["wikidata"]),
             wikidata: Wikidata::new(&config["wikidata"]),
+            wdrc: WDRC::new(&config["wdrc"]),
             storage: Arc::new(Box::new(StorageMySQL::new(&config["mixnmatch"]))),
-            wdrc_pool: Self::create_pool(&config["wdrc"]),
             import_file_path: config["import_file_path"].as_str().unwrap().to_string(),
             bot_name: config["bot_name"].as_str().unwrap().to_string(),
             bot_password: config["bot_password"].as_str().unwrap().to_string(),
@@ -69,27 +78,6 @@ impl AppState {
         ret
     }
 
-    /// Helper function to create a DB pool from a JSON config object
-    pub fn create_pool(config: &Value) -> mysql_async::Pool {
-        let min_connections = config["min_connections"]
-            .as_u64()
-            .expect("No min_connections value") as usize;
-        let max_connections = config["max_connections"]
-            .as_u64()
-            .expect("No max_connections value") as usize;
-        let keep_sec = config["keep_sec"].as_u64().expect("No keep_sec value");
-        let url = config["url"].as_str().expect("No url value");
-        let pool_opts = PoolOpts::default()
-            .with_constraints(
-                PoolConstraints::new(min_connections, max_connections).expect("Constraints error"),
-            )
-            .with_inactive_connection_ttl(Duration::from_secs(keep_sec));
-        let wd_url = url;
-        let wd_opts = Opts::from_url(wd_url)
-            .unwrap_or_else(|_| panic!("Can not build options from db_wd URL {}", wd_url));
-        mysql_async::Pool::new(OptsBuilder::from_opts(wd_opts).pool_opts(pool_opts.clone()))
-    }
-
     pub fn get_storage(&self) -> &Arc<Box<dyn Storage>> {
         &self.storage
     }
@@ -98,9 +86,8 @@ impl AppState {
         &self.wikidata
     }
 
-    /// Returns a connection to the WDRC tool database
-    pub async fn get_wdrc_conn(&self) -> Result<Conn, mysql_async::Error> {
-        self.wdrc_pool.get_conn().await
+    pub fn wdrc(&self) -> &WDRC {
+        &self.wdrc
     }
 
     pub async fn disconnect(&self) -> Result<()> {
