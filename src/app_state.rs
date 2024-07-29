@@ -1,5 +1,4 @@
 use crate::job::*;
-use crate::mixnmatch::*;
 use crate::mysql_misc::MySQLMisc;
 use crate::storage::Storage;
 use crate::storage_mysql::StorageMySQL;
@@ -7,22 +6,44 @@ use crate::wdrc::WDRC;
 use crate::wikidata::Wikidata;
 use anyhow::Result;
 use dashmap::DashMap;
+use lazy_static::lazy_static;
+use regex::Regex;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::env;
 use std::fs::File;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::{thread, time};
 use tokio::time::sleep;
 use wikimisc::timestamp::TimeStamp;
 
+/// Global function for tests.
+pub fn get_test_app() -> AppState {
+    let ret = AppState::from_config_file("config.json").expect("Cannot create test MnM");
+    *TESTING.lock().unwrap() = true;
+    ret
+}
+
+pub const Q_NA: isize = 0;
+pub const Q_NOWD: isize = -1;
+pub const USER_AUTO: usize = 0;
+pub const USER_DATE_MATCH: usize = 3;
+pub const USER_AUX_MATCH: usize = 4;
+pub const USER_LOCATION_MATCH: usize = 5;
+
+lazy_static! {
+    pub static ref TESTING: Mutex<bool> = Mutex::new(false); // To lock the test entry in the database
+    pub static ref TEST_MUTEX: Mutex<bool> = Mutex::new(true); // To lock the test entry in the database
+    static ref RE_ITEM2NUMERIC: Regex = Regex::new(r"(-{0,1}\d+)").expect("Regex failure");
+}
+
 #[derive(Debug, Clone)]
 pub struct AppState {
-    wikidata: Wikidata,
-    wdrc: WDRC,
+    wikidata: Arc<Wikidata>,
+    wdrc: Arc<WDRC>,
     storage: Arc<Box<dyn Storage>>,
-    import_file_path: String,
-    task_specific_usize: HashMap<String, usize>,
+    import_file_path: Arc<String>,
+    task_specific_usize: Arc<HashMap<String, usize>>,
     max_concurrent_jobs: usize,
 }
 
@@ -52,24 +73,24 @@ impl AppState {
             .into_iter()
             .map(|(k, v)| (k.to_owned(), v.as_u64().unwrap_or_default() as usize))
             .collect();
+        let task_specific_usize = Arc::new(task_specific_usize);
         let max_concurrent_jobs = config["max_concurrent_jobs"].as_u64().unwrap_or(10) as usize;
-        // let thread_stack_factor = config["thread_stack_factor"].as_u64().unwrap_or(64) as usize;
-        // let default_threads= config["default_threads"].as_u64().unwrap_or(64) as usize;
         let bot_name = config["bot_name"].as_str().unwrap().to_string();
         let bot_password = config["bot_password"].as_str().unwrap().to_string();
+        let import_file_path = config["import_file_path"].as_str().unwrap().to_string();
+        let import_file_path = Arc::new(import_file_path);
         let ret = Self {
-            wikidata: Wikidata::new(&config["wikidata"], bot_name, bot_password),
-            wdrc: WDRC::new(&config["wdrc"]),
+            wikidata: Arc::new(Wikidata::new(&config["wikidata"], bot_name, bot_password)),
+            wdrc: Arc::new(WDRC::new(&config["wdrc"])),
             storage: Arc::new(Box::new(StorageMySQL::new(&config["mixnmatch"]))),
-            import_file_path: config["import_file_path"].as_str().unwrap().to_string(),
+            import_file_path,
             task_specific_usize,
             max_concurrent_jobs,
-            // runtime: Arc::new(Self::create_runtime(max_concurrent_jobs, default_threads, thread_stack_factor)),
         };
         ret
     }
 
-    pub fn get_storage(&self) -> &Arc<Box<dyn Storage>> {
+    pub fn storage(&self) -> &Arc<Box<dyn Storage>> {
         &self.storage
     }
 
@@ -77,8 +98,8 @@ impl AppState {
         &self.wikidata
     }
 
-    pub fn wikidata_mut(&mut self) -> &mut Wikidata {
-        &mut self.wikidata
+    pub fn wikidata_mut(&mut self) -> Option<&mut Wikidata> {
+        Arc::get_mut(&mut self.wikidata)
     }
 
     pub fn wdrc(&self) -> &WDRC {
@@ -89,6 +110,22 @@ impl AppState {
         self.wikidata.disconnect_db().await?;
         self.storage.disconnect().await?;
         Ok(())
+    }
+
+    /// Converts a string like "Q12345" to the numeric 12334
+    pub fn item2numeric(q: &str) -> Option<isize> {
+        RE_ITEM2NUMERIC
+            .captures_iter(q)
+            .next()
+            .and_then(|cap| cap[1].parse::<isize>().ok())
+    }
+
+    pub fn tool_root_dir() -> String {
+        std::env::var("TOOL_DATA_DIR").unwrap_or("/data/project/mix-n-match".to_string())
+    }
+
+    pub fn is_on_toolforge() -> bool {
+        std::path::Path::new("/etc/wmcs-project").exists()
     }
 
     // pub async fn run_from_props(&self, props: Vec<u32>, min_entries: u16) -> Result<()> {
@@ -209,8 +246,8 @@ impl AppState {
     // }
 
     pub async fn run_single_hp_job(&self) -> Result<()> {
-        let mnm = MixNMatch::new(self.clone());
-        let mut job = Job::new(&mnm);
+        let app = self.clone();
+        let mut job = Job::new(&app);
         if let Some(job_id) = job.get_next_high_priority_job().await {
             job.set_from_id(job_id).await?;
             job.set_status(JobStatus::Running).await?;
@@ -220,9 +257,9 @@ impl AppState {
     }
 
     pub async fn run_single_job(&self, job_id: usize) -> Result<()> {
-        let mnm = MixNMatch::new(self.clone());
+        let app = self.clone();
         let handle = tokio::spawn(async move {
-            let mut job = Job::new(&mnm);
+            let mut job = Job::new(&app);
             job.set_from_id(job_id).await?;
             if let Err(e) = job.set_status(JobStatus::Running).await {
                 println!("ERROR SETTING JOB STATUS: {e}")
@@ -237,7 +274,7 @@ impl AppState {
     fn seppuku(&self) {
         let check_every_minutes = 5;
         let max_age_min = 20;
-        let mnm = MixNMatch::new(self.clone());
+        let app = self.clone();
         tokio::spawn(async move {
             loop {
                 sleep(tokio::time::Duration::from_secs(60 * check_every_minutes)).await;
@@ -246,7 +283,7 @@ impl AppState {
                 let utc = chrono::Utc::now() - min;
                 let ts = TimeStamp::datetime(&utc);
                 let (running, running_recent) =
-                    mnm.get_storage().app_state_seppuku_get_running(&ts).await;
+                    app.storage().app_state_seppuku_get_running(&ts).await;
                 if running > 0 && running_recent == 0 {
                     println!("seppuku: {running} jobs running but no activity within {max_age_min} minutes, commiting seppuku");
                     std::process::exit(0);
@@ -257,12 +294,12 @@ impl AppState {
     }
 
     pub async fn forever_loop(&self) -> Result<()> {
-        let mnm = MixNMatch::new(self.clone());
+        let app = self.clone();
         let current_jobs: Arc<DashMap<usize, TaskSize>> = Arc::new(DashMap::new());
 
         // Reset old running&failed jobs
-        mnm.get_storage().reset_running_jobs().await?;
-        mnm.get_storage().reset_failed_jobs().await?;
+        self.storage().reset_running_jobs().await?;
+        self.storage().reset_failed_jobs().await?;
         println!("Old jobs reset, starting bot");
 
         self.seppuku();
@@ -279,8 +316,8 @@ impl AppState {
                 self.hold_on();
                 continue;
             }
-            let mut job = Job::new(&mnm);
-            let task_size = self.get_storage().jobs_get_tasks().await?;
+            let mut job = Job::new(&app);
+            let task_size = self.storage().jobs_get_tasks().await?;
             let big_jobs_running = (*current_jobs)
                 .clone()
                 .into_read_only()
@@ -346,6 +383,20 @@ impl AppState {
 
     fn hold_on(&self) {
         thread::sleep(time::Duration::from_secs(5));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_item2numeric() {
+        assert_eq!(AppState::item2numeric("foobar"), None);
+        assert_eq!(AppState::item2numeric("12345"), Some(12345));
+        assert_eq!(AppState::item2numeric("Q12345"), Some(12345));
+        assert_eq!(AppState::item2numeric("Q12345X"), Some(12345));
+        assert_eq!(AppState::item2numeric("Q12345X6"), Some(12345));
     }
 }
 

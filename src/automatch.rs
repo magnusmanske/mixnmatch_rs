@@ -1,8 +1,11 @@
+use crate::app_state::AppState;
+use crate::app_state::USER_AUTO;
+use crate::app_state::USER_DATE_MATCH;
 use crate::catalog::*;
 use crate::entry::*;
 use crate::issue::*;
 use crate::job::*;
-use crate::mixnmatch::*;
+use crate::person::Person;
 use anyhow::{anyhow, Result};
 use chrono::prelude::*;
 use chrono::{NaiveDateTime, Utc};
@@ -59,7 +62,7 @@ impl CandidateDates {
 
 #[derive(Debug, Clone)]
 pub struct AutoMatch {
-    mnm: MixNMatch,
+    app: AppState,
     job: Option<Job>,
 }
 
@@ -79,22 +82,22 @@ impl Jobbable for AutoMatch {
 }
 
 impl AutoMatch {
-    pub fn new(mnm: &MixNMatch) -> Self {
+    pub fn new(app: &AppState) -> Self {
         Self {
-            mnm: mnm.clone(),
+            app: app.clone(),
             job: None,
         }
     }
 
     pub async fn automatch_by_sitelink(&mut self, catalog_id: usize) -> Result<()> {
-        let language = Catalog::from_id(catalog_id, &self.mnm).await?.search_wp;
+        let language = Catalog::from_id(catalog_id, &self.app).await?.search_wp;
         let site = format!("{}wiki", &language);
         let mut offset = self.get_last_job_offset().await;
         let batch_size = 5000;
         loop {
             let entries = self
-                .mnm
-                .get_storage()
+                .app
+                .storage()
                 .automatch_by_sitelink_get_entries(catalog_id, offset, batch_size)
                 .await?;
             if entries.is_empty() {
@@ -110,7 +113,6 @@ impl AutoMatch {
 
             let params: Vec<String> = name2entries.keys().map(|s| s.to_owned()).collect();
             let wd_matches = self
-                .mnm
                 .app
                 .wikidata()
                 .automatch_by_sitlinks_get_wd_matches(params, &site)
@@ -119,7 +121,7 @@ impl AutoMatch {
             for (q, title) in wd_matches {
                 if let Some(v) = name2entries.get(&title) {
                     for entry_id in v {
-                        if let Ok(mut entry) = Entry::from_id(*entry_id, &self.mnm).await {
+                        if let Ok(mut entry) = Entry::from_id(*entry_id, &self.app).await {
                             let _ = entry.set_match(&format!("Q{}", q), USER_AUTO).await;
                         }
                     }
@@ -142,13 +144,7 @@ impl AutoMatch {
         name: &str,
         type_q: &str,
     ) -> Option<(usize, Vec<String>)> {
-        let mut items = match self
-            .mnm
-            .app
-            .wikidata()
-            .search_with_type_api(name, type_q)
-            .await
-        {
+        let mut items = match self.app.wikidata().search_with_type_api(name, type_q).await {
             Ok(items) => items,
             Err(_e) => {
                 // eprintln!("search_with_type_and_entity_id: {e}");
@@ -168,7 +164,7 @@ impl AutoMatch {
         entry_id2items: &HashMap<usize, Vec<String>>,
     ) -> Result<()> {
         let entry_ids: Vec<usize> = entry_id2items.keys().copied().collect();
-        let mut entries = Entry::multiple_from_ids(&entry_ids, &self.mnm).await?;
+        let mut entries = Entry::multiple_from_ids(&entry_ids, &self.app).await?;
         let mut futures = vec![];
 
         for (entry_id, entry) in &mut entries {
@@ -187,8 +183,8 @@ impl AutoMatch {
     // async fn match_entry_to_items(&self, entry_id: usize, mut items: Vec<String>) -> Result<(),GenericError> {
     //     items.sort();
     //     items.dedup();
-    //     let mut entry= Entry::from_id(entry_id, &self.mnm).await?;
-    //     if entry.q!=self.mnm.item2numeric(&items[0]) {
+    //     let mut entry= Entry::from_id(entry_id, &self.app).await?;
+    //     if entry.q!=AppState::item2numeric(&items[0]) {
     //         entry.set_match(&items[0],USER_AUTO).await?;
     //         if items.len()>1 { // Multi-match
     //             entry.set_multi_match(&items).await?;
@@ -200,13 +196,11 @@ impl AutoMatch {
     pub async fn automatch_by_search(&mut self, catalog_id: usize) -> Result<()> {
         let mut offset = self.get_last_job_offset().await;
         let batch_size = *self
-            .mnm
             .app
             .task_specific_usize()
             .get("automatch_by_search_batch_size")
             .unwrap_or(&5000);
         let search_batch_size = *self
-            .mnm
             .app
             .task_specific_usize()
             .get("automatch_by_search_search_batch_size")
@@ -214,8 +208,8 @@ impl AutoMatch {
 
         loop {
             let results = self
-                .mnm
-                .get_storage()
+                .app
+                .storage()
                 .automatch_by_search_get_results(catalog_id, offset, batch_size)
                 .await?;
             // println!("automatch_by_search [{catalog_id}]:Done.");
@@ -263,7 +257,11 @@ impl AutoMatch {
                     .cloned()
                     .collect_vec();
                 // println!("no_meta_items: {no_meta_items:?}");
-                let _ = self.mnm.remove_meta_items(&mut no_meta_items).await;
+                let _ = self
+                    .app
+                    .wikidata()
+                    .remove_meta_items(&mut no_meta_items)
+                    .await;
                 search_results.retain(|(_entry_id, q)| no_meta_items.contains(q));
                 // println!("Serch results, filtered: {search_results:?}");
 
@@ -293,8 +291,8 @@ impl AutoMatch {
 
     pub async fn automatch_creations(&mut self, catalog_id: usize) -> Result<()> {
         let results = self
-            .mnm
-            .get_storage()
+            .app
+            .storage()
             .automatch_creations_get_results(catalog_id)
             .await?;
 
@@ -308,7 +306,7 @@ impl AutoMatch {
                 continue;
             }
 
-            let items = match self.mnm.wd_search(search_query).await {
+            let items = match self.app.wikidata().search_api(search_query).await {
                 Ok(items) => items,
                 Err(_e) => continue,
             };
@@ -316,7 +314,7 @@ impl AutoMatch {
                 // No search results
                 continue;
             }
-            if let Ok(mut entry) = Entry::from_id(object_entry_id, &self.mnm).await {
+            if let Ok(mut entry) = Entry::from_id(object_entry_id, &self.app).await {
                 let _ = entry.set_auto_and_multi_match(&items).await;
             };
         }
@@ -329,8 +327,8 @@ impl AutoMatch {
         loop {
             // TODO make this more efficient, too many wd replica queries
             let results = self
-                .mnm
-                .get_storage()
+                .app
+                .storage()
                 .automatch_simple_get_results(catalog_id, offset, batch_size)
                 .await?;
 
@@ -339,12 +337,13 @@ impl AutoMatch {
                 let label = &result.1;
                 let type_q = &result.2;
                 let aliases: Vec<&str> = result.3.split('|').collect();
-                let mut items = match self.mnm.wd_search_with_type_db(label, type_q).await {
+                let mut items = match self.app.wikidata().search_db_with_type(label, type_q).await {
                     Ok(items) => items,
                     _ => continue, // Ignore error
                 };
                 for alias in &aliases {
-                    let mut tmp = match self.mnm.wd_search_with_type_db(alias, type_q).await {
+                    let mut tmp = match self.app.wikidata().search_db_with_type(alias, type_q).await
+                    {
                         Ok(tmp) => tmp,
                         _ => continue, // Ignore error
                     };
@@ -352,13 +351,19 @@ impl AutoMatch {
                 }
                 items.sort();
                 items.dedup();
-                if self.mnm.remove_meta_items(&mut items).await.is_err() {
+                if self
+                    .app
+                    .wikidata()
+                    .remove_meta_items(&mut items)
+                    .await
+                    .is_err()
+                {
                     continue; // Ignore error
                 }
                 if items.is_empty() {
                     continue;
                 }
-                let mut entry = match Entry::from_id(entry_id, &self.mnm).await {
+                let mut entry = match Entry::from_id(entry_id, &self.app).await {
                     Ok(entry) => entry,
                     _ => continue, // Ignore error
                 };
@@ -387,8 +392,8 @@ impl AutoMatch {
         let batch_size = 500;
         loop {
             let results_in_original_catalog = self
-                .mnm
-                .get_storage()
+                .app
+                .storage()
                 .automatch_from_other_catalogs_get_results(catalog_id, batch_size, offset)
                 .await?;
             if results_in_original_catalog.is_empty() {
@@ -409,8 +414,8 @@ impl AutoMatch {
             });
 
             let results_in_other_catalogs = self
-                .mnm
-                .get_storage()
+                .app
+                .storage()
                 .automatch_from_other_catalogs_get_results2(&results_in_original_catalog, ext_names)
                 .await?;
             for r in &results_in_other_catalogs {
@@ -421,7 +426,7 @@ impl AutoMatch {
                 let key = (r.ext_name.to_owned(), r.type_name.to_owned());
                 if let Some(v) = name_type2id.get(&key) {
                     for entry_id in v {
-                        if let Ok(mut entry) = Entry::from_id(*entry_id, &self.mnm).await {
+                        if let Ok(mut entry) = Entry::from_id(*entry_id, &self.app).await {
                             let _ = entry.set_match(&q, USER_AUTO).await;
                         };
                     }
@@ -438,17 +443,17 @@ impl AutoMatch {
     }
 
     pub async fn purge_automatches(&self, catalog_id: usize) -> Result<()> {
-        self.mnm.get_storage().purge_automatches(catalog_id).await
+        self.app.storage().purge_automatches(catalog_id).await
     }
 
     pub async fn match_person_by_dates(&mut self, catalog_id: usize) -> Result<()> {
-        let mw_api = self.mnm.app.wikidata().get_mw_api().await?;
+        let mw_api = self.app.wikidata().get_mw_api().await?;
         let mut offset = self.get_last_job_offset().await;
         let batch_size = 5000;
         loop {
             let results = self
-                .mnm
-                .get_storage()
+                .app
+                .storage()
                 .match_person_by_dates_get_results(catalog_id, batch_size, offset)
                 .await?;
             for result in &results {
@@ -485,7 +490,7 @@ impl AutoMatch {
                     0 => {} // No results
                     1 => {
                         let q = &candidate_items[0];
-                        let _ = Entry::from_id(entry_id, &self.mnm)
+                        let _ = Entry::from_id(entry_id, &self.app)
                             .await?
                             .set_match(q, USER_DATE_MATCH)
                             .await;
@@ -495,7 +500,7 @@ impl AutoMatch {
                             entry_id,
                             IssueType::WdDuplicate,
                             json!(candidate_items),
-                            &self.mnm,
+                            &self.app,
                         )
                         .await?
                         .insert()
@@ -521,14 +526,14 @@ impl AutoMatch {
         } else {
             "P570"
         };
-        let mw_api = self.mnm.app.wikidata().get_mw_api().await?;
+        let mw_api = self.app.wikidata().get_mw_api().await?;
         // CAUTION: Do NOT use views in the SQL statement, it will/might throw an "Prepared statement needs to be re-prepared" error
         let mut offset = self.get_last_job_offset().await;
         let batch_size = 100;
         loop {
             let results = self
-                .mnm
-                .get_storage()
+                .app
+                .storage()
                 .match_person_by_single_date_get_results(
                     match_field,
                     catalog_id,
@@ -582,7 +587,7 @@ impl AutoMatch {
                 if candidates.len() == 1 {
                     // TODO >1
                     if let Some(q) = candidates.first() {
-                        let _ = Entry::from_id(result.entry_id, &self.mnm)
+                        let _ = Entry::from_id(result.entry_id, &self.app)
                             .await?
                             .set_match(q, USER_DATE_MATCH)
                             .await;
@@ -602,13 +607,8 @@ impl AutoMatch {
 
     //TODO test
     async fn search_person(&self, name: &str) -> Result<Vec<String>> {
-        let name = MixNMatch::sanitize_person_name(name);
-        let name = MixNMatch::simplify_person_name(&name);
-        self.mnm
-            .app
-            .wikidata()
-            .search_with_type_api(&name, "Q5")
-            .await
+        let name = Person::sanitize_simplify_name(name);
+        self.app.wikidata().search_with_type_api(&name, "Q5").await
     }
 
     //TODO test
@@ -657,7 +657,6 @@ impl AutoMatch {
             .collect();
         let query = query.join(" OR ");
         let mut search_results = self
-            .mnm
             .app
             .wikidata()
             .search_with_limit(&query, Some(500))
@@ -667,17 +666,17 @@ impl AutoMatch {
         }
         search_results.sort();
         search_results.dedup();
-        let api = self.mnm.app.wikidata().get_mw_api().await?;
+        let api = self.app.wikidata().get_mw_api().await?;
 
         let entry_ids = el_chunk.iter().map(|(entry_id, _)| *entry_id).collect_vec();
-        let mut entries = Entry::multiple_from_ids(&entry_ids, &self.mnm).await?;
+        let mut entries = Entry::multiple_from_ids(&entry_ids, &self.app).await?;
 
         for sr in search_results.chunks(50) {
             let sr = sr.join(" wd:");
             let sparql_subquery =
                 format!("SELECT DISTINCT ?q {{ {sparql_parts} . VALUES ?q {{ wd:{sr} }} }}");
             let sparql = format!("SELECT ?q ?qLabel {{ {{ {sparql_subquery} }} SERVICE wikibase:label {{ bd:serviceParam wikibase:language \"{language},[AUTO_LANGUAGE],en\" }} }}");
-            let mut reader = match self.mnm.load_sparql_csv(&sparql).await {
+            let mut reader = match self.app.wikidata().load_sparql_csv(&sparql).await {
                 Ok(result) => result,
                 Err(_) => continue, // Ignore error
             };
@@ -722,7 +721,7 @@ impl AutoMatch {
     }
 
     pub async fn automatch_complex(&mut self, catalog_id: usize) -> Result<()> {
-        let catalog = Catalog::from_id(catalog_id, &self.mnm).await?;
+        let catalog = Catalog::from_id(catalog_id, &self.app).await?;
         let sparql_parts = self.automatch_complex_get_sparql_parts(&catalog).await?;
         let mut language = catalog.search_wp.to_owned();
         if language.is_empty() {
@@ -733,8 +732,8 @@ impl AutoMatch {
         let batch_size = 10;
         loop {
             let el_chunk = self
-                .mnm
-                .get_storage()
+                .app
+                .storage()
                 .automatch_complex_get_el_chunk(catalog_id, offset, batch_size)
                 .await?;
             if el_chunk.is_empty() {
@@ -756,8 +755,8 @@ impl AutoMatch {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
+    use crate::app_state::{get_test_app, TEST_MUTEX};
 
     const TEST_CATALOG_ID: usize = 5526;
     const TEST_ENTRY_ID: usize = 143962196;
@@ -766,8 +765,8 @@ mod tests {
     #[tokio::test]
     async fn test_automatch_complex() {
         let _test_lock = TEST_MUTEX.lock();
-        let mnm = get_test_mnm();
-        let mut am = AutoMatch::new(&mnm);
+        let app = get_test_app();
+        let mut am = AutoMatch::new(&app);
         let result = am.automatch_complex(3663).await.unwrap();
         println!("{result:?}");
     }
@@ -775,10 +774,10 @@ mod tests {
     #[tokio::test]
     async fn test_match_person_by_dates() {
         let _test_lock = TEST_MUTEX.lock();
-        let mnm = get_test_mnm();
+        let app = get_test_app();
 
         // Clear
-        Entry::from_id(TEST_ENTRY_ID2, &mnm)
+        Entry::from_id(TEST_ENTRY_ID2, &app)
             .await
             .unwrap()
             .unmatch()
@@ -786,11 +785,11 @@ mod tests {
             .unwrap();
 
         // Match by date
-        let mut am = AutoMatch::new(&mnm);
+        let mut am = AutoMatch::new(&app);
         am.match_person_by_dates(TEST_CATALOG_ID).await.unwrap();
 
         // Check if set
-        let entry = Entry::from_id(TEST_ENTRY_ID2, &mnm).await.unwrap();
+        let entry = Entry::from_id(TEST_ENTRY_ID2, &app).await.unwrap();
         assert!(entry.is_fully_matched());
         assert_eq!(1035, entry.q.unwrap());
     }
@@ -798,27 +797,27 @@ mod tests {
     #[tokio::test]
     async fn test_automatch_by_search() {
         let _test_lock = TEST_MUTEX.lock();
-        let mnm = get_test_mnm();
+        let app = get_test_app();
 
         // Clear
-        Entry::from_id(TEST_ENTRY_ID, &mnm)
+        Entry::from_id(TEST_ENTRY_ID, &app)
             .await
             .unwrap()
             .unmatch()
             .await
             .unwrap();
 
-        assert!(Entry::from_id(TEST_ENTRY_ID, &mnm)
+        assert!(Entry::from_id(TEST_ENTRY_ID, &app)
             .await
             .unwrap()
             .is_unmatched());
 
         // Run automatch
-        let mut am = AutoMatch::new(&mnm);
+        let mut am = AutoMatch::new(&app);
         am.automatch_by_search(TEST_CATALOG_ID).await.unwrap();
 
         // Check in-database changes
-        let mut entry = Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
         assert_eq!(entry.q, Some(467402));
         assert_eq!(entry.user, Some(USER_AUTO));
 
@@ -829,17 +828,21 @@ mod tests {
     #[tokio::test]
     async fn test_automatch_by_sitelink() {
         let _test_lock = TEST_MUTEX.lock();
-        let mnm = get_test_mnm();
-        let mut am = AutoMatch::new(&mnm);
+        let app = get_test_app();
 
         // Clear
-        am.purge_automatches(TEST_CATALOG_ID).await.unwrap();
+        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+        entry.unmatch().await.unwrap();
+
+        let mut am = AutoMatch::new(&app);
+
+        // am.purge_automatches(TEST_CATALOG_ID).await.unwrap();
 
         // Run automatch
         am.automatch_by_sitelink(TEST_CATALOG_ID).await.unwrap();
 
         // Check in-database changes
-        let entry = Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        let entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
         assert_eq!(entry.q, Some(13520818));
         assert_eq!(entry.user, Some(USER_AUTO));
 
@@ -850,46 +853,50 @@ mod tests {
     #[tokio::test]
     async fn test_purge_automatches() {
         let _test_lock = TEST_MUTEX.lock();
-        let mnm = get_test_mnm();
+        let app = get_test_app();
 
         // Set a full match
-        let mut entry = Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
         entry.unmatch().await.unwrap();
         entry.set_match("Q1", 4).await.unwrap();
         assert!(entry.is_fully_matched());
 
         // Purge catalog
-        let am = AutoMatch::new(&mnm);
+        let am = AutoMatch::new(&app);
         am.purge_automatches(TEST_CATALOG_ID).await.unwrap();
 
         // Check that the entry is still fully matched
-        let entry = Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        let entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
         assert!(entry.is_fully_matched());
 
         // Set an automatch
-        let mut entry = Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
         entry.unmatch().await.unwrap();
         entry.set_match("Q1", 0).await.unwrap();
         assert!(entry.is_partially_matched());
 
         // Purge catalog
-        let am = AutoMatch::new(&mnm);
+        let am = AutoMatch::new(&app);
         am.purge_automatches(TEST_CATALOG_ID).await.unwrap();
 
         // Check that the entry is now unmatched
-        let entry = Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        let entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
         assert!(entry.is_unmatched());
     }
 
     #[tokio::test]
     async fn test_match_person_by_single_date() {
         let _test_lock = TEST_MUTEX.lock();
-        let mnm = get_test_mnm();
-        let mut am = AutoMatch::new(&mnm);
-        am.purge_automatches(TEST_CATALOG_ID).await.unwrap();
+        let app = get_test_app();
+
+        // Clear
+        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+        entry.unmatch().await.unwrap();
+
+        let mut am = AutoMatch::new(&app);
 
         // Set prelim match
-        let mut entry = Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
         entry.set_match("Q13520818", 0).await.unwrap();
 
         // Run automatch
@@ -898,7 +905,7 @@ mod tests {
             .unwrap();
 
         // Check match
-        let mut entry = Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
+        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
         assert_eq!(entry.q, Some(13520818));
         assert_eq!(entry.user, Some(USER_DATE_MATCH));
 

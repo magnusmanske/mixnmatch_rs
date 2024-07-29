@@ -5,6 +5,7 @@ use mysql_async::{from_row, prelude::*};
 use serde_json::{json, Value};
 use std::{
     collections::{HashMap, HashSet},
+    fs::File,
     time::Duration,
 };
 use urlencoding::encode;
@@ -44,7 +45,7 @@ impl Wikidata {
     }
 
     fn testing() -> bool {
-        *crate::mixnmatch::TESTING.lock().unwrap()
+        *crate::app_state::TESTING.lock().unwrap()
     }
 
     // Database things
@@ -55,7 +56,12 @@ impl Wikidata {
         site: &String,
     ) -> Result<Vec<(usize, String)>> {
         let placeholders = Self::sql_placeholders(params.len());
-        let sql = format!("SELECT `ips_item_id`,`ips_site_page` FROM `wb_items_per_site` WHERE `ips_site_id`='{}' AND `ips_site_page` IN ({})",&site,placeholders);
+        let sql = format!(
+            "SELECT `ips_item_id`,`ips_site_page`
+            FROM `wb_items_per_site`
+            WHERE `ips_site_id`='{site}'
+            AND `ips_site_page` IN ({placeholders})"
+        );
         let mut conn = self.get_conn().await?;
         let wd_matches = conn
             .exec_iter(sql, params)
@@ -89,9 +95,11 @@ impl Wikidata {
     }
 
     pub async fn search_with_type(&self, name: &str) -> Result<Vec<String>, anyhow::Error> {
-        let sql = "SELECT concat('Q',wbit_item_id) AS q FROM wbt_text,wbt_item_terms,wbt_term_in_lang,wbt_text_in_lang WHERE wbit_term_in_lang_id=wbtl_id AND wbtl_text_in_lang_id=wbxl_id AND wbxl_text_id=wbx_id  AND wbx_text=:name
-                AND EXISTS (SELECT * FROM page,pagelinks,linktarget WHERE page_title=concat('Q',wbit_item_id) AND page_namespace=0 AND pl_target_id=lt_id AND pl_from=page_id AND lt_namespace=0 AND lt_title=:type_q)
-                GROUP BY name,q";
+        let sql = "SELECT concat('Q',wbit_item_id) AS q
+        			FROM wbt_text,wbt_item_terms,wbt_term_in_lang,wbt_text_in_lang
+           			WHERE wbit_term_in_lang_id=wbtl_id AND wbtl_text_in_lang_id=wbxl_id AND wbxl_text_id=wbx_id  AND wbx_text=:name
+	                AND EXISTS (SELECT * FROM page,pagelinks,linktarget WHERE page_title=concat('Q',wbit_item_id) AND page_namespace=0 AND pl_target_id=lt_id AND pl_from=page_id AND lt_namespace=0 AND lt_title=:type_q)
+					GROUP BY name,q";
         let mut conn = self.get_conn().await?;
         Ok(conn
             .exec_iter(sql, params! {name})
@@ -147,6 +155,31 @@ impl Wikidata {
         Ok(not_found)
     }
 
+    pub async fn search_db_with_type(&self, name: &str, type_q: &str) -> Result<Vec<String>> {
+        if name.is_empty() {
+            return Ok(vec![]);
+        }
+        let items = if type_q.is_empty() {
+            self.search_without_type(name).await?
+        } else {
+            self.search_with_type(name).await?
+        };
+        Ok(items)
+    }
+
+    /// Removes "meta items" (eg disambiguation pages) from an item list.
+    /// Items are in format "Qxxx".
+    pub async fn remove_meta_items(&self, items: &mut Vec<String>) -> Result<()> {
+        if items.is_empty() {
+            return Ok(());
+        }
+        items.sort();
+        items.dedup();
+        let meta_items = self.get_meta_items(items).await?;
+        items.retain(|item| !meta_items.iter().any(|q| q == item));
+        Ok(())
+    }
+
     // API stuff
 
     pub fn bot_name(&self) -> &str {
@@ -188,6 +221,11 @@ impl Wikidata {
             .login(self.bot_name.to_owned(), self.bot_password.to_owned())
             .await?;
         Ok(())
+    }
+
+    /// Performs a Wikidata API search for the query string. Returns item IDs matching the query.
+    pub async fn search_api(&self, query: &str) -> Result<Vec<String>> {
+        self.search_with_limit(query, None).await
     }
 
     pub async fn search_with_limit(
@@ -315,13 +353,25 @@ impl Wikidata {
         query += &meta_items.join("");
         self.search_with_limit(&query, None).await
     }
+
+    /// Queries SPARQL and returns a filename with the result as CSV.
+    pub async fn load_sparql_csv(&self, sparql: &str) -> Result<csv::Reader<File>> {
+        wikimisc::wikidata::Wikidata::new()
+            .load_sparql_csv(sparql)
+            .await
+    }
 }
 
 #[cfg(test)]
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mixnmatch::get_test_mnm;
+
+    fn get_test_wd() -> Wikidata {
+        let app = crate::app_state::get_test_app();
+        let wd = app.wikidata();
+        wd.to_owned()
+    }
 
     #[test]
     fn test_sql_placeholders() {
@@ -332,8 +382,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_api_log_in() {
-        let mut mnm = get_test_mnm();
-        let wd = mnm.app.wikidata_mut();
+        let mut wd = get_test_wd();
         wd.api_log_in().await.unwrap();
         let api = wd.mw_api.as_ref().unwrap();
         assert!(api.user().logged_in());
@@ -341,21 +390,30 @@ mod tests {
 
     #[tokio::test]
     async fn test_wd_search() {
-        let mnm = get_test_mnm();
-        assert!(mnm.wd_search("").await.unwrap().is_empty());
+        let wd = get_test_wd();
+        assert!(wd.search_api("").await.unwrap().is_empty());
         assert_eq!(
-            mnm.wd_search("Magnus Manske haswbstatement:P31=Q5")
+            wd.search_api("Magnus Manske haswbstatement:P31=Q5")
                 .await
                 .unwrap(),
             vec!["Q13520818".to_string()]
         );
         assert_eq!(
-            mnm.app
-                .wikidata()
-                .search_with_type_api("Magnus Manske", "Q5")
+            wd.search_with_type_api("Magnus Manske", "Q5")
                 .await
                 .unwrap(),
             vec!["Q13520818".to_string()]
         );
+    }
+
+    #[tokio::test]
+    async fn test_remove_meta_items() {
+        let wd = get_test_wd();
+        let mut items: Vec<String> = ["Q1", "Q3522", "Q2"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        wd.remove_meta_items(&mut items).await.unwrap();
+        assert_eq!(items, ["Q1", "Q2"]);
     }
 }

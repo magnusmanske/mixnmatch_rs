@@ -1,8 +1,9 @@
-use crate::mixnmatch::*;
 use anyhow::Result;
 use serde_json::Value;
 use std::error::Error;
 use std::fmt;
+
+use crate::app_state::AppState;
 
 #[derive(Debug)]
 pub enum IssueError {
@@ -93,7 +94,7 @@ pub struct Issue {
     pub user_id: Option<usize>,
     pub resolved_ts: Option<String>,
     pub catalog_id: usize,
-    mnm: MixNMatch,
+    app: AppState,
 }
 
 impl Issue {
@@ -101,10 +102,10 @@ impl Issue {
         entry_id: usize,
         issue_type: IssueType,
         json: Value,
-        mnm: &MixNMatch,
+        app: &AppState,
     ) -> Result<Self> {
         Ok(Self {
-            mnm: mnm.clone(),
+            app: app.clone(),
             entry_id,
             issue_type,
             json,
@@ -116,7 +117,7 @@ impl Issue {
     }
 
     pub async fn insert(&self) -> Result<()> {
-        self.mnm.get_storage().issue_insert(self).await?;
+        self.app.storage().issue_insert(self).await?;
         Ok(())
     }
 }

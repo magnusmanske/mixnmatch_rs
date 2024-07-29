@@ -12,8 +12,8 @@ pub mod job;
 pub mod maintenance;
 pub mod match_state;
 pub mod microsync;
-pub mod mixnmatch;
 pub mod mysql_misc;
+pub mod person;
 pub mod php_wrapper;
 pub mod storage;
 pub mod storage_mysql;
@@ -56,8 +56,7 @@ async fn run() -> Result<()> {
         //     app.run_from_props(props, min_entries).await
         // }
         Some("test") => {
-            let mnm = crate::mixnmatch::MixNMatch::new(app.clone());
-            let mut job = crate::job::Job::new(&mnm);
+            let mut job = crate::job::Job::new(&app);
             job.set_next().await?;
             // let job_id = job.get_next_job_id().await;
             // let id_opt = j.set_next().await;
@@ -82,6 +81,7 @@ async fn main() -> Result<()> {
 /*
 ssh magnus@tools-login.wmflabs.org -L 3309:wikidatawiki.web.db.svc.eqiad.wmflabs:3306 -N &
 ssh magnus@tools-login.wmflabs.org -L 3308:tools-db:3306 -N &
+cargo test -- --test-threads=1
 cargo test  -- --nocapture
 
 git pull && ./build.sh && \rm ~/rustbot.* ; toolforge jobs restart rustbot
