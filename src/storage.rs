@@ -49,7 +49,6 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     async fn get_data_source_type_for_uuid(&self, uuid: &str) -> Result<Vec<String>>;
     async fn get_existing_ext_ids(
         &self,
-        placeholders: String,
         catalog_id: usize,
         ext_ids: &[String],
     ) -> Result<Vec<String>>;

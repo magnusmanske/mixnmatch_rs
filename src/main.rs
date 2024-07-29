@@ -18,6 +18,7 @@ pub mod storage_mysql;
 // pub mod storage_wikibase;
 pub mod taxon_matcher;
 pub mod update_catalog;
+pub mod wikidata;
 pub mod wikidata_commands;
 
 use anyhow::Result;

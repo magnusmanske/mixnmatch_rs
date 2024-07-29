@@ -9,8 +9,6 @@ use chrono::{NaiveDateTime, Utc};
 use futures::future::join_all;
 use itertools::Itertools;
 use lazy_static::lazy_static;
-use mysql_async::from_row;
-use mysql_async::prelude::*;
 use regex::Regex;
 use serde_json::json;
 use std::collections::HashMap;
@@ -111,16 +109,11 @@ impl AutoMatch {
             });
 
             let params: Vec<String> = name2entries.keys().map(|s| s.to_owned()).collect();
-            let placeholders = MixNMatch::sql_placeholders(params.len());
-            let sql2 = format!("SELECT `ips_item_id`,`ips_site_page` FROM `wb_items_per_site` WHERE `ips_site_id`='{}' AND `ips_site_page` IN ({})",&site,placeholders);
             let wd_matches = self
                 .mnm
                 .app
-                .get_wd_conn()
-                .await?
-                .exec_iter(sql2, params)
-                .await?
-                .map_and_drop(from_row::<(usize, String)>)
+                .wikidata()
+                .automatch_by_sitlinks_get_wd_matches(params, &site)
                 .await?;
 
             for (q, title) in wd_matches {

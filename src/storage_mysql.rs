@@ -284,16 +284,16 @@ impl Storage for StorageMySQL {
 
     async fn get_existing_ext_ids(
         &self,
-        placeholders: String,
         catalog_id: usize,
         ext_ids: &[String],
     ) -> Result<Vec<String>> {
+        let placeholders = Self::sql_placeholders(ext_ids.len());
         let sql = format!(
             "SELECT `ext_id` FROM entry WHERE `ext_id` IN ({}) AND `catalog`={}",
             &placeholders, catalog_id
         );
         let existing_ext_ids = sql
-            .with(ext_ids.to_vec())
+            .with(ext_ids.to_vec()) // TODO don't convert to Vec
             .map(self.get_conn().await?, |ext_id| ext_id)
             .await?;
         Ok(existing_ext_ids)
