@@ -31,8 +31,9 @@ impl WDRC {
         let properties = prop2catalog_ids.keys().cloned().collect_vec();
         let props_str = properties.iter().map(|p| format!("{p}")).join(",");
         let sql = format!("SELECT DISTINCT `item`,`property`,`timestamp` FROM `statements` WHERE `property` IN ({props_str}) AND `timestamp`>='{last_ts}'") ;
-        let mut conn = self.get_conn().await?;
-        let results = conn
+        let results = self
+            .get_conn()
+            .await?
             .exec_iter(sql, ())
             .await?
             .map_and_drop(from_row::<(usize, usize, String)>)
