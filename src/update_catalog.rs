@@ -4,6 +4,7 @@ use crate::catalog::Catalog;
 use crate::entry::*;
 use crate::job::*;
 use anyhow::{anyhow, Result};
+use csv::StringRecord;
 use lazy_static::lazy_static;
 use regex::Regex;
 use serde_json::json;
@@ -471,6 +472,8 @@ pub struct DataSource {
     _update_all_descriptions: Option<bool>,
     fail_on_error: bool,
     line_counter: LineCounter,
+    rows_to_skip: u64, // Modified at runtime
+    offset: usize,     // Set at runtime
 }
 
 impl DataSource {
@@ -522,7 +525,7 @@ impl DataSource {
             .get("min_cols")
             .map(|v| v.as_u64().unwrap_or(columns.len() as u64))
             .unwrap_or_else(|| columns.len() as u64);
-        Ok(Self {
+        let mut ret = Self {
             catalog_id,
             json: json.clone(),
             _columns: columns,
@@ -562,7 +565,11 @@ impl DataSource {
             line_counter: LineCounter::new(),
             fail_on_error: false, // TODO?
             tmp_file: None,
-        })
+            rows_to_skip: 0,
+            offset: 0,
+        };
+        ret.rows_to_skip = ret.num_header_rows + ret.skip_first_rows;
+        Ok(ret)
     }
 
     //TODO test
@@ -670,64 +677,68 @@ impl UpdateCatalog {
         }
     }
 
+    fn update_from_tabbed_file_check_result(
+        &self,
+        result: Result<StringRecord, csv::Error>,
+        datasource: &mut DataSource,
+    ) -> Result<Option<StringRecord>> {
+        let result = match result {
+            Ok(result) => result,
+            Err(e) => {
+                if datasource.fail_on_error {
+                    return Err(e.into());
+                } else {
+                    return Ok(None);
+                }
+            }
+        };
+        if result.is_empty() {
+            // Skip blank lines
+            return Ok(None);
+        }
+        datasource.line_counter.all += 1;
+        // TODO? read_max_rows but it's only used from the API so...
+        if datasource.rows_to_skip > 0 {
+            datasource.rows_to_skip -= 1;
+            return Ok(None);
+        }
+        if result.len() < datasource.min_cols {
+            if datasource.fail_on_error {
+                return Err(
+                    UpdateCatalogError::NotEnoughColumns(datasource.line_counter.all).into(),
+                );
+            }
+            return Ok(None);
+        }
+
+        datasource.line_counter.offset += 1;
+        if datasource.line_counter.offset < datasource.offset {
+            return Ok(None);
+        }
+        Ok(Some(result))
+    }
+
     /// Updates a catalog by reading a tabbed file.
     pub async fn update_from_tabbed_file(&mut self, catalog_id: usize) -> Result<()> {
         let update_info = self.get_update_info(catalog_id).await?;
         let json = update_info.json()?;
-        let mut datasource = DataSource::new(catalog_id, &json)?;
-        let offset = self.get_last_job_offset().await;
-        let batch_size = 5000;
         let catalog = Catalog::from_id(catalog_id, &self.app).await?;
         let entries_already_in_catalog = catalog.number_of_entries().await?;
-
-        let mut rows_to_skip = datasource.num_header_rows + datasource.skip_first_rows;
+        let batch_size = 5000;
+        let mut datasource = DataSource::new(catalog_id, &json)?;
+        datasource.offset = self.get_last_job_offset().await;
         datasource.just_add = entries_already_in_catalog == 0 || datasource.just_add;
         let mut reader = datasource.get_reader(&self.app).await?;
-
         let mut row_cache = vec![];
         while let Some(result) = reader.records().next() {
-            let result = match result {
-                Ok(result) => result,
-                Err(e) => {
-                    if datasource.fail_on_error {
-                        return Err(e.into());
-                    } else {
-                        continue;
-                    }
-                }
+            let result = match self.update_from_tabbed_file_check_result(result, &mut datasource)? {
+                Some(result) => result,
+                None => continue,
             };
-            if result.is_empty() {
-                // Skip blank lines
-                continue;
-            }
-            datasource.line_counter.all += 1;
-            // TODO? read_max_rows but it's only used from the API so...
-            if rows_to_skip > 0 {
-                rows_to_skip -= 1;
-                continue;
-            }
-            if result.len() < datasource.min_cols {
-                if datasource.fail_on_error {
-                    return Err(
-                        UpdateCatalogError::NotEnoughColumns(datasource.line_counter.all).into(),
-                    );
-                }
-                continue;
-            }
-
-            datasource.line_counter.offset += 1;
-            if datasource.line_counter.offset < offset {
-                continue;
-            }
-
             row_cache.push(result);
             if row_cache.len() >= batch_size {
-                if let Err(e) = self.process_rows(&mut row_cache, &mut datasource).await {
-                    if datasource.fail_on_error {
-                        return Err(e);
-                    }
-                }
-                let _ = self.remember_offset(datasource.line_counter.offset).await;
+                self.update_from_tabbed_file_process_row_cache(&mut datasource, &mut row_cache)
+                    .await?;
             }
         }
         if let Err(e) = self.process_rows(&mut row_cache, &mut datasource).await {
@@ -744,6 +755,21 @@ impl UpdateCatalog {
                $this->app->queue_job($this->catalog_id(),'automatch_by_search');
                if ( $this->has_born_died ) $this->app->queue_job($this->catalog_id(),'match_person_dates');
         */
+        Ok(())
+    }
+
+    async fn update_from_tabbed_file_process_row_cache(
+        &mut self,
+        datasource: &mut DataSource,
+        row_cache: &mut Vec<StringRecord>,
+    ) -> Result<(), anyhow::Error> {
+        if datasource.fail_on_error {
+            self.process_rows(row_cache, datasource).await?
+        } else {
+            // Ignore error
+            let _ = self.process_rows(row_cache, datasource).await;
+        }
+        let _ = self.remember_offset(datasource.line_counter.offset).await;
         Ok(())
     }
 
