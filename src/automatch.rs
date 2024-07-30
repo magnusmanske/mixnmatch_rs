@@ -520,81 +520,32 @@ impl AutoMatch {
 
     pub async fn match_person_by_single_date(&mut self, catalog_id: usize) -> Result<()> {
         let precision = 10; // 2022-xx-xx=10; use 4 for just the year
-        let match_field = "born";
-        let match_prop = if match_field == "born" {
-            "P569"
-        } else {
-            "P570"
-        };
+        let (match_field, match_prop) = match_person_by_single_date_get_match_field();
         let mw_api = self.app.wikidata().get_mw_api().await?;
         // CAUTION: Do NOT use views in the SQL statement, it will/might throw an "Prepared statement needs to be re-prepared" error
         let mut offset = self.get_last_job_offset().await;
         let batch_size = 100;
         loop {
-            let results = self
-                .app
-                .storage()
+            let (results, items) = self
                 .match_person_by_single_date_get_results(
                     match_field,
                     catalog_id,
                     precision,
                     batch_size,
                     offset,
+                    &mw_api,
                 )
                 .await?;
-            let results: Vec<CandidateDates> =
-                results.iter().map(CandidateDates::from_row).collect();
-            let items_to_load: Vec<String> =
-                results.iter().flat_map(|r| r.matches.clone()).collect();
-            let items = wikimisc::wikibase::entity_container::EntityContainer::new();
-            let _ = items.load_entities(&mw_api, &items_to_load).await; // We don't really care if there was an error in the grand scheme of things
             for result in &results {
-                let mut candidates = vec![];
-                for q in &result.matches {
-                    let item = match items.get_entity(q.to_owned()) {
-                        Some(item) => item,
-                        None => continue,
-                    };
-                    let statements = item.claims_with_property(match_prop);
-                    for statement in &statements {
-                        let main_snak = statement.main_snak();
-                        let data_value = match main_snak.data_value() {
-                            Some(dv) => dv,
-                            None => continue,
-                        };
-                        let time = match data_value.value() {
-                            wikimisc::wikibase::value::Value::Time(tv) => tv,
-                            _ => continue,
-                        };
-                        let dt =
-                            match NaiveDateTime::parse_from_str(time.time(), "+%Y-%m-%dT%H:%M:%SZ")
-                            {
-                                Ok(dt) => dt,
-                                _ => continue, // Could not parse date
-                            };
-                        let date = match precision {
-                            4 => format!("{}", dt.format("%Y")),
-                            10 => format!("{}", dt.format("%Y-%m-%d")),
-                            other => panic!("Bad precision {}", other), // Should never happen
-                        };
-                        if (match_field == "born" && date == result.born)
-                            || (match_field == "died" && date == result.died)
-                        {
-                            candidates.push(q.clone());
-                        }
-                    }
-                }
-                if candidates.len() == 1 {
-                    // TODO >1
-                    if let Some(q) = candidates.first() {
-                        let _ = Entry::from_id(result.entry_id, &self.app)
-                            .await?
-                            .set_match(q, USER_DATE_MATCH)
-                            .await;
-                    }
-                }
+                self.match_person_by_single_date_check_candidates(
+                    result,
+                    &items,
+                    match_prop,
+                    precision,
+                    match_field,
+                )
+                .await?;
             }
-
             if results.len() < batch_size {
                 break;
             }
@@ -603,6 +554,91 @@ impl AutoMatch {
         }
         let _ = self.clear_offset().await;
         Ok(())
+    }
+
+    async fn match_person_by_single_date_get_results(
+        &mut self,
+        match_field: &str,
+        catalog_id: usize,
+        precision: i32,
+        batch_size: usize,
+        offset: usize,
+        mw_api: &mediawiki::api::Api,
+    ) -> Result<
+        (
+            Vec<CandidateDates>,
+            wikimisc::wikibase::entity_container::EntityContainer,
+        ),
+        anyhow::Error,
+    > {
+        let results = self
+            .app
+            .storage()
+            .match_person_by_single_date_get_results(
+                match_field,
+                catalog_id,
+                precision,
+                batch_size,
+                offset,
+            )
+            .await?;
+        let results: Vec<CandidateDates> = results.iter().map(CandidateDates::from_row).collect();
+        let items_to_load: Vec<String> = results.iter().flat_map(|r| r.matches.clone()).collect();
+        let items = wikimisc::wikibase::entity_container::EntityContainer::new();
+        let _ = items.load_entities(mw_api, &items_to_load).await;
+        Ok((results, items))
+    }
+
+    async fn match_person_by_single_date_check_candidates(
+        &mut self,
+        result: &CandidateDates,
+        items: &wikimisc::wikibase::entity_container::EntityContainer,
+        match_prop: &str,
+        precision: i32,
+        match_field: &str,
+    ) -> Result<(), anyhow::Error> {
+        let mut candidates = vec![];
+        for q in &result.matches {
+            let item = match items.get_entity(q.to_owned()) {
+                Some(item) => item,
+                None => continue,
+            };
+            let statements = item.claims_with_property(match_prop);
+            for statement in &statements {
+                let main_snak = statement.main_snak();
+                let data_value = match main_snak.data_value() {
+                    Some(dv) => dv,
+                    None => continue,
+                };
+                let time = match data_value.value() {
+                    wikimisc::wikibase::value::Value::Time(tv) => tv,
+                    _ => continue,
+                };
+                let dt = match NaiveDateTime::parse_from_str(time.time(), "+%Y-%m-%dT%H:%M:%SZ") {
+                    Ok(dt) => dt,
+                    _ => continue, // Could not parse date
+                };
+                let date = match precision {
+                    4 => format!("{}", dt.format("%Y")),
+                    10 => format!("{}", dt.format("%Y-%m-%d")),
+                    other => panic!("Bad precision {}", other), // Should never happen
+                };
+                if (match_field == "born" && date == result.born)
+                    || (match_field == "died" && date == result.died)
+                {
+                    candidates.push(q.clone());
+                }
+            }
+        }
+        Ok(if candidates.len() == 1 {
+            // TODO >1
+            if let Some(q) = candidates.first() {
+                let _ = Entry::from_id(result.entry_id, &self.app)
+                    .await?
+                    .set_match(q, USER_DATE_MATCH)
+                    .await;
+            }
+        })
     }
 
     //TODO test
@@ -751,6 +787,16 @@ impl AutoMatch {
         let _ = self.clear_offset().await;
         Ok(())
     }
+}
+
+fn match_person_by_single_date_get_match_field() -> (&str, &str) {
+    let match_field = "born";
+    let match_prop = if match_field == "born" {
+        "P569"
+    } else {
+        "P570"
+    };
+    (match_field, match_prop)
 }
 
 #[cfg(test)]
