@@ -291,32 +291,101 @@ impl Entry {
     pub async fn add_to_item(&self, item: &mut ItemEntity) -> Result<()> {
         let catalog = Catalog::from_id(self.catalog, self.app()?).await?;
         let references = catalog.references(self).await;
+        let language = catalog.search_wp.to_owned();
+        self.add_to_item_own_id(&catalog, &references, item);
+        self.add_to_item_type(&references, item);
+        self.add_to_item_name_and_aliases(&language, item).await?;
+        self.add_to_item_descriptions(language, item).await?;
+        self.add_to_item_coordinates(&references, item).await?;
+        self.add_to_item_person_dates(&references, item).await?;
+        self.add_to_item_auxiliary(references, item).await?;
+        Ok(())
+    }
 
-        // Own prop if any
-        if catalog.wd_prop.is_some() && catalog.wd_qual.is_none() {
-            let prop = catalog.wd_prop.to_owned().unwrap(); // Safe
-            let snak = Snak::new_external_id(&format!("P{prop}"), &self.ext_id);
+    async fn add_to_item_auxiliary(
+        &self,
+        references: Vec<Reference>,
+        item: &mut ItemEntity,
+    ) -> Result<()> {
+        let auxiliary = self.get_aux().await?;
+        Ok(if !auxiliary.is_empty() {
+            let api = self.app()?.wikidata().get_mw_api().await?;
+            let ec = EntityContainer::new();
+            let props2load: Vec<String> = auxiliary
+                .iter()
+                .map(|a| format!("P{}", a.prop_numeric))
+                .collect();
+            let _ = ec.load_entities(&api, &props2load).await; // Try to pre-load all properties in one query
+            for aux in auxiliary {
+                if let Ok(prop) = ec.load_entity(&api, format!("P{}", aux.prop_numeric)).await {
+                    if let Some(claim) = aux.get_claim_for_aux(prop, &references) {
+                        self.add_claim_or_references(item, claim);
+                    }
+                }
+            }
+        })
+    }
+
+    async fn add_to_item_person_dates(
+        &self,
+        references: &Vec<Reference>,
+        item: &mut ItemEntity,
+    ) -> Result<()> {
+        let (born, died) = self.get_person_dates().await?;
+        if let Some(time) = born {
+            let (value, precision) = self.time_precision_from_ymd(&time);
+            let snak = Snak::new_time("P569", &value, precision);
             let claim = Statement::new_normal(snak, vec![], references.to_owned());
             self.add_claim_or_references(item, claim);
         }
+        Ok(if let Some(time) = died {
+            let (value, precision) = self.time_precision_from_ymd(&time);
+            let snak = Snak::new_time("P570", &value, precision);
+            let claim = Statement::new_normal(snak, vec![], references.to_owned());
+            self.add_claim_or_references(item, claim);
+        })
+    }
 
-        // Type
-        if let Some(tn) = &self.type_name {
-            if !tn.is_empty() {
-                let snak = Snak::new_item("P31", tn);
-                let claim = Statement::new_normal(snak, vec![], references.to_owned());
-                self.add_claim_or_references(item, claim);
-            }
+    async fn add_to_item_coordinates(
+        &self,
+        references: &Vec<Reference>,
+        item: &mut ItemEntity,
+    ) -> Result<()> {
+        Ok(if let Some(coord) = self.get_coordinate_location().await? {
+            let snak = Snak::new_coordinate("P625", coord.lat, coord.lon);
+            let claim = Statement::new_normal(snak, vec![], references.to_owned());
+            self.add_claim_or_references(item, claim);
+        })
+    }
+
+    async fn add_to_item_descriptions(
+        &self,
+        language: String,
+        item: &mut ItemEntity,
+    ) -> Result<()> {
+        let mut descriptions = self.get_language_descriptions().await?;
+        if self.ext_desc.is_empty() {
+            descriptions.insert(language.to_owned(), self.ext_desc.to_owned());
         }
+        Ok(for (lang, desc) in descriptions {
+            if item.description_in_locale(&lang).is_none() {
+                let desc = LocaleString::new(&lang, &desc);
+                item.descriptions_mut().push(desc);
+            }
+        })
+    }
 
-        // Name
-        let language = catalog.search_wp.to_owned();
+    async fn add_to_item_name_and_aliases(
+        &self,
+        language: &str,
+        item: &mut ItemEntity,
+    ) -> Result<()> {
         let mut aliases = self.get_aliases().await?;
         let name = &self.ext_name;
         let name = Person::sanitize_simplify_name(name);
-        let locale_string = LocaleString::new(&language, &name);
+        let locale_string = LocaleString::new(language, &name);
         let mut names = vec![locale_string.to_owned()];
-        if self.type_name == Some("Q5".into()) && WESTERN_LANGUAGES.contains(&language.as_str()) {
+        if self.type_name == Some("Q5".into()) && WESTERN_LANGUAGES.contains(&language) {
             for l in WESTERN_LANGUAGES {
                 names.push(LocaleString::new(*l, &name));
             }
@@ -336,61 +405,33 @@ impl Entry {
             }
         }
 
-        // Descriptions
-        // TODO append/merge descriptions?
-        let mut descriptions = self.get_language_descriptions().await?;
-        if self.ext_desc.is_empty() {
-            descriptions.insert(language.to_owned(), self.ext_desc.to_owned());
-        }
-        for (lang, desc) in descriptions {
-            if item.description_in_locale(&lang).is_none() {
-                let desc = LocaleString::new(&lang, &desc);
-                item.descriptions_mut().push(desc);
-            }
-        }
-
-        // Coordinates
-        if let Some(coord) = self.get_coordinate_location().await? {
-            let snak = Snak::new_coordinate("P625", coord.lat, coord.lon);
-            let claim = Statement::new_normal(snak, vec![], references.to_owned());
-            self.add_claim_or_references(item, claim);
-        }
-
-        // Born/died
-        let (born, died) = self.get_person_dates().await?;
-        if let Some(time) = born {
-            let (value, precision) = self.time_precision_from_ymd(&time);
-            let snak = Snak::new_time("P569", &value, precision);
-            let claim = Statement::new_normal(snak, vec![], references.to_owned());
-            self.add_claim_or_references(item, claim);
-        }
-        if let Some(time) = died {
-            let (value, precision) = self.time_precision_from_ymd(&time);
-            let snak = Snak::new_time("P570", &value, precision);
-            let claim = Statement::new_normal(snak, vec![], references.to_owned());
-            self.add_claim_or_references(item, claim);
-        }
-
-        // Auxiliary
-        let auxiliary = self.get_aux().await?;
-        if !auxiliary.is_empty() {
-            let api = self.app()?.wikidata().get_mw_api().await?;
-            let ec = EntityContainer::new();
-            let props2load: Vec<String> = auxiliary
-                .iter()
-                .map(|a| format!("P{}", a.prop_numeric))
-                .collect();
-            let _ = ec.load_entities(&api, &props2load).await; // Try to pre-load all properties in one query
-            for aux in auxiliary {
-                if let Ok(prop) = ec.load_entity(&api, format!("P{}", aux.prop_numeric)).await {
-                    if let Some(claim) = aux.get_claim_for_aux(prop, &references) {
-                        self.add_claim_or_references(item, claim);
-                    }
-                }
-            }
-        }
-
         Ok(())
+    }
+
+    fn add_to_item_type(&self, references: &Vec<Reference>, item: &mut ItemEntity) {
+        // Type
+        if let Some(tn) = &self.type_name {
+            if !tn.is_empty() {
+                let snak = Snak::new_item("P31", tn);
+                let claim = Statement::new_normal(snak, vec![], references.to_owned());
+                self.add_claim_or_references(item, claim);
+            }
+        }
+    }
+
+    fn add_to_item_own_id(
+        &self,
+        catalog: &Catalog,
+        references: &Vec<Reference>,
+        item: &mut ItemEntity,
+    ) {
+        // Own prop if any
+        if catalog.wd_prop.is_some() && catalog.wd_qual.is_none() {
+            let prop = catalog.wd_prop.to_owned().unwrap(); // Safe
+            let snak = Snak::new_external_id(&format!("P{prop}"), &self.ext_id);
+            let claim = Statement::new_normal(snak, vec![], references.to_owned());
+            self.add_claim_or_references(item, claim);
+        }
     }
 
     fn add_claim_or_references(&self, item: &mut ItemEntity, mut claim: Statement) {
