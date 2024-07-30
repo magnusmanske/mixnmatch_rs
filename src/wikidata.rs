@@ -71,8 +71,26 @@ impl Wikidata {
         Ok(wd_matches)
     }
 
+    async fn get_meta_items_link_targets(&self) -> Result<Vec<String>> {
+        let sql = format!(
+            "SELECT lt_id FROM linktarget WHERE lt_namespace=0 AND lt_title IN ('{}')",
+            &META_ITEMS.join("','")
+        );
+        let mut conn = self.get_conn().await?;
+        let meta_items_link_target_ids = conn
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(from_row::<u64>)
+            .await?
+            .iter()
+            .map(|i| format!("{i}"))
+            .collect();
+        Ok(meta_items_link_target_ids)
+    }
+
     // `items` should be a unique list of Qids
     pub async fn get_meta_items(&self, items: &Vec<String>) -> Result<Vec<String>> {
+        let meta_items_link_target_ids = self.get_meta_items_link_targets().await?;
         let placeholders = Self::sql_placeholders(items.len());
         let sql = format!(
             "SELECT DISTINCT page_title AS page_title
@@ -81,9 +99,8 @@ impl Wikidata {
 	        AND lt_namespace=0
 	        AND page_title IN ({placeholders})
 	        AND pl_from=page_id
-	        AND lt_id=pl_target_id
-	        AND lt_title IN ('{}')",
-            &META_ITEMS.join("','")
+	        AND pl_target_id IN ({})",
+            &meta_items_link_target_ids.join(",")
         );
         let mut conn = self.get_conn().await?;
         let meta_items = conn
@@ -94,7 +111,7 @@ impl Wikidata {
         Ok(meta_items)
     }
 
-    pub async fn search_with_type(&self, name: &str) -> Result<Vec<String>, anyhow::Error> {
+    pub async fn search_with_type(&self, name: &str) -> Result<Vec<String>> {
         let sql = "SELECT concat('Q',wbit_item_id) AS q
         			FROM wbt_text,wbt_item_terms,wbt_term_in_lang,wbt_text_in_lang
            			WHERE wbit_term_in_lang_id=wbtl_id AND wbtl_text_in_lang_id=wbxl_id AND wbxl_text_id=wbx_id  AND wbx_text=:name
@@ -108,7 +125,7 @@ impl Wikidata {
             .await?)
     }
 
-    pub async fn search_without_type(&self, name: &str) -> Result<Vec<String>, anyhow::Error> {
+    pub async fn search_without_type(&self, name: &str) -> Result<Vec<String>> {
         let sql = "SELECT concat('Q',wbit_item_id) AS q FROM wbt_text,wbt_item_terms,wbt_term_in_lang,wbt_text_in_lang WHERE wbit_term_in_lang_id=wbtl_id AND wbtl_text_in_lang_id=wbxl_id AND wbxl_text_id=wbx_id  AND wbx_text=:name GROUP BY name,q";
         let mut conn = self.get_conn().await?;
         Ok(conn

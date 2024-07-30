@@ -5,7 +5,7 @@ use crate::entry::*;
 use crate::job::*;
 use crate::maintenance::*;
 use crate::match_state::MatchState;
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::error::Error;
@@ -136,20 +136,10 @@ impl Microsync {
         let page_title = format!("User:Magnus Manske/Mix'n'match report/{}", catalog_id);
         let day = &TimeStamp::now()[0..8];
         let comment = format!("Update {}", day);
-        match self.app.wikidata_mut() {
-            Some(wd) => {
-                wd.set_wikipage_text(&page_title, wikitext, &comment)
-                    .await?
-            }
-            None => {
-                return Err(anyhow!(
-                    "add_auxiliary_to_wikidata: wikidata_mut not available"
-                ));
-            }
-        };
-
-        Ok(())
-        //mw_api.
+        self.app
+            .wikidata_mut()
+            .set_wikipage_text(&page_title, wikitext, &comment)
+            .await
     }
 
     //TODO test
@@ -253,7 +243,7 @@ impl Microsync {
         match_differs: Vec<MatchDiffers>,
         ret: &mut String,
         formatter_url: &String,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<()> {
         Ok(if !match_differs.is_empty() {
             *ret += "== Different items for the same external ID ==\n";
             if match_differs.len() > MAX_WIKI_ROWS {
@@ -439,63 +429,99 @@ impl Microsync {
         let batch_size: usize = 5000;
         loop {
             let chunk = self
-                .get_q2ext_id_chunk(&mut reader, case_insensitive, batch_size)
+                .get_differences_mnm_wd_process_chunk(
+                    &mut reader,
+                    case_insensitive,
+                    batch_size,
+                    catalog_id,
+                    property,
+                    &mut match_differs,
+                    &mut extid_not_in_mnm,
+                )
                 .await?;
-            let ext_ids: Vec<&String> = chunk.iter().map(|x| &x.1).collect();
-            let ext_id2entry = self
-                .get_entries_for_ext_ids(catalog_id, property, &ext_ids)
-                .await?;
-            for (q, ext_id) in &chunk {
-                match ext_id2entry.get(ext_id) {
-                    Some(entry) => {
-                        if entry.user.is_none() || entry.user == Some(0) || entry.q.is_none() {
-                            // Found a match but not in app yet
-                            Entry::from_id(entry.id, &self.app)
-                                .await?
-                                .set_match(&format!("Q{}", q), 4)
-                                .await?;
-                        } else if Some(*q) != entry.q {
-                            // Fully matched but to different item
-                            if let Some(entry_q) = entry.q {
-                                // Entry has N/A or Not In Wikidata, overwrite
-                                if entry_q <= 0 {
-                                    Entry::from_id(entry.id, &self.app)
-                                        .await?
-                                        .set_match(&format!("Q{}", q), 4)
-                                        .await?;
-                                } else {
-                                    let md = MatchDiffers {
-                                        ext_id: ext_id.to_owned(),
-                                        q_wd: *q,
-                                        q_mnm: entry_q,
-                                        entry_id: entry.id,
-                                        ext_url: entry.ext_url.to_owned(),
-                                    };
-                                    if match_differs.len() <= MAX_WIKI_ROWS {
-                                        match_differs.push(md);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    None => {
-                        if extid_not_in_mnm.len() <= MAX_WIKI_ROWS {
-                            extid_not_in_mnm.push(ExtIdNoMnM {
-                                q: *q,
-                                ext_id: ext_id.to_owned(),
-                            });
-                        }
-                    }
-                }
-            }
             if chunk.len() < batch_size {
                 break;
             }
         }
         extid_not_in_mnm.sort();
         match_differs.sort();
-
         Ok((extid_not_in_mnm, match_differs))
+    }
+
+    async fn get_differences_mnm_wd_process_chunk(
+        &self,
+        reader: &mut csv::Reader<File>,
+        case_insensitive: bool,
+        batch_size: usize,
+        catalog_id: usize,
+        property: usize,
+        match_differs: &mut Vec<MatchDiffers>,
+        extid_not_in_mnm: &mut Vec<ExtIdNoMnM>,
+    ) -> Result<Vec<(isize, String)>> {
+        let chunk = self
+            .get_q2ext_id_chunk(reader, case_insensitive, batch_size)
+            .await?;
+        let ext_ids: Vec<&String> = chunk.iter().map(|x| &x.1).collect();
+        let ext_id2entry = self
+            .get_entries_for_ext_ids(catalog_id, property, &ext_ids)
+            .await?;
+        for (q, ext_id) in &chunk {
+            match ext_id2entry.get(ext_id) {
+                Some(entry) => {
+                    self.get_differences_mnm_wd_process_entry(entry, q, ext_id, match_differs)
+                        .await?;
+                }
+                None => {
+                    if extid_not_in_mnm.len() <= MAX_WIKI_ROWS {
+                        extid_not_in_mnm.push(ExtIdNoMnM {
+                            q: *q,
+                            ext_id: ext_id.to_owned(),
+                        });
+                    }
+                }
+            }
+        }
+        Ok(chunk)
+    }
+
+    async fn get_differences_mnm_wd_process_entry(
+        &self,
+        entry: &SmallEntry,
+        q: &isize,
+        ext_id: &String,
+        match_differs: &mut Vec<MatchDiffers>,
+    ) -> Result<()> {
+        Ok(
+            if entry.user.is_none() || entry.user == Some(0) || entry.q.is_none() {
+                // Found a match but not in app yet
+                Entry::from_id(entry.id, &self.app)
+                    .await?
+                    .set_match(&format!("Q{}", q), 4)
+                    .await?;
+            } else if Some(*q) != entry.q {
+                // Fully matched but to different item
+                if let Some(entry_q) = entry.q {
+                    // Entry has N/A or Not In Wikidata, overwrite
+                    if entry_q <= 0 {
+                        Entry::from_id(entry.id, &self.app)
+                            .await?
+                            .set_match(&format!("Q{}", q), 4)
+                            .await?;
+                    } else {
+                        let md = MatchDiffers {
+                            ext_id: ext_id.to_owned(),
+                            q_wd: *q,
+                            q_mnm: entry_q,
+                            entry_id: entry.id,
+                            ext_url: entry.ext_url.to_owned(),
+                        };
+                        if match_differs.len() <= MAX_WIKI_ROWS {
+                            match_differs.push(md);
+                        }
+                    }
+                }
+            },
+        )
     }
 
     //TODO test

@@ -1173,17 +1173,14 @@ impl Storage for StorageMySQL {
     async fn entry_from_id(&self, entry_id: usize) -> Result<Entry> {
         let sql = format!("{} WHERE `id`=:entry_id", Self::entry_sql_select());
         let mut conn = self.get_conn().await?;
-        let mut rows: Vec<Entry> = conn
+        let ret = conn
             .exec_iter(sql, params! {entry_id})
             .await?
             .map_and_drop(|row| Self::entry_from_row(&row))
             .await?
             .iter()
             .filter_map(|row| row.to_owned())
-            .collect();
-        // `id` is a unique index, so there can be only zero or one row in rows.
-        let ret = rows
-            .pop()
+            .next()
             .ok_or(anyhow!("No entry #{}", entry_id))?
             .to_owned();
         Ok(ret)
@@ -1548,24 +1545,36 @@ impl Storage for StorageMySQL {
         status: &str,
         is_matched: i32,
     ) -> Result<()> {
-        let timestamp = TimeStamp::now();
-        let mut conn = self.get_conn().await?;
-        conn.exec_drop(r"INSERT INTO `wd_matches` (`entry_id`,`status`,`timestamp`,`catalog`) VALUES (:entry_id,:status,:timestamp,(SELECT entry.catalog FROM entry WHERE entry.id=:entry_id)) ON DUPLICATE KEY UPDATE `status`=:status,`timestamp`=:timestamp",params! {entry_id,status,timestamp}).await?;
-        conn.exec_drop(
-            r"UPDATE `person_dates` SET is_matched=:is_matched WHERE entry_id=:entry_id",
-            params! {is_matched,entry_id},
-        )
-        .await?;
-        conn.exec_drop(
-            r"UPDATE `auxiliary` SET entry_is_matched=:is_matched WHERE entry_id=:entry_id",
-            params! {is_matched,entry_id},
-        )
-        .await?;
-        conn.exec_drop(
+        let f1 = async {
+            let timestamp = TimeStamp::now();
+            let mut conn = self.get_conn().await?;
+            conn.exec_drop(r"INSERT INTO `wd_matches` (`entry_id`,`status`,`timestamp`,`catalog`) VALUES (:entry_id,:status,:timestamp,(SELECT entry.catalog FROM entry WHERE entry.id=:entry_id)) ON DUPLICATE KEY UPDATE `status`=:status,`timestamp`=:timestamp",params! {entry_id,status,timestamp}).await
+        };
+        let f2 = async {
+            let mut conn = self.get_conn().await?;
+            conn.exec_drop(
+                r"UPDATE `person_dates` SET is_matched=:is_matched WHERE entry_id=:entry_id",
+                params! {is_matched,entry_id},
+            )
+            .await
+        };
+        let f3 = async {
+            let mut conn = self.get_conn().await?;
+            conn.exec_drop(
+                r"UPDATE `auxiliary` SET entry_is_matched=:is_matched WHERE entry_id=:entry_id",
+                params! {is_matched,entry_id},
+            )
+            .await
+        };
+        let f4 = async {
+            let mut conn = self.get_conn().await?;
+            conn.exec_drop(
             r"UPDATE `statement_text` SET entry_is_matched=:is_matched WHERE entry_id=:entry_id",
             params! {is_matched,entry_id},
-        )
-        .await?;
+            )
+            .await
+        };
+        let _ = tokio::try_join!(f1, f2, f3, f4)?;
         Ok(())
     }
 
@@ -1582,14 +1591,17 @@ impl Storage for StorageMySQL {
     }
 
     async fn entry_unmatch(&self, entry_id: usize) -> Result<()> {
-        self.get_conn()
-            .await?
-            .exec_drop(
+        let f1 = async {
+            let mut conn = self.get_conn().await?;
+            conn.exec_drop(
                 r"UPDATE `entry` SET `q`=NULL,`user`=NULL,`timestamp`=NULL WHERE `id`=:entry_id",
                 params! {entry_id},
             )
-            .await?;
-        self.entry_set_match_status(entry_id, "UNKNOWN", 0).await?;
+            .await
+            .map_err(|e| anyhow!(e))
+        };
+        let f2 = async { self.entry_set_match_status(entry_id, "UNKNOWN", 0).await };
+        let _ = tokio::try_join!(f1, f2)?;
         Ok(())
     }
 
