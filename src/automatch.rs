@@ -12,6 +12,7 @@ use chrono::{NaiveDateTime, Utc};
 use futures::future::join_all;
 use itertools::Itertools;
 use lazy_static::lazy_static;
+use mediawiki::api::Api;
 use regex::Regex;
 use serde_json::json;
 use std::collections::HashMap;
@@ -446,6 +447,59 @@ impl AutoMatch {
         self.app.storage().purge_automatches(catalog_id).await
     }
 
+    async fn match_person_by_dates_process_result(
+        &self,
+        result: &(usize, String, String, String),
+        mw_api: &Api,
+    ) -> Result<()> {
+        let entry_id = result.0;
+        let ext_name = &result.1;
+        let birth_year = match Self::extract_sane_year_from_date(&result.2) {
+            Some(year) => year,
+            None => return Ok(()),
+        };
+        let death_year = match Self::extract_sane_year_from_date(&result.3) {
+            Some(year) => year,
+            None => return Ok(()),
+        };
+        let candidate_items = match self.search_person(ext_name).await {
+            Ok(c) => c,
+            _ => return Ok(()), // Ignore error
+        };
+        if candidate_items.is_empty() {
+            return Ok(()); // No candidate items
+        }
+        let candidate_items = match self
+            .subset_items_by_birth_death_year(&candidate_items, birth_year, death_year, &mw_api)
+            .await
+        {
+            Ok(ci) => ci,
+            _ => return Ok(()), // Ignore error
+        };
+        match candidate_items.len() {
+            0 => {} // No results
+            1 => {
+                let q = &candidate_items[0];
+                let _ = Entry::from_id(entry_id, &self.app)
+                    .await?
+                    .set_match(q, USER_DATE_MATCH)
+                    .await;
+            }
+            _ => {
+                Issue::new(
+                    entry_id,
+                    IssueType::WdDuplicate,
+                    json!(candidate_items),
+                    &self.app,
+                )
+                .await?
+                .insert()
+                .await?;
+            }
+        }
+        Ok(())
+    }
+
     pub async fn match_person_by_dates(&mut self, catalog_id: usize) -> Result<()> {
         let mw_api = self.app.wikidata().get_mw_api().await?;
         let mut offset = self.get_last_job_offset().await;
@@ -457,56 +511,10 @@ impl AutoMatch {
                 .match_person_by_dates_get_results(catalog_id, batch_size, offset)
                 .await?;
             for result in &results {
-                let entry_id = result.0;
-                let ext_name = &result.1;
-                let birth_year = match Self::extract_sane_year_from_date(&result.2) {
-                    Some(year) => year,
-                    None => continue,
-                };
-                let death_year = match Self::extract_sane_year_from_date(&result.3) {
-                    Some(year) => year,
-                    None => continue,
-                };
-                let candidate_items = match self.search_person(ext_name).await {
-                    Ok(c) => c,
-                    _ => continue, // Ignore error
-                };
-                if candidate_items.is_empty() {
-                    continue; // No candidate items
-                }
-                let candidate_items = match self
-                    .subset_items_by_birth_death_year(
-                        &candidate_items,
-                        birth_year,
-                        death_year,
-                        &mw_api,
-                    )
-                    .await
-                {
-                    Ok(ci) => ci,
-                    _ => continue, // Ignore error
-                };
-                match candidate_items.len() {
-                    0 => {} // No results
-                    1 => {
-                        let q = &candidate_items[0];
-                        let _ = Entry::from_id(entry_id, &self.app)
-                            .await?
-                            .set_match(q, USER_DATE_MATCH)
-                            .await;
-                    }
-                    _ => {
-                        Issue::new(
-                            entry_id,
-                            IssueType::WdDuplicate,
-                            json!(candidate_items),
-                            &self.app,
-                        )
-                        .await?
-                        .insert()
-                        .await?;
-                    }
-                }
+                // Ignore error
+                let _ = self
+                    .match_person_by_dates_process_result(result, &mw_api)
+                    .await;
             }
             if results.len() < batch_size {
                 break;
