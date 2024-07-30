@@ -39,7 +39,7 @@ lazy_static! {
 
 #[derive(Debug, Clone)]
 pub struct AppState {
-    wikidata: Arc<Wikidata>,
+    wikidata: Wikidata,
     wdrc: Arc<WDRC>,
     storage: Arc<Box<dyn Storage>>,
     import_file_path: Arc<String>,
@@ -80,7 +80,7 @@ impl AppState {
         let import_file_path = config["import_file_path"].as_str().unwrap().to_string();
         let import_file_path = Arc::new(import_file_path);
         let ret = Self {
-            wikidata: Arc::new(Wikidata::new(&config["wikidata"], bot_name, bot_password)),
+            wikidata: Wikidata::new(&config["wikidata"], bot_name, bot_password),
             wdrc: Arc::new(WDRC::new(&config["wdrc"])),
             storage: Arc::new(Box::new(StorageMySQL::new(&config["mixnmatch"]))),
             import_file_path,
@@ -98,8 +98,8 @@ impl AppState {
         &self.wikidata
     }
 
-    pub fn wikidata_mut(&mut self) -> Option<&mut Wikidata> {
-        Arc::get_mut(&mut self.wikidata)
+    pub fn wikidata_mut(&mut self) -> &mut Wikidata {
+        &mut self.wikidata
     }
 
     pub fn wdrc(&self) -> &WDRC {

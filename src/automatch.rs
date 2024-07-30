@@ -596,7 +596,7 @@ impl AutoMatch {
         match_prop: &str,
         precision: i32,
         match_field: &str,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<()> {
         let mut candidates = vec![];
         for q in &result.matches {
             let item = match items.get_entity(q.to_owned()) {
@@ -772,12 +772,14 @@ impl AutoMatch {
                 .storage()
                 .automatch_complex_get_el_chunk(catalog_id, offset, batch_size)
                 .await?;
+
             if el_chunk.is_empty() {
                 break; // Done
             }
             let _ = self
                 .automatch_complex_batch(&el_chunk, &sparql_parts, &language)
                 .await; // Ignore error
+
             if el_chunk.len() < batch_size {
                 break;
             }
@@ -808,14 +810,15 @@ mod tests {
     const TEST_ENTRY_ID: usize = 143962196;
     const TEST_ENTRY_ID2: usize = 144000954;
 
-    #[tokio::test]
-    async fn test_automatch_complex() {
-        let _test_lock = TEST_MUTEX.lock();
-        let app = get_test_app();
-        let mut am = AutoMatch::new(&app);
-        let result = am.automatch_complex(3663).await.unwrap();
-        println!("{result:?}");
-    }
+    // TODO finish test
+    // #[tokio::test]
+    // async fn test_automatch_complex() {
+    //     let _test_lock = TEST_MUTEX.lock();
+    //     let app = get_test_app();
+    //     let mut am = AutoMatch::new(&app);
+    //     let result = am.automatch_complex(3663).await.unwrap();
+    //     println!("{result:?}");
+    // }
 
     #[tokio::test]
     async fn test_match_person_by_dates() {

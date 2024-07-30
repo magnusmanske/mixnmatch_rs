@@ -135,7 +135,7 @@ impl TaxonMatcher {
         rank: &str,
         v: &[(usize, String)],
         mw_api: &mediawiki::api::Api,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<()> {
         let all_names: Vec<String> = v
             .iter()
             .map(|(_entry_id, name)| format!("\"{name}\""))
@@ -178,7 +178,7 @@ impl TaxonMatcher {
         &mut self,
         name2q: HashMap<String, Vec<String>>,
         name2entry_id: &HashMap<String, usize>,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<()> {
         for (name, mut qs) in name2q {
             if let Some(entry_id) = name2entry_id.get(&name) {
                 qs.sort();

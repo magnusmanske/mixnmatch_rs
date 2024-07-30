@@ -762,7 +762,7 @@ impl UpdateCatalog {
         &mut self,
         datasource: &mut DataSource,
         row_cache: &mut Vec<StringRecord>,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<()> {
         if datasource.fail_on_error {
             self.process_rows(row_cache, datasource).await?
         } else {

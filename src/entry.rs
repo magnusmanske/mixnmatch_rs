@@ -707,8 +707,7 @@ impl Entry {
 
     // Removes the current match from the entry, and marks the entry as unmatched in other tables.
     pub async fn unmatch(&mut self) -> Result<()> {
-        let entry_id = self.id;
-        self.app()?.storage().entry_unmatch(entry_id).await?;
+        self.app()?.storage().entry_unmatch(self.id).await?;
         self.user = None;
         self.timestamp = None;
         self.q = None;

@@ -263,7 +263,7 @@ impl AuxiliaryMatcher {
         results: &Vec<AuxiliaryResults>,
         catalog_id: usize,
         items_to_check: &mut Vec<(String, AuxiliaryResults)>,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<()> {
         Ok(for aux in results {
             if self.is_catalog_property_combination_suspect(catalog_id, aux.property) {
                 continue;
@@ -350,7 +350,7 @@ impl AuxiliaryMatcher {
         batch_size
     }
 
-    async fn get_extid_props(&mut self) -> Result<Vec<String>, anyhow::Error> {
+    async fn get_extid_props(&mut self) -> Result<Vec<String>> {
         self.properties_that_have_external_ids =
             Self::get_properties_that_have_external_ids(&self.app).await?;
         let extid_props: Vec<String> = self
@@ -405,13 +405,7 @@ impl AuxiliaryMatcher {
             for data in aux.values() {
                 commands.append(&mut self.aux2wd_process_item(data, &sources, &entities).await);
             }
-            let _ = match self.app.wikidata_mut() {
-                Some(wd) => wd.execute_commands(commands).await,
-                None => {
-                    eprintln!("add_auxiliary_to_wikidata: wikidata_mut not available");
-                    continue;
-                }
-            };
+            self.app.wikidata_mut().execute_commands(commands).await?;
 
             if results.len() < batch_size {
                 break;
