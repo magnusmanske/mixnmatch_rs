@@ -630,7 +630,7 @@ impl AutoMatch {
                 }
             }
         }
-        Ok(if candidates.len() == 1 {
+        if candidates.len() == 1 {
             // TODO >1
             if let Some(q) = candidates.first() {
                 let _ = Entry::from_id(result.entry_id, &self.app)
@@ -638,7 +638,8 @@ impl AutoMatch {
                     .set_match(q, USER_DATE_MATCH)
                     .await;
             }
-        })
+        };
+        Ok(())
     }
 
     //TODO test

@@ -193,7 +193,7 @@ impl Microsync {
     async fn wikitext_from_issues_multiple_q_in_mnm(
         &self,
         multiple_q_in_mnm: Vec<ExtIdWithMutipleQ>,
-        formatter_url: &String,
+        formatter_url: &str,
     ) -> Result<String> {
         let mut ret = String::new();
         if !multiple_q_in_mnm.is_empty() {
@@ -242,9 +242,9 @@ impl Microsync {
         &self,
         match_differs: Vec<MatchDiffers>,
         ret: &mut String,
-        formatter_url: &String,
+        formatter_url: &str,
     ) -> Result<()> {
-        Ok(if !match_differs.is_empty() {
+        if !match_differs.is_empty() {
             *ret += "== Different items for the same external ID ==\n";
             if match_differs.len() > MAX_WIKI_ROWS {
                 *ret += &format!("* {} enties have different items on Mix'n'match and Wikidata. Too many to show individually.\n\n",match_differs.len());
@@ -266,14 +266,15 @@ impl Microsync {
                 }
                 *ret += "|}\n\n";
             }
-        })
+        }
+        Ok(())
     }
 
     fn wikitext_from_issues_add_extid_info(
         &self,
         extid_not_in_mnm: Vec<ExtIdNoMnM>,
         ret: &mut String,
-        formatter_url: &String,
+        formatter_url: &str,
     ) {
         if !extid_not_in_mnm.is_empty() {
             *ret += "== Unknown external ID ==\n";
