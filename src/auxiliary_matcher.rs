@@ -199,31 +199,11 @@ impl AuxiliaryMatcher {
 
     //TODO test
     pub async fn match_via_auxiliary(&mut self, catalog_id: usize) -> Result<()> {
-        let blacklisted_catalogs: Vec<String> = AUX_BLACKLISTED_CATALOGS
-            .iter()
-            .map(|u| format!("{}", u))
-            .collect();
-        self.properties_that_have_external_ids =
-            Self::get_properties_that_have_external_ids(&self.app).await?;
-        let extid_props: Vec<String> = self
-            .properties_that_have_external_ids
-            .iter()
-            .filter_map(|s| s.replace('P', "").parse::<usize>().ok())
-            .filter(|i| !AUX_BLACKLISTED_PROPERTIES.contains(i))
-            .map(|i| format!("{}", i))
-            .collect();
-
+        let blacklisted_catalogs = get_blacklisted_catalogs();
+        let extid_props = self.get_extid_props().await?;
         let mut offset = self.get_last_job_offset().await;
-        let batch_size = *self
-            .app
-            .task_specific_usize()
-            .get("auxiliary_matcher_batch_size")
-            .unwrap_or(&500);
-        let search_batch_size = *self
-            .app
-            .task_specific_usize()
-            .get("auxiliary_matcher_search_batch_size")
-            .unwrap_or(&50);
+        let batch_size = self.get_batch_size();
+        let search_batch_size = self.get_search_batch_size();
         let mw_api = self.app.wikidata().get_mw_api().await?;
         loop {
             // println!("Catalog {catalog_id} running {batch_size} entries from {offset}");
@@ -238,92 +218,11 @@ impl AuxiliaryMatcher {
                     &blacklisted_catalogs,
                 )
                 .await?;
-            let mut items_to_check: Vec<(String, AuxiliaryResults)> = vec![];
-
-            // println!("To check: {}",results.len());
-
-            if true {
-                // async parallel
-                for results_chunk in results.chunks(search_batch_size) {
-                    let mut futures = vec![];
-                    for aux in results_chunk {
-                        if !self.is_catalog_property_combination_suspect(catalog_id, aux.property) {
-                            let future = self.search_property_value(aux.to_owned());
-                            futures.push(future);
-                        }
-                    }
-                    let futures_results = join_all(futures).await.into_iter().flatten();
-                    for (aux, items) in futures_results {
-                        match items.len().cmp(&1) {
-                            std::cmp::Ordering::Less => {}
-                            std::cmp::Ordering::Equal => {
-                                items_to_check.push((items[0].to_owned(), aux))
-                            }
-                            std::cmp::Ordering::Greater => {
-                                Issue::new(
-                                    aux.entry_id,
-                                    IssueType::WdDuplicate,
-                                    json!(items),
-                                    &self.app,
-                                )
-                                .await?
-                                .insert()
-                                .await?;
-                            }
-                        }
-                    }
-                }
-            } else {
-                // Remove eventually
-
-                for aux in &results {
-                    if self.is_catalog_property_combination_suspect(catalog_id, aux.property) {
-                        continue;
-                    }
-                    let query = format!("haswbstatement:\"{}={}\"", aux.prop(), aux.value);
-                    let search_results = match self.app.wikidata().search_api(&query).await {
-                        Ok(result) => result,
-                        Err(_) => continue, // Something went wrong, just skip this one
-                    };
-                    match search_results.len().cmp(&1) {
-                        std::cmp::Ordering::Less => {}
-                        std::cmp::Ordering::Equal => {
-                            if let Some(q) = search_results.first() {
-                                items_to_check.push((q.to_owned(), aux.to_owned()));
-                            }
-                        }
-                        std::cmp::Ordering::Greater => {
-                            Issue::new(
-                                aux.entry_id,
-                                IssueType::WdDuplicate,
-                                json!(search_results),
-                                &self.app,
-                            )
-                            .await?
-                            .insert()
-                            .await?;
-                        }
-                    }
-                }
-            }
-
-            // Load the actual entities, don't trust the search results
-            let items_to_load = items_to_check
-                .iter()
-                .map(|(q, _aux)| q.to_owned())
-                .collect();
-            let entities = EntityContainer::new();
-            let _ = entities.load_entities(&mw_api, &items_to_load).await;
-            for (q, aux) in &items_to_check {
-                if let Some(entity) = &entities.get_entity(q.to_owned()) {
-                    if aux.entity_has_statement(entity) {
-                        if let Ok(mut entry) = Entry::from_id(aux.entry_id, &self.app).await {
-                            let _ = entry.set_match(q, USER_AUX_MATCH).await;
-                        }
-                    }
-                }
-            }
-
+            let items_to_check = self
+                .match_via_auxiliary_parallel(&results, search_batch_size, catalog_id)
+                .await?;
+            self.match_via_auxiliary_check_items(items_to_check, &mw_api)
+                .await;
             if results.len() < batch_size {
                 break;
             }
@@ -333,6 +232,135 @@ impl AuxiliaryMatcher {
         let _ = self.clear_offset().await;
         let _ = Job::queue_simple_job(&self.app, catalog_id, "aux2wd", None).await;
         Ok(())
+    }
+
+    async fn match_via_auxiliary_check_items(
+        &mut self,
+        items_to_check: Vec<(String, AuxiliaryResults)>,
+        mw_api: &mediawiki::api::Api,
+    ) {
+        // Load the actual entities, don't trust the search results
+        let items_to_load = items_to_check
+            .iter()
+            .map(|(q, _aux)| q.to_owned())
+            .collect();
+        let entities = EntityContainer::new();
+        let _ = entities.load_entities(mw_api, &items_to_load).await;
+        for (q, aux) in &items_to_check {
+            if let Some(entity) = &entities.get_entity(q.to_owned()) {
+                if aux.entity_has_statement(entity) {
+                    if let Ok(mut entry) = Entry::from_id(aux.entry_id, &self.app).await {
+                        let _ = entry.set_match(q, USER_AUX_MATCH).await;
+                    }
+                }
+            }
+        }
+    }
+
+    // DEPRECATED
+    async fn _match_via_auxiliary_serially(
+        &mut self,
+        results: &Vec<AuxiliaryResults>,
+        catalog_id: usize,
+        items_to_check: &mut Vec<(String, AuxiliaryResults)>,
+    ) -> Result<(), anyhow::Error> {
+        Ok(for aux in results {
+            if self.is_catalog_property_combination_suspect(catalog_id, aux.property) {
+                continue;
+            }
+            let query = format!("haswbstatement:\"{}={}\"", aux.prop(), aux.value);
+            let search_results = match self.app.wikidata().search_api(&query).await {
+                Ok(result) => result,
+                Err(_) => continue, // Something went wrong, just skip this one
+            };
+            match search_results.len().cmp(&1) {
+                std::cmp::Ordering::Less => {}
+                std::cmp::Ordering::Equal => {
+                    if let Some(q) = search_results.first() {
+                        items_to_check.push((q.to_owned(), aux.to_owned()));
+                    }
+                }
+                std::cmp::Ordering::Greater => {
+                    Issue::new(
+                        aux.entry_id,
+                        IssueType::WdDuplicate,
+                        json!(search_results),
+                        &self.app,
+                    )
+                    .await?
+                    .insert()
+                    .await?;
+                }
+            }
+        })
+    }
+
+    async fn match_via_auxiliary_parallel(
+        &mut self,
+        results: &Vec<AuxiliaryResults>,
+        search_batch_size: usize,
+        catalog_id: usize,
+    ) -> Result<Vec<(String, AuxiliaryResults)>> {
+        let mut items_to_check: Vec<(String, AuxiliaryResults)> = vec![];
+        for results_chunk in results.chunks(search_batch_size) {
+            let mut futures = vec![];
+            for aux in results_chunk {
+                if !self.is_catalog_property_combination_suspect(catalog_id, aux.property) {
+                    let future = self.search_property_value(aux.to_owned());
+                    futures.push(future);
+                }
+            }
+            let futures_results = join_all(futures).await.into_iter().flatten();
+            for (aux, items) in futures_results {
+                match items.len().cmp(&1) {
+                    std::cmp::Ordering::Less => {}
+                    std::cmp::Ordering::Equal => items_to_check.push((items[0].to_owned(), aux)),
+                    std::cmp::Ordering::Greater => {
+                        Issue::new(
+                            aux.entry_id,
+                            IssueType::WdDuplicate,
+                            json!(items),
+                            &self.app,
+                        )
+                        .await?
+                        .insert()
+                        .await?;
+                    }
+                }
+            }
+        }
+        Ok(items_to_check)
+    }
+
+    fn get_search_batch_size(&mut self) -> usize {
+        let search_batch_size = *self
+            .app
+            .task_specific_usize()
+            .get("auxiliary_matcher_search_batch_size")
+            .unwrap_or(&50);
+        search_batch_size
+    }
+
+    fn get_batch_size(&mut self) -> usize {
+        let batch_size = *self
+            .app
+            .task_specific_usize()
+            .get("auxiliary_matcher_batch_size")
+            .unwrap_or(&500);
+        batch_size
+    }
+
+    async fn get_extid_props(&mut self) -> Result<Vec<String>, anyhow::Error> {
+        self.properties_that_have_external_ids =
+            Self::get_properties_that_have_external_ids(&self.app).await?;
+        let extid_props: Vec<String> = self
+            .properties_that_have_external_ids
+            .iter()
+            .filter_map(|s| s.replace('P', "").parse::<usize>().ok())
+            .filter(|i| !AUX_BLACKLISTED_PROPERTIES.contains(i))
+            .map(|i| format!("{}", i))
+            .collect();
+        Ok(extid_props)
     }
 
     //TODO test
@@ -666,6 +694,14 @@ impl AuxiliaryMatcher {
     fn is_catalog_property_combination_suspect(&self, catalog_id: usize, prop: usize) -> bool {
         AUX_BLACKLISTED_CATALOGS_PROPERTIES.contains(&(catalog_id, prop))
     }
+}
+
+fn get_blacklisted_catalogs() -> Vec<String> {
+    let blacklisted_catalogs: Vec<String> = AUX_BLACKLISTED_CATALOGS
+        .iter()
+        .map(|u| format!("{}", u))
+        .collect();
+    blacklisted_catalogs
 }
 
 #[cfg(test)]
