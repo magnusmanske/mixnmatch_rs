@@ -492,37 +492,36 @@ impl Microsync {
         ext_id: &String,
         match_differs: &mut Vec<MatchDiffers>,
     ) -> Result<()> {
-        Ok(
-            if entry.user.is_none() || entry.user == Some(0) || entry.q.is_none() {
-                // Found a match but not in app yet
-                Entry::from_id(entry.id, &self.app)
-                    .await?
-                    .set_match(&format!("Q{}", q), 4)
-                    .await?;
-            } else if Some(*q) != entry.q {
-                // Fully matched but to different item
-                if let Some(entry_q) = entry.q {
-                    // Entry has N/A or Not In Wikidata, overwrite
-                    if entry_q <= 0 {
-                        Entry::from_id(entry.id, &self.app)
-                            .await?
-                            .set_match(&format!("Q{}", q), 4)
-                            .await?;
-                    } else {
-                        let md = MatchDiffers {
-                            ext_id: ext_id.to_owned(),
-                            q_wd: *q,
-                            q_mnm: entry_q,
-                            entry_id: entry.id,
-                            ext_url: entry.ext_url.to_owned(),
-                        };
-                        if match_differs.len() <= MAX_WIKI_ROWS {
-                            match_differs.push(md);
-                        }
+        if entry.user.is_none() || entry.user == Some(0) || entry.q.is_none() {
+            // Found a match but not in app yet
+            Entry::from_id(entry.id, &self.app)
+                .await?
+                .set_match(&format!("Q{}", q), 4)
+                .await?;
+        } else if Some(*q) != entry.q {
+            // Fully matched but to different item
+            if let Some(entry_q) = entry.q {
+                // Entry has N/A or Not In Wikidata, overwrite
+                if entry_q <= 0 {
+                    Entry::from_id(entry.id, &self.app)
+                        .await?
+                        .set_match(&format!("Q{}", q), 4)
+                        .await?;
+                } else {
+                    let md = MatchDiffers {
+                        ext_id: ext_id.to_owned(),
+                        q_wd: *q,
+                        q_mnm: entry_q,
+                        entry_id: entry.id,
+                        ext_url: entry.ext_url.to_owned(),
+                    };
+                    if match_differs.len() <= MAX_WIKI_ROWS {
+                        match_differs.push(md);
                     }
                 }
-            },
-        )
+            }
+        }
+        Ok(())
     }
 
     //TODO test
