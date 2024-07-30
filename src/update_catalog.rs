@@ -191,27 +191,7 @@ impl ExtendedEntry {
     //TODO test
     pub async fn update_existing(&mut self, entry: &mut Entry, app: &AppState) -> Result<()> {
         entry.set_app(app);
-
-        // TODO use update_existing_description
-        // TODO use update_all_descriptions
-
-        // We add, we do not remove from the existing data!
-        if !self.entry.ext_name.is_empty() {
-            entry.set_ext_name(&self.entry.ext_name).await?;
-        }
-        if !self.entry.ext_desc.is_empty() {
-            entry.set_ext_desc(&self.entry.ext_desc).await?;
-        }
-        if self.entry.type_name.is_some() {
-            entry.set_type_name(self.entry.type_name.clone()).await?;
-        }
-        if !self.entry.ext_url.is_empty() {
-            entry.set_ext_url(&self.entry.ext_url).await?;
-        }
-        // Ignore ID, this is the key anyway
-        // q, user, and timetamp would not change
-        // Ignore random
-
+        self.update_existing_basic_values(entry).await?;
         if self.born.is_some() || self.died.is_some() {
             entry.set_person_dates(&self.born, &self.died).await?;
         }
@@ -221,8 +201,22 @@ impl ExtendedEntry {
         self.sync_aliases(entry).await?;
         self.sync_descriptions(entry).await?;
         self.sync_auxiliary(entry).await?;
-
         Ok(())
+    }
+
+    async fn update_existing_basic_values(&mut self, entry: &mut Entry) -> Result<()> {
+        if !self.entry.ext_name.is_empty() {
+            entry.set_ext_name(&self.entry.ext_name).await?;
+        }
+        if !self.entry.ext_desc.is_empty() {
+            entry.set_ext_desc(&self.entry.ext_desc).await?;
+        }
+        if self.entry.type_name.is_some() {
+            entry.set_type_name(self.entry.type_name.clone()).await?;
+        }
+        Ok(if !self.entry.ext_url.is_empty() {
+            entry.set_ext_url(&self.entry.ext_url).await?;
+        })
     }
 
     // Adds new aliases.

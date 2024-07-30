@@ -106,38 +106,14 @@ impl CoordinateMatcher {
     }
 
     async fn process_row(&self, row: &LocationRow) -> Result<()> {
-        let p31 = self.get_entry_type(row).unwrap_or_default();
         let (max_distance, max_distance_sparql) = self.get_max_distance_sparql_for_entry(row);
-
         let ext_name = match row.ext_name.split('(').next() {
             Some(ext_name) => ext_name.trim().to_lowercase(),
             None => panic!("This never happens!"),
         };
 
-        let mut query = format!("nearcoord:{max_distance},{},{}", row.lat, row.lon);
-        if !p31.is_empty() {
-            query += " haswbstatement:P31={p31}";
-        }
-        let params = vec![
-            ("action", "query"),
-            ("list", "search"),
-            ("titlesnippet", ""),
-            ("srnamespace", "0"),
-            ("srlimit", "500"),
-            ("srsearch", query.as_str()),
-        ];
-        let params = self.mw_api.params_into(&params);
-        let result = match self.mw_api.query_api_json(&params, "GET").await {
-            Ok(r) => r,
-            Err(e) => return Err(e.into()),
-        };
-
         let mut matches = vec![];
-        let results = result["query"]["search"]
-            .as_array()
-            .map(|v| v.to_owned())
-            .unwrap_or_default();
-
+        let results = self.process_row_get_results(row, &max_distance).await?;
         for result in results {
             let q = match result["title"].as_str() {
                 Some(q) => q,
@@ -153,6 +129,17 @@ impl CoordinateMatcher {
             }
         }
 
+        self.process_row_process_matches(matches, row, max_distance_sparql)
+            .await;
+        Ok(())
+    }
+
+    async fn process_row_process_matches(
+        &self,
+        matches: Vec<String>,
+        row: &LocationRow,
+        max_distance_sparql: f64,
+    ) {
         if matches.is_empty() {
             if self.is_permission("allow_location_create", row.catalog_id, "yes")
                 && self
@@ -168,7 +155,33 @@ impl CoordinateMatcher {
                 .try_match_via_sparql_query(row, max_distance_sparql)
                 .await;
         }
-        Ok(())
+    }
+
+    async fn process_row_get_results(
+        &self,
+        row: &LocationRow,
+        max_distance: &str,
+    ) -> Result<Vec<serde_json::Value>> {
+        let p31 = self.get_entry_type(row).unwrap_or_default();
+        let mut query = format!("nearcoord:{max_distance},{},{}", row.lat, row.lon);
+        if !p31.is_empty() {
+            query += " haswbstatement:P31={p31}";
+        }
+        let params = vec![
+            ("action", "query"),
+            ("list", "search"),
+            ("titlesnippet", ""),
+            ("srnamespace", "0"),
+            ("srlimit", "500"),
+            ("srsearch", query.as_str()),
+        ];
+        let params = self.mw_api.params_into(&params);
+        let result = self.mw_api.query_api_json(&params, "GET").await?;
+        let results = result["query"]["search"]
+            .as_array()
+            .map(|v| v.to_owned())
+            .unwrap_or_default();
+        Ok(results)
     }
 
     // Returns true if there is a match
