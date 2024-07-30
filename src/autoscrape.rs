@@ -547,33 +547,10 @@ impl AutoscrapeResolve {
             }
         };
         //.ok_or_else(||AutoscrapeError::UnknownLevelType(json.to_owned()))?;
-        let regexs_str = json
-            .get("rx")
-            .map(|x| x.to_owned())
-            .unwrap_or_else(|| json!([]))
-            .as_array()
-            .map(|x| x.to_owned())
-            .unwrap_or_else(Vec::new);
+        let regexs_str = Self::from_json_get_regexs_str(json);
         let mut regexs = vec![];
         for regex in regexs_str {
-            let arr = regex
-                .as_array()
-                .ok_or_else(|| AutoscrapeError::UnknownLevelType(json.to_string()))?;
-            let pattern = arr
-                .first()
-                .ok_or_else(|| AutoscrapeError::UnknownLevelType(json.to_string()))?
-                .as_str()
-                .ok_or_else(|| AutoscrapeError::UnknownLevelType(json.to_string()))?;
-            let replacement = arr
-                .get(1)
-                .ok_or_else(|| AutoscrapeError::UnknownLevelType(json.to_string()))?
-                .as_str()
-                .ok_or_else(|| AutoscrapeError::UnknownLevelType(json.to_string()))?;
-            let re_pattern = &Self::fix_regex(pattern);
-            let regex = AutoscrapeRegex::new(re_pattern).ok();
-            let err = AutoscrapeError::UnknownLevelType(json.to_string());
-            let regex = regex.ok_or(err)?;
-            regexs.push((regex, replacement.to_string()));
+            Self::from_json_regex(regex, json, &mut regexs)?;
         }
         let use_pattern = Self::json_as_str(json, "use")?;
         Ok(Self {
@@ -600,8 +577,44 @@ impl AutoscrapeResolve {
         let ret = RE_HTML.replace_all(&ret, " ");
         RE_SIMPLE_SPACE.replace_all(&ret, " ").trim().into()
     }
-}
 
+    fn from_json_regex(
+        regex: Value,
+        json: &Value,
+        regexs: &mut Vec<(Regex, String)>,
+    ) -> Result<(), AutoscrapeError> {
+        let arr = regex
+            .as_array()
+            .ok_or_else(|| AutoscrapeError::UnknownLevelType(json.to_string()))?;
+        let pattern = arr
+            .first()
+            .ok_or_else(|| AutoscrapeError::UnknownLevelType(json.to_string()))?
+            .as_str()
+            .ok_or_else(|| AutoscrapeError::UnknownLevelType(json.to_string()))?;
+        let replacement = arr
+            .get(1)
+            .ok_or_else(|| AutoscrapeError::UnknownLevelType(json.to_string()))?
+            .as_str()
+            .ok_or_else(|| AutoscrapeError::UnknownLevelType(json.to_string()))?;
+        let re_pattern = &Self::fix_regex(pattern);
+        let regex = AutoscrapeRegex::new(re_pattern).ok();
+        let err = AutoscrapeError::UnknownLevelType(json.to_string());
+        let regex = regex.ok_or(err)?;
+        regexs.push((regex, replacement.to_string()));
+        Ok(())
+    }
+
+    fn from_json_get_regexs_str(json: &Value) -> Vec<Value> {
+        let regexs_str = json
+            .get("rx")
+            .map(|x| x.to_owned())
+            .unwrap_or_else(|| json!([]))
+            .as_array()
+            .map(|x| x.to_owned())
+            .unwrap_or_else(Vec::new);
+        regexs_str
+    }
+}
 #[derive(Debug, Clone)]
 pub struct AutoscrapeResolveAux {
     property: usize,
