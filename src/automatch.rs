@@ -520,7 +520,7 @@ impl AutoMatch {
 
     pub async fn match_person_by_single_date(&mut self, catalog_id: usize) -> Result<()> {
         let precision = 10; // 2022-xx-xx=10; use 4 for just the year
-        let (match_field, match_prop) = match_person_by_single_date_get_match_field();
+        let (match_field, match_prop) = self.match_person_by_single_date_get_match_field();
         let mw_api = self.app.wikidata().get_mw_api().await?;
         // CAUTION: Do NOT use views in the SQL statement, it will/might throw an "Prepared statement needs to be re-prepared" error
         let mut offset = self.get_last_job_offset().await;
@@ -528,7 +528,7 @@ impl AutoMatch {
         loop {
             let (results, items) = self
                 .match_person_by_single_date_get_results(
-                    match_field,
+                    &match_field,
                     catalog_id,
                     precision,
                     batch_size,
@@ -540,9 +540,9 @@ impl AutoMatch {
                 self.match_person_by_single_date_check_candidates(
                     result,
                     &items,
-                    match_prop,
+                    &match_prop,
                     precision,
-                    match_field,
+                    &match_field,
                 )
                 .await?;
             }
@@ -787,16 +787,16 @@ impl AutoMatch {
         let _ = self.clear_offset().await;
         Ok(())
     }
-}
 
-fn match_person_by_single_date_get_match_field() -> (&str, &str) {
-    let match_field = "born";
-    let match_prop = if match_field == "born" {
-        "P569"
-    } else {
-        "P570"
-    };
-    (match_field, match_prop)
+    fn match_person_by_single_date_get_match_field(&self) -> (String, String) {
+        let match_field = "born";
+        let match_prop = if match_field == "born" {
+            "P569"
+        } else {
+            "P570"
+        };
+        (match_field.to_string(), match_prop.to_string())
+    }
 }
 
 #[cfg(test)]

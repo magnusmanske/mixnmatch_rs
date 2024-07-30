@@ -162,59 +162,50 @@ impl Microsync {
         extid_not_in_mnm: Vec<ExtIdNoMnM>,
     ) -> Result<String> {
         let formatter_url = Self::get_formatter_url_for_prop(catalog.wd_prop.unwrap_or(0)).await?;
-        let catalog_name = match &catalog.name {
-            Some(s) => s.to_owned(),
-            None => String::new(),
-        };
+        let mut ret = wikitext_from_issues_get_header(catalog);
+        self.wikitext_from_issues_add_extid_info(extid_not_in_mnm, &mut ret, &formatter_url);
+        self.wikitext_from_issues_match_differs(match_differs, &mut ret, &formatter_url)
+            .await?;
+        ret += &self
+            .wikitext_from_issues_multiple_q_in_mnm(multiple_q_in_mnm, &formatter_url)
+            .await?;
+        ret += &self
+            .wikitext_from_issues_multiple_extid_in_wd(multiple_extid_in_wikidata, formatter_url);
+        Ok(ret)
+    }
+
+    fn wikitext_from_issues_multiple_extid_in_wd(
+        &self,
+        multiple_extid_in_wikidata: Vec<MultipleExtIdInWikidata>,
+        formatter_url: String,
+    ) -> String {
         let mut ret = String::new();
-        ret += &format!("A report for the [{}/ Mix'n'match] tool. '''This page will be replaced regularly!'''\n",MNM_SITE_URL);
-        ret += "''Please note:''\n";
-        ret += "* If you fix something from this list on Wikidata, please fix it on Mix'n'match as well, if applicable. Otherwise, the error might be re-introduced from there.\n";
-        ret += "* 'External ID' refers to the IDs in the original (external) catalog; the same as the statement value for the associated  property.\n\n";
-        ret += &format!(
-            "==[{MNM_SITE_URL}/#/catalog/{} {}]==\n{}\n\n",
-            catalog.id, &catalog_name, &catalog.desc
-        );
-
-        if !extid_not_in_mnm.is_empty() {
-            ret += "== Unknown external ID ==\n";
-            if extid_not_in_mnm.len() > MAX_WIKI_ROWS {
-                ret += &format!("* {} external IDs in Wikidata but not in Mix'n'Match. Too many to show individually.\n\n",extid_not_in_mnm.len());
+        if !multiple_extid_in_wikidata.is_empty() {
+            ret += "== Multiple items for the same external ID in Wikidata ==\n";
+            if multiple_extid_in_wikidata.len() > MAX_WIKI_ROWS {
+                ret += &format!("* {} external IDs have at least two items on Wikidata. Too many to show individually.\n\n",multiple_extid_in_wikidata.len());
             } else {
-                ret += "{| class='wikitable'\n! External ID !! Item\n";
-                for e in &extid_not_in_mnm {
+                ret += "{| class='wikitable'\n! External ID !! Items in Mix'n'Match\n";
+                for e in &multiple_extid_in_wikidata {
                     let ext_id = self.format_ext_id(&e.ext_id, "", &formatter_url);
-                    let s = format!("|-\n| {} || {{{{Q|{}}}}}\n", &ext_id, e.q);
+                    let items: Vec<String> =
+                        e.items.iter().map(|q| format!("{{{{Q|{}}}}}", q)).collect();
+                    let items = items.join("<br/>");
+                    let s = format!("|-\n| {ext_id} || {}\n", items);
                     ret += &s;
                 }
                 ret += "|}\n\n";
             }
         }
+        ret
+    }
 
-        if !match_differs.is_empty() {
-            ret += "== Different items for the same external ID ==\n";
-            if match_differs.len() > MAX_WIKI_ROWS {
-                ret += &format!("* {} enties have different items on Mix'n'match and Wikidata. Too many to show individually.\n\n",match_differs.len());
-            } else {
-                let entry_ids: Vec<usize> = match_differs.iter().map(|e| e.entry_id).collect();
-                let entry2name = self
-                    .app
-                    .storage()
-                    .microsync_load_entry_names(&entry_ids)
-                    .await?;
-                ret += "{| class='wikitable'\n! External ID !! External label !! Item in Wikidata !! Item in Mix'n'Match !! Mix'n'match entry\n" ;
-                for e in &match_differs {
-                    let ext_name = entry2name.get(&e.entry_id).unwrap_or(&e.ext_id);
-                    let ext_id = self.format_ext_id(&e.ext_id, &e.ext_url, &formatter_url);
-                    let mnm_url =
-                        format!("https://mix-n-match.toolforge.org/#/entry/{}", e.entry_id);
-                    let s = format!("|-\n| {ext_id} || {ext_name} || {{{{Q|{}}}}} || {{{{Q|{}}}}} || [{mnm_url} {}]\n",e.q_wd,e.q_mnm,e.entry_id);
-                    ret += &s;
-                }
-                ret += "|}\n\n";
-            }
-        }
-
+    async fn wikitext_from_issues_multiple_q_in_mnm(
+        &self,
+        multiple_q_in_mnm: Vec<ExtIdWithMutipleQ>,
+        formatter_url: &String,
+    ) -> Result<String> {
+        let mut ret = String::new();
         if !multiple_q_in_mnm.is_empty() {
             ret += "== Same item for multiple external IDs in Mix'n'match ==\n";
             if multiple_q_in_mnm.len() > MAX_WIKI_ROWS {
@@ -245,7 +236,7 @@ impl Microsync {
                             "|-\n|| ".to_string()
                         };
                         let ext_name = entry2name.get(entry_id).unwrap_or(ext_id);
-                        let ext_id = self.format_ext_id(ext_id, "", &formatter_url);
+                        let ext_id = self.format_ext_id(ext_id, "", formatter_url);
                         let mnm_url =
                             format!("https://mix-n-match.toolforge.org/#/entry/{}", entry_id);
                         ret += &format!("{row}[{mnm_url} {entry_id}] || {ext_id} || {ext_name}\n");
@@ -254,26 +245,60 @@ impl Microsync {
                 ret += "|}\n\n";
             }
         }
+        Ok(ret)
+    }
 
-        if !multiple_extid_in_wikidata.is_empty() {
-            ret += "== Multiple items for the same external ID in Wikidata ==\n";
-            if multiple_extid_in_wikidata.len() > MAX_WIKI_ROWS {
-                ret += &format!("* {} external IDs have at least two items on Wikidata. Too many to show individually.\n\n",multiple_extid_in_wikidata.len());
+    async fn wikitext_from_issues_match_differs(
+        &self,
+        match_differs: Vec<MatchDiffers>,
+        ret: &mut String,
+        formatter_url: &String,
+    ) -> Result<(), anyhow::Error> {
+        Ok(if !match_differs.is_empty() {
+            *ret += "== Different items for the same external ID ==\n";
+            if match_differs.len() > MAX_WIKI_ROWS {
+                *ret += &format!("* {} enties have different items on Mix'n'match and Wikidata. Too many to show individually.\n\n",match_differs.len());
             } else {
-                ret += "{| class='wikitable'\n! External ID !! Items in Mix'n'Match\n";
-                for e in &multiple_extid_in_wikidata {
-                    let ext_id = self.format_ext_id(&e.ext_id, "", &formatter_url);
-                    let items: Vec<String> =
-                        e.items.iter().map(|q| format!("{{{{Q|{}}}}}", q)).collect();
-                    let items = items.join("<br/>");
-                    let s = format!("|-\n| {ext_id} || {}\n", items);
-                    ret += &s;
+                let entry_ids: Vec<usize> = match_differs.iter().map(|e| e.entry_id).collect();
+                let entry2name = self
+                    .app
+                    .storage()
+                    .microsync_load_entry_names(&entry_ids)
+                    .await?;
+                *ret += "{| class='wikitable'\n! External ID !! External label !! Item in Wikidata !! Item in Mix'n'Match !! Mix'n'match entry\n" ;
+                for e in &match_differs {
+                    let ext_name = entry2name.get(&e.entry_id).unwrap_or(&e.ext_id);
+                    let ext_id = self.format_ext_id(&e.ext_id, &e.ext_url, formatter_url);
+                    let mnm_url =
+                        format!("https://mix-n-match.toolforge.org/#/entry/{}", e.entry_id);
+                    let s = format!("|-\n| {ext_id} || {ext_name} || {{{{Q|{}}}}} || {{{{Q|{}}}}} || [{mnm_url} {}]\n",e.q_wd,e.q_mnm,e.entry_id);
+                    *ret += &s;
                 }
-                ret += "|}\n\n";
+                *ret += "|}\n\n";
+            }
+        })
+    }
+
+    fn wikitext_from_issues_add_extid_info(
+        &self,
+        extid_not_in_mnm: Vec<ExtIdNoMnM>,
+        ret: &mut String,
+        formatter_url: &String,
+    ) {
+        if !extid_not_in_mnm.is_empty() {
+            *ret += "== Unknown external ID ==\n";
+            if extid_not_in_mnm.len() > MAX_WIKI_ROWS {
+                *ret += &format!("* {} external IDs in Wikidata but not in Mix'n'Match. Too many to show individually.\n\n",extid_not_in_mnm.len());
+            } else {
+                *ret += "{| class='wikitable'\n! External ID !! Item\n";
+                for e in &extid_not_in_mnm {
+                    let ext_id = self.format_ext_id(&e.ext_id, "", formatter_url);
+                    let s = format!("|-\n| {} || {{{{Q|{}}}}}\n", &ext_id, e.q);
+                    *ret += &s;
+                }
+                *ret += "|}\n\n";
             }
         }
-
-        Ok(ret)
     }
 
     fn format_ext_id(&self, ext_id: &str, ext_url: &str, formatter_url: &str) -> String {
@@ -510,6 +535,26 @@ impl Microsync {
             .collect();
         Ok(ret)
     }
+}
+
+fn wikitext_from_issues_get_header(catalog: &Catalog) -> String {
+    let catalog_name = match &catalog.name {
+        Some(s) => s.to_owned(),
+        None => String::new(),
+    };
+    let mut ret = String::new();
+    ret += &format!(
+        "A report for the [{}/ Mix'n'match] tool. '''This page will be replaced regularly!'''\n",
+        MNM_SITE_URL
+    );
+    ret += "''Please note:''\n";
+    ret += "* If you fix something from this list on Wikidata, please fix it on Mix'n'match as well, if applicable. Otherwise, the error might be re-introduced from there.\n";
+    ret += "* 'External ID' refers to the IDs in the original (external) catalog; the same as the statement value for the associated  property.\n\n";
+    ret += &format!(
+        "==[{MNM_SITE_URL}/#/catalog/{} {}]==\n{}\n\n",
+        catalog.id, &catalog_name, &catalog.desc
+    );
+    ret
 }
 
 #[cfg(test)]
