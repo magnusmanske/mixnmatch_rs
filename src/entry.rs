@@ -308,7 +308,7 @@ impl Entry {
         item: &mut ItemEntity,
     ) -> Result<()> {
         let auxiliary = self.get_aux().await?;
-        Ok(if !auxiliary.is_empty() {
+        if !auxiliary.is_empty() {
             let api = self.app()?.wikidata().get_mw_api().await?;
             let ec = EntityContainer::new();
             let props2load: Vec<String> = auxiliary
@@ -323,7 +323,8 @@ impl Entry {
                     }
                 }
             }
-        })
+        }
+        Ok(())
     }
 
     async fn add_to_item_person_dates(
@@ -338,12 +339,13 @@ impl Entry {
             let claim = Statement::new_normal(snak, vec![], references.to_owned());
             self.add_claim_or_references(item, claim);
         }
-        Ok(if let Some(time) = died {
+        if let Some(time) = died {
             let (value, precision) = self.time_precision_from_ymd(&time);
             let snak = Snak::new_time("P570", &value, precision);
             let claim = Statement::new_normal(snak, vec![], references.to_owned());
             self.add_claim_or_references(item, claim);
-        })
+        }
+        Ok(())
     }
 
     async fn add_to_item_coordinates(
@@ -351,11 +353,12 @@ impl Entry {
         references: &Vec<Reference>,
         item: &mut ItemEntity,
     ) -> Result<()> {
-        Ok(if let Some(coord) = self.get_coordinate_location().await? {
+        if let Some(coord) = self.get_coordinate_location().await? {
             let snak = Snak::new_coordinate("P625", coord.lat, coord.lon);
             let claim = Statement::new_normal(snak, vec![], references.to_owned());
             self.add_claim_or_references(item, claim);
-        })
+        }
+        Ok(())
     }
 
     async fn add_to_item_descriptions(
@@ -367,12 +370,13 @@ impl Entry {
         if self.ext_desc.is_empty() {
             descriptions.insert(language.to_owned(), self.ext_desc.to_owned());
         }
-        Ok(for (lang, desc) in descriptions {
+        for (lang, desc) in descriptions {
             if item.description_in_locale(&lang).is_none() {
                 let desc = LocaleString::new(&lang, &desc);
                 item.descriptions_mut().push(desc);
             }
-        })
+        }
+        Ok(())
     }
 
     async fn add_to_item_name_and_aliases(

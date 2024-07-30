@@ -264,7 +264,7 @@ impl AuxiliaryMatcher {
         catalog_id: usize,
         items_to_check: &mut Vec<(String, AuxiliaryResults)>,
     ) -> Result<()> {
-        Ok(for aux in results {
+        for aux in results {
             if self.is_catalog_property_combination_suspect(catalog_id, aux.property) {
                 continue;
             }
@@ -292,12 +292,13 @@ impl AuxiliaryMatcher {
                     .await?;
                 }
             }
-        })
+        }
+        Ok(())
     }
 
     async fn match_via_auxiliary_parallel(
         &mut self,
-        results: &Vec<AuxiliaryResults>,
+        results: &[AuxiliaryResults],
         search_batch_size: usize,
         catalog_id: usize,
     ) -> Result<Vec<(String, AuxiliaryResults)>> {
