@@ -393,7 +393,7 @@ impl Storage for StorageMySQL {
 
     async fn microsync_load_entry_names(
         &self,
-        entry_ids: &Vec<usize>,
+        entry_ids: &[usize],
     ) -> Result<HashMap<usize, String>> {
         let placeholders = Self::sql_placeholders(entry_ids.len());
         let sql = format!(
@@ -402,7 +402,7 @@ impl Storage for StorageMySQL {
         );
         let mut conn = self.get_conn().await?;
         let results = conn
-            .exec_iter(sql, entry_ids)
+            .exec_iter(sql, entry_ids.to_vec())
             .await?
             .map_and_drop(from_row::<(usize, String)>)
             .await?
@@ -429,14 +429,14 @@ impl Storage for StorageMySQL {
     async fn microsync_get_entries_for_ext_ids(
         &self,
         catalog_id: usize,
-        ext_ids: &Vec<&String>,
+        ext_ids: &[&String],
     ) -> Result<Vec<(usize, Option<isize>, Option<usize>, String, String)>> {
         let placeholders: Vec<&str> = ext_ids.iter().map(|_| "BINARY ?").collect();
         let placeholders = placeholders.join(",");
         let sql = format!("SELECT `id`,`q`,`user`,`ext_id`,`ext_url` FROM `entry` WHERE `catalog`={catalog_id} AND `ext_id` IN ({placeholders})");
         let mut conn = self.get_conn().await?;
         let results = conn
-            .exec_iter(sql, ext_ids)
+            .exec_iter(sql, ext_ids.to_vec())
             .await?
             .map_and_drop(from_row::<(usize, Option<isize>, Option<usize>, String, String)>)
             .await?;
@@ -559,16 +559,18 @@ impl Storage for StorageMySQL {
     async fn autoscrape_get_entry_ids_for_ext_ids(
         &self,
         catalog_id: usize,
-        ext_ids: &Vec<String>,
+        ext_ids: &[String],
     ) -> Result<Vec<(String, usize)>> {
         let placeholders = Self::sql_placeholders(ext_ids.len());
         let sql = format!(
-            "SELECT `ext_id`,`id` FROM entry WHERE `ext_id` IN ({}) AND `catalog`={}",
-            &placeholders, catalog_id
+            "SELECT `ext_id`,`id` FROM entry WHERE `ext_id` IN ({placeholders}) AND `catalog`={catalog_id}"
         );
-        let existing_ext_ids: Vec<(String, usize)> = sql
-            .with(ext_ids.clone())
-            .map(self.get_conn().await?, |(ext_id, id)| (ext_id, id))
+        let existing_ext_ids: Vec<(String, usize)> = self
+            .get_conn()
+            .await?
+            .exec_iter(sql, ext_ids.to_vec())
+            .await?
+            .map_and_drop(from_row::<(String, usize)>)
             .await?;
         Ok(existing_ext_ids)
     }
@@ -598,8 +600,8 @@ impl Storage for StorageMySQL {
         catalog_id: usize,
         offset: usize,
         batch_size: usize,
-        extid_props: &Vec<String>,
-        blacklisted_catalogs: &Vec<String>,
+        extid_props: &[String],
+        blacklisted_catalogs: &[String],
     ) -> Result<Vec<AuxiliaryResults>> {
         let sql = format!(
             "SELECT auxiliary.id,entry_id,0,aux_p,aux_name FROM entry,auxiliary
@@ -628,7 +630,7 @@ impl Storage for StorageMySQL {
 
     async fn auxiliary_matcher_add_auxiliary_to_wikidata(
         &self,
-        blacklisted_properties: &Vec<String>,
+        blacklisted_properties: &[String],
         catalog_id: usize,
         offset: usize,
         batch_size: usize,
@@ -718,7 +720,7 @@ impl Storage for StorageMySQL {
 
     async fn maintenance_sync_property(
         &self,
-        catalogs: &Vec<usize>,
+        catalogs: &[usize],
         propval2item: &HashMap<String, isize>,
         params: Vec<String>,
     ) -> Result<Vec<(usize, String, Option<usize>, Option<usize>)>> {
@@ -873,7 +875,7 @@ impl Storage for StorageMySQL {
         &self,
         job_id: usize,
         json_string: String,
-        timestamp: &String,
+        timestamp: &str,
     ) -> Result<()> {
         let sql = "UPDATE `jobs` SET `json`=:json_string,last_ts=:timestamp WHERE `id`=:job_id";
         let mut conn = self.get_conn().await?;
@@ -943,7 +945,7 @@ impl Storage for StorageMySQL {
         &self,
         status: JobStatus,
         depends_on: Option<JobStatus>,
-        no_actions: &Vec<String>,
+        no_actions: &[String],
         next_ts: Option<String>,
     ) -> Option<usize> {
         let sql = self.jobs_get_next_job_construct_sql(status, depends_on, no_actions, next_ts);
@@ -1057,7 +1059,7 @@ impl Storage for StorageMySQL {
 
     async fn automatch_from_other_catalogs_get_results2(
         &self,
-        results_in_original_catalog: &Vec<ResultInOriginalCatalog>,
+        results_in_original_catalog: &[ResultInOriginalCatalog],
         ext_names: Vec<String>,
     ) -> Result<Vec<ResultInOtherCatalog>> {
         let ext_names: Vec<mysql_async::Value> = ext_names
@@ -1666,8 +1668,7 @@ mod tests {
         };
 
         // High priority
-        let sql =
-            storage.jobs_get_next_job_construct_sql(JobStatus::HighPriority, None, &vec![], None);
+        let sql = storage.jobs_get_next_job_construct_sql(JobStatus::HighPriority, None, &[], None);
         let expected = format!(
             "SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NULL ORDER BY `last_ts` LIMIT 1",
             JobStatus::HighPriority.as_str()
@@ -1675,8 +1676,7 @@ mod tests {
         assert_eq!(sql, expected);
 
         // Low priority
-        let sql =
-            storage.jobs_get_next_job_construct_sql(JobStatus::LowPriority, None, &vec![], None);
+        let sql = storage.jobs_get_next_job_construct_sql(JobStatus::LowPriority, None, &[], None);
         let expected = format!(
             "SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NULL ORDER BY `last_ts` LIMIT 1",
             JobStatus::LowPriority.as_str()
@@ -1687,7 +1687,7 @@ mod tests {
         let sql = storage.jobs_get_next_job_construct_sql(
             JobStatus::Todo,
             Some(JobStatus::Done),
-            &vec![],
+            &[],
             None,
         );
         let expected = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NOT NULL AND `depends_on` IN (SELECT `id` FROM `jobs` WHERE `status`='{}') ORDER BY `last_ts` LIMIT 1",JobStatus::Todo.as_str(),JobStatus::Done.as_str()) ;
@@ -1701,7 +1701,7 @@ mod tests {
         assert_eq!(sql, expected);
 
         // get_next_initial_job
-        let sql = storage.jobs_get_next_job_construct_sql(JobStatus::Todo, None, &vec![], None);
+        let sql = storage.jobs_get_next_job_construct_sql(JobStatus::Todo, None, &[], None);
         let expected = format!(
             "SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NULL ORDER BY `last_ts` LIMIT 1",
             JobStatus::Todo.as_str()
@@ -1713,7 +1713,7 @@ mod tests {
         let sql = storage.jobs_get_next_job_construct_sql(
             JobStatus::Done,
             None,
-            &vec![],
+            &[],
             Some(timestamp.to_owned()),
         );
         let expected = format!(

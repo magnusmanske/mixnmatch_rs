@@ -646,6 +646,7 @@ impl AuxiliaryMatcher {
                 }
                 if let Some(prop_entity) = self.properties.get_entity(prop) {
                     let p9073 = prop_entity.values_for_property("P9073");
+                    #[allow(clippy::collapsible_match)]
                     if let Some(value) = p9073.first() {
                         /* trunk-ignore(clippy/collapsible_match) */
                         if let Value::Entity(entity_value) = value {

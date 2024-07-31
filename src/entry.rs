@@ -79,6 +79,7 @@ impl AuxiliaryRow {
             SnakDataType::NotSet => todo!(),
             SnakDataType::NoValue => todo!(),
             SnakDataType::SomeValue => todo!(),
+            SnakDataType::EntitySchema => todo!(),
         };
         Some(Statement::new_normal(snak, vec![], references.to_owned()))
     }

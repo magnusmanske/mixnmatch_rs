@@ -449,6 +449,7 @@ impl Microsync {
         Ok((extid_not_in_mnm, match_differs))
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn get_differences_mnm_wd_process_chunk(
         &self,
         reader: &mut csv::Reader<File>,
@@ -529,7 +530,7 @@ impl Microsync {
         &self,
         catalog_id: usize,
         property: usize,
-        ext_ids: &Vec<&String>,
+        ext_ids: &[&String],
     ) -> Result<HashMap<String, SmallEntry>> {
         if ext_ids.is_empty() {
             return Ok(HashMap::new());
@@ -656,7 +657,7 @@ mod tests {
         let app = get_test_app();
         let result = app
             .storage()
-            .microsync_load_entry_names(&vec![TEST_ENTRY_ID])
+            .microsync_load_entry_names(&[TEST_ENTRY_ID])
             .await
             .unwrap();
         assert_eq!(
