@@ -176,7 +176,7 @@ impl ExtendedEntry {
         }
 
         if ret.entry.type_name.is_none() {
-            ret.entry.type_name = datasource.default_type.to_owned();
+            ret.entry.type_name.clone_from(&datasource.default_type);
         }
 
         if ret.entry.ext_url.is_empty() {
@@ -214,9 +214,10 @@ impl ExtendedEntry {
         if self.entry.type_name.is_some() {
             entry.set_type_name(self.entry.type_name.clone()).await?;
         }
-        Ok(if !self.entry.ext_url.is_empty() {
+        if !self.entry.ext_url.is_empty() {
             entry.set_ext_url(&self.entry.ext_url).await?;
-        })
+        }
+        Ok(())
     }
 
     // Adds new aliases.
@@ -307,9 +308,9 @@ impl ExtendedEntry {
         {
             match label {
                 "id" => { /* Already have that in entry */ }
-                "name" => self.entry.ext_name = cell.to_owned(),
-                "desc" => self.entry.ext_desc = cell.to_owned(),
-                "url" => self.entry.ext_url = cell.to_owned(),
+                "name" => self.entry.ext_name = cell.to_string(),
+                "desc" => self.entry.ext_desc = cell.to_string(),
+                "url" => self.entry.ext_url = cell.to_string(),
                 "q" | "autoq" => {
                     self.entry.q = cell.to_string().replace('Q', "").parse::<isize>().ok();
                     if let Some(i) = self.entry.q {

@@ -66,7 +66,7 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
 
     async fn microsync_load_entry_names(
         &self,
-        entry_ids: &Vec<usize>,
+        entry_ids: &[usize],
     ) -> Result<HashMap<usize, String>>;
     async fn microsync_get_multiple_q_in_mnm(
         &self,
@@ -75,7 +75,7 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     async fn microsync_get_entries_for_ext_ids(
         &self,
         catalog_id: usize,
-        ext_ids: &Vec<&String>,
+        ext_ids: &[&String],
     ) -> Result<Vec<(usize, Option<isize>, Option<usize>, String, String)>>;
 
     // MixNMatch
@@ -102,7 +102,7 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     async fn autoscrape_get_entry_ids_for_ext_ids(
         &self,
         catalog_id: usize,
-        ext_ids: &Vec<String>,
+        ext_ids: &[String],
     ) -> Result<Vec<(String, usize)>>;
     async fn autoscrape_start(&self, autoscrape_id: usize) -> Result<()>;
     async fn autoscrape_finish(&self, autoscrape_id: usize, last_run_urls: usize) -> Result<()>;
@@ -114,12 +114,12 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
         catalog_id: usize,
         offset: usize,
         batch_size: usize,
-        extid_props: &Vec<String>,
-        blacklisted_catalogs: &Vec<String>,
+        extid_props: &[String],
+        blacklisted_catalogs: &[String],
     ) -> Result<Vec<AuxiliaryResults>>;
     async fn auxiliary_matcher_add_auxiliary_to_wikidata(
         &self,
-        blacklisted_properties: &Vec<String>,
+        blacklisted_properties: &[String],
         catalog_id: usize,
         offset: usize,
         batch_size: usize,
@@ -134,7 +134,7 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     async fn maintenance_get_prop2catalog_ids(&self) -> Result<Vec<(usize, usize)>>;
     async fn maintenance_sync_property(
         &self,
-        catalogs: &Vec<usize>,
+        catalogs: &[usize],
         propval2item: &HashMap<String, isize>,
         params: Vec<String>,
     ) -> Result<Vec<(usize, String, Option<usize>, Option<usize>)>>;
@@ -166,7 +166,7 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
         &self,
         job_id: usize,
         json_string: String,
-        timestamp: &String,
+        timestamp: &str,
     ) -> Result<()>;
     async fn jobs_row_from_id(&self, job_id: usize) -> Result<JobRow>;
     async fn jobs_set_status(
@@ -181,7 +181,7 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
         &self,
         status: JobStatus,
         depends_on: Option<JobStatus>,
-        no_actions: &Vec<String>,
+        no_actions: &[String],
         next_ts: Option<String>,
     ) -> Option<usize>;
 
@@ -217,7 +217,7 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     ) -> Result<Vec<ResultInOriginalCatalog>>;
     async fn automatch_from_other_catalogs_get_results2(
         &self,
-        results_in_original_catalog: &Vec<ResultInOriginalCatalog>,
+        results_in_original_catalog: &[ResultInOriginalCatalog],
         ext_names: Vec<String>,
     ) -> Result<Vec<ResultInOtherCatalog>>;
     async fn purge_automatches(&self, catalog_id: usize) -> Result<()>;

@@ -316,7 +316,7 @@ impl Wikidata {
             return Ok(());
         }
         let mut item2commands: HashMap<usize, Vec<WikidataCommand>> = HashMap::new();
-        for (key, group) in &commands.into_iter().group_by(|command| command.item_id) {
+        for (key, group) in &commands.into_iter().chunk_by(|command| command.item_id) {
             item2commands.insert(key, group.collect());
         }
 
