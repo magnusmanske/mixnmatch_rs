@@ -293,6 +293,40 @@ impl AutoscrapeFollow {
     /// Follows the next URL
     //TODO test
     async fn refill_cache(&mut self, autoscrape: &Autoscrape) -> Result<()> {
+        // Load next URL
+        let text = self.refill_cache_get_text(autoscrape).await?;
+
+        // Find new URLs to follow
+        self.refill_cache_text_to_cache(text)?;
+        Ok(())
+    }
+
+    fn refill_cache_text_to_cache(&mut self, text: String) -> Result<(), anyhow::Error> {
+        let regex = AutoscrapeRegex::new(&self.regex)?;
+        self.cache = regex
+            .captures_iter(&text)
+            //.filter_map(|caps|caps.ok())
+            .filter_map(|cap| cap.get(1))
+            .map(|url| url.as_str().to_string())
+            .collect();
+        Ok(())
+    }
+
+    async fn refill_cache_get_text(
+        &mut self,
+        autoscrape: &Autoscrape,
+    ) -> Result<String, anyhow::Error> {
+        let url = self.refill_cache_get_url(autoscrape);
+        let client = Autoscrape::reqwest_client_external()?;
+        let text = match client.get(url.to_owned()).send().await {
+            Ok(x) => x.text().await.ok(),
+            _ => None,
+        }
+        .ok_or_else(|| AutoscrapeError::MediawikiFailure(url.clone()))?;
+        Ok(text)
+    }
+
+    fn refill_cache_get_url(&mut self, autoscrape: &Autoscrape) -> String {
         // Construct URL with level values
         let mut url = self.url.clone();
         let level2value: HashMap<String, String> = autoscrape
@@ -304,25 +338,7 @@ impl AutoscrapeFollow {
         for (key, value) in level2value {
             url = url.replace(&key, &value);
         }
-
-        // Load next URL
-        let client = Autoscrape::reqwest_client_external()?;
-        let text = match client.get(url.to_owned()).send().await {
-            Ok(x) => x.text().await.ok(),
-            _ => None,
-        }
-        .ok_or_else(|| AutoscrapeError::MediawikiFailure(url.clone()))?;
-
-        // Find new URLs to follow
-        let regex = AutoscrapeRegex::new(&self.regex)?;
-        self.cache = regex
-            .captures_iter(&text)
-            //.filter_map(|caps|caps.ok())
-            .filter_map(|cap| cap.get(1))
-            .map(|url| url.as_str().to_string())
-            .collect();
-
-        Ok(())
+        url
     }
 }
 
