@@ -133,14 +133,8 @@ impl UpdateCatalog {
 
     /// Updates a catalog by reading a tabbed file.
     pub async fn update_from_tabbed_file(&mut self, catalog_id: usize) -> Result<()> {
-        let update_info = self.get_update_info(catalog_id).await?;
-        let json = update_info.json()?;
-        let catalog = Catalog::from_id(catalog_id, &self.app).await?;
-        let entries_already_in_catalog = catalog.number_of_entries().await?;
         let batch_size = 5000;
-        let mut datasource = DataSource::new(catalog_id, &json)?;
-        datasource.offset = self.get_last_job_offset().await;
-        datasource.just_add = entries_already_in_catalog == 0 || datasource.just_add;
+        let mut datasource = self.get_data_source(catalog_id).await?;
         let mut reader = datasource.get_reader(&self.app).await?;
         let mut row_cache = vec![];
         while let Some(result) = reader.records().next() {
@@ -154,21 +148,29 @@ impl UpdateCatalog {
                     .await?;
             }
         }
-        if let Err(e) = self.process_rows(&mut row_cache, &mut datasource).await {
-            if datasource.fail_on_error {
-                return Err(e);
-            }
+        if datasource.fail_on_error {
+            self.process_rows(&mut row_cache, &mut datasource).await?;
         }
-
         datasource.clear_tmp_file();
         let _ = self.clear_offset().await;
-
         /*
-               $this->app->queue_job($this->catalog_id(),'microsync');
-               $this->app->queue_job($this->catalog_id(),'automatch_by_search');
-               if ( $this->has_born_died ) $this->app->queue_job($this->catalog_id(),'match_person_dates');
+        // TODO?
+            $this->app->queue_job($this->catalog_id(),'microsync');
+            $this->app->queue_job($this->catalog_id(),'automatch_by_search');
+            if ( $this->has_born_died ) $this->app->queue_job($this->catalog_id(),'match_person_dates');
         */
         Ok(())
+    }
+
+    async fn get_data_source(&mut self, catalog_id: usize) -> Result<DataSource, anyhow::Error> {
+        let update_info = self.get_update_info(catalog_id).await?;
+        let json = update_info.json()?;
+        let catalog = Catalog::from_id(catalog_id, &self.app).await?;
+        let entries_already_in_catalog = catalog.number_of_entries().await?;
+        let mut datasource = DataSource::new(catalog_id, &json)?;
+        datasource.offset = self.get_last_job_offset().await;
+        datasource.just_add = entries_already_in_catalog == 0 || datasource.just_add;
+        Ok(datasource)
     }
 
     async fn update_from_tabbed_file_process_row_cache(

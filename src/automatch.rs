@@ -622,29 +622,14 @@ impl AutoMatch {
             };
             let statements = item.claims_with_property(match_prop);
             for statement in &statements {
-                let main_snak = statement.main_snak();
-                let data_value = match main_snak.data_value() {
-                    Some(dv) => dv,
-                    None => continue,
-                };
-                let time = match data_value.value() {
-                    wikimisc::wikibase::value::Value::Time(tv) => tv,
-                    _ => continue,
-                };
-                let dt = match NaiveDateTime::parse_from_str(time.time(), "+%Y-%m-%dT%H:%M:%SZ") {
-                    Ok(dt) => dt,
-                    _ => continue, // Could not parse date
-                };
-                let date = match precision {
-                    4 => format!("{}", dt.format("%Y")),
-                    10 => format!("{}", dt.format("%Y-%m-%d")),
-                    other => panic!("Bad precision {}", other), // Should never happen
-                };
-                if (match_field == "born" && date == result.born)
-                    || (match_field == "died" && date == result.died)
-                {
-                    candidates.push(q.clone());
-                }
+                match_person_by_single_date_check_statement(
+                    statement,
+                    precision,
+                    match_field,
+                    result,
+                    &mut candidates,
+                    q,
+                );
             }
         }
         if candidates.len() == 1 {
@@ -816,6 +801,39 @@ impl AutoMatch {
             "P570"
         };
         (match_field.to_string(), match_prop.to_string())
+    }
+}
+
+fn match_person_by_single_date_check_statement(
+    statement: &&wikimisc::wikibase::Statement,
+    precision: i32,
+    match_field: &str,
+    result: &CandidateDates,
+    candidates: &mut Vec<String>,
+    q: &str,
+) {
+    let main_snak = statement.main_snak();
+    let data_value = match main_snak.data_value() {
+        Some(dv) => dv,
+        None => return,
+    };
+    let time = match data_value.value() {
+        wikimisc::wikibase::value::Value::Time(tv) => tv,
+        _ => return,
+    };
+    let dt = match NaiveDateTime::parse_from_str(time.time(), "+%Y-%m-%dT%H:%M:%SZ") {
+        Ok(dt) => dt,
+        _ => return, // Could not parse date
+    };
+    let date = match precision {
+        4 => format!("{}", dt.format("%Y")),
+        10 => format!("{}", dt.format("%Y-%m-%d")),
+        other => panic!("Bad precision {}", other), // Should never happen
+    };
+    if (match_field == "born" && date == result.born)
+        || (match_field == "died" && date == result.died)
+    {
+        candidates.push(q.to_string());
     }
 }
 
