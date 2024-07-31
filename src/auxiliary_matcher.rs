@@ -472,64 +472,74 @@ impl AuxiliaryMatcher {
             sources.get(&q).unwrap_or(&vec![]).to_owned();
         let mut commands: Vec<WikidataCommand> = vec![];
         for aux in aux_data {
-            if AUX_BLACKLISTED_PROPERTIES.contains(&aux.property) {
-                // No blacklisted properties
-                continue;
-            }
-            if let Some(entity) = entities.get_entity(aux.q()) {
-                if META_ITEMS
-                    .iter()
-                    .any(|q| entity.has_target_entity("P31", q))
-                {
-                    continue; // Don't edit items that are META items
-                }
-                if self.entity_already_has_property(aux, &entity).await {
-                    continue; // Don't add anything if item already has a statement with that property
-                }
-            }
-            if self
-                .aux2wd_check_if_property_value_is_on_wikidata(aux)
-                .await
-            {
-                // Search Wikidata for other occurrences
-                continue;
-            }
-            if let Ok(b) = self
-                .app
-                .storage()
-                .avoid_auto_match(aux.entry_id, Some(aux.q_numeric as isize))
-                .await
-            {
-                if b {
-                    continue;
-                }
-            } else {
-                // Something went wrong, ignore this one
-                continue;
-            }
-
-            let command_value: Option<WikidataCommandValue> =
-                if self.properties_using_items.contains(&aux.prop()) {
-                    aux.value_as_item_id()
-                } else if self.properties_with_coordinates.contains(&aux.prop()) {
-                    aux.value_as_item_location()
-                } else {
-                    Some(WikidataCommandValue::String(aux.value.to_owned()))
-                };
-
-            if let Some(value) = command_value {
-                commands.push(WikidataCommand {
-                    item_id: aux.q_numeric,
-                    what: WikidataCommandWhat::Property(aux.property),
-                    value: value.to_owned(),
-                    references: vec![source.clone()],
-                    qualifiers: vec![],
-                    comment: Some(aux.entry_comment_link()),
-                    rank: None,
-                });
-            }
+            self.aux2wd_process_item_aux(aux, entities, &mut commands, &source)
+                .await;
         }
         commands
+    }
+
+    async fn aux2wd_process_item_aux(
+        &self,
+        aux: &AuxiliaryResults,
+        entities: &EntityContainer,
+        commands: &mut Vec<WikidataCommand>,
+        source: &[WikidataCommandPropertyValue],
+    ) {
+        if AUX_BLACKLISTED_PROPERTIES.contains(&aux.property) {
+            // No blacklisted properties
+            return;
+        }
+        if let Some(entity) = entities.get_entity(aux.q()) {
+            if META_ITEMS
+                .iter()
+                .any(|q| entity.has_target_entity("P31", q))
+            {
+                return; // Don't edit items that are META items
+            }
+            if self.entity_already_has_property(aux, &entity).await {
+                return; // Don't add anything if item already has a statement with that property
+            }
+        }
+        if self
+            .aux2wd_check_if_property_value_is_on_wikidata(aux)
+            .await
+        {
+            // Search Wikidata for other occurrences
+            return;
+        }
+        if let Ok(b) = self
+            .app
+            .storage()
+            .avoid_auto_match(aux.entry_id, Some(aux.q_numeric as isize))
+            .await
+        {
+            if b {
+                return;
+            }
+        } else {
+            // Something went wrong, ignore this one
+            return;
+        }
+        let command_value: Option<WikidataCommandValue> =
+            if self.properties_using_items.contains(&aux.prop()) {
+                aux.value_as_item_id()
+            } else if self.properties_with_coordinates.contains(&aux.prop()) {
+                aux.value_as_item_location()
+            } else {
+                Some(WikidataCommandValue::String(aux.value.to_owned()))
+            };
+
+        if let Some(value) = command_value {
+            commands.push(WikidataCommand {
+                item_id: aux.q_numeric,
+                what: WikidataCommandWhat::Property(aux.property),
+                value: value.to_owned(),
+                references: vec![source.to_vec()],
+                qualifiers: vec![],
+                comment: Some(aux.entry_comment_link()),
+                rank: None,
+            });
+        }
     }
 
     /// Check if that property/value combination is on Wikidata. Returns true if something was found.

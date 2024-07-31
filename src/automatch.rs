@@ -334,47 +334,12 @@ impl AutoMatch {
                 .await?;
 
             for result in &results {
-                let entry_id = result.0;
-                let label = &result.1;
-                let type_q = &result.2;
-                let aliases: Vec<&str> = result.3.split('|').collect();
-                let mut items = match self.app.wikidata().search_db_with_type(label, type_q).await {
-                    Ok(items) => items,
-                    _ => continue, // Ignore error
-                };
-                for alias in &aliases {
-                    let mut tmp = match self.app.wikidata().search_db_with_type(alias, type_q).await
-                    {
-                        Ok(tmp) => tmp,
-                        _ => continue, // Ignore error
-                    };
-                    items.append(&mut tmp);
-                }
-                items.sort();
-                items.dedup();
-                if self
-                    .app
-                    .wikidata()
-                    .remove_meta_items(&mut items)
-                    .await
-                    .is_err()
+                let (entry_id, items) = match self.automatch_simple_items_from_result(result).await
                 {
-                    continue; // Ignore error
-                }
-                if items.is_empty() {
-                    continue;
-                }
-                let mut entry = match Entry::from_id(entry_id, &self.app).await {
-                    Ok(entry) => entry,
-                    _ => continue, // Ignore error
+                    Some(value) => value,
+                    None => continue,
                 };
-                if entry.set_match(&items[0], USER_AUTO).await.is_err() {
-                    continue; // Ignore error
-                }
-                if items.len() > 1 {
-                    // Multi-match
-                    let _ = entry.set_multi_match(&items).await.is_err(); // Ignore error
-                }
+                self.automatch_simple_set_matches(items, entry_id).await;
             }
 
             if results.len() < batch_size {
@@ -385,6 +350,57 @@ impl AutoMatch {
         }
         let _ = self.clear_offset().await;
         Ok(())
+    }
+
+    async fn automatch_simple_set_matches(&mut self, items: Vec<String>, entry_id: usize) {
+        let item = match items.first() {
+            Some(item) => item,
+            None => return,
+        };
+        let mut entry = match Entry::from_id(entry_id, &self.app).await {
+            Ok(entry) => entry,
+            _ => return, // Ignore error
+        };
+        if entry.set_match(item, USER_AUTO).await.is_err() {
+            return; // Ignore error
+        }
+        if items.len() > 1 {
+            // Multi-match
+            let _ = entry.set_multi_match(&items).await.is_err(); // Ignore error
+        }
+    }
+
+    async fn automatch_simple_items_from_result(
+        &mut self,
+        result: &(usize, String, String, String),
+    ) -> Option<(usize, Vec<String>)> {
+        let entry_id = result.0;
+        let label = &result.1;
+        let type_q = &result.2;
+        let aliases: Vec<&str> = result.3.split('|').collect();
+        let mut items = match self.app.wikidata().search_db_with_type(label, type_q).await {
+            Ok(items) => items,
+            _ => return None, // Ignore error
+        };
+        for alias in &aliases {
+            let mut tmp = match self.app.wikidata().search_db_with_type(alias, type_q).await {
+                Ok(tmp) => tmp,
+                _ => continue, // Ignore error
+            };
+            items.append(&mut tmp);
+        }
+        items.sort();
+        items.dedup();
+        if self
+            .app
+            .wikidata()
+            .remove_meta_items(&mut items)
+            .await
+            .is_err()
+        {
+            return None; // Ignore error
+        }
+        Some((entry_id, items))
     }
 
     //TODO test
