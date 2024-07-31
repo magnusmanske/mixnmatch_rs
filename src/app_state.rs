@@ -79,15 +79,14 @@ impl AppState {
         let bot_password = config["bot_password"].as_str().unwrap().to_string();
         let import_file_path = config["import_file_path"].as_str().unwrap().to_string();
         let import_file_path = Arc::new(import_file_path);
-        let ret = Self {
+        Self {
             wikidata: Wikidata::new(&config["wikidata"], bot_name, bot_password),
             wdrc: Arc::new(WDRC::new(&config["wdrc"])),
             storage: Arc::new(Box::new(StorageMySQL::new(&config["mixnmatch"]))),
             import_file_path,
             task_specific_usize,
             max_concurrent_jobs,
-        };
-        ret
+        }
     }
 
     pub fn storage(&self) -> &Arc<Box<dyn Storage>> {
@@ -386,6 +385,9 @@ impl AppState {
     }
 }
 
+unsafe impl Send for AppState {}
+unsafe impl Sync for AppState {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -399,6 +401,3 @@ mod tests {
         assert_eq!(AppState::item2numeric("Q12345X6"), Some(12345));
     }
 }
-
-unsafe impl Send for AppState {}
-unsafe impl Sync for AppState {}

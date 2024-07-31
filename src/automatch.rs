@@ -470,7 +470,7 @@ impl AutoMatch {
             return Ok(()); // No candidate items
         }
         let candidate_items = match self
-            .subset_items_by_birth_death_year(&candidate_items, birth_year, death_year, &mw_api)
+            .subset_items_by_birth_death_year(&candidate_items, birth_year, death_year, mw_api)
             .await
         {
             Ok(ci) => ci,
