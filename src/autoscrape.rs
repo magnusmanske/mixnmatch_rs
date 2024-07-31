@@ -1,8 +1,8 @@
 use crate::app_state::AppState;
 use crate::catalog::Catalog;
 use crate::entry::*;
+use crate::extended_entry::ExtendedEntry;
 use crate::job::*;
-use crate::update_catalog::ExtendedEntry;
 use anyhow::Result;
 use async_trait::async_trait;
 use lazy_static::lazy_static;
@@ -772,61 +772,74 @@ impl AutoscrapeScraper {
                 continue;
             }
             for cap in regex_entry.captures_iter(html) {
-                // let cap = match cap {
-                //     Ok(cap) => cap,
-                //     Err(_) => continue,
-                // };
-                let values: Vec<String> = cap
-                    .iter()
-                    .map(|v| v.map(|x| x.as_str().to_string()).unwrap_or_default())
-                    .collect();
-                let mut map: HashMap<String, String> = values
-                    .iter()
-                    .enumerate()
-                    .skip(1)
-                    .map(|(num, value)| (format!("${}", num), value.to_owned()))
-                    .collect();
-                for (num, level) in autoscrape.levels.iter().enumerate() {
-                    map.insert(format!("$L{}", num + 1), level.current());
-                }
-                let type_name = self.resolve_type.replace_vars(&map);
-                let type_name = if type_name.is_empty() {
-                    None
-                } else {
-                    Some(type_name)
-                };
-                let entry_ex = ExtendedEntry {
-                    entry: Entry {
-                        id: ENTRY_NEW_ID,
-                        catalog: autoscrape.catalog_id,
-                        ext_id: self.resolve_id.replace_vars(&map),
-                        ext_url: self.resolve_url.replace_vars(&map),
-                        ext_name: self.resolve_name.replace_vars(&map),
-                        ext_desc: self.resolve_desc.replace_vars(&map),
-                        q: None,
-                        user: None,
-                        timestamp: None,
-                        random: rand::thread_rng().gen(),
-                        type_name,
-                        app: Some(autoscrape.app.clone()),
-                    },
-                    aux: self
-                        .resolve_aux
-                        .iter()
-                        .map(|aux| aux.replace_vars(&map))
-                        .collect(),
-                    born: None,
-                    died: None,
-                    aliases: vec![],
-                    descriptions: HashMap::new(),
-                    location: None,
-                };
+                let entry_ex = self.process_html_block_generate_entry_ex(cap, autoscrape);
                 ret.push(entry_ex);
             }
             break; // First regexp to match wins
         }
         ret
     }
+
+    fn process_html_block_generate_entry_ex(
+        &self,
+        cap: regex::Captures,
+        autoscrape: &Autoscrape,
+    ) -> ExtendedEntry {
+        let map = process_html_block_generate_map(cap, autoscrape);
+        let type_name = self.resolve_type.replace_vars(&map);
+        let type_name = if type_name.is_empty() {
+            None
+        } else {
+            Some(type_name)
+        };
+        let entry_ex = ExtendedEntry {
+            entry: Entry {
+                id: ENTRY_NEW_ID,
+                catalog: autoscrape.catalog_id,
+                ext_id: self.resolve_id.replace_vars(&map),
+                ext_url: self.resolve_url.replace_vars(&map),
+                ext_name: self.resolve_name.replace_vars(&map),
+                ext_desc: self.resolve_desc.replace_vars(&map),
+                q: None,
+                user: None,
+                timestamp: None,
+                random: rand::thread_rng().gen(),
+                type_name,
+                app: Some(autoscrape.app.clone()),
+            },
+            aux: self
+                .resolve_aux
+                .iter()
+                .map(|aux| aux.replace_vars(&map))
+                .collect(),
+            born: None,
+            died: None,
+            aliases: vec![],
+            descriptions: HashMap::new(),
+            location: None,
+        };
+        entry_ex
+    }
+}
+
+fn process_html_block_generate_map(
+    cap: regex::Captures,
+    autoscrape: &Autoscrape,
+) -> HashMap<String, String> {
+    let values: Vec<String> = cap
+        .iter()
+        .map(|v| v.map(|x| x.as_str().to_string()).unwrap_or_default())
+        .collect();
+    let mut map: HashMap<String, String> = values
+        .iter()
+        .enumerate()
+        .skip(1)
+        .map(|(num, value)| (format!("${}", num), value.to_owned()))
+        .collect();
+    for (num, level) in autoscrape.levels.iter().enumerate() {
+        map.insert(format!("$L{}", num + 1), level.current());
+    }
+    map
 }
 
 #[derive(Debug)]

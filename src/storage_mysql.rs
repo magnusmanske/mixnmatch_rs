@@ -1657,6 +1657,7 @@ mod tests {
 
     use super::*;
 
+    // #lizard forgives
     #[test]
     fn test_jobs_get_next_job_construct_sql() {
         let mut path = env::current_dir().expect("Can't get CWD");
