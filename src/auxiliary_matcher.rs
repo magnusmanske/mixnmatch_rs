@@ -617,54 +617,15 @@ impl AuxiliaryMatcher {
         &mut self,
         entry: &Entry,
     ) -> Option<WikidataCommandPropertyValueGroup> {
-        self.catalogs
-            .entry(entry.catalog)
-            .or_insert(Catalog::from_id(entry.catalog, &self.app).await.ok());
-        let catalog = match self.catalogs.get(&entry.catalog) {
-            Some(catalog) => catalog,
-            None => return None, // No catalog, no source
+        let (catalog, mut stated_in) = match self.get_source_for_entry_init(entry).await {
+            Ok(value) => value,
+            Err(value) => return value,
         };
-        let catalog = match catalog {
-            Some(catalog) => catalog,
-            None => return None, // No catalog, no source
-        };
-        let mut stated_in: WikidataCommandPropertyValueGroup = vec![];
-        if let Some(q) = catalog.source_item {
-            stated_in.push(WikidataCommandPropertyValue {
-                property: 248,
-                value: WikidataCommandValue::Item(q),
-            });
-        }
 
         // Source via catalog property
         if let Some(wd_prop) = catalog.wd_prop {
-            if stated_in.is_empty() {
-                let prop = format!("P{}", wd_prop);
-                if !self.properties.has_entity(prop.to_owned()) {
-                    let mw_api = self.app.wikidata().get_mw_api().await.ok()?;
-                    let _ = self.properties.load_entity(&mw_api, prop.to_owned()).await;
-                }
-                if let Some(prop_entity) = self.properties.get_entity(prop) {
-                    let p9073 = prop_entity.values_for_property("P9073");
-                    #[allow(clippy::collapsible_match)]
-                    if let Some(value) = p9073.first() {
-                        /* trunk-ignore(clippy/collapsible_match) */
-                        if let Value::Entity(entity_value) = value {
-                            if let Ok(q) = entity_value.id().replace('Q', "").parse::<usize>() {
-                                stated_in.push(WikidataCommandPropertyValue {
-                                    property: 248,
-                                    value: WikidataCommandValue::Item(q),
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-
-            stated_in.push(WikidataCommandPropertyValue {
-                property: wd_prop,
-                value: WikidataCommandValue::String(entry.ext_id.to_string()),
-            });
+            self.get_source_for_entry_via_catalog_property(&mut stated_in, wd_prop, entry)
+                .await?;
             return Some(stated_in);
         }
 
@@ -684,6 +645,69 @@ impl AuxiliaryMatcher {
             value: WikidataCommandValue::String(mnm_entry_url),
         });
         Some(stated_in)
+    }
+
+    async fn get_source_for_entry_init(
+        &mut self,
+        entry: &Entry,
+    ) -> Result<
+        (&Catalog, Vec<WikidataCommandPropertyValue>),
+        Option<Vec<WikidataCommandPropertyValue>>,
+    > {
+        self.catalogs
+            .entry(entry.catalog)
+            .or_insert(Catalog::from_id(entry.catalog, &self.app).await.ok());
+        let catalog = match self.catalogs.get(&entry.catalog) {
+            Some(catalog) => catalog,
+            None => return Err(None), // No catalog, no source
+        };
+        let catalog = match catalog {
+            Some(catalog) => catalog,
+            None => return Err(None), // No catalog, no source
+        };
+        let mut stated_in: WikidataCommandPropertyValueGroup = vec![];
+        if let Some(q) = catalog.source_item {
+            stated_in.push(WikidataCommandPropertyValue {
+                property: 248,
+                value: WikidataCommandValue::Item(q),
+            });
+        }
+        Ok((catalog, stated_in))
+    }
+
+    async fn get_source_for_entry_via_catalog_property(
+        &mut self,
+        stated_in: &mut Vec<WikidataCommandPropertyValue>,
+        wd_prop: usize,
+        entry: &Entry,
+    ) -> Option<()> {
+        if stated_in.is_empty() {
+            let prop = format!("P{}", wd_prop);
+            if !self.properties.has_entity(prop.to_owned()) {
+                let mw_api = self.app.wikidata().get_mw_api().await.ok()?;
+                let _ = self.properties.load_entity(&mw_api, prop.to_owned()).await;
+            }
+            if let Some(prop_entity) = self.properties.get_entity(prop) {
+                let p9073 = prop_entity.values_for_property("P9073");
+                #[allow(clippy::collapsible_match)]
+                if let Some(value) = p9073.first() {
+                    /* trunk-ignore(clippy/collapsible_match) */
+                    if let Value::Entity(entity_value) = value {
+                        if let Ok(q) = entity_value.id().replace('Q', "").parse::<usize>() {
+                            stated_in.push(WikidataCommandPropertyValue {
+                                property: 248,
+                                value: WikidataCommandValue::Item(q),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        stated_in.push(WikidataCommandPropertyValue {
+            property: wd_prop,
+            value: WikidataCommandValue::String(entry.ext_id.to_string()),
+        });
+        Some(())
     }
 
     //TODO test
