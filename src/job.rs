@@ -408,6 +408,7 @@ impl Job {
     // PRIVATE METHODS
 
     //TODO test
+    // #lizard forgives the complexity
     async fn run_this_job(&mut self) -> Result<()> {
         // let json = self.get_json().await;
         // println!("STARTING {:?} with option {:?}", &self.data().await?,&json);
