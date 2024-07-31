@@ -160,7 +160,7 @@ impl UpdateCatalog {
         &mut self,
         datasource: &mut DataSource,
         batch_size: usize,
-    ) -> Result<Vec<StringRecord>, anyhow::Error> {
+    ) -> Result<Vec<StringRecord>> {
         let mut reader = datasource.get_reader(&self.app).await?;
         let mut row_cache = vec![];
         while let Some(result) = reader.records().next() {
@@ -180,7 +180,7 @@ impl UpdateCatalog {
     async fn update_from_tabbed_file_get_datasource(
         &mut self,
         catalog_id: usize,
-    ) -> Result<DataSource, anyhow::Error> {
+    ) -> Result<DataSource> {
         let update_info = self.get_update_info(catalog_id).await?;
         let json = update_info.json()?;
         let catalog = Catalog::from_id(catalog_id, &self.app).await?;
