@@ -301,7 +301,7 @@ impl AutoscrapeFollow {
         Ok(())
     }
 
-    fn refill_cache_text_to_cache(&mut self, text: String) -> Result<(), anyhow::Error> {
+    fn refill_cache_text_to_cache(&mut self, text: String) -> Result<()> {
         let regex = AutoscrapeRegex::new(&self.regex)?;
         self.cache = regex
             .captures_iter(&text)
@@ -312,10 +312,7 @@ impl AutoscrapeFollow {
         Ok(())
     }
 
-    async fn refill_cache_get_text(
-        &mut self,
-        autoscrape: &Autoscrape,
-    ) -> Result<String, anyhow::Error> {
+    async fn refill_cache_get_text(&mut self, autoscrape: &Autoscrape) -> Result<String> {
         let url = self.refill_cache_get_url(autoscrape);
         let client = Autoscrape::reqwest_client_external()?;
         let text = match client.get(url.to_owned()).send().await {

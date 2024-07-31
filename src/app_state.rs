@@ -342,7 +342,7 @@ impl AppState {
         current_jobs: &Arc<DashMap<usize, TaskSize>>,
         threshold_job_size: &TaskSize,
         threshold_percent: usize,
-    ) -> Result<(Job, HashMap<String, TaskSize>), anyhow::Error> {
+    ) -> Result<(Job, HashMap<String, TaskSize>)> {
         let mut job = Job::new(app);
         let task_size = self.storage().jobs_get_tasks().await?;
         let big_jobs_running = (**current_jobs)

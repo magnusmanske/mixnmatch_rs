@@ -535,8 +535,8 @@ impl Job {
                 maintenance.cleanup_mnm_relations().await
             }
 
-            "wdrc_sync" => Maintenance::new(&self.app).wdrc_sync().await,
-
+            "wdrc_sync" => self.app.wdrc().sync(&self.app).await,
+            // Maintenance::new(&self.app).wdrc_sync().await,
             "update_person_dates" => PhpWrapper::update_person_dates(catalog_id),
             "generate_aux_from_description" => {
                 PhpWrapper::generate_aux_from_description(catalog_id)
