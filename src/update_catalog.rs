@@ -134,35 +134,53 @@ impl UpdateCatalog {
     /// Updates a catalog by reading a tabbed file.
     pub async fn update_from_tabbed_file(&mut self, catalog_id: usize) -> Result<()> {
         let batch_size = 5000;
-        let mut datasource = self.get_data_source(catalog_id).await?;
-        let mut reader = datasource.get_reader(&self.app).await?;
-        let mut row_cache = vec![];
-        while let Some(result) = reader.records().next() {
-            let result = match self.update_from_tabbed_file_check_result(result, &mut datasource)? {
-                Some(result) => result,
-                None => continue,
-            };
-            row_cache.push(result);
-            if row_cache.len() >= batch_size {
-                self.update_from_tabbed_file_process_row_cache(&mut datasource, &mut row_cache)
-                    .await?;
+        let mut datasource = self
+            .update_from_tabbed_file_get_datasource(catalog_id)
+            .await?;
+        let mut row_cache = self
+            .update_from_tabbed_file_process_results(&mut datasource, batch_size)
+            .await?;
+        if let Err(e) = self.process_rows(&mut row_cache, &mut datasource).await {
+            if datasource.fail_on_error {
+                return Err(e);
             }
-        }
-        if datasource.fail_on_error {
-            self.process_rows(&mut row_cache, &mut datasource).await?;
         }
         datasource.clear_tmp_file();
         let _ = self.clear_offset().await;
         /*
         // TODO?
-            $this->app->queue_job($this->catalog_id(),'microsync');
-            $this->app->queue_job($this->catalog_id(),'automatch_by_search');
-            if ( $this->has_born_died ) $this->app->queue_job($this->catalog_id(),'match_person_dates');
+        $this->app->queue_job($this->catalog_id(),'microsync');
+        $this->app->queue_job($this->catalog_id(),'automatch_by_search');
+        if ( $this->has_born_died ) $this->app->queue_job($this->catalog_id(),'match_person_dates');
         */
         Ok(())
     }
 
-    async fn get_data_source(&mut self, catalog_id: usize) -> Result<DataSource, anyhow::Error> {
+    async fn update_from_tabbed_file_process_results(
+        &mut self,
+        datasource: &mut DataSource,
+        batch_size: usize,
+    ) -> Result<Vec<StringRecord>, anyhow::Error> {
+        let mut reader = datasource.get_reader(&self.app).await?;
+        let mut row_cache = vec![];
+        while let Some(result) = reader.records().next() {
+            let result = match self.update_from_tabbed_file_check_result(result, datasource)? {
+                Some(result) => result,
+                None => continue,
+            };
+            row_cache.push(result);
+            if row_cache.len() >= batch_size {
+                self.update_from_tabbed_file_process_row_cache(datasource, &mut row_cache)
+                    .await?;
+            }
+        }
+        Ok(row_cache)
+    }
+
+    async fn update_from_tabbed_file_get_datasource(
+        &mut self,
+        catalog_id: usize,
+    ) -> Result<DataSource, anyhow::Error> {
         let update_info = self.get_update_info(catalog_id).await?;
         let json = update_info.json()?;
         let catalog = Catalog::from_id(catalog_id, &self.app).await?;

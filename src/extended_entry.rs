@@ -158,6 +158,7 @@ impl ExtendedEntry {
     }
 
     /// Inserts a new entry and its associated data into the database
+    // #lizard forgives
     //TODO test
     pub async fn insert_new(&mut self, app: &AppState) -> Result<()> {
         self.entry.set_app(app);

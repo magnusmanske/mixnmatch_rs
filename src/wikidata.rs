@@ -253,26 +253,11 @@ impl Wikidata {
         query: &str,
         srlimit: Option<usize>,
     ) -> Result<Vec<String>> {
-        // TODO via mw_api?
         if query.is_empty() {
             return Ok(vec![]);
         }
-        let query = encode(query);
-        let srlimit = srlimit.unwrap_or(10);
-        let url = format!("{WIKIDATA_API_URL}?action=query&list=search&format=json&srsearch={query}&srlimit={srlimit}");
-        let v = wikimisc::wikidata::Wikidata::new()
-            .reqwest_client()?
-            .get(url)
-            .send()
+        let ret = Self::search_with_limit_run_query(query, srlimit)
             .await?
-            .json::<Value>()
-            .await?;
-        let v = v.as_object().ok_or(anyhow!("bad result"))?;
-        let v = v.get("query").ok_or(anyhow!("no key 'query'"))?;
-        let v = v.as_object().ok_or(anyhow!("not an object"))?;
-        let v = v.get("search").ok_or(anyhow!("no key 'search'"))?;
-        let v = v.as_array().ok_or(anyhow!("not an array"))?;
-        let ret = v
             .iter()
             .filter_map(|result| {
                 let result = result.as_object()?;
@@ -379,6 +364,35 @@ impl Wikidata {
         wikimisc::wikidata::Wikidata::new()
             .load_sparql_csv(sparql)
             .await
+    }
+
+    async fn search_with_limit_run_query(
+        query: &str,
+        srlimit: Option<usize>,
+    ) -> Result<Vec<Value>> {
+        // TODO via mw_api?
+        let query = encode(query);
+        let srlimit = srlimit.unwrap_or(10);
+        let url = format!("{WIKIDATA_API_URL}?action=query&list=search&format=json&srsearch={query}&srlimit={srlimit}");
+        let v = wikimisc::wikidata::Wikidata::new()
+            .reqwest_client()?
+            .get(url)
+            .send()
+            .await?
+            .json::<Value>()
+            .await?;
+        let v = v
+            .as_object()
+            .ok_or(anyhow!("bad result"))?
+            .get("query")
+            .ok_or(anyhow!("no key 'query'"))?
+            .as_object()
+            .ok_or(anyhow!("not an object"))?
+            .get("search")
+            .ok_or(anyhow!("no key 'search'"))?
+            .as_array()
+            .ok_or(anyhow!("not an array"))?;
+        Ok(v.to_owned())
     }
 }
 
