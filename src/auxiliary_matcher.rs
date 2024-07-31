@@ -485,19 +485,39 @@ impl AuxiliaryMatcher {
         commands: &mut Vec<WikidataCommand>,
         source: &[WikidataCommandPropertyValue],
     ) {
+        if !self.aux2wd_process_item_aux_check_aux(aux, entities).await {
+            return;
+        }
+        match self
+            .app
+            .storage()
+            .avoid_auto_match(aux.entry_id, Some(aux.q_numeric as isize))
+            .await
+        {
+            Ok(false) => {}
+            _ => return,
+        }
+        self.aux2wd_process_item_aux_add_command(aux, commands, source);
+    }
+
+    async fn aux2wd_process_item_aux_check_aux(
+        &self,
+        aux: &AuxiliaryResults,
+        entities: &EntityContainer,
+    ) -> bool {
         if AUX_BLACKLISTED_PROPERTIES.contains(&aux.property) {
             // No blacklisted properties
-            return;
+            return false;
         }
         if let Some(entity) = entities.get_entity(aux.q()) {
             if META_ITEMS
                 .iter()
                 .any(|q| entity.has_target_entity("P31", q))
             {
-                return; // Don't edit items that are META items
+                return false; // Don't edit items that are META items
             }
             if self.entity_already_has_property(aux, &entity).await {
-                return; // Don't add anything if item already has a statement with that property
+                return false; // Don't add anything if item already has a statement with that property
             }
         }
         if self
@@ -505,21 +525,17 @@ impl AuxiliaryMatcher {
             .await
         {
             // Search Wikidata for other occurrences
-            return;
+            return false;
         }
-        if let Ok(b) = self
-            .app
-            .storage()
-            .avoid_auto_match(aux.entry_id, Some(aux.q_numeric as isize))
-            .await
-        {
-            if b {
-                return;
-            }
-        } else {
-            // Something went wrong, ignore this one
-            return;
-        }
+        true
+    }
+
+    fn aux2wd_process_item_aux_add_command(
+        &self,
+        aux: &AuxiliaryResults,
+        commands: &mut Vec<WikidataCommand>,
+        source: &[WikidataCommandPropertyValue],
+    ) {
         let command_value: Option<WikidataCommandValue> =
             if self.properties_using_items.contains(&aux.prop()) {
                 aux.value_as_item_id()
