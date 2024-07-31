@@ -315,56 +315,12 @@ impl AppState {
                 self.hold_on();
                 continue;
             }
-            let mut job = Job::new(&app);
-            let task_size = self.storage().jobs_get_tasks().await?;
-            let big_jobs_running = (*current_jobs)
-                .clone()
-                .into_read_only()
-                .iter()
-                .map(|(_job_id, size)| size.to_owned())
-                .filter(|size| *size > threshold_job_size)
-                .count();
-            let max_job_size =
-                if big_jobs_running >= self.max_concurrent_jobs * threshold_percent / 100 {
-                    threshold_job_size.to_owned()
-                } else {
-                    TaskSize::GINORMOUS
-                };
-            job.skip_actions = task_size
-                .iter()
-                .filter(|(_action, size)| **size > max_job_size)
-                .map(|(action, _size)| action.to_string())
-                .collect();
+            let (mut job, task_size) = self
+                .get_next_job(&app, &current_jobs, &threshold_job_size, threshold_percent)
+                .await?;
             match job.set_next().await {
                 Ok(true) => {
-                    let _ = job.set_status(JobStatus::Running).await;
-                    let action = match job.get_action().await {
-                        Ok(action) => action,
-                        Err(_) => {
-                            let _ = job.set_status(JobStatus::Failed).await;
-                            continue;
-                        }
-                    };
-                    let job_size = task_size
-                        .get(&action)
-                        .unwrap_or(&TaskSize::SMALL)
-                        .to_owned();
-                    let job_id = match job.get_id().await {
-                        Ok(id) => id,
-                        Err(_e) => {
-                            eprintln!("No job ID"); //,e);
-                            continue;
-                        }
-                    };
-                    current_jobs.insert(job_id, job_size);
-                    println!("Now {} jobs running", current_jobs.len());
-                    let current_jobs = current_jobs.clone();
-                    tokio::spawn(async move {
-                        if let Err(_e) = job.run().await {
-                            println!("Job {job_id} failed with error") // Not writing error, there might be an issue that causes stack overflow
-                        }
-                        current_jobs.remove(&job_id);
-                    });
+                    Self::run_job(job, task_size, &current_jobs).await;
                 }
                 Ok(false) => {
                     // println!("No jobs available, waiting... (not using: {:?})",job.skip_actions);
@@ -380,8 +336,73 @@ impl AppState {
         // self.disconnect().await?; // Never happens
     }
 
+    async fn get_next_job(
+        &self,
+        app: &AppState,
+        current_jobs: &Arc<DashMap<usize, TaskSize>>,
+        threshold_job_size: &TaskSize,
+        threshold_percent: usize,
+    ) -> Result<(Job, HashMap<String, TaskSize>), anyhow::Error> {
+        let mut job = Job::new(app);
+        let task_size = self.storage().jobs_get_tasks().await?;
+        let big_jobs_running = (**current_jobs)
+            .clone()
+            .into_read_only()
+            .iter()
+            .map(|(_job_id, size)| size.to_owned())
+            .filter(|size| *size > *threshold_job_size)
+            .count();
+        let max_job_size = if big_jobs_running >= self.max_concurrent_jobs * threshold_percent / 100
+        {
+            threshold_job_size.to_owned()
+        } else {
+            TaskSize::GINORMOUS
+        };
+        job.skip_actions = task_size
+            .iter()
+            .filter(|(_action, size)| **size > max_job_size)
+            .map(|(action, _size)| action.to_string())
+            .collect();
+        Ok((job, task_size))
+    }
+
     fn hold_on(&self) {
         thread::sleep(time::Duration::from_secs(5));
+    }
+
+    async fn run_job(
+        mut job: Job,
+        task_size: HashMap<String, TaskSize>,
+        current_jobs: &Arc<DashMap<usize, TaskSize>>,
+    ) {
+        let _ = job.set_status(JobStatus::Running).await;
+        let action = match job.get_action().await {
+            Ok(action) => action,
+            Err(_) => {
+                let _ = job.set_status(JobStatus::Failed).await;
+                return;
+            }
+        };
+        let job_size = task_size
+            .get(&action)
+            .unwrap_or(&TaskSize::SMALL)
+            .to_owned();
+        let job_id = match job.get_id().await {
+            Ok(id) => id,
+            Err(_e) => {
+                eprintln!("No job ID"); //,e);
+                return;
+            }
+        };
+        current_jobs.insert(job_id, job_size);
+        println!("Now {} jobs running", current_jobs.len());
+        let current_jobs = current_jobs.clone();
+        tokio::spawn(async move {
+            if let Err(_e) = job.run().await {
+                println!("Job {job_id} failed with error") // Not writing error, there might be an issue that causes stack overflow
+            }
+            current_jobs.remove(&job_id);
+        });
     }
 }
 
