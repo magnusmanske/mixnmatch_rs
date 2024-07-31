@@ -97,6 +97,7 @@ impl StorageMySQL {
         })
     }
 
+    // #lizard forgives
     fn catalog_from_row(row: &Row) -> Option<Catalog> {
         Some(Catalog {
             id: row.get(0)?,
@@ -115,6 +116,26 @@ impl StorageMySQL {
             taxon_run: row.get(13)?,
             app: None,
         })
+    }
+
+    async fn entry_set_match_cleanup(
+        &self,
+        entry: &Entry,
+        user_id: usize,
+        q_numeric: isize,
+    ) -> Result<bool> {
+        // Update overview table and misc cleanup
+        self.update_overview_table(entry, Some(user_id), Some(q_numeric))
+            .await?;
+        let is_full_match = user_id > 0 && q_numeric > 0;
+        let is_matched = if is_full_match { 1 } else { 0 };
+        self.entry_set_match_status(entry.id, "UNKNOWN", is_matched)
+            .await?;
+        if user_id != USER_AUTO {
+            self.entry_remove_multi_match(entry.id).await?;
+        }
+        self.queue_reference_fixer(q_numeric).await?;
+        Ok(true)
     }
 
     /// Computes the column of the overview table that is affected, given a user ID and item ID
@@ -173,6 +194,7 @@ impl StorageMySQL {
         r"SELECT id,catalog,ext_id,ext_url,ext_name,ext_desc,q,user,timestamp,if(isnull(random),rand(),random) as random,`type` FROM `entry`".into()
     }
 
+    // #lizard forgives
     fn entry_from_row(row: &Row) -> Option<Entry> {
         Some(Entry {
             id: row.get(0)?,
@@ -1526,19 +1548,8 @@ impl Storage for StorageMySQL {
         if nothing_changed {
             return Ok(false);
         }
-
-        // Update overview table and misc cleanup
-        self.update_overview_table(entry, Some(user_id), Some(q_numeric))
-            .await?;
-        let is_full_match = user_id > 0 && q_numeric > 0;
-        let is_matched = if is_full_match { 1 } else { 0 };
-        self.entry_set_match_status(entry_id, "UNKNOWN", is_matched)
-            .await?;
-        if user_id != USER_AUTO {
-            self.entry_remove_multi_match(entry_id).await?;
-        }
-        self.queue_reference_fixer(q_numeric).await?;
-        Ok(true)
+        self.entry_set_match_cleanup(entry, user_id, q_numeric)
+            .await
     }
 
     async fn entry_set_match_status(
