@@ -611,7 +611,7 @@ impl AutoscrapeResolve {
             .unwrap_or_else(|| json!([]))
             .as_array()
             .map(|x| x.to_owned())
-            .unwrap_or_else(Vec::new);
+            .unwrap_or_default();
         regexs_str
     }
 }

@@ -395,7 +395,7 @@ impl Entry {
             }
         }
         for name in names {
-            if item.label_in_locale(&language).is_none() {
+            if item.label_in_locale(language).is_none() {
                 item.labels_mut().push(name);
             } else {
                 aliases.push(name);
@@ -523,7 +523,7 @@ impl Entry {
         if self.type_name != type_name {
             self.check_valid_id()?;
             let entry_id = self.id;
-            self.type_name = type_name.clone();
+            self.type_name.clone_from(&type_name);
             self.app()?
                 .storage()
                 .entry_set_type_name(type_name, entry_id)
@@ -926,13 +926,13 @@ mod tests {
         entry.set_match("Q1", 4).await.unwrap();
         assert_eq!(entry.q, Some(1));
         assert_eq!(entry.user, Some(4));
-        assert!(!entry.timestamp.is_none());
+        assert!(entry.timestamp.is_some());
 
         // Check in-database changes
         let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
         assert_eq!(entry.q, Some(1));
         assert_eq!(entry.user, Some(4));
-        assert!(!entry.timestamp.is_none());
+        assert!(entry.timestamp.is_some());
 
         // Clear and check in-memory changes
         entry.unmatch().await.unwrap();

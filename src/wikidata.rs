@@ -383,7 +383,6 @@ impl Wikidata {
 }
 
 #[cfg(test)]
-#[cfg(test)]
 mod tests {
     use super::*;
 
