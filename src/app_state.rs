@@ -5,6 +5,7 @@ use crate::storage_mysql::StorageMySQL;
 use crate::wdrc::WDRC;
 use crate::wikidata::Wikidata;
 use anyhow::Result;
+use chrono::Local;
 use dashmap::DashMap;
 use lazy_static::lazy_static;
 use regex::Regex;
@@ -14,6 +15,7 @@ use std::env;
 use std::fs::File;
 use std::sync::{Arc, Mutex};
 use std::{thread, time};
+use sysinfo::System;
 use tokio::time::sleep;
 use wikimisc::timestamp::TimeStamp;
 
@@ -326,9 +328,8 @@ impl AppState {
                     // println!("No jobs available, waiting... (not using: {:?})",job.skip_actions);
                     self.hold_on();
                 }
-                Err(_e) => {
-                    // Not writing error, there might be an issue that causes stack overflow
-                    println!("MAIN LOOP: Something went wrong!");
+                Err(e) => {
+                    println!("MAIN LOOP: Something went wrong: {e}");
                     self.hold_on();
                 }
             }
@@ -370,6 +371,24 @@ impl AppState {
         thread::sleep(time::Duration::from_secs(5));
     }
 
+    fn print_sysinfo() {
+        if !sysinfo::IS_SUPPORTED_SYSTEM {
+            return;
+        }
+        let sys = System::new_all();
+        println!("Uptime: {:?}", System::uptime());
+        println!("Total memory: {} MB", sys.total_memory() / 1024);
+        println!("Free memory: {} MB", sys.free_memory() / 1024);
+        println!("Used memory: {} MB", sys.used_memory() / 1024);
+        println!("Total swap: {} MB", sys.total_swap() / 1024);
+        println!("Free swap: {} MB", sys.free_swap() / 1024);
+        println!("Used swap: {} MB", sys.used_swap() / 1024);
+        println!("Number of processes: {}", sys.processes().len());
+        println!("Total number of CPUs: {}", sys.cpus().len());
+        println!("CPU: {}%", sys.global_cpu_usage());
+        println!("Load average: {:?}", System::load_average());
+    }
+
     async fn run_job(
         mut job: Job,
         task_size: HashMap<String, TaskSize>,
@@ -395,11 +414,13 @@ impl AppState {
             }
         };
         current_jobs.insert(job_id, job_size);
-        println!("Now {} jobs running", current_jobs.len());
+        let current_time_str = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        println!("{current_time_str}: {} jobs running", current_jobs.len());
+        Self::print_sysinfo();
         let current_jobs = current_jobs.clone();
         tokio::spawn(async move {
-            if let Err(_e) = job.run().await {
-                println!("Job {job_id} failed with error") // Not writing error, there might be an issue that causes stack overflow
+            if let Err(e) = job.run().await {
+                println!("Job {job_id} failed with error {e}")
             }
             current_jobs.remove(&job_id);
         });

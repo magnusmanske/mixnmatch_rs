@@ -12,6 +12,7 @@ use crate::update_catalog::*;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use chrono::Duration;
+use chrono::Local;
 use serde_json::json;
 use std::cmp::Ordering;
 use std::error::Error;
@@ -415,7 +416,8 @@ impl Job {
         if self.data.status == JobStatus::Blocked {
             return Err(anyhow!("Job::run_this_job: Blocked"));
         }
-        println!("STARTING JOB {:?}", self.get_id().await); // DEACTIVATED VERBOSE OUTPUT FOR FEAR OF STACK OVERFLOW
+        let current_time_str = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        println!("{current_time_str}: Starting job {:?}", self.get_id().await);
         let catalog_id = self.get_catalog().await?;
         match self.get_action().await?.as_str() {
             "automatch" => {

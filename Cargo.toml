@@ -30,6 +30,7 @@ tempfile = "*"
 fancy-regex = "*"
 dashmap = "5"
 anyhow = "*"
+sysinfo = "*"
 
 [profile.release]
 lto = 'thin'
