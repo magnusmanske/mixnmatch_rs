@@ -307,31 +307,39 @@ impl Wikidata {
 
         self.api_log_in().await?;
         for (item_id, commands) in &item2commands {
-            let mut comments: HashSet<String> = HashSet::new();
-            let mut json = json!({});
-            for command in commands {
-                if let Some(comment) = &command.comment {
-                    comments.insert(comment.to_owned());
-                }
-                command.edit_entity(&mut json);
-            }
-            let comment: String = comments.iter().join(";");
-
-            if let Some(mw_api) = self.mw_api.as_mut() {
-                let mut params: HashMap<String, String> = HashMap::new();
-                params.insert("action".to_string(), "wbeditentity".to_string());
-                params.insert("id".to_string(), format!("Q{}", item_id));
-                params.insert("data".to_string(), json.to_string());
-                params.insert("token".to_string(), mw_api.get_edit_token().await?);
-                if !comment.is_empty() {
-                    params.insert("summary".to_string(), comment);
-                }
-                if mw_api.post_query_api_json_mut(&params).await.is_err() {
-                    println!("wbeditentiry failed for Q{}: {:?}", item_id, commands);
-                }
-            }
+            self.execute_item_command(commands, item_id).await?;
         }
 
+        Ok(())
+    }
+
+    async fn execute_item_command(
+        &mut self,
+        commands: &Vec<WikidataCommand>,
+        item_id: &usize,
+    ) -> Result<()> {
+        let mut comments: HashSet<String> = HashSet::new();
+        let mut json = json!({});
+        for command in commands {
+            if let Some(comment) = &command.comment {
+                comments.insert(comment.to_owned());
+            }
+            command.edit_entity(&mut json);
+        }
+        let comment: String = comments.iter().join(";");
+        if let Some(mw_api) = self.mw_api.as_mut() {
+            let mut params: HashMap<String, String> = HashMap::new();
+            params.insert("action".to_string(), "wbeditentity".to_string());
+            params.insert("id".to_string(), format!("Q{}", item_id));
+            params.insert("data".to_string(), json.to_string());
+            params.insert("token".to_string(), mw_api.get_edit_token().await?);
+            if !comment.is_empty() {
+                params.insert("summary".to_string(), comment);
+            }
+            if mw_api.post_query_api_json_mut(&params).await.is_err() {
+                println!("wbeditentiry failed for Q{}: {:?}", item_id, commands);
+            }
+        }
         Ok(())
     }
 

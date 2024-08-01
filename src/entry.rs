@@ -107,7 +107,7 @@ impl fmt::Display for EntryError {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Entry {
     pub id: usize,
     pub catalog: usize,

@@ -379,6 +379,7 @@ mod tests {
         assert_eq!(ExtendedEntry::parse_date(""), None);
     }
 
+    // #lizard forgives
     #[tokio::test]
     async fn test_update_from_tabbed_file() {
         let _test_lock = TEST_MUTEX.lock();

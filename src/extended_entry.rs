@@ -21,7 +21,7 @@ lazy_static! {
     static ref RE_LAT_LON: Regex = Regex::new(r"^(\S+)/(\S+)$").expect("Regexp construction");
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ExtendedEntry {
     pub entry: Entry,
     pub aux: HashMap<usize, String>,
@@ -40,31 +40,11 @@ impl ExtendedEntry {
             .ok_or(anyhow!("No external ID for entry"))?;
         let mut ret = Self {
             entry: Entry::new_from_catalog_and_ext_id(datasource.catalog_id, ext_id),
-            aux: HashMap::new(),
-            born: None,
-            died: None,
-            aliases: Vec::new(),
-            descriptions: HashMap::new(),
-            location: None,
+            ..Default::default()
         };
 
-        for (label, col_num) in &datasource.colmap {
-            let cell = match row.get(*col_num) {
-                Some(cell) => cell,
-                None => continue,
-            };
-            ret.process_cell(label, cell)?;
-        }
-
-        for pattern in &datasource.patterns {
-            let cell = match row.get(pattern.column_number) {
-                Some(cell) => cell,
-                None => continue,
-            };
-            if let Some(new_cell) = Self::get_capture(&pattern.pattern, cell) {
-                ret.process_cell(&pattern.use_column_label, &new_cell)?;
-            }
-        }
+        Self::from_row_colmap(datasource, row, &mut ret)?;
+        Self::from_row_patterns(datasource, row, &mut ret)?;
 
         if ret.entry.type_name.is_none() {
             ret.entry.type_name.clone_from(&datasource.default_type);
@@ -77,6 +57,38 @@ impl ExtendedEntry {
         }
 
         Ok(ret)
+    }
+
+    fn from_row_patterns(
+        datasource: &mut DataSource,
+        row: &csv::StringRecord,
+        ret: &mut ExtendedEntry,
+    ) -> Result<()> {
+        for pattern in &datasource.patterns {
+            let cell = match row.get(pattern.column_number) {
+                Some(cell) => cell,
+                None => continue,
+            };
+            if let Some(new_cell) = Self::get_capture(&pattern.pattern, cell) {
+                ret.process_cell(&pattern.use_column_label, &new_cell)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn from_row_colmap(
+        datasource: &mut DataSource,
+        row: &csv::StringRecord,
+        ret: &mut ExtendedEntry,
+    ) -> Result<()> {
+        for (label, col_num) in &datasource.colmap {
+            let cell = match row.get(*col_num) {
+                Some(cell) => cell,
+                None => continue,
+            };
+            ret.process_cell(label, cell)?;
+        }
+        Ok(())
     }
 
     //TODO test
