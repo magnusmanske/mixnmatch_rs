@@ -295,7 +295,6 @@ impl AppState {
     }
 
     pub async fn forever_loop(&self) -> Result<()> {
-        let app = self.clone();
         let current_jobs: Arc<DashMap<usize, TaskSize>> = Arc::new(DashMap::new());
 
         // Reset old running&failed jobs
@@ -304,6 +303,12 @@ impl AppState {
         println!("Old jobs reset, starting bot");
 
         self.seppuku();
+
+        // Log forver_loop start
+        let current_time_str = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        self.storage()
+            .set_kv_value("forever_loop_start", &current_time_str)
+            .await?;
 
         let threshold_job_size = TaskSize::MEDIUM;
         let threshold_percent = 50;
@@ -318,7 +323,7 @@ impl AppState {
                 continue;
             }
             let (mut job, task_size) = self
-                .get_next_job(&app, &current_jobs, &threshold_job_size, threshold_percent)
+                .get_next_job(self, &current_jobs, &threshold_job_size, threshold_percent)
                 .await?;
             match job.set_next().await {
                 Ok(true) => {
