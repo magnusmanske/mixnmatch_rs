@@ -9,6 +9,7 @@ use crate::wikidata_commands::*;
 use anyhow::Result;
 use futures::future::join_all;
 use lazy_static::lazy_static;
+use mediawiki::Api;
 use regex::Regex;
 use serde_json::json;
 use std::collections::HashMap;
@@ -394,19 +395,8 @@ impl AuxiliaryMatcher {
                 .await?;
             let (aux, sources) = self.aux2wd_remap_results(catalog_id, &results).await;
 
-            let entities = EntityContainer::new();
-            if self.aux2wd_skip_existing_property {
-                let entity_ids: Vec<String> = aux.keys().map(|q| format!("Q{}", q)).collect();
-                if entities.load_entities(&mw_api, &entity_ids).await.is_err() {
-                    continue; // We can't know which items already have specific properties, so skip this batch
-                }
-            }
-
-            let mut commands: Vec<WikidataCommand> = vec![];
-            for data in aux.values() {
-                commands.append(&mut self.aux2wd_process_item(data, &sources, &entities).await);
-            }
-            self.app.wikidata_mut().execute_commands(commands).await?;
+            self.add_auxiliary_to_wikidata_run_commands(aux, sources, &mw_api)
+                .await?;
 
             if results.len() < batch_size {
                 break;
@@ -415,6 +405,28 @@ impl AuxiliaryMatcher {
             let _ = self.remember_offset(offset).await;
         }
         let _ = self.clear_offset().await;
+        Ok(())
+    }
+
+    async fn add_auxiliary_to_wikidata_run_commands(
+        &mut self,
+        aux: HashMap<usize, Vec<AuxiliaryResults>>,
+        sources: HashMap<String, Vec<WikidataCommandPropertyValue>>,
+        mw_api: &Api,
+    ) -> Result<()> {
+        let entities = EntityContainer::new();
+        if self.aux2wd_skip_existing_property {
+            let entity_ids: Vec<String> = aux.keys().map(|q| format!("Q{}", q)).collect();
+            if entities.load_entities(mw_api, &entity_ids).await.is_err() {
+                return Ok(()); // We can't know which items already have specific properties, so skip this batch
+            }
+        }
+
+        let mut commands: Vec<WikidataCommand> = vec![];
+        for data in aux.values() {
+            commands.append(&mut self.aux2wd_process_item(data, &sources, &entities).await);
+        }
+        self.app.wikidata_mut().execute_commands(commands).await?;
         Ok(())
     }
 

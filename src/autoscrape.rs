@@ -123,22 +123,7 @@ impl Autoscrape {
             .first()
             .ok_or(AutoscrapeError::NoAutoscrapeForCatalog(catalog_id))?;
         let json: Value = serde_json::from_str(json)?;
-        let mut ret = Self {
-            autoscrape_id: *id,
-            catalog_id,
-            app: app.clone(),
-            simple_space: false,
-            skip_failed: false,
-            utf8_encode: false,
-            levels: vec![],
-            scraper: AutoscrapeScraper::from_json(
-                json.get("scraper")
-                    .ok_or(AutoscrapeError::NoAutoscrapeForCatalog(catalog_id))?,
-            )?,
-            job: None,
-            urls_loaded: 0,
-            entry_batch: vec![],
-        };
+        let mut ret = Self::new_basic(id, catalog_id, app, &json)?;
         if let Some(options) = json.get("options") {
             // Options in main JSON
             ret.options_from_json(options);
@@ -402,6 +387,31 @@ impl Autoscrape {
             .deflate(true)
             .brotli(true)
             .build()?)
+    }
+
+    fn new_basic(
+        id: &usize,
+        catalog_id: usize,
+        app: &AppState,
+        json: &Value,
+    ) -> Result<Autoscrape> {
+        let ret = Self {
+            autoscrape_id: *id,
+            catalog_id,
+            app: app.clone(),
+            simple_space: false,
+            skip_failed: false,
+            utf8_encode: false,
+            levels: vec![],
+            scraper: AutoscrapeScraper::from_json(
+                json.get("scraper")
+                    .ok_or(AutoscrapeError::NoAutoscrapeForCatalog(catalog_id))?,
+            )?,
+            job: None,
+            urls_loaded: 0,
+            entry_batch: vec![],
+        };
+        Ok(ret)
     }
 }
 

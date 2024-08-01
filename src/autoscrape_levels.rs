@@ -6,18 +6,13 @@ use std::collections::HashMap;
 
 #[async_trait]
 trait Level {
-    //TODO test
     async fn init(&mut self, autoscrape: &Autoscrape);
 
     /// Returns true if this level has been completed, false if there was at least one more result.
-    //TODO test
     async fn tick(&mut self) -> bool;
 
-    //TODO test
     fn current(&self) -> String;
-    //TODO test
     fn get_state(&self) -> Value;
-    //TODO test
     fn set_state(&mut self, json: &Value);
 }
 
@@ -29,18 +24,15 @@ pub struct AutoscrapeKeys {
 
 #[async_trait]
 impl Level for AutoscrapeKeys {
-    //TODO test
     async fn init(&mut self, _autoscrape: &Autoscrape) {
         self.position = 0;
     }
 
-    //TODO test
     async fn tick(&mut self) -> bool {
         self.position += 1;
         self.position >= self.keys.len()
     }
 
-    //TODO test
     fn current(&self) -> String {
         match self.keys.get(self.position) {
             Some(v) => v.to_owned(),
@@ -48,12 +40,10 @@ impl Level for AutoscrapeKeys {
         }
     }
 
-    //TODO test
     fn get_state(&self) -> Value {
         json!({"position":self.position})
     }
 
-    //TODO test
     fn set_state(&mut self, json: &Value) {
         if let Some(position) = json.get("position") {
             if let Some(position) = position.as_u64() {
@@ -64,7 +54,6 @@ impl Level for AutoscrapeKeys {
 }
 
 impl AutoscrapeKeys {
-    //TODO test
     fn from_json(json: &Value) -> Result<Self, AutoscrapeError> {
         let keys = json
             .get("keys")
@@ -91,28 +80,23 @@ impl JsonStuff for AutoscrapeRange {}
 
 #[async_trait]
 impl Level for AutoscrapeRange {
-    //TODO test
     async fn init(&mut self, _autoscrape: &Autoscrape) {
         self.current_value = self.start;
     }
 
-    //TODO test
     async fn tick(&mut self) -> bool {
         self.current_value += self.step;
         self.current_value > self.end
     }
 
-    //TODO test
     fn current(&self) -> String {
         format!("{}", self.current_value)
     }
 
-    //TODO test
     fn get_state(&self) -> Value {
         json!({"current_value":self.current_value})
     }
 
-    //TODO test
     fn set_state(&mut self, json: &Value) {
         if let Some(current_value) = json.get("current_value") {
             if let Some(current_value) = current_value.as_u64() {
@@ -123,7 +107,6 @@ impl Level for AutoscrapeRange {
 }
 
 impl AutoscrapeRange {
-    //TODO test
     fn from_json(json: &Value) -> Result<Self, AutoscrapeError> {
         Ok(Self {
             start: Self::json_as_u64(json, "start")?,
@@ -146,12 +129,10 @@ impl JsonStuff for AutoscrapeFollow {}
 
 #[async_trait]
 impl Level for AutoscrapeFollow {
-    //TODO test
     async fn init(&mut self, autoscrape: &Autoscrape) {
         let _ = self.refill_cache(autoscrape).await;
     }
 
-    //TODO test
     async fn tick(&mut self) -> bool {
         match self.cache.pop() {
             Some(key) => {
@@ -162,17 +143,14 @@ impl Level for AutoscrapeFollow {
         }
     }
 
-    //TODO test
     fn current(&self) -> String {
         self.current_key.to_owned()
     }
 
-    //TODO test
     fn get_state(&self) -> Value {
         json!({"url":self.url.to_owned(),"regex":self.regex.to_owned()})
     }
 
-    //TODO test
     fn set_state(&mut self, json: &Value) {
         if let Some(url) = json.get("url") {
             if let Some(url) = url.as_str() {
@@ -188,7 +166,6 @@ impl Level for AutoscrapeFollow {
 }
 
 impl AutoscrapeFollow {
-    //TODO test
     fn from_json(json: &Value) -> Result<Self, AutoscrapeError> {
         Ok(Self {
             url: Self::json_as_str(json, "url")?,
@@ -199,8 +176,6 @@ impl AutoscrapeFollow {
     }
 
     /// Follows the next URL
-    // #lizard forgives (false positive)
-    //TODO test
     async fn refill_cache(&mut self, autoscrape: &Autoscrape) -> Result<()> {
         // Load next URL
         let text = self.refill_cache_get_text(autoscrape).await?;
@@ -260,12 +235,10 @@ impl JsonStuff for AutoscrapeMediaWiki {}
 
 #[async_trait]
 impl Level for AutoscrapeMediaWiki {
-    //TODO test
     async fn init(&mut self, _autoscrape: &Autoscrape) {
         self.title_cache.clear();
     }
 
-    //TODO test
     async fn tick(&mut self) -> bool {
         if self.title_cache.is_empty() && self.refill_cache().await.is_err() {
             return true;
@@ -279,17 +252,14 @@ impl Level for AutoscrapeMediaWiki {
         }
     }
 
-    //TODO test
     fn current(&self) -> String {
         self.apfrom.to_owned()
     }
 
-    //TODO test
     fn get_state(&self) -> Value {
         json!({"url":self.url.to_owned(),"apfrom":self.apfrom.to_owned()})
     }
 
-    //TODO test
     fn set_state(&mut self, json: &Value) {
         self.title_cache.clear();
         if let Some(url) = json.get("url") {
@@ -306,7 +276,6 @@ impl Level for AutoscrapeMediaWiki {
 }
 
 impl AutoscrapeMediaWiki {
-    //TODO test
     fn from_json(json: &Value) -> Result<Self, AutoscrapeError> {
         Ok(Self {
             url: Self::json_as_str(json, "url")?,
@@ -317,7 +286,6 @@ impl AutoscrapeMediaWiki {
     }
 
     /// Returns an allpages query result. Order is reversed so A->Z works via pop().
-    //TODO test
     async fn refill_cache(&mut self) -> Result<()> {
         let url = format!("{}?action=query&format=json&list=allpages&apnamespace=0&aplimit=500&apfilterredir=nonredirects&apfrom={}",&self.url,&self.apfrom) ;
         if Some(url.to_owned()) == self.last_url {
@@ -325,13 +293,12 @@ impl AutoscrapeMediaWiki {
         }
         self.last_url = Some(url.to_owned());
 
-        let client = Autoscrape::reqwest_client_external()?;
-        let text = match client.get(url.to_owned()).send().await {
-            Ok(x) => x.text().await.ok(),
-            _ => None,
-        }
-        .ok_or_else(|| AutoscrapeError::MediawikiFailure(url.clone()))?;
-        let json: Value = serde_json::from_str(&text)?;
+        let json = Self::refill_cache_load_json(&url).await?;
+        self.refill_cache_set_from_json(json, url)?;
+        Ok(())
+    }
+
+    fn refill_cache_set_from_json(&mut self, json: Value, url: String) -> Result<()> {
         self.title_cache = json
             .get("query")
             .ok_or_else(|| AutoscrapeError::MediawikiFailure(url.to_owned()))?
@@ -347,6 +314,17 @@ impl AutoscrapeMediaWiki {
             .collect();
         Ok(())
     }
+
+    async fn refill_cache_load_json(url: &String) -> Result<Value> {
+        let client = Autoscrape::reqwest_client_external()?;
+        let text = match client.get(url.to_owned()).send().await {
+            Ok(x) => x.text().await.ok(),
+            _ => None,
+        }
+        .ok_or_else(|| AutoscrapeError::MediawikiFailure(url.clone()))?;
+        let json: Value = serde_json::from_str(&text)?;
+        Ok(json)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -358,7 +336,6 @@ pub enum AutoscrapeLevelType {
 }
 
 impl AutoscrapeLevelType {
-    //TODO test
     async fn init(&mut self, autoscrape: &Autoscrape) {
         match self {
             AutoscrapeLevelType::Keys(x) => x.init(autoscrape).await,
@@ -368,7 +345,6 @@ impl AutoscrapeLevelType {
         }
     }
 
-    //TODO test
     async fn tick(&mut self) -> bool {
         match self {
             AutoscrapeLevelType::Keys(x) => x.tick().await,
@@ -378,7 +354,6 @@ impl AutoscrapeLevelType {
         }
     }
 
-    //TODO test
     fn current(&self) -> String {
         match self {
             AutoscrapeLevelType::Keys(x) => x.current(),
@@ -388,7 +363,6 @@ impl AutoscrapeLevelType {
         }
     }
 
-    //TODO test
     pub fn get_state(&self) -> Value {
         match self {
             AutoscrapeLevelType::Keys(x) => x.get_state(),
@@ -398,7 +372,6 @@ impl AutoscrapeLevelType {
         }
     }
 
-    //TODO test
     pub fn set_state(&mut self, json: &Value) {
         match self {
             AutoscrapeLevelType::Keys(x) => x.set_state(json),
@@ -415,7 +388,6 @@ pub struct AutoscrapeLevel {
 }
 
 impl AutoscrapeLevel {
-    //TODO test
     pub fn from_json(json: &Value) -> Result<Self, AutoscrapeError> {
         let level_type = match json
             .get("mode")
@@ -440,17 +412,14 @@ impl AutoscrapeLevel {
         &mut self.level_type
     }
 
-    //TODO test
     pub async fn init(&mut self, autoscrape: &Autoscrape) {
         self.level_type.init(autoscrape).await
     }
 
-    //TODO test
     pub async fn tick(&mut self) -> bool {
         self.level_type.tick().await
     }
 
-    //TODO test
     pub fn current(&self) -> String {
         self.level_type.current()
     }

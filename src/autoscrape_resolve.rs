@@ -14,7 +14,7 @@ lazy_static! {
     static ref RE_HTML: Regex = Regex::new(r"(<.*?>)").expect("Regex error");
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct AutoscrapeResolve {
     use_pattern: String,
     regexs: Vec<(AutoscrapeRegex, String)>,
@@ -66,6 +66,7 @@ impl AutoscrapeResolve {
         RE_SIMPLE_SPACE.replace_all(&ret, " ").trim().into()
     }
 
+    // #lizard forgives
     fn from_json_regex(
         regex: Value,
         json: &Value,

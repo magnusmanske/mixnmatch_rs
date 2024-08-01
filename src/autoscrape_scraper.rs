@@ -10,7 +10,7 @@ use regex::Regex;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct AutoscrapeScraper {
     url: String,
     regex_block: Option<AutoscrapeRegex>,
@@ -26,7 +26,7 @@ pub struct AutoscrapeScraper {
 impl JsonStuff for AutoscrapeScraper {}
 
 impl AutoscrapeScraper {
-    //TODO test
+    // #lizard forgives
     pub fn from_json(json: &Value) -> Result<Self> {
         let resolve = json
             .get("resolve")
@@ -44,7 +44,6 @@ impl AutoscrapeScraper {
         })
     }
 
-    //TODO test
     fn resolve_aux_from_json(json: &Value) -> Result<Vec<AutoscrapeResolveAux>> {
         Ok(json // TODO test aux, eg catalog 287
             .get("aux")
@@ -58,7 +57,6 @@ impl AutoscrapeScraper {
             .collect())
     }
 
-    //TODO test
     fn regex_entry_from_json(json: &Value) -> Result<Vec<AutoscrapeRegex>> {
         let rx_entry = json
             .get("rx_entry")
@@ -71,7 +69,6 @@ impl AutoscrapeScraper {
         }
     }
 
-    //TODO test
     fn regex_block_from_json(json: &Value) -> Result<Option<AutoscrapeRegex>> {
         Ok(
             // TODO test
@@ -94,7 +91,6 @@ impl AutoscrapeScraper {
         )
     }
 
-    //TODO test
     pub fn process_html_page(&self, html: &str, autoscrape: &Autoscrape) -> Vec<ExtendedEntry> {
         match &self.regex_block {
             Some(regex_block) => {
@@ -114,7 +110,6 @@ impl AutoscrapeScraper {
         &self.url
     }
 
-    //TODO test
     fn process_html_block(&self, html: &str, autoscrape: &Autoscrape) -> Vec<ExtendedEntry> {
         let mut ret = vec![];
         for regex_entry in &self.regex_entry {
@@ -171,10 +166,7 @@ impl AutoscrapeScraper {
         entry_ex
     }
 
-    fn regex_entry_from_json_array(
-        rx_entry: &Value,
-        json: &Value,
-    ) -> std::result::Result<Vec<Regex>, anyhow::Error> {
+    fn regex_entry_from_json_array(rx_entry: &Value, json: &Value) -> Result<Vec<Regex>> {
         let arr = rx_entry
             .as_array()
             .ok_or_else(|| AutoscrapeError::BadType(json.to_owned()))?;
@@ -191,10 +183,7 @@ impl AutoscrapeScraper {
         Ok(ret)
     }
 
-    fn regex_entry_from_json_string(
-        rx_entry: &Value,
-        json: &Value,
-    ) -> std::result::Result<Vec<Regex>, anyhow::Error> {
+    fn regex_entry_from_json_string(rx_entry: &Value, json: &Value) -> Result<Vec<Regex>> {
         let s = rx_entry
             .as_str()
             .ok_or_else(|| AutoscrapeError::BadType(json.to_owned()))?;
