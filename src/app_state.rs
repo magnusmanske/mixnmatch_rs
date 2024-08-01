@@ -381,17 +381,29 @@ impl AppState {
             return;
         }
         let sys = System::new_all();
-        println!("Uptime: {:?}", System::uptime());
-        println!("Total memory: {} MB", sys.total_memory() / 1024);
-        println!("Free memory: {} MB", sys.free_memory() / 1024);
-        println!("Used memory: {} MB", sys.used_memory() / 1024);
-        println!("Total swap: {} MB", sys.total_swap() / 1024);
-        println!("Free swap: {} MB", sys.free_swap() / 1024);
-        println!("Used swap: {} MB", sys.used_swap() / 1024);
-        println!("Number of processes: {}", sys.processes().len());
-        println!("Total number of CPUs: {}", sys.cpus().len());
-        println!("CPU: {}%", sys.global_cpu_usage());
-        println!("Load average: {:?}", System::load_average());
+        // println!("Uptime: {:?}", System::uptime());
+        println!(
+            "Memory: total {}, free {}, used {} MB",
+            sys.total_memory() / 1024,
+            sys.free_memory() / 1024,
+            sys.used_memory() / 1024
+        );
+        println!(
+            "Swap: total: {}, free {}, used:{} MB",
+            sys.total_swap() / 1024,
+            sys.free_swap() / 1024,
+            sys.used_swap() / 1024
+        );
+        println!(
+            "Processes: {}, CPUs: {}",
+            sys.processes().len(),
+            sys.cpus().len()
+        );
+        println!(
+            "CPU usage: {}%, Load average: {:?}",
+            sys.global_cpu_usage(),
+            System::load_average()
+        );
     }
 
     async fn run_job(
