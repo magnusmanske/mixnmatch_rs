@@ -2,6 +2,9 @@
 pub mod app_state;
 pub mod automatch;
 pub mod autoscrape;
+pub mod autoscrape_levels;
+pub mod autoscrape_resolve;
+pub mod autoscrape_scraper;
 pub mod auxiliary_matcher;
 pub mod catalog;
 pub mod coordinate_matcher;

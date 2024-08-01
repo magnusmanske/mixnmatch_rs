@@ -153,6 +153,7 @@ mod tests {
     use super::*;
     use crate::entry::CoordinateLocation;
 
+    // #lizard forgives
     #[test]
     fn test_as_datavalue() {
         let value = WikidataCommandValue::String("test".to_owned());
@@ -219,6 +220,7 @@ mod tests {
         assert_eq!(rank.as_str(), "deprecated", "rank_as_str failed");
     }
 
+    // #lizard forgives
     #[test]
     fn test_value_as_snak() {
         let value = WikidataCommandValue::String("test".to_owned());
