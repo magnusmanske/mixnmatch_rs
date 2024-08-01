@@ -1,5 +1,5 @@
 use crate::{
-    app_state::{AppState, USER_AUX_MATCH},
+    app_state::{AppState, USER_AUTO, USER_AUX_MATCH},
     catalog::Catalog,
     entry::Entry,
     mysql_misc::MySQLMisc,
@@ -254,23 +254,12 @@ impl WDRC {
             .maintenance_sync_property(catalogs, &propval2item, params)
             .await?;
         for (id, ext_id, user, _mnm_q) in results {
-            let wd_item_q = match propval2item.get(&ext_id) {
-                Some(wd_item_q) => wd_item_q,
-                None => continue,
-            };
-            if user.is_none() || user == Some(0) {
-                match Entry::from_id(id, app).await {
-                    Ok(mut entry) => {
-                        if entry.q != Some(*wd_item_q) || !entry.is_fully_matched() {
-                            // Only if something is different
-                            let _ = entry
-                                .set_match(&format!("Q{wd_item_q}"), USER_AUX_MATCH)
-                                .await;
-                            // println!("P{property}: {} => {}",entry.get_entry_url().unwrap_or("".into()),entry.get_item_url().unwrap_or("".into()));
-                        }
-                    }
-                    Err(_) => continue, // Ignore error
-                }
+            if user.is_none() || user == Some(USER_AUTO) {
+                let wd_item_q = match propval2item.get(&ext_id) {
+                    Some(wd_item_q) => *wd_item_q,
+                    None => continue,
+                };
+                let _ = Self::match_unmatched_entry(id, wd_item_q, app).await;
             }
         }
         Ok(())
@@ -327,6 +316,21 @@ impl WDRC {
         self.sync_redirects(app).await?;
         self.apply_deletions(app).await?;
         self.sync_properties(app).await?;
+        Ok(())
+    }
+
+    async fn match_unmatched_entry(
+        entry_id: usize,
+        wd_item_q: isize,
+        app: &AppState,
+    ) -> Result<()> {
+        let mut entry = Entry::from_id(entry_id, app).await?;
+        if !entry.is_fully_matched() {
+            entry
+                .set_match(&format!("Q{wd_item_q}"), USER_AUX_MATCH)
+                .await?;
+            // println!("P{property}: {} => {}",entry.get_entry_url().unwrap_or("".into()),entry.get_item_url().unwrap_or("".into()));
+        }
         Ok(())
     }
 }
