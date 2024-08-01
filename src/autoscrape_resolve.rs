@@ -134,3 +134,96 @@ impl AutoscrapeResolveAux {
         (self.property, ret)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn test_autoscrape_resolve_from_json() {
+        let json = json!({"test":{
+            "use": "use",
+            "rx": [
+                ["rx", "replace"]
+            ]
+        }});
+        let resolve = AutoscrapeResolve::from_json(&json, "test").unwrap();
+        assert_eq!(resolve.use_pattern, "use");
+        assert_eq!(resolve.regexs.len(), 1);
+        assert_eq!(resolve.regexs[0].0.to_string(), "rx");
+        assert_eq!(resolve.regexs[0].1, "replace");
+    }
+
+    #[test]
+    fn test_autoscrape_resolve_from_json_no_rx() {
+        let json = json!({"test":{
+            "use": "use"}
+        });
+        let resolve = AutoscrapeResolve::from_json(&json, "test").unwrap();
+        assert_eq!(resolve.use_pattern, "use");
+        assert_eq!(resolve.regexs.len(), 0);
+    }
+
+    #[test]
+    fn test_autoscrape_resolve_from_json_nothing() {
+        let json = json!({});
+        let resolve = AutoscrapeResolve::from_json(&json, "test").unwrap();
+        assert_eq!(resolve.use_pattern, "");
+        assert_eq!(resolve.regexs.len(), 0);
+    }
+
+    #[test]
+    fn test_autoscrape_resolve_replace_vars() {
+        let json = json!({"test":{
+            "use": "use",
+            "rx": [
+                ["rx", "replace"]
+            ]
+        }});
+        let resolve = AutoscrapeResolve::from_json(&json, "test").unwrap();
+        let mut map = HashMap::new();
+        map.insert("use".to_string(), "replace".to_string());
+        let ret = resolve.replace_vars(&map);
+        assert_eq!(ret, "replace");
+    }
+
+    #[test]
+    fn test_autoscrape_resolve_replace_vars_no_regex() {
+        let json = json!({"test":{
+            "use": "use"
+        }});
+        let resolve = AutoscrapeResolve::from_json(&json, "test").unwrap();
+        let mut map = HashMap::new();
+        map.insert("use".to_string(), "replace".to_string());
+        let ret = resolve.replace_vars(&map);
+        assert_eq!(ret, "replace");
+    }
+
+    #[test]
+    fn test_autoscrape_resolve_aux_from_json() {
+        let json = json!({"prop": "P123", "id": "id"});
+        let resolve = AutoscrapeResolveAux::from_json(&json).unwrap();
+        assert_eq!(resolve.property, 123);
+        assert_eq!(resolve.id, "id");
+    }
+
+    #[test]
+    fn test_autoscrape_resolve_aux_replace_vars() {
+        let json = json!({"prop": "P123", "id": "id"});
+        let resolve = AutoscrapeResolveAux::from_json(&json).unwrap();
+        let mut map = HashMap::new();
+        map.insert("id".to_string(), "replace".to_string());
+        let ret = resolve.replace_vars(&map);
+        assert_eq!(ret, (123, "replace".to_string()));
+    }
+
+    #[test]
+    fn test_autoscrape_resolve_aux_replace_vars_no_replace() {
+        let json = json!({"prop": "P123", "id": "id"});
+        let resolve = AutoscrapeResolveAux::from_json(&json).unwrap();
+        let map = HashMap::new();
+        let ret = resolve.replace_vars(&map);
+        assert_eq!(ret, (123, "id".to_string()));
+    }
+}
