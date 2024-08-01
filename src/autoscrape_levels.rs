@@ -455,3 +455,42 @@ impl AutoscrapeLevel {
         self.level_type.current()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_autoscrape_level_keys() {
+        let json = json!({
+            "mode": "keys",
+            "keys": ["a", "b", "c"]
+        });
+        let mut level = AutoscrapeLevel::from_json(&json).unwrap();
+        assert_eq!(level.current(), "a");
+        assert!(!level.tick().await);
+        assert_eq!(level.current(), "b");
+        assert!(!level.tick().await);
+        assert_eq!(level.current(), "c");
+        assert!(level.tick().await);
+        assert_eq!(level.current(), "");
+    }
+
+    #[tokio::test]
+    async fn test_autoscrape_level_range() {
+        let json = json!({
+            "mode": "range",
+            "start": 1,
+            "end": 3,
+            "step": 1
+        });
+        let mut level = AutoscrapeLevel::from_json(&json).unwrap();
+        assert_eq!(level.current(), "1");
+        assert!(!level.tick().await);
+        assert_eq!(level.current(), "2");
+        assert!(!level.tick().await);
+        assert_eq!(level.current(), "3");
+        assert!(level.tick().await);
+        assert_eq!(level.current(), "4");
+    }
+}
