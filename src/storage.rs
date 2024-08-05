@@ -40,7 +40,7 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
         bad_catalogs: &[usize],
         max_results: usize,
     ) -> Result<Vec<LocationRow>>;
-    async fn get_coordinate_matcher_permissions(&self) -> Result<Vec<(usize, String, String)>>;
+    async fn get_all_catalogs_key_value_pairs(&self) -> Result<Vec<(usize, String, String)>>;
 
     // Data source
 

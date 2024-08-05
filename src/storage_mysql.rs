@@ -301,7 +301,7 @@ impl Storage for StorageMySQL {
         Ok(rows)
     }
 
-    async fn get_coordinate_matcher_permissions(&self) -> Result<Vec<(usize, String, String)>> {
+    async fn get_all_catalogs_key_value_pairs(&self) -> Result<Vec<(usize, String, String)>> {
         let sql = r#"SELECT `catalog_id`,`kv_key`,`kv_value` FROM `kv_catalog`"#;
         let mut conn = self.get_conn().await?;
         let results = conn

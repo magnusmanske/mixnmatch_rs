@@ -1,6 +1,11 @@
-use crate::app_state::AppState;
+use crate::app_state::{AppState, USER_AUX_MATCH};
+use crate::auxiliary_matcher::AuxiliaryMatcher;
+use crate::catalog::Catalog;
+use crate::entry::Entry;
 use crate::match_state::MatchState;
-use anyhow::Result;
+use anyhow::{anyhow, Result};
+use futures::future::join_all;
+use std::collections::HashMap;
 
 pub struct Maintenance {
     app: AppState,
@@ -26,6 +31,85 @@ impl Maintenance {
             offset += unique_qs.len();
             let _ = self.fix_redirected_items_batch(&unique_qs).await; // Ignore error
         }
+    }
+
+    pub async fn fully_match_via_collection_inventory_number(&self) -> Result<()> {
+        let catalog_ids: Vec<usize> = self
+            .app
+            .storage()
+            .get_all_catalogs_key_value_pairs()
+            .await?
+            .iter()
+            .filter(|(_catalog_id, key, _value)| key == "collection")
+            .map(|(catalog_id, _key, _value)| *catalog_id)
+            .collect();
+        let mut futures = vec![];
+        for catalog_id in catalog_ids {
+            let future = self.fully_match_via_collection_inventory_number_for_catalog(catalog_id);
+            futures.push(future);
+        }
+        let _ = join_all(futures).await;
+        Ok(())
+    }
+
+    async fn fully_match_via_collection_inventory_number_for_catalog(
+        &self,
+        catalog_id: usize,
+    ) -> Result<()> {
+        // Get not fully matched aux
+        let aux: HashMap<String, usize> = self
+            .app
+            .storage()
+            .auxiliary_matcher_match_via_aux(
+                catalog_id,
+                0,
+                usize::MAX,
+                &["217".to_string()],
+                &AuxiliaryMatcher::get_blacklisted_catalogs(),
+            )
+            .await?
+            .iter()
+            .map(|a| (a.value.to_owned(), a.entry_id))
+            .collect();
+        if aux.is_empty() {
+            return Ok(());
+        }
+
+        // Get inventory numbers with correct qualifier from Wikidata
+        let catalog = Catalog::from_id(catalog_id, &self.app).await?;
+        let kv_catalog = catalog.get_key_value_pairs().await?;
+        let collection_q = kv_catalog
+            .get("collection")
+            .ok_or_else(|| anyhow!("Catalog {catalog_id} does not have a 'collection' key"))?;
+        let sparql = format!("SELECT ?q ?id {{ ?q p:P217 ?statement . ?statement pq:P195 wd:{collection_q}; ps:P217 ?id }}");
+        let mw_api = self.app.wikidata().get_mw_api().await?;
+        let results = mw_api.sparql_query(&sparql).await?;
+        let results = results["results"]["bindings"]
+            .as_array()
+            .ok_or_else(|| anyhow!("SPARQL failed"))?;
+
+        // Match via aux to inventory numbers
+        for binding in results {
+            let q = binding["q"]["value"].as_str();
+            let id = binding["id"]["value"].as_str();
+            let (q, id) = match (q, id) {
+                (Some(q), Some(id)) => (q.to_string(), id.to_string()),
+                _ => continue,
+            };
+            let q = match mw_api.extract_entity_from_uri(&q) {
+                Ok(q) => q,
+                Err(_) => continue,
+            };
+            if let Some(entry_id) = aux.get(&id) {
+                if let Ok(mut entry) = Entry::from_id(*entry_id, &self.app).await {
+                    if !entry.is_fully_matched() {
+                        // println!("Matching https://mix-n-match.toolforge.org/#/entry/{entry_id} to https://www.wikidata.org/wiki/{q}");
+                        let _ = entry.set_match(&q, USER_AUX_MATCH).await;
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Iterates over blocks of (fully or partially) matched Wikidata items, and unlinks meta items, such as disambiguation pages.
@@ -142,7 +226,7 @@ impl Maintenance {
 
     /// Finds some unmatched (Q5) entries where there is a (unique) full match for that name,
     /// and uses it as an auto-match
-    pub async fn maintenance_automatch(&self) -> Result<()> {
+    pub async fn automatch(&self) -> Result<()> {
         self.app.storage().maintenance_automatch().await
     }
 }
