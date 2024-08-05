@@ -305,7 +305,7 @@ impl CoordinateMatcher {
         let results = self
             .app
             .storage()
-            .get_coordinate_matcher_permissions()
+            .get_all_catalogs_key_value_pairs()
             .await?;
         for (catalog_id, kv_key, kv_value) in results {
             self.permissions

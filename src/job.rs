@@ -515,6 +515,7 @@ impl Job {
                     .unlink_meta_items(catalog_id, &MatchState::any_matched())
                     .await
             }
+
             "fix_redirected_items_in_catalog" => {
                 let maintenance = Maintenance::new(&self.app);
                 maintenance
@@ -524,7 +525,14 @@ impl Job {
 
             "maintenance_automatch" => {
                 let maintenance = Maintenance::new(&self.app);
-                maintenance.maintenance_automatch().await
+                maintenance.automatch().await
+            }
+
+            "maintenance_inventory_match" => {
+                let maintenance = Maintenance::new(&self.app);
+                maintenance
+                    .fully_match_via_collection_inventory_number()
+                    .await
             }
 
             "remove_p17_for_humans" => {

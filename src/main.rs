@@ -61,11 +61,13 @@ async fn run() -> Result<()> {
         //     app.run_from_props(props, min_entries).await
         // }
         Some("test") => {
-            let mut job = crate::job::Job::new(&app);
-            job.set_next().await?;
+            let m = maintenance::Maintenance::new(&app);
+            m.fully_match_via_collection_inventory_number().await?;
+            // let mut job = crate::job::Job::new(&app);
+            // job.set_next().await?;
             // let job_id = job.get_next_job_id().await;
             // let id_opt = j.set_next().await;
-            println!("{job:?}");
+            // println!("{job:?}");
             Ok(())
         }
         Some("server") => app.forever_loop().await,

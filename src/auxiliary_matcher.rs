@@ -200,7 +200,7 @@ impl AuxiliaryMatcher {
 
     //TODO test
     pub async fn match_via_auxiliary(&mut self, catalog_id: usize) -> Result<()> {
-        let blacklisted_catalogs = get_blacklisted_catalogs();
+        let blacklisted_catalogs = Self::get_blacklisted_catalogs();
         let extid_props = self.get_extid_props().await?;
         let mut offset = self.get_last_job_offset().await;
         let batch_size = self.get_batch_size();
@@ -752,14 +752,14 @@ impl AuxiliaryMatcher {
     fn is_catalog_property_combination_suspect(&self, catalog_id: usize, prop: usize) -> bool {
         AUX_BLACKLISTED_CATALOGS_PROPERTIES.contains(&(catalog_id, prop))
     }
-}
 
-fn get_blacklisted_catalogs() -> Vec<String> {
-    let blacklisted_catalogs: Vec<String> = AUX_BLACKLISTED_CATALOGS
-        .iter()
-        .map(|u| format!("{}", u))
-        .collect();
-    blacklisted_catalogs
+    pub fn get_blacklisted_catalogs() -> Vec<String> {
+        let blacklisted_catalogs: Vec<String> = AUX_BLACKLISTED_CATALOGS
+            .iter()
+            .map(|u| format!("{}", u))
+            .collect();
+        blacklisted_catalogs
+    }
 }
 
 #[cfg(test)]
