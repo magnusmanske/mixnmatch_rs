@@ -535,6 +535,11 @@ impl Job {
                     .await
             }
 
+            "automatch_people_via_year_born" => {
+                let maintenance = Maintenance::new(&self.app);
+                maintenance.automatch_people_via_year_born().await
+            }
+
             "remove_p17_for_humans" => {
                 let maintenance = Maintenance::new(&self.app);
                 maintenance.remove_p17_for_humans().await
