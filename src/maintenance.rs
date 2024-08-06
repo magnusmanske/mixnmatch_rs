@@ -33,6 +33,13 @@ impl Maintenance {
         }
     }
 
+    pub async fn automatch_people_via_year_born(&self) -> Result<()> {
+        self.app
+            .storage()
+            .maintenance_automatch_people_via_year_born()
+            .await
+    }
+
     pub async fn fully_match_via_collection_inventory_number(&self) -> Result<()> {
         let catalog_ids: Vec<usize> = self
             .app

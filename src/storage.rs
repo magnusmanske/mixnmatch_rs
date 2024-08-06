@@ -141,6 +141,7 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     async fn maintenance_fix_redirects(&self, from: isize, to: isize) -> Result<()>;
     async fn maintenance_unlink_item_matches(&self, items: Vec<String>) -> Result<()>;
     async fn maintenance_automatch(&self) -> Result<()>;
+    async fn maintenance_automatch_people_via_year_born(&self) -> Result<()>;
     async fn get_items(
         &self,
         catalog_id: usize,

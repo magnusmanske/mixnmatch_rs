@@ -690,6 +690,46 @@ impl Storage for StorageMySQL {
         Ok(())
     }
 
+    async fn maintenance_automatch_people_via_year_born(&self) -> Result<()> {
+        let mut conn = self.get_conn().await?;
+
+        // Reset
+        println!("Reset");
+        let sql = r#"DROP TABLE IF EXISTS tmp_automatches"#;
+        conn.exec_drop(sql, mysql_async::Params::Empty).await?;
+
+        // Generate sub-list of potential matches
+        println!("Create");
+        let sql = r#"CREATE table tmp_automatches
+	       SELECT e2.id AS entry_id,e1.q AS q
+	       FROM entry e1,entry e2,person_dates p1,person_dates p2,catalog c1,catalog c2
+	       WHERE p1.entry_id=e1.id AND p2.entry_id=e2.id AND p1.year_born=p2.year_born
+	       AND e1.ext_name=e2.ext_name
+	       AND e1.q>0 AND e1.user>0
+	       AND (e2.q IS NULL or e2.user=0)
+	       AND e1.q!=e2.q
+	       AND e1.catalog=c1.id AND c1.active=1
+	       AND e2.catalog=c2.id AND c2.active=1
+	       limit 2000"#;
+        conn.exec_drop(sql, mysql_async::Params::Empty).await?;
+
+        // Apply sub-list
+        println!("Apply");
+        let sql = r#"UPDATE entry
+        	INNER JOIN tmp_automatches ON entry.id=entry_id
+        	SET entry.q=tmp_automatches.q,user=0,timestamp=date_format(now(),"%Y%m%d%H%i%S")
+         	WHERE entry.q!=tmp_automatches.q AND (entry.q IS NULL or entry.user=0)
+          	AND NOT EXISTS (SELECT * FROM log WHERE entry.id=log.entry_id AND `action`='remove_q' AND log.q=tmp_automatches.q);"#;
+        conn.exec_drop(sql, mysql_async::Params::Empty).await?;
+
+        // Cleanup
+        println!("Cleanup");
+        let sql = r#"DROP TABLE IF EXISTS tmp_automatches"#;
+        conn.exec_drop(sql, mysql_async::Params::Empty).await?;
+
+        Ok(())
+    }
+
     async fn cleanup_mnm_relations(&self) -> Result<()> {
         let sql = "DELETE from mnm_relation WHERE entry_id=0 or target_entry_id=0";
         let mut conn = self.get_conn().await?;
