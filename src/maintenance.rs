@@ -56,13 +56,13 @@ impl Maintenance {
         &self,
         catalog_id: usize,
     ) -> Result<()> {
-        println!("Starting {catalog_id}");
+        // println!("Starting {catalog_id}");
         let inventory_number2entry_id = self.get_inventory_numbers_to_entry_id(catalog_id).await?;
         if inventory_number2entry_id.is_empty() {
             return Ok(());
         }
 
-        println!("Running {catalog_id}");
+        // println!("Running {catalog_id}");
         let mw_api = self.app.wikidata().get_mw_api().await?;
         let results = self
             .get_items_and_inventory_numbers_for_catalog(catalog_id, &mw_api)
@@ -83,7 +83,7 @@ impl Maintenance {
             if let Some(entry_id) = inventory_number2entry_id.get(&id) {
                 if let Ok(mut entry) = Entry::from_id(*entry_id, &self.app).await {
                     if !entry.is_fully_matched() {
-                        println!("Matching https://mix-n-match.toolforge.org/#/entry/{entry_id} to https://www.wikidata.org/wiki/{q}");
+                        // println!("Matching https://mix-n-match.toolforge.org/#/entry/{entry_id} to https://www.wikidata.org/wiki/{q}");
                         let _ = entry.set_match(&q, USER_AUX_MATCH).await;
                     }
                 }
