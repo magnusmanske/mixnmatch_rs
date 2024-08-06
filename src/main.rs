@@ -62,7 +62,7 @@ async fn run() -> Result<()> {
         // }
         Some("test") => {
             let m = maintenance::Maintenance::new(&app);
-            m.fully_match_via_collection_inventory_number().await?;
+            m.automatch_people_via_year_born().await?;
             // let mut job = crate::job::Job::new(&app);
             // job.set_next().await?;
             // let job_id = job.get_next_job_id().await;
