@@ -56,37 +56,17 @@ impl Maintenance {
         &self,
         catalog_id: usize,
     ) -> Result<()> {
-        // Get not fully matched aux
-        let aux: HashMap<String, usize> = self
-            .app
-            .storage()
-            .auxiliary_matcher_match_via_aux(
-                catalog_id,
-                0,
-                usize::MAX,
-                &["217".to_string()],
-                &AuxiliaryMatcher::get_blacklisted_catalogs(),
-            )
-            .await?
-            .iter()
-            .map(|a| (a.value.to_owned(), a.entry_id))
-            .collect();
-        if aux.is_empty() {
+        println!("Starting {catalog_id}");
+        let inventory_number2entry_id = self.get_inventory_numbers_to_entry_id(catalog_id).await?;
+        if inventory_number2entry_id.is_empty() {
             return Ok(());
         }
 
-        // Get inventory numbers with correct qualifier from Wikidata
-        let catalog = Catalog::from_id(catalog_id, &self.app).await?;
-        let kv_catalog = catalog.get_key_value_pairs().await?;
-        let collection_q = kv_catalog
-            .get("collection")
-            .ok_or_else(|| anyhow!("Catalog {catalog_id} does not have a 'collection' key"))?;
-        let sparql = format!("SELECT ?q ?id {{ ?q p:P217 ?statement . ?statement pq:P195 wd:{collection_q}; ps:P217 ?id }}");
+        println!("Running {catalog_id}");
         let mw_api = self.app.wikidata().get_mw_api().await?;
-        let results = mw_api.sparql_query(&sparql).await?;
-        let results = results["results"]["bindings"]
-            .as_array()
-            .ok_or_else(|| anyhow!("SPARQL failed"))?;
+        let results = self
+            .get_items_and_inventory_numbers_for_catalog(catalog_id, &mw_api)
+            .await?;
 
         // Match via aux to inventory numbers
         for binding in results {
@@ -100,16 +80,55 @@ impl Maintenance {
                 Ok(q) => q,
                 Err(_) => continue,
             };
-            if let Some(entry_id) = aux.get(&id) {
+            if let Some(entry_id) = inventory_number2entry_id.get(&id) {
                 if let Ok(mut entry) = Entry::from_id(*entry_id, &self.app).await {
                     if !entry.is_fully_matched() {
-                        // println!("Matching https://mix-n-match.toolforge.org/#/entry/{entry_id} to https://www.wikidata.org/wiki/{q}");
+                        println!("Matching https://mix-n-match.toolforge.org/#/entry/{entry_id} to https://www.wikidata.org/wiki/{q}");
                         let _ = entry.set_match(&q, USER_AUX_MATCH).await;
                     }
                 }
             }
         }
         Ok(())
+    }
+
+    async fn get_items_and_inventory_numbers_for_catalog(
+        &self,
+        catalog_id: usize,
+        mw_api: &mediawiki::Api,
+    ) -> Result<Vec<serde_json::Value>> {
+        let catalog = Catalog::from_id(catalog_id, &self.app).await?;
+        let kv_catalog = catalog.get_key_value_pairs().await?;
+        let collection_q = kv_catalog
+            .get("collection")
+            .ok_or_else(|| anyhow!("Catalog {catalog_id} does not have a 'collection' key"))?;
+        let sparql = format!("SELECT ?q ?id {{ ?q p:P217 ?statement . ?statement pq:P195 wd:{collection_q}; ps:P217 ?id }}");
+        let results = mw_api.sparql_query(&sparql).await?;
+        let results = results["results"]["bindings"]
+            .as_array()
+            .ok_or_else(|| anyhow!("SPARQL failed"))?;
+        Ok(results.to_owned())
+    }
+
+    async fn get_inventory_numbers_to_entry_id(
+        &self,
+        catalog_id: usize,
+    ) -> Result<HashMap<String, usize>> {
+        let inventory_number2entry_id: HashMap<String, usize> = self
+            .app
+            .storage()
+            .auxiliary_matcher_match_via_aux(
+                catalog_id,
+                0,
+                usize::MAX,
+                &["217".to_string()],
+                &AuxiliaryMatcher::get_blacklisted_catalogs(),
+            )
+            .await?
+            .iter()
+            .map(|a| (a.value.to_owned(), a.entry_id))
+            .collect();
+        Ok(inventory_number2entry_id)
     }
 
     /// Iterates over blocks of (fully or partially) matched Wikidata items, and unlinks meta items, such as disambiguation pages.
