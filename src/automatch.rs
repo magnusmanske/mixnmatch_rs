@@ -415,13 +415,8 @@ impl AutoMatch {
                 .map(|r| r.ext_name.to_owned())
                 .collect();
 
-            let mut name_type2id: HashMap<(String, String), Vec<usize>> = HashMap::new();
-            results_in_original_catalog.iter().for_each(|r| {
-                name_type2id
-                    .entry((r.ext_name.to_owned(), r.type_name.to_owned()))
-                    .and_modify(|v| v.push(r.entry_id))
-                    .or_insert(vec![r.entry_id]);
-            });
+            let name_type2id =
+                Self::automatch_from_other_catalogs_name_type2id(&results_in_original_catalog);
 
             let results_in_other_catalogs = self
                 .app
@@ -429,18 +424,8 @@ impl AutoMatch {
                 .automatch_from_other_catalogs_get_results2(&results_in_original_catalog, ext_names)
                 .await?;
             for r in &results_in_other_catalogs {
-                let q = match r.q {
-                    Some(q) => format!("Q{}", q),
-                    None => continue,
-                };
-                let key = (r.ext_name.to_owned(), r.type_name.to_owned());
-                if let Some(v) = name_type2id.get(&key) {
-                    for entry_id in v {
-                        if let Ok(mut entry) = Entry::from_id(*entry_id, &self.app).await {
-                            let _ = entry.set_match(&q, USER_AUTO).await;
-                        };
-                    }
-                }
+                self.automatch_from_other_catalogs_process_result(r, &name_type2id)
+                    .await;
             }
             if results_in_original_catalog.len() < batch_size {
                 break;
@@ -450,6 +435,25 @@ impl AutoMatch {
         }
         let _ = self.clear_offset().await;
         Ok(())
+    }
+
+    async fn automatch_from_other_catalogs_process_result(
+        &mut self,
+        r: &ResultInOtherCatalog,
+        name_type2id: &HashMap<(String, String), Vec<usize>>,
+    ) {
+        let q = match r.q {
+            Some(q) => format!("Q{}", q),
+            None => return,
+        };
+        let key = (r.ext_name.to_owned(), r.type_name.to_owned());
+        if let Some(v) = name_type2id.get(&key) {
+            for entry_id in v {
+                if let Ok(mut entry) = Entry::from_id(*entry_id, &self.app).await {
+                    let _ = entry.set_match(&q, USER_AUTO).await;
+                };
+            }
+        }
     }
 
     pub async fn purge_automatches(&self, catalog_id: usize) -> Result<()> {
@@ -622,7 +626,7 @@ impl AutoMatch {
             };
             let statements = item.claims_with_property(match_prop);
             for statement in &statements {
-                match_person_by_single_date_check_statement(
+                Self::match_person_by_single_date_check_statement(
                     statement,
                     precision,
                     match_field,
@@ -802,38 +806,51 @@ impl AutoMatch {
         };
         (match_field.to_string(), match_prop.to_string())
     }
-}
 
-fn match_person_by_single_date_check_statement(
-    statement: &&wikimisc::wikibase::Statement,
-    precision: i32,
-    match_field: &str,
-    result: &CandidateDates,
-    candidates: &mut Vec<String>,
-    q: &str,
-) {
-    let main_snak = statement.main_snak();
-    let data_value = match main_snak.data_value() {
-        Some(dv) => dv,
-        None => return,
-    };
-    let time = match data_value.value() {
-        wikimisc::wikibase::value::Value::Time(tv) => tv,
-        _ => return,
-    };
-    let dt = match NaiveDateTime::parse_from_str(time.time(), "+%Y-%m-%dT%H:%M:%SZ") {
-        Ok(dt) => dt,
-        _ => return, // Could not parse date
-    };
-    let date = match precision {
-        4 => format!("{}", dt.format("%Y")),
-        10 => format!("{}", dt.format("%Y-%m-%d")),
-        other => panic!("Bad precision {}", other), // Should never happen
-    };
-    if (match_field == "born" && date == result.born)
-        || (match_field == "died" && date == result.died)
-    {
-        candidates.push(q.to_string());
+    fn automatch_from_other_catalogs_name_type2id(
+        results_in_original_catalog: &[ResultInOriginalCatalog],
+    ) -> HashMap<(String, String), Vec<usize>> {
+        let mut name_type2id: HashMap<(String, String), Vec<usize>> = HashMap::new();
+        results_in_original_catalog.iter().for_each(|r| {
+            name_type2id
+                .entry((r.ext_name.to_owned(), r.type_name.to_owned()))
+                .and_modify(|v| v.push(r.entry_id))
+                .or_insert(vec![r.entry_id]);
+        });
+        name_type2id
+    }
+
+    fn match_person_by_single_date_check_statement(
+        statement: &&wikimisc::wikibase::Statement,
+        precision: i32,
+        match_field: &str,
+        result: &CandidateDates,
+        candidates: &mut Vec<String>,
+        q: &str,
+    ) {
+        let main_snak = statement.main_snak();
+        let data_value = match main_snak.data_value() {
+            Some(dv) => dv,
+            None => return,
+        };
+        let time = match data_value.value() {
+            wikimisc::wikibase::value::Value::Time(tv) => tv,
+            _ => return,
+        };
+        let dt = match NaiveDateTime::parse_from_str(time.time(), "+%Y-%m-%dT%H:%M:%SZ") {
+            Ok(dt) => dt,
+            _ => return, // Could not parse date
+        };
+        let date = match precision {
+            4 => format!("{}", dt.format("%Y")),
+            10 => format!("{}", dt.format("%Y-%m-%d")),
+            other => panic!("Bad precision {}", other), // Should never happen
+        };
+        if (match_field == "born" && date == result.born)
+            || (match_field == "died" && date == result.died)
+        {
+            candidates.push(q.to_string());
+        }
     }
 }
 
