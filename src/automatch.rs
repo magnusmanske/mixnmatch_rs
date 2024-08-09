@@ -248,34 +248,25 @@ impl AutoMatch {
         &mut self,
         result_batch: &[(usize, String, String, String)],
     ) {
-        let mut futures = vec![];
-        for result in result_batch {
-            let entry_id = result.0;
-            let label = &result.1;
-            let type_q = &result.2;
-            let aliases: Vec<&str> = result
-                .3
-                .split('|')
-                .filter(|alias| !alias.is_empty())
-                .collect();
-            let future = self.search_with_type_and_entity_id(entry_id, label, type_q);
-            futures.push(future);
-            for alias in &aliases {
-                let future = self.search_with_type_and_entity_id(entry_id, alias, type_q);
-                futures.push(future);
-            }
-        }
-        let mut search_results = join_all(futures)
-            .await
-            .into_iter()
-            .flatten()
-            .flat_map(|(entry_id, items)| items.into_iter().map(move |q| (entry_id, q.to_string())))
-            .collect_vec();
-        search_results.sort();
-        search_results.dedup();
+        let mut search_results = self
+            .automatch_by_search_process_results_batch_process_futures(result_batch)
+            .await;
         if search_results.is_empty() {
             return;
         }
+        self.automatch_by_search_process_results_batch_filter_search_results(&mut search_results)
+            .await;
+        let mut entry_id2items: HashMap<usize, Vec<String>> = HashMap::new();
+        for (entry_id, q) in search_results {
+            entry_id2items.entry(entry_id).or_default().push(q);
+        }
+        let _ = self.match_entries_to_items(&entry_id2items).await;
+    }
+
+    async fn automatch_by_search_process_results_batch_filter_search_results(
+        &mut self,
+        search_results: &mut Vec<(usize, String)>,
+    ) {
         let mut no_meta_items = search_results
             .iter()
             .map(|(_entry_id, q)| q)
@@ -287,11 +278,6 @@ impl AutoMatch {
             .remove_meta_items(&mut no_meta_items)
             .await;
         search_results.retain(|(_entry_id, q)| no_meta_items.contains(q));
-        let mut entry_id2items: HashMap<usize, Vec<String>> = HashMap::new();
-        for (entry_id, q) in search_results {
-            entry_id2items.entry(entry_id).or_default().push(q);
-        }
-        let _ = self.match_entries_to_items(&entry_id2items).await;
     }
 
     pub async fn automatch_creations(&mut self, catalog_id: usize) -> Result<()> {
@@ -906,6 +892,39 @@ impl AutoMatch {
                 .or_insert(vec![*id]);
         });
         name2entries
+    }
+
+    async fn automatch_by_search_process_results_batch_process_futures(
+        &self,
+        result_batch: &[(usize, String, String, String)],
+    ) -> Vec<(usize, String)> {
+        let mut futures = vec![];
+        for result in result_batch {
+            let entry_id = result.0;
+            let label = &result.1;
+            let type_q = &result.2;
+            let aliases: Vec<&str> = result
+                .3
+                .split('|')
+                .filter(|alias| !alias.is_empty())
+                .collect();
+            let future = self.search_with_type_and_entity_id(entry_id, label, type_q);
+            futures.push(future);
+            for alias in &aliases {
+                let future = self.search_with_type_and_entity_id(entry_id, alias, type_q);
+                futures.push(future);
+            }
+        }
+
+        let mut search_results = join_all(futures)
+            .await
+            .into_iter()
+            .flatten()
+            .flat_map(|(entry_id, items)| items.into_iter().map(move |q| (entry_id, q.to_string())))
+            .collect_vec();
+        search_results.sort();
+        search_results.dedup();
+        search_results
     }
 }
 
