@@ -466,28 +466,12 @@ impl AutoMatch {
         mw_api: &Api,
     ) -> Result<()> {
         let entry_id = result.0;
-        let ext_name = &result.1;
-        let birth_year = match Self::extract_sane_year_from_date(&result.2) {
-            Some(year) => year,
-            None => return Ok(()),
-        };
-        let death_year = match Self::extract_sane_year_from_date(&result.3) {
-            Some(year) => year,
-            None => return Ok(()),
-        };
-        let candidate_items = match self.search_person(ext_name).await {
-            Ok(c) => c,
-            _ => return Ok(()), // Ignore error
-        };
-        if candidate_items.is_empty() {
-            return Ok(()); // No candidate items
-        }
         let candidate_items = match self
-            .subset_items_by_birth_death_year(&candidate_items, birth_year, death_year, mw_api)
+            .match_person_by_dates_process_result_get_candidate_items(result, mw_api)
             .await
         {
-            Ok(ci) => ci,
-            _ => return Ok(()), // Ignore error
+            Ok(value) => value,
+            Err(value) => return value,
         };
         match candidate_items.len() {
             0 => {} // No results
@@ -511,6 +495,37 @@ impl AutoMatch {
             }
         }
         Ok(())
+    }
+
+    async fn match_person_by_dates_process_result_get_candidate_items(
+        &self,
+        result: &(usize, String, String, String),
+        mw_api: &Api,
+    ) -> Result<Vec<String>, std::result::Result<(), anyhow::Error>> {
+        let ext_name = &result.1;
+        let birth_year = match Self::extract_sane_year_from_date(&result.2) {
+            Some(year) => year,
+            None => return Err(Ok(())),
+        };
+        let death_year = match Self::extract_sane_year_from_date(&result.3) {
+            Some(year) => year,
+            None => return Err(Ok(())),
+        };
+        let candidate_items = match self.search_person(ext_name).await {
+            Ok(c) => c,
+            _ => return Err(Ok(())), // Ignore error
+        };
+        if candidate_items.is_empty() {
+            return Err(Ok(())); // No candidate items
+        }
+        let candidate_items = match self
+            .subset_items_by_birth_death_year(&candidate_items, birth_year, death_year, mw_api)
+            .await
+        {
+            Ok(ci) => ci,
+            _ => return Err(Ok(())), // Ignore error
+        };
+        Ok(candidate_items)
     }
 
     pub async fn match_person_by_dates(&mut self, catalog_id: usize) -> Result<()> {
