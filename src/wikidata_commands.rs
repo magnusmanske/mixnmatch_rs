@@ -65,53 +65,56 @@ impl WikidataCommand {
         // Assiuming "create"
         match &self.what {
             WikidataCommandWhat::Property(property) => {
-                let mainsnak = self.value_as_snak(*property, &self.value);
-                let mut claim = json!({
-                    "mainsnak":mainsnak,
-                    "type":"statement",
-                    "rank":self.rank_as_str()
-                });
-
-                if !self.references.is_empty() {
-                    let mut reference_groups = vec![];
-                    for reference_group in &self.references {
-                        if reference_group.is_empty() {
-                            continue;
-                        }
-                        let mut snaks: HashMap<String, Vec<Value>> = HashMap::new();
-                        for reference in reference_group {
-                            let snak = self.value_as_snak(reference.property, &reference.value);
-                            let prop = format!("P{}", reference.property);
-                            snaks
-                                .entry(prop)
-                                .and_modify(|v| v.push(snak.to_owned()))
-                                .or_insert(vec![snak.to_owned()]);
-                        }
-                        reference_groups.push(json!({ "snaks": snaks }));
-                    }
-                    claim["references"] = json!(reference_groups);
-                }
-
-                if !self.qualifiers.is_empty() {
-                    let mut snaks: HashMap<String, Vec<Value>> = HashMap::new();
-                    for qualifier in &self.qualifiers {
-                        let snak = self.value_as_snak(qualifier.property, &qualifier.value);
-                        let prop = format!("P{}", qualifier.property);
-                        snaks
-                            .entry(prop)
-                            .and_modify(|v| v.push(snak.to_owned()))
-                            .or_insert(vec![snak.to_owned()]);
-                    }
-                    claim["qualifiers"] = json!(snaks);
-                }
-
-                if json.get("claims").is_none() {
-                    json["claims"] = json!([]);
-                }
-                if let Some(claims) = json["claims"].as_array_mut() {
-                    claims.push(claim)
-                }
+                let mut claim = self.edit_entity_generate_claim(property);
+                self.edit_entity_references(&mut claim);
+                self.edit_entity_qualifiers(&mut claim);
+                Self::edit_entity_add_claim(json, claim);
             }
+        }
+    }
+
+    fn edit_entity_generate_claim(&self, property: &usize) -> Value {
+        json!({
+            "mainsnak":self.value_as_snak(*property, &self.value),
+            "type":"statement",
+            "rank":self.rank_as_str()
+        })
+    }
+
+    fn edit_entity_qualifiers(&self, claim: &mut Value) {
+        if !self.qualifiers.is_empty() {
+            let mut snaks: HashMap<String, Vec<Value>> = HashMap::new();
+            for qualifier in &self.qualifiers {
+                let snak = self.value_as_snak(qualifier.property, &qualifier.value);
+                let prop = format!("P{}", qualifier.property);
+                snaks
+                    .entry(prop)
+                    .and_modify(|v| v.push(snak.to_owned()))
+                    .or_insert(vec![snak.to_owned()]);
+            }
+            claim["qualifiers"] = json!(snaks);
+        }
+    }
+
+    fn edit_entity_references(&self, claim: &mut Value) {
+        if !self.references.is_empty() {
+            let mut reference_groups = vec![];
+            for reference_group in &self.references {
+                if reference_group.is_empty() {
+                    continue;
+                }
+                let mut snaks: HashMap<String, Vec<Value>> = HashMap::new();
+                for reference in reference_group {
+                    let snak = self.value_as_snak(reference.property, &reference.value);
+                    let prop = format!("P{}", reference.property);
+                    snaks
+                        .entry(prop)
+                        .and_modify(|v| v.push(snak.to_owned()))
+                        .or_insert(vec![snak.to_owned()]);
+                }
+                reference_groups.push(json!({ "snaks": snaks }));
+            }
+            claim["references"] = json!(reference_groups);
         }
     }
 
@@ -144,6 +147,15 @@ impl WikidataCommand {
             WikidataCommandValue::Location(cl) => {
                 json!({"value":{"latitude":cl.lat,"longitude":cl.lon,"globe":"http://www.wikidata.org/entity/Q2"},"type":"globecoordinate"})
             } //_ => {panic!("WikidataCommand::as_datavalue: not implemented: {:?}",&self)}
+        }
+    }
+
+    fn edit_entity_add_claim(json: &mut Value, claim: Value) {
+        if json.get("claims").is_none() {
+            json["claims"] = json!([]);
+        }
+        if let Some(claims) = json["claims"].as_array_mut() {
+            claims.push(claim)
         }
     }
 }
