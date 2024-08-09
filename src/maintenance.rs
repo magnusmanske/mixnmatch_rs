@@ -77,26 +77,40 @@ impl Maintenance {
 
         // Match via aux to inventory numbers
         for binding in results {
-            let q = binding["q"]["value"].as_str();
-            let id = binding["id"]["value"].as_str();
-            let (q, id) = match (q, id) {
-                (Some(q), Some(id)) => (q.to_string(), id.to_string()),
-                _ => continue,
-            };
-            let q = match mw_api.extract_entity_from_uri(&q) {
-                Ok(q) => q,
-                Err(_) => continue,
-            };
-            if let Some(entry_id) = inventory_number2entry_id.get(&id) {
-                if let Ok(mut entry) = Entry::from_id(*entry_id, &self.app).await {
-                    if !entry.is_fully_matched() {
-                        // println!("Matching https://mix-n-match.toolforge.org/#/entry/{entry_id} to https://www.wikidata.org/wiki/{q}");
-                        let _ = entry.set_match(&q, USER_AUX_MATCH).await;
-                    }
+            self.fully_match_via_collection_inventory_number_for_catalog_process_binding(
+                binding,
+                &mw_api,
+                &inventory_number2entry_id,
+            )
+            .await;
+        }
+        Ok(())
+    }
+
+    async fn fully_match_via_collection_inventory_number_for_catalog_process_binding(
+        &self,
+        binding: serde_json::Value,
+        mw_api: &mediawiki::Api,
+        inventory_number2entry_id: &HashMap<String, usize>,
+    ) {
+        let q = binding["q"]["value"].as_str();
+        let id = binding["id"]["value"].as_str();
+        let (q, id) = match (q, id) {
+            (Some(q), Some(id)) => (q.to_string(), id.to_string()),
+            _ => return,
+        };
+        let q = match mw_api.extract_entity_from_uri(&q) {
+            Ok(q) => q,
+            Err(_) => return,
+        };
+        if let Some(entry_id) = inventory_number2entry_id.get(&id) {
+            if let Ok(mut entry) = Entry::from_id(*entry_id, &self.app).await {
+                if !entry.is_fully_matched() {
+                    // println!("Matching https://mix-n-match.toolforge.org/#/entry/{entry_id} to https://www.wikidata.org/wiki/{q}");
+                    let _ = entry.set_match(&q, USER_AUX_MATCH).await;
                 }
             }
         }
-        Ok(())
     }
 
     async fn get_items_and_inventory_numbers_for_catalog(
