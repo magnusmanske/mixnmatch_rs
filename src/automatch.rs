@@ -471,7 +471,7 @@ impl AutoMatch {
             .await
         {
             Ok(value) => value,
-            Err(value) => return value,
+            Err(value) => return Ok(value),
         };
         match candidate_items.len() {
             0 => {} // No results
@@ -501,29 +501,29 @@ impl AutoMatch {
         &self,
         result: &(usize, String, String, String),
         mw_api: &Api,
-    ) -> Result<Vec<String>, std::result::Result<(), anyhow::Error>> {
+    ) -> Result<Vec<String>, ()> {
         let ext_name = &result.1;
         let birth_year = match Self::extract_sane_year_from_date(&result.2) {
             Some(year) => year,
-            None => return Err(Ok(())),
+            None => return Err(()),
         };
         let death_year = match Self::extract_sane_year_from_date(&result.3) {
             Some(year) => year,
-            None => return Err(Ok(())),
+            None => return Err(()),
         };
         let candidate_items = match self.search_person(ext_name).await {
             Ok(c) => c,
-            _ => return Err(Ok(())), // Ignore error
+            _ => return Err(()), // Ignore error
         };
         if candidate_items.is_empty() {
-            return Err(Ok(())); // No candidate items
+            return Err(()); // No candidate items
         }
         let candidate_items = match self
             .subset_items_by_birth_death_year(&candidate_items, birth_year, death_year, mw_api)
             .await
         {
             Ok(ci) => ci,
-            _ => return Err(Ok(())), // Ignore error
+            _ => return Err(()), // Ignore error
         };
         Ok(candidate_items)
     }
@@ -709,23 +709,8 @@ impl AutoMatch {
         sparql_parts: &str,
         language: &str,
     ) -> Result<()> {
-        let query: Vec<String> = el_chunk
-            .iter()
-            .map(|(_, label)| format!("\"{}\"", label.replace('"', "")))
-            .collect();
-        let query = query.join(" OR ");
-        let mut search_results = self
-            .app
-            .wikidata()
-            .search_with_limit(&query, Some(500))
-            .await?;
-        if search_results.is_empty() {
-            return Ok(());
-        }
-        search_results.sort();
-        search_results.dedup();
+        let search_results = self.automatch_complex_batch_search(el_chunk).await?;
         let api = self.app.wikidata().get_mw_api().await?;
-
         let entry_ids = el_chunk.iter().map(|(entry_id, _)| *entry_id).collect_vec();
         let mut entries = Entry::multiple_from_ids(&entry_ids, &self.app).await?;
 
@@ -739,25 +724,32 @@ impl AutoMatch {
                 Err(_) => continue, // Ignore error
             };
             for row in reader.records().filter_map(|r| r.ok()) {
-                let q = api.extract_entity_from_uri(&row[0]).unwrap();
-                let q_label = &row[1];
-
-                let entry_candidates: Vec<usize> = el_chunk
-                    .iter()
-                    .filter(|(_, label)| label.contains(q_label) || q_label.contains(label))
-                    .map(|(entry_id, _)| *entry_id)
-                    .collect();
-                if entry_candidates.len() != 1 {
-                    // No match, or multiple matches, not touching this one
-                    continue;
-                }
-                if let Some(entry) = entries.get_mut(&entry_candidates[0]) {
-                    // println!("{q} {q_label} => {}",entry.id);
-                    let _ = entry.set_auto_and_multi_match(&[q]).await; // Ignore error
-                }
+                Self::automatch_complex_batch_process_row(&api, row, el_chunk, &mut entries).await;
             }
         }
         Ok(())
+    }
+
+    async fn automatch_complex_batch_search(
+        &self,
+        el_chunk: &[(usize, String)],
+    ) -> Result<Vec<String>> {
+        let query: Vec<String> = el_chunk
+            .iter()
+            .map(|(_, label)| format!("\"{}\"", label.replace('"', "")))
+            .collect();
+        let query = query.join(" OR ");
+        let mut search_results = self
+            .app
+            .wikidata()
+            .search_with_limit(&query, Some(500))
+            .await?;
+        if search_results.is_empty() {
+            return Ok(vec![]);
+        }
+        search_results.sort();
+        search_results.dedup();
+        Ok(search_results)
     }
 
     async fn automatch_complex_get_sparql_parts(&self, catalog: &Catalog) -> Result<String> {
@@ -865,6 +857,30 @@ impl AutoMatch {
             || (match_field == "died" && date == result.died)
         {
             candidates.push(q.to_string());
+        }
+    }
+
+    async fn automatch_complex_batch_process_row(
+        api: &Api,
+        row: csv::StringRecord,
+        el_chunk: &[(usize, String)],
+        entries: &mut HashMap<usize, Entry>,
+    ) {
+        let q = api.extract_entity_from_uri(&row[0]).unwrap();
+        let q_label = &row[1];
+        let entry_candidates: Vec<usize> = el_chunk
+            .iter()
+            .filter(|(_, label)| label.contains(q_label) || q_label.contains(label))
+            .map(|(entry_id, _)| *entry_id)
+            .collect();
+        if entry_candidates.len() != 1 {
+            // No match, or multiple matches, not touching this one
+            return;
+        }
+
+        if let Some(entry) = entries.get_mut(&entry_candidates[0]) {
+            // println!("{q} {q_label} => {}",entry.id);
+            let _ = entry.set_auto_and_multi_match(&[q]).await; // Ignore error
         }
     }
 }
