@@ -495,7 +495,7 @@ impl Storage for StorageMySQL {
     /// Checks if the log already has a removed match for this entry.
     /// If a q_numeric item is given, and a specific one is in the log entry, it will only trigger on this combination.
     async fn avoid_auto_match(&self, entry_id: usize, q_numeric: Option<isize>) -> Result<bool> {
-        let mut sql = r"SELECT id FROM `log` WHERE `entry_id`=:entry_id".to_string();
+        let mut sql = format!("SELECT id FROM `log` WHERE `entry_id`={entry_id}");
         if let Some(q) = q_numeric {
             sql += &format!(" AND (q IS NULL OR q={})", &q)
         }
@@ -503,7 +503,7 @@ impl Storage for StorageMySQL {
         let has_rows = !self
             .get_conn()
             .await?
-            .exec_iter(sql, params! {entry_id})
+            .exec_iter(sql, mysql_async::Params::Empty)
             .await?
             .map_and_drop(from_row::<usize>)
             .await?
