@@ -295,21 +295,7 @@ impl AppState {
     }
 
     pub async fn forever_loop(&self) -> Result<()> {
-        let current_jobs: Arc<DashMap<usize, TaskSize>> = Arc::new(DashMap::new());
-
-        // Reset old running&failed jobs
-        self.storage().reset_running_jobs().await?;
-        self.storage().reset_failed_jobs().await?;
-        println!("Old jobs reset, starting bot");
-
-        self.seppuku();
-
-        // Log forver_loop start
-        let current_time_str = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-        self.storage()
-            .set_kv_value("forever_loop_start", &current_time_str)
-            .await?;
-
+        let current_jobs = self.forever_loop_initalize().await?;
         let threshold_job_size = TaskSize::MEDIUM;
         let threshold_percent = 50;
 
@@ -322,24 +308,48 @@ impl AppState {
                 self.hold_on();
                 continue;
             }
-            let (mut job, task_size) = self
-                .get_next_job(self, &current_jobs, &threshold_job_size, threshold_percent)
+            self.forever_loop_run_job(&current_jobs, &threshold_job_size, threshold_percent)
                 .await?;
-            match job.set_next().await {
-                Ok(true) => {
-                    Self::run_job(job, task_size, &current_jobs).await;
-                }
-                Ok(false) => {
-                    // println!("No jobs available, waiting... (not using: {:?})",job.skip_actions);
-                    self.hold_on();
-                }
-                Err(e) => {
-                    println!("MAIN LOOP: Something went wrong: {e}");
-                    self.hold_on();
-                }
-            }
         }
         // self.disconnect().await?; // Never happens
+    }
+
+    async fn forever_loop_initalize(&self) -> Result<Arc<DashMap<usize, TaskSize>>> {
+        let current_jobs: Arc<DashMap<usize, TaskSize>> = Arc::new(DashMap::new());
+        self.storage().reset_running_jobs().await?;
+        self.storage().reset_failed_jobs().await?;
+        println!("Old jobs reset, starting bot");
+        self.seppuku();
+        let current_time_str = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        self.storage()
+            .set_kv_value("forever_loop_start", &current_time_str)
+            .await?;
+        Ok(current_jobs)
+    }
+
+    async fn forever_loop_run_job(
+        &self,
+        current_jobs: &Arc<DashMap<usize, TaskSize>>,
+        threshold_job_size: &TaskSize,
+        threshold_percent: usize,
+    ) -> Result<()> {
+        let (mut job, task_size) = self
+            .get_next_job(self, current_jobs, threshold_job_size, threshold_percent)
+            .await?;
+        match job.set_next().await {
+            Ok(true) => {
+                Self::run_job(job, task_size, current_jobs).await;
+            }
+            Ok(false) => {
+                // println!("No jobs available, waiting... (not using: {:?})",job.skip_actions);
+                self.hold_on();
+            }
+            Err(e) => {
+                println!("MAIN LOOP: Something went wrong: {e}");
+                self.hold_on();
+            }
+        }
+        Ok(())
     }
 
     async fn get_next_job(
