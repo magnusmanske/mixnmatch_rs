@@ -215,27 +215,48 @@ impl Microsync {
                     let mut first = true;
                     let q_mnm = e.q;
                     for (entry_id, ext_id) in &e.entry2ext_id {
-                        let row = if first {
-                            first = false;
-                            format!(
-                                "|-\n|rowspan={}|{{{{Q|{}}}}}|| ",
-                                e.entry2ext_id.len(),
-                                q_mnm
-                            )
-                        } else {
-                            "|-\n|| ".to_string()
-                        };
-                        let ext_name = entry2name.get(entry_id).unwrap_or(ext_id);
-                        let ext_id = self.format_ext_id(ext_id, "", formatter_url);
-                        let mnm_url =
-                            format!("https://mix-n-match.toolforge.org/#/entry/{}", entry_id);
-                        ret += &format!("{row}[{mnm_url} {entry_id}] || {ext_id} || {ext_name}\n");
+                        ret += &self.wikitext_from_issues_multiple_q_in_mnm_process_row(
+                            &mut first,
+                            e,
+                            q_mnm,
+                            &entry2name,
+                            entry_id,
+                            ext_id,
+                            formatter_url,
+                        );
                     }
                 }
                 ret += "|}\n\n";
             }
         }
         Ok(ret)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn wikitext_from_issues_multiple_q_in_mnm_process_row(
+        &self,
+        first: &mut bool,
+        e: &ExtIdWithMutipleQ,
+        q_mnm: isize,
+        entry2name: &HashMap<usize, String>,
+        entry_id: &usize,
+        ext_id: &String,
+        formatter_url: &str,
+    ) -> String {
+        let row = if *first {
+            *first = false;
+            format!(
+                "|-\n|rowspan={}|{{{{Q|{}}}}}|| ",
+                e.entry2ext_id.len(),
+                q_mnm
+            )
+        } else {
+            "|-\n|| ".to_string()
+        };
+        let ext_name = entry2name.get(entry_id).unwrap_or(ext_id);
+        let ext_id = self.format_ext_id(ext_id, "", formatter_url);
+        let mnm_url = format!("https://mix-n-match.toolforge.org/#/entry/{}", entry_id);
+        format!("{row}[{mnm_url} {entry_id}] || {ext_id} || {ext_name}\n")
     }
 
     async fn wikitext_from_issues_match_differs(

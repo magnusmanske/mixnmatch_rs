@@ -104,31 +104,12 @@ impl AutoMatch {
             if entries.is_empty() {
                 break; // Done
             }
-            let mut name2entries: HashMap<String, Vec<usize>> = HashMap::new();
-            entries.iter().for_each(|(id, name)| {
-                name2entries
-                    .entry(name.to_owned())
-                    .and_modify(|n2e| n2e.push(*id))
-                    .or_insert(vec![*id]);
-            });
-
-            let params: Vec<String> = name2entries.keys().map(|s| s.to_owned()).collect();
+            let name2entries = Self::automatch_by_sitelink_name2entries(&entries);
             let wd_matches = self
-                .app
-                .wikidata()
-                .automatch_by_sitlinks_get_wd_matches(params, &site)
+                .automatch_by_sitelink_get_wd_matches(&name2entries, &site)
                 .await?;
-
-            for (q, title) in wd_matches {
-                if let Some(v) = name2entries.get(&title) {
-                    for entry_id in v {
-                        if let Ok(mut entry) = Entry::from_id(*entry_id, &self.app).await {
-                            let _ = entry.set_match(&format!("Q{}", q), USER_AUTO).await;
-                        }
-                    }
-                }
-            }
-
+            self.automatch_by_sitelink_process_wd_matches(wd_matches, name2entries)
+                .await;
             if entries.len() < batch_size {
                 break;
             }
@@ -137,6 +118,36 @@ impl AutoMatch {
         }
         let _ = self.clear_offset().await;
         Ok(())
+    }
+
+    async fn automatch_by_sitelink_process_wd_matches(
+        &mut self,
+        wd_matches: Vec<(usize, String)>,
+        name2entries: HashMap<String, Vec<usize>>,
+    ) {
+        for (q, title) in wd_matches {
+            if let Some(v) = name2entries.get(&title) {
+                for entry_id in v {
+                    if let Ok(mut entry) = Entry::from_id(*entry_id, &self.app).await {
+                        let _ = entry.set_match(&format!("Q{}", q), USER_AUTO).await;
+                    }
+                }
+            }
+        }
+    }
+
+    async fn automatch_by_sitelink_get_wd_matches(
+        &mut self,
+        name2entries: &HashMap<String, Vec<usize>>,
+        site: &String,
+    ) -> Result<Vec<(usize, String)>, anyhow::Error> {
+        let params: Vec<String> = name2entries.keys().map(|s| s.to_owned()).collect();
+        let wd_matches = self
+            .app
+            .wikidata()
+            .automatch_by_sitlinks_get_wd_matches(params, site)
+            .await?;
+        Ok(wd_matches)
     }
 
     async fn search_with_type_and_entity_id(
@@ -882,6 +893,19 @@ impl AutoMatch {
             // println!("{q} {q_label} => {}",entry.id);
             let _ = entry.set_auto_and_multi_match(&[q]).await; // Ignore error
         }
+    }
+
+    fn automatch_by_sitelink_name2entries(
+        entries: &[(usize, String)],
+    ) -> HashMap<String, Vec<usize>> {
+        let mut name2entries: HashMap<String, Vec<usize>> = HashMap::new();
+        entries.iter().for_each(|(id, name)| {
+            name2entries
+                .entry(name.to_owned())
+                .and_modify(|n2e| n2e.push(*id))
+                .or_insert(vec![*id]);
+        });
+        name2entries
     }
 }
 
