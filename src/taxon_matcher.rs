@@ -37,6 +37,15 @@ pub enum TaxonNameField {
     Description,
 }
 
+impl TaxonNameField {
+    pub fn as_str(&self) -> &str {
+        match self {
+            TaxonNameField::Name => "ext_name",
+            TaxonNameField::Description => "ext_desc",
+        }
+    }
+}
+
 impl Jobbable for TaxonMatcher {
     //TODO test
     fn set_current_job(&mut self, job: &Job) {

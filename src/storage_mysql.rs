@@ -211,6 +211,33 @@ impl StorageMySQL {
             app: None,
         })
     }
+
+    async fn match_taxa_get_ranked_names_batch_get_results(
+        &self,
+        ranks: &[&str],
+        field: &TaxonNameField,
+        catalog_id: usize,
+        batch_size: usize,
+        offset: usize,
+    ) -> Result<Vec<(usize, String, String)>> {
+        let taxon_name_column = field.as_str();
+        let sql = format!(
+            r"SELECT `id`,`{taxon_name_column}` AS taxon_name,`type` FROM `entry`
+            	WHERE `catalog` IN (:catalog_id)
+             	AND (`q` IS NULL OR `user`=0)
+              	AND `type` IN ('{}')
+            	LIMIT :batch_size OFFSET :offset",
+            ranks.join("','")
+        );
+        let results = self
+            .get_conn()
+            .await?
+            .exec_iter(sql, params! {catalog_id,batch_size,offset})
+            .await?
+            .map_and_drop(from_row::<(usize, String, String)>)
+            .await?;
+        Ok(results)
+    }
 }
 
 // STORAGE TRAIT IMPLEMENTATION
@@ -239,27 +266,11 @@ impl Storage for StorageMySQL {
         batch_size: usize,
         offset: usize,
     ) -> Result<(usize, RankedNames)> {
-        let taxon_name_column = match field {
-            TaxonNameField::Name => "ext_name",
-            TaxonNameField::Description => "ext_desc",
-        };
-        let sql = format!(
-            r"SELECT `id`,`{}` AS taxon_name,`type` FROM `entry`
-                	WHERE `catalog` IN (:catalog_id)
-                 	AND (`q` IS NULL OR `user`=0)
-                  	AND `type` IN ('{}')
-                	LIMIT :batch_size OFFSET :offset",
-            taxon_name_column,
-            ranks.join("','")
-        );
-
-        let mut conn = self.get_conn().await?;
-        let results = conn
-            .exec_iter(sql, params! {catalog_id,batch_size,offset})
-            .await?
-            .map_and_drop(from_row::<(usize, String, String)>)
+        let results = self
+            .match_taxa_get_ranked_names_batch_get_results(
+                ranks, field, catalog_id, batch_size, offset,
+            )
             .await?;
-        drop(conn);
         let mut ranked_names: RankedNames = HashMap::new();
         for result in &results {
             let entry_id = result.0;
