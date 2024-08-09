@@ -693,15 +693,15 @@ impl Storage for StorageMySQL {
     async fn maintenance_automatch_people_via_year_born(&self) -> Result<()> {
         let mut conn = self.get_conn().await?;
 
+        // DEACTIVATED THIS TAKES TOO LONG
+
         // Reset
-        println!("Reset");
         let sql = r#"DROP TABLE IF EXISTS tmp_automatches"#;
         conn.exec_drop(sql, mysql_async::Params::Empty).await?;
 
         // Generate sub-list of potential matches
-        println!("Create");
         let sql = r#"CREATE table tmp_automatches
-	       SELECT e2.id AS entry_id,e1.q AS q
+	       SELECT DISTINCT e2.id AS entry_id,e1.q AS q
 	       FROM entry e1,entry e2,person_dates p1,person_dates p2,catalog c1,catalog c2
 	       WHERE p1.entry_id=e1.id AND p2.entry_id=e2.id AND p1.year_born=p2.year_born
 	       AND e1.ext_name=e2.ext_name
@@ -710,11 +710,10 @@ impl Storage for StorageMySQL {
 	       AND e1.q!=e2.q
 	       AND e1.catalog=c1.id AND c1.active=1
 	       AND e2.catalog=c2.id AND c2.active=1
-	       limit 2000"#;
+	       limit 1000"#;
         conn.exec_drop(sql, mysql_async::Params::Empty).await?;
 
         // Apply sub-list
-        println!("Apply");
         let sql = r#"UPDATE entry
         	INNER JOIN tmp_automatches ON entry.id=entry_id
         	SET entry.q=tmp_automatches.q,user=0,timestamp=date_format(now(),"%Y%m%d%H%i%S")
@@ -723,7 +722,6 @@ impl Storage for StorageMySQL {
         conn.exec_drop(sql, mysql_async::Params::Empty).await?;
 
         // Cleanup
-        println!("Cleanup");
         let sql = r#"DROP TABLE IF EXISTS tmp_automatches"#;
         conn.exec_drop(sql, mysql_async::Params::Empty).await?;
 
