@@ -83,21 +83,7 @@ impl WDRC {
             .get_wrdc_api_responses(&format!("action=redirects&since={last_ts}"))
             .await?
         {
-            let from = j["item"]
-                .as_str()
-                .map(AppState::item2numeric)
-                .and_then(|i| i)
-                .unwrap_or(0);
-            let to = j["target"]
-                .as_str()
-                .map(AppState::item2numeric)
-                .and_then(|i| i)
-                .unwrap_or(0);
-            let ts = j["timestamp"]
-                .as_str()
-                .unwrap_or_else(|| &new_ts)
-                .to_string();
-            redirects.insert(from, to);
+            let ts = Self::sync_redirects_add_redirect(j, &new_ts, &mut redirects);
             if new_ts < ts {
                 new_ts = ts;
             }
@@ -190,17 +176,7 @@ impl WDRC {
                 Some(i) => i,
                 None => continue,
             };
-            let prop_values: Vec<String> = i
-                .claims_with_property(format!("P{property}"))
-                .iter()
-                .map(|statement| statement.main_snak())
-                .filter_map(|snak| snak.data_value().to_owned())
-                .map(|datavalue| datavalue.value().to_owned())
-                .filter_map(|value| match value {
-                    wikimisc::wikibase::Value::StringValue(v) => Some(v),
-                    _ => None,
-                })
-                .collect();
+            let prop_values = Self::sync_property_propval2item_get_prop_values(property, i);
             for prop_value in prop_values {
                 propval2item.entry(prop_value).or_default().push(q_num);
             }
@@ -289,26 +265,37 @@ impl WDRC {
             .map(|(item, property, _ts)| (item, property))
             .collect_vec();
         for results in all_results.chunks(batch_size) {
-            let results = results.to_vec();
-            let properties = results
-                .iter()
-                .map(|(_item, property)| *property)
-                .sorted()
-                .dedup()
-                .collect_vec();
-            let futures = properties
-                .iter()
-                .map(|property| self.sync_property(*property, &results, &prop2catalog_ids, app))
-                .collect_vec();
-            let results = join_all(futures).await;
-            let failed = results.into_iter().filter(|r| r.is_err()).collect_vec();
-            if let Some(Err(e)) = failed.first() {
-                return Err(anyhow!("{e}"));
-            }
+            self.sync_properties_process_results(results, &prop2catalog_ids, app)
+                .await?;
         }
         app.storage()
             .set_kv_value("wdrc_sync_properties", &new_ts)
             .await?;
+        Ok(())
+    }
+
+    async fn sync_properties_process_results(
+        &self,
+        results: &[(usize, usize)],
+        prop2catalog_ids: &HashMap<usize, Vec<usize>>,
+        app: &AppState,
+    ) -> Result<()> {
+        let results = results.to_vec();
+        let properties = results
+            .iter()
+            .map(|(_item, property)| *property)
+            .sorted()
+            .dedup()
+            .collect_vec();
+        let futures = properties
+            .iter()
+            .map(|property| self.sync_property(*property, &results, prop2catalog_ids, app))
+            .collect_vec();
+        let results = join_all(futures).await;
+        let failed = results.into_iter().filter(|r| r.is_err()).collect_vec();
+        if let Some(Err(e)) = failed.first() {
+            return Err(anyhow!("{e}"));
+        }
         Ok(())
     }
 
@@ -332,5 +319,46 @@ impl WDRC {
             // println!("P{property}: {} => {}",entry.get_entry_url().unwrap_or("".into()),entry.get_item_url().unwrap_or("".into()));
         }
         Ok(())
+    }
+
+    fn sync_redirects_add_redirect(
+        j: Value,
+        new_ts: &String,
+        redirects: &mut HashMap<isize, isize>,
+    ) -> String {
+        let from = j["item"]
+            .as_str()
+            .map(AppState::item2numeric)
+            .and_then(|i| i)
+            .unwrap_or(0);
+        let to = j["target"]
+            .as_str()
+            .map(AppState::item2numeric)
+            .and_then(|i| i)
+            .unwrap_or(0);
+        let ts = j["timestamp"]
+            .as_str()
+            .unwrap_or_else(|| new_ts)
+            .to_string();
+        redirects.insert(from, to);
+        ts
+    }
+
+    fn sync_property_propval2item_get_prop_values(
+        property: usize,
+        i: wikimisc::wikibase::Entity,
+    ) -> Vec<String> {
+        let prop_values: Vec<String> = i
+            .claims_with_property(format!("P{property}"))
+            .iter()
+            .map(|statement| statement.main_snak())
+            .filter_map(|snak| snak.data_value().to_owned())
+            .map(|datavalue| datavalue.value().to_owned())
+            .filter_map(|value| match value {
+                wikimisc::wikibase::Value::StringValue(v) => Some(v),
+                _ => None,
+            })
+            .collect();
+        prop_values
     }
 }
