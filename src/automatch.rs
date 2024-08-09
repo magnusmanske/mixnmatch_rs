@@ -140,7 +140,7 @@ impl AutoMatch {
         &mut self,
         name2entries: &HashMap<String, Vec<usize>>,
         site: &String,
-    ) -> Result<Vec<(usize, String)>, anyhow::Error> {
+    ) -> Result<Vec<(usize, String)>> {
         let params: Vec<String> = name2entries.keys().map(|s| s.to_owned()).collect();
         let wd_matches = self
             .app

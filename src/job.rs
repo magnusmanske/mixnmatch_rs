@@ -288,27 +288,38 @@ impl Job {
         let action = self.get_action().await?;
         let res = self.run_this_job().await;
         match res {
-            Ok(_) => {
-                self.set_status(JobStatus::Done).await?;
-                println!(
-                    "Job {} catalog {}:{} completed.",
-                    self.get_id().await?,
-                    catalog_id,
-                    action
-                );
-            }
-            Err(e) => {
-                match catalog_id {
-                    0 => self.set_status(JobStatus::Done).await?, // Don't fail'
-                    _ => self.set_status(JobStatus::Failed).await?,
-                }
-                let note = Some(format!("{e}")); //Some("ERROR".to_string()); //
-                self.set_note(note).await?;
-                let job_id = self.get_id().await?;
-                println!("Job {job_id} catalog {catalog_id}:{action} FAILED: {e}");
-            }
+            Ok(_) => self.run_ok(catalog_id, action).await?,
+            Err(e) => self.run_error(catalog_id, &action, &e).await?,
         }
         self.update_next_ts().await
+    }
+
+    async fn run_error(
+        &mut self,
+        catalog_id: usize,
+        action: &str,
+        error: &anyhow::Error,
+    ) -> Result<()> {
+        match catalog_id {
+            0 => self.set_status(JobStatus::Done).await?, // Don't fail
+            _ => self.set_status(JobStatus::Failed).await?,
+        }
+        let note = Some(format!("{error}"));
+        self.set_note(note).await?;
+        let job_id = self.get_id().await?;
+        println!("Job {job_id} catalog {catalog_id}:{action} FAILED: {error}");
+        Ok(())
+    }
+
+    async fn run_ok(&mut self, catalog_id: usize, action: String) -> Result<(), anyhow::Error> {
+        self.set_status(JobStatus::Done).await?;
+        println!(
+            "Job {} catalog {}:{} completed.",
+            self.get_id().await?,
+            catalog_id,
+            action
+        );
+        Ok(())
     }
 
     //TODO test

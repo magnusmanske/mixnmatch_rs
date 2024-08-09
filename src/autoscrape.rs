@@ -124,20 +124,7 @@ impl Autoscrape {
             .ok_or(AutoscrapeError::NoAutoscrapeForCatalog(catalog_id))?;
         let json: Value = serde_json::from_str(json)?;
         let mut ret = Self::new_basic(id, catalog_id, app, &json)?;
-        if let Some(options) = json.get("options") {
-            // Options in main JSON
-            ret.options_from_json(options);
-        } else if let Some(scraper) = json.get("scraper") {
-            // Options in scraper
-            if let Some(options) = scraper.get("options") {
-                ret.options_from_json(options);
-            }
-        }
-        if let Some(levels) = json.get("levels") {
-            for level in levels.as_array().unwrap_or(&vec![]).iter() {
-                ret.levels.push(AutoscrapeLevel::from_json(level)?);
-            }
-        }
+        Self::initialize_with_options(json, &mut ret)?;
         Ok(ret)
     }
 
@@ -412,6 +399,24 @@ impl Autoscrape {
             entry_batch: vec![],
         };
         Ok(ret)
+    }
+
+    fn initialize_with_options(json: Value, ret: &mut Autoscrape) -> Result<()> {
+        if let Some(options) = json.get("options") {
+            // Options in main JSON
+            ret.options_from_json(options);
+        } else if let Some(scraper) = json.get("scraper") {
+            // Options in scraper
+            if let Some(options) = scraper.get("options") {
+                ret.options_from_json(options);
+            }
+        }
+        if let Some(levels) = json.get("levels") {
+            for level in levels.as_array().unwrap_or(&vec![]).iter() {
+                ret.levels.push(AutoscrapeLevel::from_json(level)?);
+            }
+        }
+        Ok(())
     }
 }
 
