@@ -42,6 +42,7 @@ pub const TABLES_WITH_ENTRY_ID_FIELDS: &[&str] = &[
 #[derive(Debug)]
 pub struct StorageMySQL {
     pool: mysql_async::Pool,
+    pool_ro: mysql_async::Pool,
 }
 
 impl MySQLMisc for StorageMySQL {
@@ -51,14 +52,23 @@ impl MySQLMisc for StorageMySQL {
 }
 
 impl StorageMySQL {
-    pub fn new(j: &Value) -> Self {
+    pub fn new(j: &Value, j_ro: &Value) -> Self {
         Self {
             pool: Self::create_pool(j),
+            pool_ro: Self::create_pool(j_ro),
         }
     }
 
+    // fn pool_ro(&self) -> &mysql_async::Pool {
+    //     &self.pool_ro
+    // }
+
     fn get_conn(&self) -> GetConn {
         self.pool.get_conn()
+    }
+
+    fn get_conn_ro(&self) -> GetConn {
+        self.pool_ro.get_conn()
     }
 
     fn coordinate_matcher_main_query_sql(
@@ -230,7 +240,7 @@ impl StorageMySQL {
             ranks.join("','")
         );
         let results = self
-            .get_conn()
+            .get_conn_ro()
             .await?
             .exec_iter(sql, params! {catalog_id,batch_size,offset})
             .await?
@@ -300,7 +310,7 @@ impl Storage for StorageMySQL {
         max_results: usize,
     ) -> Result<Vec<LocationRow>> {
         let sql = Self::coordinate_matcher_main_query_sql(catalog_id, bad_catalogs, max_results);
-        let mut conn = self.get_conn().await?;
+        let mut conn = self.get_conn_ro().await?;
         let rows: Vec<LocationRow> = conn
             .exec_iter(sql, ())
             .await?
@@ -314,7 +324,7 @@ impl Storage for StorageMySQL {
 
     async fn get_all_catalogs_key_value_pairs(&self) -> Result<Vec<(usize, String, String)>> {
         let sql = r#"SELECT `catalog_id`,`kv_key`,`kv_value` FROM `kv_catalog`"#;
-        let mut conn = self.get_conn().await?;
+        let mut conn = self.get_conn_ro().await?;
         let results = conn
             .exec_iter(sql, ())
             .await?
@@ -345,7 +355,7 @@ impl Storage for StorageMySQL {
         );
         let existing_ext_ids = sql
             .with(ext_ids.to_vec()) // TODO don't convert to Vec
-            .map(self.get_conn().await?, |ext_id| ext_id)
+            .map(self.get_conn_ro().await?, |ext_id| ext_id)
             .await?;
         Ok(existing_ext_ids)
     }
@@ -366,14 +376,14 @@ impl Storage for StorageMySQL {
     async fn number_of_entries_in_catalog(&self, catalog_id: usize) -> Result<usize> {
         let results: Vec<usize> = "SELECT count(*) AS cnt FROM `entry` WHERE `catalog`=:catalog_id"
             .with(params! {catalog_id})
-            .map(self.get_conn().await?, |num| num)
+            .map(self.get_conn_ro().await?, |num| num)
             .await?;
         Ok(*results.first().unwrap_or(&0))
     }
 
     async fn get_catalog_from_id(&self, catalog_id: usize) -> Result<Catalog> {
         let sql = r"SELECT id,`name`,url,`desc`,`type`,wd_prop,wd_qual,search_wp,active,owner,note,source_item,has_person_date,taxon_run FROM `catalog` WHERE `id`=:catalog_id";
-        let mut conn = self.get_conn().await?;
+        let mut conn = self.get_conn_ro().await?;
         let mut rows: Vec<Catalog> = conn
             .exec_iter(sql, params! {catalog_id})
             .await?
@@ -395,7 +405,7 @@ impl Storage for StorageMySQL {
         catalog_id: usize,
     ) -> Result<HashMap<String, String>> {
         let sql = r#"SELECT `kv_key`,`kv_value` FROM `kv_catalog` WHERE `catalog_id`=:catalog_id"#;
-        let mut conn = self.get_conn().await?;
+        let mut conn = self.get_conn_ro().await?;
         let results = conn
             .exec_iter(sql, params! {catalog_id})
             .await?
@@ -433,7 +443,7 @@ impl Storage for StorageMySQL {
             "SELECT `id`,`ext_name` FROM `entry` WHERE `id` IN ({})",
             placeholders
         );
-        let mut conn = self.get_conn().await?;
+        let mut conn = self.get_conn_ro().await?;
         let results = conn
             .exec_iter(sql, entry_ids.to_vec())
             .await?
@@ -450,7 +460,7 @@ impl Storage for StorageMySQL {
         catalog_id: usize,
     ) -> Result<Vec<(isize, String, String)>> {
         let sql = format!("SELECT q,group_concat(id) AS ids,group_concat(ext_id SEPARATOR '{}') AS ext_ids FROM entry WHERE catalog=:catalog_id AND q IS NOT NULL and q>0 AND user>0 GROUP BY q HAVING count(id)>1 ORDER BY q",EXT_URL_UNIQUE_SEPARATOR);
-        let mut conn = self.get_conn().await?;
+        let mut conn = self.get_conn_ro().await?;
         let results = conn
             .exec_iter(sql, params! {catalog_id})
             .await?
@@ -467,7 +477,7 @@ impl Storage for StorageMySQL {
         let placeholders: Vec<&str> = ext_ids.iter().map(|_| "BINARY ?").collect();
         let placeholders = placeholders.join(",");
         let sql = format!("SELECT `id`,`q`,`user`,`ext_id`,`ext_url` FROM `entry` WHERE `catalog`={catalog_id} AND `ext_id` IN ({placeholders})");
-        let mut conn = self.get_conn().await?;
+        let mut conn = self.get_conn_ro().await?;
         let results = conn
             .exec_iter(sql, ext_ids.to_vec())
             .await?
@@ -512,7 +522,7 @@ impl Storage for StorageMySQL {
         }
         sql += " LIMIT 1";
         let has_rows = !self
-            .get_conn()
+            .get_conn_ro()
             .await?
             .exec_iter(sql, mysql_async::Params::Empty)
             .await?
@@ -525,7 +535,7 @@ impl Storage for StorageMySQL {
     //TODO test
     async fn get_random_active_catalog_id_with_property(&self) -> Option<usize> {
         let sql = "SELECT id FROM catalog WHERE active=1 AND wd_prop IS NOT NULL and wd_qual IS NULL ORDER by rand() LIMIT 1" ;
-        self.get_conn()
+        self.get_conn_ro()
             .await
             .ok()?
             .exec_iter(sql, ())
@@ -578,7 +588,7 @@ impl Storage for StorageMySQL {
 
     async fn autoscrape_get_for_catalog(&self, catalog_id: usize) -> Result<Vec<(usize, String)>> {
         Ok(self
-            .get_conn()
+            .get_conn_ro()
             .await?
             .exec_iter(
                 "SELECT `id`,`json` FROM `autoscrape` WHERE `catalog`=:catalog_id",
@@ -599,7 +609,7 @@ impl Storage for StorageMySQL {
             "SELECT `ext_id`,`id` FROM entry WHERE `ext_id` IN ({placeholders}) AND `catalog`={catalog_id}"
         );
         let existing_ext_ids: Vec<(String, usize)> = self
-            .get_conn()
+            .get_conn_ro()
             .await?
             .exec_iter(sql, ext_ids.to_vec())
             .await?
@@ -650,7 +660,7 @@ impl Storage for StorageMySQL {
             blacklisted_catalogs.join(",")
         );
         let results = self
-            .get_conn()
+            .get_conn_ro()
             .await?
             .exec_iter(sql, params! {catalog_id,offset,batch_size})
             .await?
@@ -680,7 +690,7 @@ impl Storage for StorageMySQL {
             blacklisted_properties.join(",")
         );
         let results = self
-            .get_conn()
+            .get_conn_ro()
             .await?
             .exec_iter(sql.clone(), params! {catalog_id,offset,batch_size})
             .await?
@@ -780,7 +790,7 @@ impl Storage for StorageMySQL {
     // Return items are tuples of (catalog_id, wd_prop)
     async fn maintenance_get_prop2catalog_ids(&self) -> Result<Vec<(usize, usize)>> {
         let sql = r"SELECT `id`,`wd_prop` FROM `catalog` WHERE `wd_prop` IS NOT NULL AND `wd_qual` IS NULL AND `active`=1";
-        let mut conn = self.get_conn().await?;
+        let mut conn = self.get_conn_ro().await?;
         let results = conn
             .exec_iter(sql, ())
             .await?
@@ -800,7 +810,7 @@ impl Storage for StorageMySQL {
         let sql = format!(
             r"SELECT `id`,`ext_id`,`user`,`q` FROM `entry` WHERE `catalog` IN ({catalogs_str}) AND `ext_id` IN ({qm_propvals})"
         );
-        let mut conn = self.get_conn().await?;
+        let mut conn = self.get_conn_ro().await?;
         let results = conn
             .exec_iter(sql, params)
             .await?
@@ -862,7 +872,7 @@ impl Storage for StorageMySQL {
         let sql = format!("SELECT DISTINCT `q` FROM `entry` WHERE `catalog`=:catalog_id {} LIMIT :batch_size OFFSET :offset",
             state.get_sql()
         ) ;
-        let mut conn = self.get_conn().await?;
+        let mut conn = self.get_conn_ro().await?;
         let ret = conn
             .exec_iter(sql.clone(), params! {catalog_id,offset,batch_size})
             .await?
@@ -878,7 +888,7 @@ impl Storage for StorageMySQL {
 
     async fn jobs_get_tasks(&self) -> Result<HashMap<String, TaskSize>> {
         let sql = "SELECT `action`,`size` FROM `job_sizes`";
-        let mut conn = self.get_conn().await?;
+        let mut conn = self.get_conn_ro().await?;
         let ret = conn
             .exec_iter(sql, ())
             .await?
@@ -1042,7 +1052,7 @@ impl Storage for StorageMySQL {
 	            AND NOT EXISTS (SELECT * FROM `log` WHERE log.entry_id=entry.id AND log.action='remove_q')
 	            {}
 	            ORDER BY `id` LIMIT :batch_size OFFSET :offset",MatchState::not_fully_matched().get_sql());
-        let mut conn = self.get_conn().await?;
+        let mut conn = self.get_conn_ro().await?;
         let entries = conn
             .exec_iter(sql.clone(), params! {catalog_id,offset,batch_size})
             .await?
@@ -1062,7 +1072,7 @@ impl Storage for StorageMySQL {
 	            FROM `entry` WHERE `catalog`=:catalog_id {}
 	            /* ORDER BY `id` */
 	            LIMIT :batch_size OFFSET :offset",MatchState::not_fully_matched().get_sql());
-        let mut conn = self.get_conn().await?;
+        let mut conn = self.get_conn_ro().await?;
         let results = conn
             .exec_iter(sql.clone(), params! {catalog_id,offset,batch_size})
             .await?
@@ -1078,7 +1088,7 @@ impl Storage for StorageMySQL {
         let sql = "SELECT object_title,object_entry_id,search_query FROM vw_object_creator WHERE object_catalog={} AND object_q IS NULL
                 UNION
                 SELECT object_title,object_entry_id,search_query FROM vw_object_creator_aux WHERE object_catalog={} AND object_q IS NULL";
-        let mut conn = self.get_conn().await?;
+        let mut conn = self.get_conn_ro().await?;
         let results = conn
             .exec_iter(sql, params! {catalog_id})
             .await?
@@ -1098,7 +1108,7 @@ impl Storage for StorageMySQL {
                 FROM `entry` WHERE `catalog`=:catalog_id {}
                 /* ORDER BY `id` */
                 LIMIT :batch_size OFFSET :offset",MatchState::not_fully_matched().get_sql());
-        let mut conn = self.get_conn().await?;
+        let mut conn = self.get_conn_ro().await?;
         let results = conn
             .exec_iter(sql.clone(), params! {catalog_id,offset,batch_size})
             .await?
@@ -1114,7 +1124,7 @@ impl Storage for StorageMySQL {
         offset: usize,
     ) -> Result<Vec<ResultInOriginalCatalog>> {
         let sql = "SELECT `id`,`ext_name`,`type` FROM entry WHERE catalog=:catalog_id AND q IS NULL LIMIT :batch_size OFFSET :offset" ;
-        let conn = self.get_conn().await?;
+        let conn = self.get_conn_ro().await?;
         let results_in_original_catalog: Vec<ResultInOriginalCatalog> = sql
             .with(params! {catalog_id,batch_size,offset})
             .map(conn, |(entry_id, ext_name, type_name)| {
@@ -1147,7 +1157,7 @@ impl Storage for StorageMySQL {
             AND q IS NOT NULL AND q > 0 AND user IS NOT NULL AND user>0
             AND catalog IN (SELECT id from catalog WHERE active=1)
             GROUP BY ext_name,type HAVING count(DISTINCT q)=1";
-        let conn = self.get_conn().await?;
+        let conn = self.get_conn_ro().await?;
         let results_in_other_catalogs: Vec<ResultInOtherCatalog> = sql
             .with(params)
             .map(conn, |(entry_id, ext_name, type_name, q)| {
@@ -1184,7 +1194,7 @@ impl Storage for StorageMySQL {
             WHERE `person_dates`.`entry_id` = `entry`.`id`
             AND `catalog`=:catalog_id AND (q IS NULL or user=0) AND born!='' AND died!=''
             LIMIT :batch_size OFFSET :offset";
-        let mut conn = self.get_conn().await?;
+        let mut conn = self.get_conn_ro().await?;
         let results = conn
             .exec_iter(sql, params! {catalog_id,batch_size,offset})
             .await?
@@ -1210,7 +1220,7 @@ impl Storage for StorageMySQL {
 	                WHERE (q is not null and user=0) AND catalog=:catalog_id AND length({})=:precision AND entry.id=person_dates.entry_id
 	            )
 	            ORDER BY entry_id LIMIT :batch_size OFFSET :offset",match_field,match_field);
-        let mut conn = self.get_conn().await?;
+        let mut conn = self.get_conn_ro().await?;
         let results = conn
             .exec_iter(
                 sql.clone(),
@@ -1232,7 +1242,7 @@ impl Storage for StorageMySQL {
             AND NOT EXISTS (SELECT * FROM `log` WHERE log.entry_id=entry.id AND log.action='remove_q')
             {}
             ORDER BY `id` LIMIT :batch_size OFFSET :offset",MatchState::unmatched().get_sql());
-        let mut conn = self.get_conn().await?;
+        let mut conn = self.get_conn_ro().await?;
         let el_chunk = conn
             .exec_iter(sql.clone(), params! {catalog_id,offset,batch_size})
             .await?
@@ -1245,7 +1255,7 @@ impl Storage for StorageMySQL {
 
     async fn entry_from_id(&self, entry_id: usize) -> Result<Entry> {
         let sql = format!("{} WHERE `id`=:entry_id", Self::entry_sql_select());
-        let mut conn = self.get_conn().await?;
+        let mut conn = self.get_conn_ro().await?;
         let ret = conn
             .exec_iter(sql, params! {entry_id})
             .await?
@@ -1264,7 +1274,7 @@ impl Storage for StorageMySQL {
             "{} WHERE `catalog`=:catalog_id AND `ext_id`=:ext_id",
             Self::entry_sql_select()
         );
-        let mut conn = self.get_conn().await?;
+        let mut conn = self.get_conn_ro().await?;
         let mut rows: Vec<Entry> = conn
             .exec_iter(sql, params! {catalog_id,ext_id})
             .await?
@@ -1291,7 +1301,7 @@ impl Storage for StorageMySQL {
             .collect::<Vec<String>>()
             .join(",");
         let sql = format!("{} WHERE `id` IN ({})", Self::entry_sql_select(), entry_ids);
-        let mut conn = self.get_conn().await?;
+        let mut conn = self.get_conn_ro().await?;
         let rows: Vec<Entry> = conn
             .exec_iter(sql, ())
             .await?
@@ -1336,7 +1346,7 @@ impl Storage for StorageMySQL {
     }
 
     async fn entry_get_creation_time(&self, entry_id: usize) -> Option<String> {
-        let mut conn = self.get_conn().await.ok()?;
+        let mut conn = self.get_conn_ro().await.ok()?;
         let results = conn
             .exec_iter(
                 r"SELECT `timestamp` FROM `entry_creation` WHERE `entry_id`=:entry_id",
@@ -1420,7 +1430,7 @@ impl Storage for StorageMySQL {
         &self,
         entry_id: usize,
     ) -> Result<(Option<String>, Option<String>)> {
-        let mut conn = self.get_conn().await?;
+        let mut conn = self.get_conn_ro().await?;
         let mut rows: Vec<(String, String)> = conn
             .exec_iter(
                 r"SELECT `born`,`died` FROM `person_dates` WHERE `entry_id`=:entry_id LIMIT 1",
@@ -1465,7 +1475,7 @@ impl Storage for StorageMySQL {
 
     /// Returns a LocaleString Vec of all aliases of the entry
     async fn entry_get_aliases(&self, entry_id: usize) -> Result<Vec<LocaleString>> {
-        let mut conn = self.get_conn().await?;
+        let mut conn = self.get_conn_ro().await?;
         let rows: Vec<(String, String)> = conn
             .exec_iter(
                 r"SELECT `language`,`label` FROM `aliases` WHERE `entry_id`=:entry_id",
@@ -1491,7 +1501,7 @@ impl Storage for StorageMySQL {
         entry_id: usize,
     ) -> Result<HashMap<String, String>> {
         let rows: Vec<(String, String)> = self
-            .get_conn()
+            .get_conn_ro()
             .await?
             .exec_iter(
                 r"SELECT `language`,`label` FROM `descriptions` WHERE `entry_id`=:entry_id",
@@ -1550,7 +1560,7 @@ impl Storage for StorageMySQL {
         &self,
         entry_id: usize,
     ) -> Result<Option<CoordinateLocation>> {
-        let mut conn = self.get_conn().await?;
+        let mut conn = self.get_conn_ro().await?;
         let ret = conn
             .exec_iter(
                 r"SELECT `lat`,`lon` FROM `location` WHERE `entry_id`=:entry_id LIMIT 1",
@@ -1565,7 +1575,7 @@ impl Storage for StorageMySQL {
     }
 
     async fn entry_get_aux(&self, entry_id: usize) -> Result<Vec<AuxiliaryRow>> {
-        let mut conn = self.get_conn().await?;
+        let mut conn = self.get_conn_ro().await?;
         let ret = conn
             .exec_iter(r"SELECT `id`,`aux_p`,`aux_name`,`in_wikidata`,`entry_is_matched` FROM `auxiliary` WHERE `entry_id`=:entry_id",params! {entry_id}).await?
             .map_and_drop(|row| AuxiliaryRow::from_row(&row)).await?
@@ -1669,7 +1679,7 @@ impl Storage for StorageMySQL {
 
     async fn entry_get_multi_matches(&self, entry_id: usize) -> Result<Vec<String>> {
         Ok(self
-            .get_conn()
+            .get_conn_ro()
             .await?
             .exec_iter(
                 r"SELECT candidates FROM multi_match WHERE entry_id=:entry_id",
@@ -1697,7 +1707,7 @@ impl Storage for StorageMySQL {
         let sql = format!("SELECT
                         (SELECT count(*) FROM jobs WHERE `status` IN ('RUNNING')) AS running,
                         (SELECT count(*) FROM jobs WHERE `status` IN ('RUNNING') AND last_ts>='{ts}') AS running_recent");
-        let mut conn = self.get_conn().await.expect("seppuku: No DB connection");
+        let mut conn = self.get_conn_ro().await.expect("seppuku: No DB connection");
         let (running, running_recent) = *conn
             .exec_iter(sql, ())
             .await
@@ -1726,6 +1736,7 @@ mod tests {
         let config: Value = serde_json::from_reader(file).unwrap();
         let storage = StorageMySQL {
             pool: StorageMySQL::create_pool(&config["wikidata"]),
+            pool_ro: StorageMySQL::create_pool(&config["wikidata"]),
         };
 
         // High priority
