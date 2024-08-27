@@ -84,7 +84,10 @@ impl AppState {
         Self {
             wikidata: Wikidata::new(&config["wikidata"], bot_name, bot_password),
             wdrc: Arc::new(WDRC::new(&config["wdrc"])),
-            storage: Arc::new(Box::new(StorageMySQL::new(&config["mixnmatch"]))),
+            storage: Arc::new(Box::new(StorageMySQL::new(
+                &config["mixnmatch"],
+                &config["mixnmatch_ro"],
+            ))),
             import_file_path,
             task_specific_usize,
             max_concurrent_jobs,
