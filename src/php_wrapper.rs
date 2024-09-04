@@ -49,8 +49,4 @@ impl PhpWrapper {
     pub fn import_aux_from_url(catalog_id: usize) -> Result<()> {
         Self::run_command_with_catalog_id(catalog_id, "import_aux_from_url.php")
     }
-
-    pub fn match_by_coordinates(catalog_id: usize) -> Result<()> {
-        Self::run_command_with_catalog_id(catalog_id, "match_by_coordinates.php")
-    }
 }
