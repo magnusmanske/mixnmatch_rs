@@ -17,6 +17,7 @@ use crate::{
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use itertools::Itertools;
+use mysql_async::Params::Empty;
 use mysql_async::{from_row, futures::GetConn, prelude::*, Params, Row};
 use rand::prelude::*;
 use serde_json::Value;
@@ -232,17 +233,17 @@ impl StorageMySQL {
     ) -> Result<Vec<(usize, String, String)>> {
         let taxon_name_column = field.as_str();
         let sql = format!(
-            r"SELECT `id`,`{taxon_name_column}` AS taxon_name,`type` FROM `entry`
-            	WHERE `catalog` IN (:catalog_id)
+            "SELECT `id`,`{taxon_name_column}` AS taxon_name,`type` FROM `entry`
+            	WHERE `catalog` IN ({catalog_id})
              	AND (`q` IS NULL OR `user`=0)
               	AND `type` IN ('{}')
-            	LIMIT :batch_size OFFSET :offset",
+            	LIMIT {batch_size} OFFSET {offset}",
             ranks.join("','")
         );
         let results = self
             .get_conn_ro()
             .await?
-            .exec_iter(sql, params! {catalog_id,batch_size,offset})
+            .exec_iter(sql, Empty)
             .await?
             .map_and_drop(from_row::<(usize, String, String)>)
             .await?;
@@ -262,7 +263,8 @@ impl Storage for StorageMySQL {
     // Taxon matcher
     async fn set_catalog_taxon_run(&self, catalog_id: usize, taxon_run: bool) -> Result<()> {
         let taxon_run = taxon_run as u16;
-        let sql = "UPDATE `catalog` SET `taxon_run`=1 WHERE `id`=? AND `taxon_run`=?";
+        let sql =
+            "UPDATE `catalog` SET `taxon_run`=1 WHERE `id`=:catalog_id AND `taxon_run`=:taxon_run";
         let mut conn = self.get_conn().await?;
         conn.exec_drop(sql, params! {catalog_id, taxon_run}).await?;
         Ok(())
@@ -524,7 +526,7 @@ impl Storage for StorageMySQL {
         let has_rows = !self
             .get_conn_ro()
             .await?
-            .exec_iter(sql, mysql_async::Params::Empty)
+            .exec_iter(sql, Empty)
             .await?
             .map_and_drop(from_row::<usize>)
             .await?
@@ -707,7 +709,7 @@ impl Storage for StorageMySQL {
     async fn remove_p17_for_humans(&self) -> Result<()> {
         let sql = r#"DELETE FROM auxiliary WHERE aux_p=17 AND EXISTS (SELECT * FROM entry WHERE entry_id=entry.id AND `type`="Q5")"#;
         let mut conn = self.get_conn().await?;
-        conn.exec_drop(sql, mysql_async::Params::Empty).await?;
+        conn.exec_drop(sql, Empty).await?;
         Ok(())
     }
 
@@ -718,7 +720,7 @@ impl Storage for StorageMySQL {
 
         // Reset
         let sql = r#"DROP TABLE IF EXISTS tmp_automatches"#;
-        conn.exec_drop(sql, mysql_async::Params::Empty).await?;
+        conn.exec_drop(sql, Empty).await?;
 
         // Generate sub-list of potential matches
         let sql = r#"CREATE table tmp_automatches
@@ -732,7 +734,7 @@ impl Storage for StorageMySQL {
 	       AND e1.catalog=c1.id AND c1.active=1
 	       AND e2.catalog=c2.id AND c2.active=1
 	       limit 1000"#;
-        conn.exec_drop(sql, mysql_async::Params::Empty).await?;
+        conn.exec_drop(sql, Empty).await?;
 
         // Apply sub-list
         let sql = r#"UPDATE entry
@@ -740,11 +742,11 @@ impl Storage for StorageMySQL {
         	SET entry.q=tmp_automatches.q,user=0,timestamp=date_format(now(),"%Y%m%d%H%i%S")
          	WHERE entry.q!=tmp_automatches.q AND (entry.q IS NULL or entry.user=0)
           	AND NOT EXISTS (SELECT * FROM log WHERE entry.id=log.entry_id AND `action`='remove_q' AND log.q=tmp_automatches.q);"#;
-        conn.exec_drop(sql, mysql_async::Params::Empty).await?;
+        conn.exec_drop(sql, Empty).await?;
 
         // Cleanup
         let sql = r#"DROP TABLE IF EXISTS tmp_automatches"#;
-        conn.exec_drop(sql, mysql_async::Params::Empty).await?;
+        conn.exec_drop(sql, Empty).await?;
 
         Ok(())
     }
@@ -832,7 +834,7 @@ impl Storage for StorageMySQL {
             items.join(",")
         );
         let mut conn = self.get_conn().await?;
-        conn.exec_drop(sql, mysql_async::Params::Empty).await?;
+        conn.exec_drop(sql, Empty).await?;
         Ok(())
     }
 
