@@ -1,9 +1,7 @@
 use crate::app_state::AppState;
 use crate::entry::AuxiliaryRow;
-use crate::storage::Storage;
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
-use std::sync::Arc;
 use wikimisc::wikibase::Reference;
 use wikimisc::wikibase::Snak;
 
@@ -95,13 +93,9 @@ impl Catalog {
     }
 
     // TODO test
-    pub async fn set_taxon_run(
-        &mut self,
-        storage: &Arc<Box<dyn Storage>>,
-        new_taxon_run: bool,
-    ) -> Result<()> {
+    pub async fn set_taxon_run(&mut self, app: &AppState, new_taxon_run: bool) -> Result<()> {
         if self.taxon_run != new_taxon_run {
-            storage
+            app.storage()
                 .set_catalog_taxon_run(self.id, new_taxon_run)
                 .await?;
             self.taxon_run = new_taxon_run;
