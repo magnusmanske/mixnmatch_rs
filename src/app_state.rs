@@ -132,123 +132,6 @@ impl AppState {
         std::path::Path::new("/etc/wmcs-project").exists()
     }
 
-    // pub async fn run_from_props(&self, props: Vec<u32>, min_entries: u16) -> Result<()> {
-    //     if props.len() < 2 {
-    //         return Err(anyhow!("Minimum of two properties required."));
-    //     }
-    //     let mut mnm = MixNMatch::new(self.clone());
-    //     let first_prop = props.first().unwrap(); // Safe
-    //     let mut sql = format!(
-    //         r#"SELECT main_ext_id,group_concat(entry_id),count(DISTINCT entry_id) AS cnt
-    //         FROM ( SELECT entry_id,aux_name AS main_ext_id FROM auxiliary,entry WHERE aux_p={first_prop} and entry.id=entry_id AND (entry.q is null or entry.user=0)
-    //         UNION SELECT entry.id,ext_id FROM entry,catalog WHERE entry.catalog=catalog.id AND catalog.active=1 AND catalog.wd_prop={first_prop} AND (entry.q is null or entry.user=0) ) t1"#
-    //     );
-    //     for (num, prop) in props.iter().skip(1).enumerate() {
-    //         sql += if num == 0 { " WHERE" } else { " AND" };
-    //         sql += &format!(
-    //             r#" entry_id IN (SELECT entry_id FROM auxiliary,entry WHERE aux_p={prop} and entry.id=entry_id UNION SELECT entry.id FROM entry,catalog WHERE entry.catalog=catalog.id AND catalog.active=1 AND catalog.wd_prop={prop})"#
-    //         );
-    //     }
-    //     sql += &format!(r#"GROUP BY main_ext_id HAVING cnt>={min_entries}"#);
-    //     sql = sql.replace(['\n', '\t'], " ");
-
-    //     let mut conn = self
-    //         .get_mnm_conn()
-    //         .await
-    //         .expect("run_from_props: No DB connection");
-
-    //     let results: Vec<_> = conn
-    //         .exec_iter(sql, ())
-    //         .await
-    //         .expect("run_from_props: No results")
-    //         .map_and_drop(from_row::<(String, String, usize)>)
-    //         .await
-    //         .expect("run_from_props: Result retrieval failure");
-
-    //     let props_s = props
-    //         .iter()
-    //         .map(|p| format!("{p}"))
-    //         .collect::<Vec<String>>()
-    //         .join(",");
-    //     for (_primary_ext_id, entries_s, _cnt) in results {
-    //         let entries_v: Vec<_> = entries_s
-    //             .split(',')
-    //             .filter_map(|s| s.parse::<usize>().ok())
-    //             .collect();
-    //         self.create_item_from_entries(&entries_v, &props_s, &mut conn, &mut mnm)
-    //             .await?;
-    //     }
-    //     Ok(())
-    // }
-
-    // pub async fn create_item_from_entries(
-    //     &self,
-    //     entries_v: &[usize],
-    //     props_s: &str,
-    //     conn: &mut Conn,
-    //     mnm: &mut MixNMatch,
-    // ) -> Result<()> {
-    //     let entries_s: Vec<_> = entries_v.iter().map(|id| format!("{id}")).collect();
-    //     let entries_s = entries_s.join(",");
-    //     let sql = format!(
-    //         r#"SELECT entry_id,aux_p,aux_name FROM auxiliary WHERE entry_id IN ({entries_s}) AND aux_p IN ({props_s}) UNION SELECT entry.id,catalog.wd_prop,ext_id FROM entry,catalog WHERE entry.catalog=catalog.id AND entry.id IN ({entries_s}) AND wd_prop IN ({props_s})"#
-    //     );
-
-    //     let entry_prop_values: Vec<_> = conn
-    //         .exec_iter(sql, ())
-    //         .await
-    //         .expect("run_from_props: No results")
-    //         .map_and_drop(from_row::<(usize, u32, String)>)
-    //         .await
-    //         .expect("run_from_props: Result retrieval failure");
-
-    //     let prop_values = entry_prop_values
-    //         .iter()
-    //         .map(|(_entry_id, prop, value)| format!("P{prop}={value}"))
-    //         .collect::<Vec<String>>()
-    //         .join("|");
-    //     let query = format!(r#"haswbstatement:"{prop_values}""#);
-    //     let mut qs = mnm.wd_search(&query).await?;
-    //     if qs.is_empty() {
-    //         println!("Create new item from {entries_s}");
-    //         let mut new_item = ItemEntity::new_empty();
-    //         for entry_id in entries_v {
-    //             let entry = Entry::from_id(*entry_id, mnm).await?;
-    //             entry.add_to_item(&mut new_item).await?;
-    //         }
-    //         // println!("{:#?}", new_item);
-    //         match mnm.create_new_wikidata_item(new_item).await {
-    //             Ok(q) => {
-    //                 println!("Created https://www.wikidata.org/wiki/{q}");
-    //                 for entry_id in entries_v {
-    //                     let mut entry = Entry::from_id(*entry_id, mnm).await?;
-    //                     let _ = entry.set_match(&q, USER_AUX_MATCH).await;
-    //                 }
-    //             }
-    //             Err(e) => {
-    //                 // Ignore TODO try again with blank description?
-    //                 println!("ERROR: {e}");
-    //                 return Ok(());
-    //             }
-    //         }
-    //     } else {
-    //         qs.sort();
-    //         qs.dedup();
-    //         if qs.len() == 1 {
-    //             let q = qs.first().unwrap(); // Safe
-    //             for entry_id in entries_v {
-    //                 let mut entry = Entry::from_id(*entry_id, mnm).await?;
-    //                 if !entry.is_fully_matched() {
-    //                     let _ = entry.set_match(q, USER_AUX_MATCH).await?;
-    //                 }
-    //             }
-    //         } else {
-    //             println!("Multiple potential matches for {entries_s} {qs:?}, skipping");
-    //         }
-    //     }
-    //     Ok(())
-    // }
-
     pub async fn run_single_hp_job(&self) -> Result<()> {
         let app = self.clone();
         let mut job = Job::new(&app);
@@ -364,13 +247,7 @@ impl AppState {
     ) -> Result<(Job, HashMap<String, TaskSize>)> {
         let mut job = Job::new(app);
         let task_size = self.storage().jobs_get_tasks().await?;
-        let big_jobs_running = (**current_jobs)
-            .clone()
-            .into_read_only()
-            .iter()
-            .map(|(_job_id, size)| size.to_owned())
-            .filter(|size| *size > *threshold_job_size)
-            .count();
+        let big_jobs_running = Self::count_big_jobs_running(current_jobs, threshold_job_size);
         let max_job_size = if big_jobs_running >= self.max_concurrent_jobs * threshold_percent / 100
         {
             threshold_job_size.to_owned()
@@ -455,10 +332,19 @@ impl AppState {
             current_jobs.remove(&job_id);
         });
     }
-}
 
-unsafe impl Send for AppState {}
-unsafe impl Sync for AppState {}
+    fn count_big_jobs_running(
+        current_jobs: &Arc<DashMap<usize, TaskSize>>,
+        threshold_job_size: &TaskSize,
+    ) -> usize {
+        let big_jobs_running = current_jobs
+            .iter()
+            .map(|x| x.value().to_owned())
+            .filter(|size| *size > *threshold_job_size)
+            .count();
+        big_jobs_running
+    }
+}
 
 #[cfg(test)]
 mod tests {

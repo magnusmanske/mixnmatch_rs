@@ -17,7 +17,6 @@ use serde_json::json;
 use std::cmp::Ordering;
 use std::error::Error;
 use std::fmt;
-use std::sync::Arc;
 use wikimisc::timestamp::TimeStamp;
 
 #[derive(Eq, Clone, Debug)]
@@ -251,7 +250,7 @@ impl JobRow {
 #[derive(Debug, Clone)]
 pub struct Job {
     pub data: JobRow,
-    pub app: Arc<AppState>,
+    pub app: AppState,
     pub skip_actions: Vec<String>,
 }
 
@@ -259,7 +258,7 @@ impl Job {
     pub fn new(app: &AppState) -> Self {
         Self {
             data: JobRow::default(),
-            app: Arc::new(app.clone()),
+            app: app.clone(),
             skip_actions: vec![],
         }
     }

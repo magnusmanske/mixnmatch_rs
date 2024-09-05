@@ -24,7 +24,7 @@ lazy_static! {
 #[derive(Debug, Clone, Default)]
 pub struct ExtendedEntry {
     pub entry: Entry,
-    pub aux: HashMap<usize, String>,
+    pub aux: HashMap<usize, String>, // TODO FIXME this should be MultiMap or something!
     pub born: Option<String>,
     pub died: Option<String>,
     pub aliases: Vec<LocaleString>,
@@ -140,6 +140,7 @@ impl ExtendedEntry {
     // Does NOT remove ones that don't exist anymore. Who knows how they got into the database.
     //TODO test
     pub async fn sync_auxiliary(&self, entry: &Entry) -> Result<()> {
+        // TODO FIXME this should be MultiMap or something!
         let existing: HashMap<usize, String> = entry
             .get_aux()
             .await?
