@@ -596,13 +596,10 @@ impl AutoMatch {
         batch_size: usize,
         offset: usize,
         mw_api: &mediawiki::api::Api,
-    ) -> Result<
-        (
-            Vec<CandidateDates>,
-            wikimisc::wikibase::entity_container::EntityContainer,
-        ),
-        anyhow::Error,
-    > {
+    ) -> Result<(
+        Vec<CandidateDates>,
+        wikimisc::wikibase::entity_container::EntityContainer,
+    )> {
         let results = self
             .app
             .storage()
