@@ -188,6 +188,10 @@ impl AppState {
         // TO MANUALLY FIND ACTIONS NOT ASSIGNED A TASK SIZE:
         // select distinct action from jobs where action not in (select action from job_sizes);
 
+        println!(
+            "\n=== Starting forever loop with max_concurrent_jobs={}",
+            self.max_concurrent_jobs
+        );
         loop {
             let current_jobs_len = current_jobs.len();
             if current_jobs_len >= self.max_concurrent_jobs {
@@ -272,20 +276,14 @@ impl AppState {
         }
         let sys = System::new_all();
         // println!("Uptime: {:?}", System::uptime());
-        println!(
-            "Memory: total {}, free {}, used {} MB",
+        print!(
+            "Memory: total {}, free {}, used {} MB; ",
             sys.total_memory() / 1024,
             sys.free_memory() / 1024,
             sys.used_memory() / 1024
         );
-        println!(
-            "Swap: total: {}, free {}, used:{} MB",
-            sys.total_swap() / 1024,
-            sys.free_swap() / 1024,
-            sys.used_swap() / 1024
-        );
-        println!(
-            "Processes: {}, CPUs: {}",
+        print!(
+            "Processes: {}, CPUs: {}; ",
             sys.processes().len(),
             sys.cpus().len()
         );
