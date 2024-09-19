@@ -21,6 +21,41 @@ lazy_static! {
     static ref RE_YEAR: Regex = Regex::new(r"(\d{3,4})").expect("Regexp error");
 }
 
+pub enum DateMatchField {
+    Born,
+    Died,
+}
+
+impl DateMatchField {
+    fn get_field_name(&self) -> &'static str {
+        match self {
+            DateMatchField::Born => "born",
+            DateMatchField::Died => "died",
+        }
+    }
+
+    fn get_property(&self) -> &'static str {
+        match self {
+            DateMatchField::Born => "P569",
+            DateMatchField::Died => "P570",
+        }
+    }
+}
+
+pub enum DatePrecision {
+    Day,
+    Year,
+}
+
+impl DatePrecision {
+    fn as_i32(&self) -> i32 {
+        match self {
+            DatePrecision::Day => 10,
+            DatePrecision::Year => 4,
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct ResultInOriginalCatalog {
     pub entry_id: usize,
@@ -550,9 +585,13 @@ impl AutoMatch {
         Ok(())
     }
 
-    pub async fn match_person_by_single_date(&mut self, catalog_id: usize) -> Result<()> {
-        let precision = 10; // 2022-xx-xx=10; use 4 for just the year
-        let (match_field, match_prop) = self.match_person_by_single_date_get_match_field();
+    pub async fn match_person_by_single_date(
+        &mut self,
+        catalog_id: usize,
+        match_field: DateMatchField,
+        precision: DatePrecision,
+    ) -> Result<()> {
+        // let (match_field, match_prop) = match_field.get_field_and_prop();
         let mw_api = self.app.wikidata().get_mw_api().await?;
         // CAUTION: Do NOT use views in the SQL statement, it will/might throw an "Prepared statement needs to be re-prepared" error
         let mut offset = self.get_last_job_offset().await;
@@ -562,7 +601,7 @@ impl AutoMatch {
                 .match_person_by_single_date_get_results(
                     &match_field,
                     catalog_id,
-                    precision,
+                    precision.as_i32(),
                     batch_size,
                     offset,
                     &mw_api,
@@ -572,8 +611,7 @@ impl AutoMatch {
                 self.match_person_by_single_date_check_candidates(
                     result,
                     &items,
-                    &match_prop,
-                    precision,
+                    precision.as_i32(),
                     &match_field,
                 )
                 .await?;
@@ -590,7 +628,7 @@ impl AutoMatch {
 
     async fn match_person_by_single_date_get_results(
         &mut self,
-        match_field: &str,
+        match_field: &DateMatchField,
         catalog_id: usize,
         precision: i32,
         batch_size: usize,
@@ -604,7 +642,7 @@ impl AutoMatch {
             .app
             .storage()
             .match_person_by_single_date_get_results(
-                match_field,
+                match_field.get_field_name(),
                 catalog_id,
                 precision,
                 batch_size,
@@ -622,9 +660,8 @@ impl AutoMatch {
         &mut self,
         result: &CandidateDates,
         items: &wikimisc::wikibase::entity_container::EntityContainer,
-        match_prop: &str,
         precision: i32,
-        match_field: &str,
+        match_field: &DateMatchField,
     ) -> Result<()> {
         let mut candidates = vec![];
         for q in &result.matches {
@@ -632,12 +669,12 @@ impl AutoMatch {
                 Some(item) => item,
                 None => continue,
             };
-            let statements = item.claims_with_property(match_prop);
+            let statements = item.claims_with_property(match_field.get_property());
             for statement in &statements {
                 Self::match_person_by_single_date_check_statement(
                     statement,
                     precision,
-                    match_field,
+                    match_field.get_field_name(),
                     result,
                     &mut candidates,
                     q,
@@ -795,16 +832,6 @@ impl AutoMatch {
         }
         let _ = self.clear_offset().await;
         Ok(())
-    }
-
-    fn match_person_by_single_date_get_match_field(&self) -> (String, String) {
-        let match_field = "born";
-        let match_prop = if match_field == "born" {
-            "P569"
-        } else {
-            "P570"
-        };
-        (match_field.to_string(), match_prop.to_string())
     }
 
     fn automatch_from_other_catalogs_name_type2id(
@@ -1072,7 +1099,7 @@ mod tests {
         entry.set_match("Q13520818", 0).await.unwrap();
 
         // Run automatch
-        am.match_person_by_single_date(TEST_CATALOG_ID)
+        am.match_person_by_single_date(TEST_CATALOG_ID, DateMatchField::Born, DatePrecision::Day)
             .await
             .unwrap();
 
