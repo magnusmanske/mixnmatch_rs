@@ -473,7 +473,14 @@ impl Job {
             "match_on_birthdate" => {
                 let mut am = AutoMatch::new(&self.app);
                 am.set_current_job(self);
-                am.match_person_by_single_date(catalog_id).await
+                am.match_person_by_single_date(catalog_id, DateMatchField::Born, DatePrecision::Day)
+                    .await
+            }
+            "match_on_deathdate" => {
+                let mut am = AutoMatch::new(&self.app);
+                am.set_current_job(self);
+                am.match_person_by_single_date(catalog_id, DateMatchField::Died, DatePrecision::Day)
+                    .await
             }
             "autoscrape" => {
                 let mut autoscrape = Autoscrape::new(catalog_id, &self.app).await?;
