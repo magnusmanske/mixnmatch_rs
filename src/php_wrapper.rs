@@ -1,4 +1,4 @@
-use crate::app_state::AppState;
+use crate::{app_state::AppState, bespoke_scrapers::*};
 use anyhow::Result;
 use chrono::Utc;
 use std::process::Command;
@@ -38,8 +38,12 @@ impl PhpWrapper {
         Self::run_command_with_catalog_id(catalog_id, "generate_aux_from_description.php")
     }
 
-    pub fn bespoke_scraper(catalog_id: usize) -> Result<()> {
-        Self::run_command_with_catalog_id(catalog_id, "bespoke_scraper.php")
+    pub async fn bespoke_scraper(catalog_id: usize, app: &AppState) -> Result<()> {
+        match catalog_id {
+            121 => BespokeScraper121::new(app).run().await,
+            6479 => BespokeScraper6479::new(app).run().await,
+            _ => Self::run_command_with_catalog_id(catalog_id, "bespoke_scraper.php"),
+        }
     }
 
     pub fn update_descriptions_from_url(catalog_id: usize) -> Result<()> {

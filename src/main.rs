@@ -6,6 +6,7 @@ pub mod autoscrape_levels;
 pub mod autoscrape_resolve;
 pub mod autoscrape_scraper;
 pub mod auxiliary_matcher;
+pub mod bespoke_scrapers;
 pub mod catalog;
 pub mod coordinate_matcher;
 pub mod datasource;
@@ -30,6 +31,7 @@ pub mod wikidata;
 pub mod wikidata_commands;
 
 use anyhow::Result;
+use bespoke_scrapers::BespokeScraper;
 use std::env;
 
 async fn run() -> Result<()> {
@@ -60,16 +62,7 @@ async fn run() -> Result<()> {
         //     let min_entries = argv.get(4).and_then(|s| s.parse::<u16>().ok()).unwrap_or(2);
         //     app.run_from_props(props, min_entries).await
         // }
-        Some("test") => {
-            let m = maintenance::Maintenance::new(&app);
-            m.automatch_people_via_year_born().await?;
-            // let mut job = crate::job::Job::new(&app);
-            // job.set_next().await?;
-            // let job_id = job.get_next_job_id().await;
-            // let id_opt = j.set_next().await;
-            // println!("{job:?}");
-            Ok(())
-        }
+        Some("test") => bespoke_scrapers::BespokeScraper6479::new(&app).run().await,
         Some("server") => app.forever_loop().await,
         Some(other) => panic!("Unrecodnized command '{other}'"),
         None => panic!("Command required: server CONFIG_FILE | job CONFIG_FILE JOB_ID"),

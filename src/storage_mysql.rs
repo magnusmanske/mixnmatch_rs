@@ -60,10 +60,6 @@ impl StorageMySQL {
         }
     }
 
-    // fn pool_ro(&self) -> &mysql_async::Pool {
-    //     &self.pool_ro
-    // }
-
     fn get_conn(&self) -> GetConn {
         self.pool.get_conn()
     }
@@ -1363,7 +1359,7 @@ impl Storage for StorageMySQL {
     }
 
     async fn entry_set_ext_name(&self, ext_name: &str, entry_id: usize) -> Result<()> {
-        let sql = "UPDATE `entry` SET `ext_name`=:ext_name WHERE `id`=:entry_id";
+        let sql = "UPDATE `entry` SET `ext_name`=SUBSTR(:ext_name,1,127) WHERE `id`=:entry_id";
         let mut conn = self.get_conn().await?;
         conn.exec_drop(sql, params! {ext_name,entry_id}).await?;
         Ok(())
@@ -1381,7 +1377,7 @@ impl Storage for StorageMySQL {
     }
 
     async fn entry_set_ext_desc(&self, ext_desc: &str, entry_id: usize) -> Result<()> {
-        let sql = "UPDATE `entry` SET `ext_desc`=:ext_desc WHERE `id`=:entry_id";
+        let sql = "UPDATE `entry` SET `ext_desc`=SUBSTR(:ext_desc,1,254) WHERE `id`=:entry_id";
         let mut conn = self.get_conn().await?;
         conn.exec_drop(sql, params! {ext_desc,entry_id}).await?;
         Ok(())
