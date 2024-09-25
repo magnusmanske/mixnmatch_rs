@@ -573,7 +573,7 @@ impl Job {
             "generate_aux_from_description" => {
                 PhpWrapper::generate_aux_from_description(catalog_id)
             }
-            "bespoke_scraper" => PhpWrapper::bespoke_scraper(catalog_id),
+            "bespoke_scraper" => PhpWrapper::bespoke_scraper(catalog_id, &self.app).await,
             "import_aux_from_url" => PhpWrapper::import_aux_from_url(catalog_id),
             "update_descriptions_from_url" => PhpWrapper::update_descriptions_from_url(catalog_id),
             "match_by_coordinates" => {

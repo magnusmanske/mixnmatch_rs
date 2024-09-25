@@ -5,7 +5,7 @@ use crate::update_catalog::UpdateCatalogError;
 use anyhow::{anyhow, Result};
 use lazy_static::lazy_static;
 use regex::Regex;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use wikimisc::timestamp::TimeStamp;
 use wikimisc::wikibase::LocaleString;
 
@@ -24,7 +24,7 @@ lazy_static! {
 #[derive(Debug, Clone, Default)]
 pub struct ExtendedEntry {
     pub entry: Entry,
-    pub aux: HashMap<usize, String>, // TODO FIXME this should be MultiMap or something!
+    pub aux: HashSet<(usize, String)>,
     pub born: Option<String>,
     pub died: Option<String>,
     pub aliases: Vec<LocaleString>,
@@ -120,6 +120,12 @@ impl ExtendedEntry {
         if !self.entry.ext_url.is_empty() {
             entry.set_ext_url(&self.entry.ext_url).await?;
         }
+        if entry.q.is_none() {
+            if let Some(q) = self.entry.q {
+                println!("UPDATING Q{q} for {}", entry.id);
+                entry.set_match(&format!("Q{q}"), 4).await?;
+            }
+        }
         Ok(())
     }
 
@@ -140,16 +146,17 @@ impl ExtendedEntry {
     // Does NOT remove ones that don't exist anymore. Who knows how they got into the database.
     //TODO test
     pub async fn sync_auxiliary(&self, entry: &Entry) -> Result<()> {
-        // TODO FIXME this should be MultiMap or something!
-        let existing: HashMap<usize, String> = entry
+        let existing: Vec<(usize, String)> = entry
             .get_aux()
             .await?
             .iter()
             .map(|a| (a.prop_numeric, a.value.to_owned()))
             .collect();
-        for (prop, value) in &self.aux {
-            if existing.get(prop) != Some(value) {
-                entry.set_auxiliary(*prop, Some(value.to_owned())).await?;
+        for prop_value in &self.aux {
+            if !existing.contains(prop_value) {
+                entry
+                    .set_auxiliary(prop_value.0, Some(prop_value.1.to_owned()))
+                    .await?;
             }
         }
         Ok(())
@@ -296,6 +303,7 @@ impl ExtendedEntry {
 
         // Do location if necessary
         // TODO for all location properties, not only P625 hardcoded
+        // also dates (P569/P570)?
         if property_num == 625 {
             if let Some(captures) = RE_LAT_LON.captures(&value) {
                 if let (Some(lat), Some(lon)) = (captures.get(1), captures.get(2)) {
@@ -305,7 +313,7 @@ impl ExtendedEntry {
                 }
             }
         } else {
-            self.aux.insert(property_num, value);
+            self.aux.insert((property_num, value));
         }
 
         Ok(true)
