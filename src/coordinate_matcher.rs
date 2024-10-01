@@ -2,13 +2,11 @@ use crate::app_state::AppState;
 use crate::app_state::USER_LOCATION_MATCH;
 use crate::entry::Entry;
 use crate::job::{Job, Jobbable};
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use lazy_static::lazy_static;
 use mediawiki::api::Api;
 use regex::{Regex, RegexBuilder};
 use std::collections::HashMap;
-use std::error::Error;
-use std::fmt;
 
 const DEFAULT_MAX_DISTANCE: &str = "500m";
 const MAX_AUTOMATCH_DISTANCE: f64 = 0.1; // km
@@ -21,21 +19,6 @@ lazy_static! {
     static ref RE_KILOMETERS: Regex = RegexBuilder::new(r"^([0-9.]+)km$")
         .build()
         .expect("Regex error");
-}
-
-#[derive(Debug, Clone)]
-enum CoordinateMatcherError {
-    String(String),
-}
-
-impl Error for CoordinateMatcherError {}
-
-impl fmt::Display for CoordinateMatcherError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            CoordinateMatcherError::String(s) => write!(f, "{s}"),
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -256,10 +239,7 @@ impl CoordinateMatcher {
     fn check_bad_catalog(&self) -> Result<()> {
         if let Some(catalog_id) = self.catalog_id {
             if self.bad_catalogs.contains(&catalog_id) {
-                return Err(CoordinateMatcherError::String(format!(
-                    "CoordinateMatcher: Bad catalog: {catalog_id}"
-                ))
-                .into());
+                return Err(anyhow!("CoordinateMatcher: Bad catalog: {catalog_id}"));
             }
         }
         Ok(())
