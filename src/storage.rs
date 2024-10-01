@@ -9,6 +9,7 @@ use crate::{
     match_state::MatchState,
     taxon_matcher::{RankedNames, TaxonNameField},
     update_catalog::UpdateInfo,
+    PropTodo,
 };
 use anyhow::Result;
 use async_trait::async_trait;
@@ -127,6 +128,9 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
 
     // Maintenance
 
+    async fn get_props_todo(&self) -> Result<Vec<PropTodo>>;
+    async fn add_props_todo(&self, new_props: Vec<PropTodo>) -> Result<()>;
+    async fn mark_props_todo_as_has_catalog(&self) -> Result<()>;
     async fn remove_p17_for_humans(&self) -> Result<()>;
     async fn cleanup_mnm_relations(&self) -> Result<()>;
     async fn maintenance_sync_redirects(&self, redirects: HashMap<isize, isize>) -> Result<()>;

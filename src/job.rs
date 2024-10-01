@@ -526,45 +526,34 @@ impl Job {
                 };
                 ms.check_catalog(catalog_id).await
             }
+
+            "maintenance_automatch" => Maintenance::new(&self.app).automatch().await,
+            "update_props_todo" => Maintenance::new(&self.app).update_props_todo().await,
+            "remove_p17_for_humans" => Maintenance::new(&self.app).remove_p17_for_humans().await,
+            "cleanup_mnm_relations" => Maintenance::new(&self.app).cleanup_mnm_relations().await,
+
             "fix_disambig" => {
-                let maintenance = Maintenance::new(&self.app);
-                maintenance
+                Maintenance::new(&self.app)
                     .unlink_meta_items(catalog_id, &MatchState::any_matched())
                     .await
             }
 
             "fix_redirected_items_in_catalog" => {
-                let maintenance = Maintenance::new(&self.app);
-                maintenance
+                Maintenance::new(&self.app)
                     .fix_redirects(catalog_id, &MatchState::any_matched())
                     .await
             }
 
-            "maintenance_automatch" => {
-                let maintenance = Maintenance::new(&self.app);
-                maintenance.automatch().await
-            }
-
             "maintenance_inventory_match" => {
-                let maintenance = Maintenance::new(&self.app);
-                maintenance
+                Maintenance::new(&self.app)
                     .fully_match_via_collection_inventory_number()
                     .await
             }
 
             "automatch_people_via_year_born" => {
-                let maintenance = Maintenance::new(&self.app);
-                maintenance.automatch_people_via_year_born().await
-            }
-
-            "remove_p17_for_humans" => {
-                let maintenance = Maintenance::new(&self.app);
-                maintenance.remove_p17_for_humans().await
-            }
-
-            "cleanup_mnm_relations" => {
-                let maintenance = Maintenance::new(&self.app);
-                maintenance.cleanup_mnm_relations().await
+                Maintenance::new(&self.app)
+                    .automatch_people_via_year_born()
+                    .await
             }
 
             "wdrc_sync" => self.app.wdrc().sync(&self.app).await,

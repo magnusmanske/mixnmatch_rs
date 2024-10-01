@@ -13,6 +13,7 @@ use crate::{
     mysql_misc::MySQLMisc,
     taxon_matcher::{RankedNames, TaxonMatcher, TaxonNameField, TAXON_RANKS},
     update_catalog::UpdateInfo,
+    PropTodo,
 };
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
@@ -701,11 +702,54 @@ impl Storage for StorageMySQL {
 
     // Maintenance
 
+    async fn get_props_todo(&self) -> Result<Vec<PropTodo>> {
+        let sql = r#"SELECT id,property_num,property_name,default_type,status,note,user_id,items_using FROM props_todo"#;
+        let mut conn = self.get_conn_ro().await?;
+        let results = conn
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(PropTodo::from_row)
+            .await?
+            .into_iter()
+            .flatten()
+            .collect();
+        Ok(results)
+    }
+
+    async fn add_props_todo(&self, new_props: Vec<PropTodo>) -> Result<()> {
+        if new_props.is_empty() {
+            return Ok(());
+        }
+        let mut conn = self.get_conn().await?;
+        r"INSERT IGNORE INTO `props_todo` (property_num,property_name,default_type,`status`,note,user_id,items_using)
+         		VALUES (:property_num,:property_name,:default_type,:status,:note,:user_id,:items_using)"
+        .with(new_props.iter().map(|prop|
+            params! {
+            "property_num" => prop.prop_num,
+            "property_name" => prop.name.to_owned(),
+            "default_type" => prop.default_type.to_owned(),
+            "status" => prop.status.to_owned(),
+            "note" => prop.note.to_owned(),
+            "user_id" => prop.user_id,
+            "items_using" => prop.items_using
+            }))
+        .batch(&mut conn)
+        .await?;
+        Ok(())
+    }
+
+    async fn mark_props_todo_as_has_catalog(&self) -> Result<()> {
+        let sql = r#"UPDATE props_todo SET status="HAS_CATALOG",note="Auto-matched to catalog",user_id=0
+        WHERE `status`="NO_CATALOG" AND property_num IN
+        (select distinct wd_prop from catalog where active=1 and wd_qual is NULL and wd_prop is not null)"#;
+        self.get_conn().await?.exec_drop(sql, Empty).await?;
+        Ok(())
+    }
+
     /// Removes P17 auxiliary values for entryies of type Q5 (human)
     async fn remove_p17_for_humans(&self) -> Result<()> {
         let sql = r#"DELETE FROM auxiliary WHERE aux_p=17 AND EXISTS (SELECT * FROM entry WHERE entry_id=entry.id AND `type`="Q5")"#;
-        let mut conn = self.get_conn().await?;
-        conn.exec_drop(sql, Empty).await?;
+        self.get_conn().await?.exec_drop(sql, Empty).await?;
         Ok(())
     }
 
