@@ -179,7 +179,7 @@ impl AutoMatch {
         let wd_matches = self
             .app
             .wikidata()
-            .automatch_by_sitlinks_get_wd_matches(params, site)
+            .get_items_for_pages_on_wiki(params, site)
             .await?;
         Ok(wd_matches)
     }

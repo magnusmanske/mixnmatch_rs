@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use lazy_static::lazy_static;
 use rand::Rng;
 use regex::{Captures, Regex};
-use std::{collections::HashMap, fs::File};
+use std::collections::HashMap;
 use wikimisc::timestamp::TimeStamp;
 
 #[async_trait]

@@ -31,8 +31,42 @@ pub mod wikidata;
 pub mod wikidata_commands;
 
 use anyhow::Result;
-use bespoke_scrapers::BespokeScraper;
 use std::env;
+
+#[derive(Debug, Default)]
+pub struct PropTodo {
+    pub id: usize,
+    pub prop_num: u64,
+    pub name: String,
+    pub default_type: String,
+    pub status: String,
+    pub note: String,
+    pub user_id: u64,
+    pub items_using: Option<u64>,
+}
+
+impl PropTodo {
+    pub fn new(prop_num: u64, name: String) -> Self {
+        Self {
+            prop_num,
+            name,
+            ..Default::default()
+        }
+    }
+
+    pub fn from_row(r: mysql_async::Row) -> Option<Self> {
+        Some(Self {
+            id: r.get(0)?,
+            prop_num: r.get(1)?,
+            name: r.get(2)?,
+            default_type: r.get(3)?,
+            status: r.get(4)?,
+            note: r.get(5)?,
+            user_id: r.get(6)?,
+            items_using: r.get(7)?,
+        })
+    }
+}
 
 async fn run() -> Result<()> {
     let argv: Vec<String> = env::args_os().map(|s| s.into_string().unwrap()).collect();
@@ -62,7 +96,11 @@ async fn run() -> Result<()> {
         //     let min_entries = argv.get(4).and_then(|s| s.parse::<u16>().ok()).unwrap_or(2);
         //     app.run_from_props(props, min_entries).await
         // }
-        Some("test") => bespoke_scrapers::BespokeScraper6479::new(&app).run().await,
+        Some("test") => {
+            // bespoke_scrapers::BespokeScraper6479::new(&app).run().await;
+            let maintenance = maintenance::Maintenance::new(&app);
+            maintenance.update_props_todo().await
+        }
         Some("server") => app.forever_loop().await,
         Some(other) => panic!("Unrecodnized command '{other}'"),
         None => panic!("Command required: server CONFIG_FILE | job CONFIG_FILE JOB_ID"),

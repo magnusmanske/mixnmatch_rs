@@ -50,21 +50,23 @@ impl Wikidata {
 
     // Database things
 
-    pub async fn automatch_by_sitlinks_get_wd_matches(
+    /// Returns [(item_id, page)]
+    pub async fn get_items_for_pages_on_wiki(
         &self,
-        params: Vec<String>,
+        pages: Vec<String>,
         site: &String,
     ) -> Result<Vec<(usize, String)>> {
-        let placeholders = Self::sql_placeholders(params.len());
+        let placeholders = Self::sql_placeholders(pages.len());
         let sql = format!(
             "SELECT `ips_item_id`,`ips_site_page`
             FROM `wb_items_per_site`
             WHERE `ips_site_id`='{site}'
             AND `ips_site_page` IN ({placeholders})"
         );
-        let mut conn = self.get_conn().await?;
-        let wd_matches = conn
-            .exec_iter(sql, params)
+        let wd_matches = self
+            .get_conn()
+            .await?
+            .exec_iter(sql, pages)
             .await?
             .map_and_drop(from_row::<(usize, String)>)
             .await?;
@@ -76,22 +78,23 @@ impl Wikidata {
             "SELECT lt_id FROM linktarget WHERE lt_namespace=0 AND lt_title IN ('{}')",
             &META_ITEMS.join("','")
         );
-        let mut conn = self.get_conn().await?;
-        let meta_items_link_target_ids = conn
+        let meta_items_link_target_ids = self
+            .get_conn()
+            .await?
             .exec_iter(sql, ())
             .await?
             .map_and_drop(from_row::<u64>)
             .await?
             .iter()
-            .map(|i| format!("{i}"))
+            .map(|i| i.to_string())
             .collect();
         Ok(meta_items_link_target_ids)
     }
 
-    // `items` should be a unique list of Qids
-    pub async fn get_meta_items(&self, items: &Vec<String>) -> Result<Vec<String>> {
+    /// Returns a list of items that link to meta items (disambiguation pages etc)
+    pub async fn get_meta_items(&self, unique_qs: &Vec<String>) -> Result<Vec<String>> {
         let meta_items_link_target_ids = self.get_meta_items_link_targets().await?;
-        let placeholders = Self::sql_placeholders(items.len());
+        let placeholders = Self::sql_placeholders(unique_qs.len());
         let sql = format!(
             "SELECT DISTINCT page_title AS page_title
             FROM page,pagelinks,linktarget
@@ -102,13 +105,14 @@ impl Wikidata {
 	        AND pl_target_id IN ({})",
             &meta_items_link_target_ids.join(",")
         );
-        let mut conn = self.get_conn().await?;
-        let meta_items = conn
-            .exec_iter(sql, items)
+        let results = self
+            .get_conn()
+            .await?
+            .exec_iter(sql, unique_qs)
             .await?
             .map_and_drop(from_row::<String>)
             .await?;
-        Ok(meta_items)
+        Ok(results)
     }
 
     pub async fn search_with_type(&self, name: &str) -> Result<Vec<String>> {
@@ -117,24 +121,29 @@ impl Wikidata {
            			WHERE wbit_term_in_lang_id=wbtl_id AND wbtl_text_in_lang_id=wbxl_id AND wbxl_text_id=wbx_id  AND wbx_text=:name
 	                AND EXISTS (SELECT * FROM page,pagelinks,linktarget WHERE page_title=concat('Q',wbit_item_id) AND page_namespace=0 AND pl_target_id=lt_id AND pl_from=page_id AND lt_namespace=0 AND lt_title=:type_q)
 					GROUP BY name,q";
-        let mut conn = self.get_conn().await?;
-        Ok(conn
+        let results = self
+            .get_conn()
+            .await?
             .exec_iter(sql, params! {name})
             .await?
             .map_and_drop(from_row::<String>)
-            .await?)
+            .await?;
+        Ok(results)
     }
 
     pub async fn search_without_type(&self, name: &str) -> Result<Vec<String>> {
         let sql = "SELECT concat('Q',wbit_item_id) AS q FROM wbt_text,wbt_item_terms,wbt_term_in_lang,wbt_text_in_lang WHERE wbit_term_in_lang_id=wbtl_id AND wbtl_text_in_lang_id=wbxl_id AND wbxl_text_id=wbx_id  AND wbx_text=:name GROUP BY name,q";
-        let mut conn = self.get_conn().await?;
-        Ok(conn
+        let results = self
+            .get_conn()
+            .await?
             .exec_iter(sql, params! {name})
             .await?
             .map_and_drop(from_row::<String>)
-            .await?)
+            .await?;
+        Ok(results)
     }
 
+    /// Returns a list of redirected items, with their redirect tatget.
     pub async fn get_redirected_items(
         &self,
         unique_qs: &Vec<String>,
@@ -142,16 +151,18 @@ impl Wikidata {
         let placeholders = Self::sql_placeholders(unique_qs.len());
         let sql = format!("SELECT page_title,rd_title FROM `page`,`redirect`
                 WHERE `page_id`=`rd_from` AND `rd_namespace`=0 AND `page_is_redirect`=1 AND `page_namespace`=0
-                AND `page_title` IN ({})",placeholders);
-        let mut conn = self.get_conn().await?;
-        let page2rd = conn
+                AND `page_title` IN ({placeholders})");
+        let results = self
+            .get_conn()
+            .await?
             .exec_iter(sql, unique_qs)
             .await?
             .map_and_drop(from_row::<(String, String)>)
             .await?;
-        Ok(page2rd)
+        Ok(results)
     }
 
+    /// Returns a list of deleted items
     pub async fn get_deleted_items(&self, unique_qs: &[String]) -> Result<Vec<String>> {
         let placeholders = Self::sql_placeholders(unique_qs.len());
         let sql = format!(
@@ -195,8 +206,10 @@ impl Wikidata {
         }
         items.sort();
         items.dedup();
-        let meta_items = self.get_meta_items(items).await?;
-        items.retain(|item| !meta_items.iter().any(|q| q == item));
+        let meta_items: HashSet<String> = self.get_meta_items(items).await?.into_iter().collect();
+        if !meta_items.is_empty() {
+            items.retain(|item| !meta_items.contains(item));
+        }
         Ok(())
     }
 

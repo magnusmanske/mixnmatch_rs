@@ -3,9 +3,10 @@ use crate::auxiliary_matcher::AuxiliaryMatcher;
 use crate::catalog::Catalog;
 use crate::entry::Entry;
 use crate::match_state::MatchState;
+use crate::PropTodo;
 use anyhow::{anyhow, Result};
 use futures::future::join_all;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub struct Maintenance {
     app: AppState,
@@ -31,6 +32,53 @@ impl Maintenance {
             offset += unique_qs.len();
             let _ = self.fix_redirected_items_batch(&unique_qs).await; // Ignore error
         }
+    }
+
+    pub async fn update_props_todo(&self) -> Result<()> {
+        let mw_api = self.app.wikidata().get_mw_api().await?;
+        let sparql = r#"SELECT ?p ?pLabel {
+        	VALUES ?auth { wd:Q19595382 wd:Q62589316 wd:Q42396390 } .
+         	?p rdf:type wikibase:Property ; wdt:P31/wdt:P279* ?auth .
+          	MINUS { ?p wdt:P2264 [] } .
+            SERVICE wikibase:label { bd:serviceParam wikibase:language "[AUTO_LANGUAGE],mul,en". }
+        }"#;
+        if let Ok(results) = mw_api.sparql_query(sparql).await {
+            if let Some(bindings) = results["results"]["bindings"].as_array() {
+                let mut properties = vec![];
+                let mut prop_names = HashMap::new();
+                for b in bindings {
+                    if let Some(entity_url) = b["p"]["value"].as_str() {
+                        if let Ok(entity) = mw_api.extract_entity_from_uri(entity_url) {
+                            if let Ok(prop_num) = entity[1..].parse::<u64>() {
+                                properties.push(prop_num);
+                                if let Some(prop_name) = b["pLabel"]["value"].as_str() {
+                                    prop_names.insert(prop_num, prop_name);
+                                }
+                            }
+                        }
+                    }
+                }
+                let extisting_props = self.app.storage().get_props_todo().await?;
+                let existing_hash: HashSet<u64> =
+                    extisting_props.iter().map(|p| p.prop_num).collect();
+                let new_props: Vec<PropTodo> = properties
+                    .iter()
+                    .filter(|prop_num| !existing_hash.contains(prop_num))
+                    .map(|prop_num| {
+                        let name = prop_names
+                            .get(prop_num)
+                            .map(|s| s.to_string())
+                            .unwrap_or(format!("P{prop_num}"));
+                        PropTodo::new(*prop_num, name)
+                    })
+                    .collect();
+                self.app.storage().add_props_todo(new_props).await?;
+                // TODO add default_type?
+                // TODO add items_using?
+            }
+        }
+        let _ = self.app.storage().mark_props_todo_as_has_catalog().await; // We don't really care about the result
+        Ok(())
     }
 
     pub async fn automatch_people_via_year_born(&self) -> Result<()> {
