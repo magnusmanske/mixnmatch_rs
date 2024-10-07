@@ -198,8 +198,13 @@ impl AppState {
                 self.hold_on();
                 continue;
             }
-            self.forever_loop_run_job(&current_jobs, &threshold_job_size, threshold_percent)
-                .await?;
+            match self
+                .forever_loop_run_job(&current_jobs, &threshold_job_size, threshold_percent)
+                .await
+            {
+                Ok(_) => {}
+                Err(e) => eprintln!("Error in forever_loop_run_job: {e}"),
+            }
         }
         // self.disconnect().await?; // Never happens
     }
