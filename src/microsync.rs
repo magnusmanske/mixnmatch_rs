@@ -8,8 +8,6 @@ use crate::match_state::MatchState;
 use anyhow::Result;
 use serde_json::Value;
 use std::collections::HashMap;
-use std::error::Error;
-use std::fmt;
 use std::fs::File;
 use wikimisc::timestamp::TimeStamp;
 
@@ -17,23 +15,6 @@ pub const EXT_URL_UNIQUE_SEPARATOR: &str = "!@£$%^&|";
 const MAX_WIKI_ROWS: usize = 400;
 const BLACKLISTED_CATALOGS: &[usize] = &[506];
 const MNM_SITE_URL: &str = "https://mix-n-match.toolforge.org";
-
-#[derive(Debug)]
-pub enum MicrosyncError {
-    UnsuitableCatalogProperty,
-}
-
-impl Error for MicrosyncError {}
-
-impl fmt::Display for MicrosyncError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            MicrosyncError::UnsuitableCatalogProperty => {
-                write!(f, "MicrosyncError::UnsuitableCatalogProperty")
-            }
-        }
-    }
-}
 
 #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
 struct MatchDiffers {
@@ -106,7 +87,6 @@ impl Microsync {
         let catalog = Catalog::from_id(catalog_id, &self.app).await?;
         let property = match (catalog.wd_prop, catalog.wd_qual) {
             (Some(prop), None) => prop,
-            //_ => return Err(Box::new(MicrosyncError::UnsuitableCatalogProperty))
             _ => return Ok(()), // Don't fail this job, just silently close it
         };
         let maintenance = Maintenance::new(&self.app);

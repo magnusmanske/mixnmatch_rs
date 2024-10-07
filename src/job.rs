@@ -532,6 +532,12 @@ impl Job {
             "remove_p17_for_humans" => Maintenance::new(&self.app).remove_p17_for_humans().await,
             "cleanup_mnm_relations" => Maintenance::new(&self.app).cleanup_mnm_relations().await,
 
+            "create_match_person_dates" => {
+                Maintenance::new(&self.app)
+                    .create_match_person_dates_jobs_for_catalogs()
+                    .await
+            }
+
             "fix_disambig" => {
                 Maintenance::new(&self.app)
                     .unlink_meta_items(catalog_id, &MatchState::any_matched())

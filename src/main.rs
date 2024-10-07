@@ -43,6 +43,7 @@ pub struct PropTodo {
     pub note: String,
     pub user_id: u64,
     pub items_using: Option<u64>,
+    pub number_of_records: Option<u64>,
 }
 
 impl PropTodo {
@@ -50,6 +51,7 @@ impl PropTodo {
         Self {
             prop_num,
             name,
+            status: "NO_CATALOG".to_string(),
             ..Default::default()
         }
     }
@@ -64,6 +66,7 @@ impl PropTodo {
             note: r.get(5)?,
             user_id: r.get(6)?,
             items_using: r.get(7)?,
+            number_of_records: r.get(8)?,
         })
     }
 }
