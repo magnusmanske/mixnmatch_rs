@@ -703,7 +703,7 @@ impl Storage for StorageMySQL {
     // Maintenance
 
     async fn get_props_todo(&self) -> Result<Vec<PropTodo>> {
-        let sql = r#"SELECT id,property_num,property_name,default_type,status,note,user_id,items_using FROM props_todo"#;
+        let sql = r#"SELECT id,property_num,property_name,default_type,status,note,user_id,items_using,number_of_records FROM props_todo"#;
         let mut conn = self.get_conn_ro().await?;
         let results = conn
             .exec_iter(sql, ())
@@ -739,10 +739,19 @@ impl Storage for StorageMySQL {
     }
 
     async fn mark_props_todo_as_has_catalog(&self) -> Result<()> {
-        let sql = r#"UPDATE props_todo SET status="HAS_CATALOG",note="Auto-matched to catalog",user_id=0
+        let sql = r#"UPDATE `props_todo` SET status="HAS_CATALOG",note="Auto-matched to catalog",user_id=0
         WHERE `status`="NO_CATALOG" AND property_num IN
         (select distinct wd_prop from catalog where active=1 and wd_qual is NULL and wd_prop is not null)"#;
         self.get_conn().await?.exec_drop(sql, Empty).await?;
+        Ok(())
+    }
+
+    async fn set_props_todo_items_using(&self, prop_numeric: u64, cnt: u64) -> Result<()> {
+        let sql = r#"UPDATE `props_todo` SET items_using=:cnt WHERE property_num=:prop_numeric"#;
+        self.get_conn()
+            .await?
+            .exec_drop(sql, params! {prop_numeric,cnt})
+            .await?;
         Ok(())
     }
 
@@ -793,8 +802,16 @@ impl Storage for StorageMySQL {
 
     async fn cleanup_mnm_relations(&self) -> Result<()> {
         let sql = "DELETE from mnm_relation WHERE entry_id=0 or target_entry_id=0";
-        let mut conn = self.get_conn().await?;
-        conn.exec_drop(sql, ()).await?;
+        self.get_conn().await?.exec_drop(sql, ()).await?;
+        Ok(())
+    }
+
+    async fn create_match_person_dates_jobs_for_catalogs(&self) -> Result<()> {
+        let sql = r#"INSERT IGNORE INTO jobs (`action`,catalog,`status`)
+        	SELECT 'match_person_dates',id,'TODO' FROM catalog
+         	WHERE has_person_date='yes'
+          	AND id NOT IN (SELECT catalog FROM jobs WHERE `action`='match_person_dates')"#;
+        self.get_conn().await?.exec_drop(sql, ()).await?;
         Ok(())
     }
 

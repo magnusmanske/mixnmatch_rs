@@ -34,7 +34,76 @@ impl Maintenance {
         }
     }
 
+    pub async fn create_match_person_dates_jobs_for_catalogs(&self) -> Result<()> {
+        self.app
+            .storage()
+            .create_match_person_dates_jobs_for_catalogs()
+            .await?;
+        Ok(())
+    }
+
     pub async fn update_props_todo(&self) -> Result<()> {
+        // We don't really care if one of these fails occasionally
+        let _ = self.update_props_todo_add_new_properties().await;
+        let _ = self.update_props_todo_update_items_using().await;
+        let _ = self.app.storage().mark_props_todo_as_has_catalog().await;
+        // TODO add default_type?
+        Ok(())
+    }
+
+    async fn update_props_todo_update_items_using(&self) -> Result<()> {
+        let props_todo: HashSet<u64> = self
+            .app
+            .storage()
+            .get_props_todo()
+            .await?
+            .into_iter()
+            .filter(|p| p.items_using.is_none()) // Only those without number; comment out to update everything
+            .map(|p| p.prop_num)
+            .collect();
+        let mw_api = self.app.wikidata().get_mw_api().await?;
+        let sparql = r#"select ?p (count(?q) AS ?cnt) { ?q ?p [] } group by ?p"#;
+        let results = match mw_api.sparql_query(sparql).await {
+            Ok(results) => results,
+            Err(_) => return Ok(()),
+        };
+        let bindings = match results["results"]["bindings"].as_array() {
+            Some(bindings) => bindings,
+            None => return Ok(()),
+        };
+        for b in bindings {
+            let (prop_url, cnt) = match (b["p"]["value"].as_str(), b["cnt"]["value"].as_str()) {
+                (Some(prop_url), Some(cnt)) => (prop_url, cnt),
+                _ => continue,
+            };
+            let (url, prop) = match prop_url.rsplit_once('/') {
+                Some((url, prop)) => (url, prop),
+                _ => continue,
+            };
+            if prop.chars().nth(0) != Some('P') || url != "http://www.wikidata.org/prop/direct" {
+                continue;
+            }
+            let prop_num = match prop[1..].parse::<u64>() {
+                Ok(prop_num) => prop_num,
+                Err(_) => continue,
+            };
+            if !props_todo.contains(&prop_num) {
+                continue;
+            }
+            let cnt = match cnt.parse::<u64>() {
+                Ok(cnt) => cnt,
+                Err(_) => continue,
+            };
+            let _ = self
+                .app
+                .storage()
+                .set_props_todo_items_using(prop_num, cnt)
+                .await;
+        }
+        Ok(())
+    }
+
+    async fn update_props_todo_add_new_properties(&self) -> Result<()> {
         let mw_api = self.app.wikidata().get_mw_api().await?;
         let sparql = r#"SELECT ?p ?pLabel {
         	VALUES ?auth { wd:Q19595382 wd:Q62589316 wd:Q42396390 } .
@@ -42,42 +111,42 @@ impl Maintenance {
           	MINUS { ?p wdt:P2264 [] } .
             SERVICE wikibase:label { bd:serviceParam wikibase:language "[AUTO_LANGUAGE],mul,en". }
         }"#;
-        if let Ok(results) = mw_api.sparql_query(sparql).await {
-            if let Some(bindings) = results["results"]["bindings"].as_array() {
-                let mut properties = vec![];
-                let mut prop_names = HashMap::new();
-                for b in bindings {
-                    if let Some(entity_url) = b["p"]["value"].as_str() {
-                        if let Ok(entity) = mw_api.extract_entity_from_uri(entity_url) {
-                            if let Ok(prop_num) = entity[1..].parse::<u64>() {
-                                properties.push(prop_num);
-                                if let Some(prop_name) = b["pLabel"]["value"].as_str() {
-                                    prop_names.insert(prop_num, prop_name);
-                                }
-                            }
+        let results = match mw_api.sparql_query(sparql).await {
+            Ok(results) => results,
+            Err(_) => return Ok(()),
+        };
+        let bindings = match results["results"]["bindings"].as_array() {
+            Some(bindings) => bindings,
+            None => return Ok(()),
+        };
+        let mut properties = vec![];
+        let mut prop_names = HashMap::new();
+        for b in bindings {
+            if let Some(entity_url) = b["p"]["value"].as_str() {
+                if let Ok(entity) = mw_api.extract_entity_from_uri(entity_url) {
+                    if let Ok(prop_num) = entity[1..].parse::<u64>() {
+                        properties.push(prop_num);
+                        if let Some(prop_name) = b["pLabel"]["value"].as_str() {
+                            prop_names.insert(prop_num, prop_name);
                         }
                     }
                 }
-                let extisting_props = self.app.storage().get_props_todo().await?;
-                let existing_hash: HashSet<u64> =
-                    extisting_props.iter().map(|p| p.prop_num).collect();
-                let new_props: Vec<PropTodo> = properties
-                    .iter()
-                    .filter(|prop_num| !existing_hash.contains(prop_num))
-                    .map(|prop_num| {
-                        let name = prop_names
-                            .get(prop_num)
-                            .map(|s| s.to_string())
-                            .unwrap_or(format!("P{prop_num}"));
-                        PropTodo::new(*prop_num, name)
-                    })
-                    .collect();
-                self.app.storage().add_props_todo(new_props).await?;
-                // TODO add default_type?
-                // TODO add items_using?
             }
         }
-        let _ = self.app.storage().mark_props_todo_as_has_catalog().await; // We don't really care about the result
+        let extisting_props = self.app.storage().get_props_todo().await?;
+        let existing_hash: HashSet<u64> = extisting_props.iter().map(|p| p.prop_num).collect();
+        let new_props: Vec<PropTodo> = properties
+            .iter()
+            .filter(|prop_num| !existing_hash.contains(prop_num))
+            .map(|prop_num| {
+                let name = prop_names
+                    .get(prop_num)
+                    .map(|s| s.to_string())
+                    .unwrap_or(format!("P{prop_num}"));
+                PropTodo::new(*prop_num, name)
+            })
+            .collect();
+        self.app.storage().add_props_todo(new_props).await?;
         Ok(())
     }
 
