@@ -173,6 +173,7 @@ impl StorageMySQL {
             "SELECT `id` FROM `jobs` WHERE `status`='{}'",
             status.as_str()
         );
+        sql += r#" AND NOT EXISTS (SELECT * FROM catalog WHERE catalog.id=jobs.catalog AND active!=1)"#; // No inactive catalogs
         match depends_on {
             Some(other_status) => {
                 sql += &format!(" AND `depends_on` IS NOT NULL AND `depends_on` IN (SELECT `id` FROM `jobs` WHERE `status`='{}')",other_status.as_str());
