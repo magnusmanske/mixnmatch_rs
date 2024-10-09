@@ -234,6 +234,11 @@ impl AppState {
         match job.set_next().await {
             Ok(true) => {
                 Self::run_job(job, task_size, current_jobs).await;
+                let current_job_ids = current_jobs
+                    .iter()
+                    .map(|x| x.key().to_owned())
+                    .collect::<Vec<_>>();
+                println!("JOBS RUNNING: {:?}", current_job_ids);
             }
             Ok(false) => {
                 // println!("No jobs available, waiting... (not using: {:?})",job.skip_actions);
