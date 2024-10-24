@@ -47,11 +47,10 @@ impl Maintenance {
         results.sort();
         results.dedup();
         for (entry_id, q) in results {
-            let mut entry = match Entry::from_id(entry_id, &self.app).await {
-                Ok(entry) => entry,
-                Err(_) => continue,
+            if let Ok(mut entry) = Entry::from_id(entry_id, &self.app).await {
+                // Ignore error
+                let _ = entry.set_match(&format!("Q{q}"), USER_DATE_MATCH).await;
             };
-            entry.set_match(&format!("Q{q}"), USER_DATE_MATCH).await?;
         }
         Ok(())
     }
