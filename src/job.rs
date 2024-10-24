@@ -530,6 +530,11 @@ impl Job {
                 ms.check_catalog(catalog_id).await
             }
 
+            "maintenance_name_and_full_dates" => {
+                Maintenance::new(&self.app)
+                    .match_by_name_and_full_dates()
+                    .await
+            }
             "maintenance_automatch" => Maintenance::new(&self.app).automatch().await,
             "update_props_todo" => Maintenance::new(&self.app).update_props_todo().await,
             "remove_p17_for_humans" => Maintenance::new(&self.app).remove_p17_for_humans().await,

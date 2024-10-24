@@ -921,6 +921,34 @@ impl Storage for StorageMySQL {
         Ok(())
     }
 
+    /// Returns tuples of entry IDs and their prospective q matches,
+    /// based on other entriews with the same name, birth date, and death date
+    /// (both dates are day precision).
+    async fn maintenance_match_people_via_name_and_full_dates(
+        &self,
+        batch_size: usize,
+    ) -> Result<Vec<(usize, usize)>> {
+        let mut conn = self.get_conn().await?;
+        let sql = format!(
+            "SELECT d1.entry_id,d2.q
+			FROM vw_dates d1,vw_dates d2
+			WHERE length(d1.born)=10 and length(d1.died)=10 and d1.is_matched=false
+			AND d1.born=d2.born AND d2.died=d2.died AND d2.is_matched=true
+			AND d1.ext_name=d2.ext_name
+			AND (d1.user=0 OR d1.user is null)
+			AND d2.user>0 and d2.user is not null
+			HAVING d2.q>0
+			limit {batch_size}
+			"
+        );
+        let results = conn
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(from_row::<(usize, usize)>)
+            .await?;
+        Ok(results)
+    }
+
     /// Retrieves a batch of (unique) Wikidata items, in a given matching state.
     async fn get_items(
         &self,
