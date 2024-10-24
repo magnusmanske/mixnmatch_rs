@@ -1,4 +1,4 @@
-use crate::app_state::{AppState, USER_AUX_MATCH};
+use crate::app_state::{AppState, USER_AUX_MATCH, USER_DATE_MATCH};
 use crate::auxiliary_matcher::AuxiliaryMatcher;
 use crate::catalog::Catalog;
 use crate::entry::Entry;
@@ -32,6 +32,28 @@ impl Maintenance {
             offset += unique_qs.len();
             let _ = self.fix_redirected_items_batch(&unique_qs).await; // Ignore error
         }
+    }
+
+    /// For unmatched entries with day-precision birth and death dates,
+    /// finds other, matched entries with the same name and full dates,
+    /// then matches them.
+    pub async fn match_by_name_and_full_dates(&self) -> Result<()> {
+        const BATCH_SIZE: usize = 100;
+        let mut results = self
+            .app
+            .storage()
+            .maintenance_match_people_via_name_and_full_dates(BATCH_SIZE)
+            .await?;
+        results.sort();
+        results.dedup();
+        for (entry_id, q) in results {
+            let mut entry = match Entry::from_id(entry_id, &self.app).await {
+                Ok(entry) => entry,
+                Err(_) => continue,
+            };
+            entry.set_match(&format!("Q{q}"), USER_DATE_MATCH).await?;
+        }
+        Ok(())
     }
 
     pub async fn create_match_person_dates_jobs_for_catalogs(&self) -> Result<()> {

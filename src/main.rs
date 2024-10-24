@@ -102,7 +102,7 @@ async fn run() -> Result<()> {
         Some("test") => {
             // bespoke_scrapers::BespokeScraper6479::new(&app).run().await;
             let maintenance = maintenance::Maintenance::new(&app);
-            maintenance.update_props_todo().await
+            maintenance.match_by_name_and_full_dates().await
         }
         Some("server") => app.forever_loop().await,
         Some(other) => panic!("Unrecodnized command '{other}'"),
