@@ -1,7 +1,9 @@
 use crate::job::*;
+use crate::job_status::JobStatus;
 use crate::mysql_misc::MySQLMisc;
 use crate::storage::Storage;
 use crate::storage_mysql::StorageMySQL;
+use crate::task_size::TaskSize;
 use crate::wdrc::WDRC;
 use crate::wikidata::Wikidata;
 use anyhow::Result;
