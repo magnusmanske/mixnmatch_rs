@@ -122,7 +122,7 @@ impl ExtendedEntry {
         }
         if entry.q.is_none() {
             if let Some(q) = self.entry.q {
-                println!("UPDATING Q{q} for {}", entry.id);
+                // println!("UPDATING Q{q} for {}", entry.id);
                 entry.set_match(&format!("Q{q}"), 4).await?;
             }
         }
