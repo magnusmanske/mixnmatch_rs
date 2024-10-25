@@ -1829,10 +1829,13 @@ mod tests {
             pool_ro: StorageMySQL::create_pool(&config["wikidata"]),
         };
 
+        let catalog_filter =
+            "AND NOT EXISTS (SELECT * FROM catalog WHERE catalog.id=jobs.catalog AND active!=1)";
+
         // High priority
         let sql = storage.jobs_get_next_job_construct_sql(JobStatus::HighPriority, None, &[], None);
         let expected = format!(
-            "SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NULL ORDER BY `last_ts` LIMIT 1",
+            "SELECT `id` FROM `jobs` WHERE `status`='{}' {catalog_filter} AND `depends_on` IS NULL ORDER BY `last_ts` LIMIT 1",
             JobStatus::HighPriority.as_str()
         );
         assert_eq!(sql, expected);
@@ -1840,7 +1843,7 @@ mod tests {
         // Low priority
         let sql = storage.jobs_get_next_job_construct_sql(JobStatus::LowPriority, None, &[], None);
         let expected = format!(
-            "SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NULL ORDER BY `last_ts` LIMIT 1",
+            "SELECT `id` FROM `jobs` WHERE `status`='{}' {catalog_filter} AND `depends_on` IS NULL ORDER BY `last_ts` LIMIT 1",
             JobStatus::LowPriority.as_str()
         );
         assert_eq!(sql, expected);
@@ -1852,20 +1855,20 @@ mod tests {
             &[],
             None,
         );
-        let expected = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NOT NULL AND `depends_on` IN (SELECT `id` FROM `jobs` WHERE `status`='{}') ORDER BY `last_ts` LIMIT 1",JobStatus::Todo.as_str(),JobStatus::Done.as_str()) ;
+        let expected = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' {catalog_filter} AND `depends_on` IS NOT NULL AND `depends_on` IN (SELECT `id` FROM `jobs` WHERE `status`='{}') ORDER BY `last_ts` LIMIT 1",JobStatus::Todo.as_str(),JobStatus::Done.as_str()) ;
         assert_eq!(sql, expected);
 
         // get_next_initial_allowed_job
         let avoid = vec!["test1".to_string(), "test2".to_string()];
         let sql = storage.jobs_get_next_job_construct_sql(JobStatus::Todo, None, &avoid, None);
         let not_in = avoid.join("','");
-        let expected = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NULL AND `action` NOT IN ('{}') ORDER BY `last_ts` LIMIT 1",JobStatus::Todo.as_str(),&not_in) ;
+        let expected = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' {catalog_filter} AND `depends_on` IS NULL AND `action` NOT IN ('{}') ORDER BY `last_ts` LIMIT 1",JobStatus::Todo.as_str(),&not_in) ;
         assert_eq!(sql, expected);
 
         // get_next_initial_job
         let sql = storage.jobs_get_next_job_construct_sql(JobStatus::Todo, None, &[], None);
         let expected = format!(
-            "SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NULL ORDER BY `last_ts` LIMIT 1",
+            "SELECT `id` FROM `jobs` WHERE `status`='{}' {catalog_filter} AND `depends_on` IS NULL ORDER BY `last_ts` LIMIT 1",
             JobStatus::Todo.as_str()
         );
         assert_eq!(sql, expected);
@@ -1879,7 +1882,7 @@ mod tests {
             Some(timestamp.to_owned()),
         );
         let expected = format!(
-            "SELECT `id` FROM `jobs` WHERE `status`='{}' AND `next_ts`!='' AND `next_ts`<='{}' ORDER BY `next_ts` LIMIT 1",
+            "SELECT `id` FROM `jobs` WHERE `status`='{}' {catalog_filter} AND `next_ts`!='' AND `next_ts`<='{}' ORDER BY `next_ts` LIMIT 1",
             JobStatus::Done.as_str(),
             &timestamp
         );
@@ -1889,7 +1892,7 @@ mod tests {
         let no_actions = vec!["foo".to_string(), "bar".to_string()];
         let sql = storage.jobs_get_next_job_construct_sql(JobStatus::Todo, None, &no_actions, None);
         let expected = format!(
-            "SELECT `id` FROM `jobs` WHERE `status`='{}' AND `depends_on` IS NULL AND `action` NOT IN ('foo','bar') ORDER BY `last_ts` LIMIT 1",
+            "SELECT `id` FROM `jobs` WHERE `status`='{}' {catalog_filter} AND `depends_on` IS NULL AND `action` NOT IN ('foo','bar') ORDER BY `last_ts` LIMIT 1",
             JobStatus::Todo.as_str()
         );
         assert_eq!(sql, expected);
