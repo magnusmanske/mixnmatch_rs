@@ -1,4 +1,4 @@
-use std::cmp::Ordering;
+use std::{cmp::Ordering, fmt};
 
 #[derive(Eq, Clone, Debug)]
 pub enum TaskSize {
@@ -47,6 +47,12 @@ impl TaskSize {
             "ginormous" => Some(Self::GINORMOUS),
             _ => None,
         }
+    }
+}
+
+impl fmt::Display for TaskSize {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.value())
     }
 }
 
