@@ -270,7 +270,7 @@ impl AppState {
         } else {
             TaskSize::GINORMOUS
         };
-        println!("JOBSIZE: {max_job_size} ({big_jobs_running} big jobs running, threshold_percent={threshold_percent})");
+        // println!("JOBSIZE: {max_job_size} ({big_jobs_running} big jobs running, threshold_percent={threshold_percent})");
         job.skip_actions = task_size
             .iter()
             .filter(|(_action, size)| **size > max_job_size)
