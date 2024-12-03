@@ -486,7 +486,7 @@ impl Job {
             None => return Ok(String::new()),
         };
         let seconds = Duration::try_seconds(seconds).unwrap();
-        let utc = TimeStamp::from_str(&self.data().await?.last_ts.clone())
+        let utc = TimeStamp::str2utc(&self.data().await?.last_ts)
             .ok_or(anyhow!("Can't parse timestamp in last_ts"))?
             .checked_add_signed(seconds)
             .ok_or(JobError::TimeError)?;

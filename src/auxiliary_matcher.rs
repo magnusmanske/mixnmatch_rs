@@ -629,10 +629,9 @@ impl AuxiliaryMatcher {
         let mut sources: HashMap<String, WikidataCommandPropertyValueGroup> = HashMap::new();
 
         let entry_ids: Vec<usize> = results.iter().map(|r| r.entry_id).collect();
-        let entries = match Entry::multiple_from_ids(&entry_ids, &self.app).await {
-            Ok(entries) => entries,
-            Err(_) => HashMap::new(), // Something went wrong, ignore
-        };
+        let entries = Entry::multiple_from_ids(&entry_ids, &self.app)
+            .await
+            .unwrap_or_default();
 
         for result in results {
             if self.is_catalog_property_combination_suspect(catalog_id, result.property) {
