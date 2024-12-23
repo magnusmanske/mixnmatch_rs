@@ -104,8 +104,10 @@ async fn run() -> Result<()> {
         // }
         Some("test") => {
             // bespoke_scrapers::BespokeScraper6479::new(&app).run().await;
-            let maintenance = maintenance::Maintenance::new(&app);
-            maintenance.match_by_name_and_full_dates().await
+            // let maintenance = maintenance::Maintenance::new(&app);
+            // maintenance.match_by_name_and_full_dates().await
+            let mut am = automatch::AutoMatch::new(&app);
+            am.automatch_with_sparql(444).await
         }
         Some("server") => app.forever_loop().await,
         Some(other) => panic!("Unrecodnized command '{other}'"),
