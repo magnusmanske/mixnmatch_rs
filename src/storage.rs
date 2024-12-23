@@ -200,6 +200,13 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
 
     // Automatch
 
+    async fn automatch_entry_by_sparql(
+        &self,
+        catalog_id: usize,
+        q_numeric: usize,
+        label: &str,
+    ) -> Result<()>;
+
     async fn automatch_by_sitelink_get_entries(
         &self,
         catalog_id: usize,
@@ -260,6 +267,12 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     async fn entry_from_id(&self, entry_id: usize) -> Result<Entry>;
     async fn entry_from_ext_id(&self, catalog_id: usize, ext_id: &str) -> Result<Entry>;
     async fn multiple_from_ids(&self, entry_ids: &[usize]) -> Result<HashMap<usize, Entry>>;
+    async fn get_entry_batch(
+        &self,
+        catalog_id: usize,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<Entry>>;
     async fn entry_insert_as_new(&self, entry: &Entry) -> Result<usize>;
     async fn entry_delete(&self, entry_id: usize) -> Result<()>;
     async fn entry_get_creation_time(&self, entry_id: usize) -> Option<String>;

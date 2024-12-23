@@ -898,6 +898,21 @@ impl Storage for StorageMySQL {
         Ok(())
     }
 
+    async fn automatch_entry_by_sparql(
+        &self,
+        catalog_id: usize,
+        q_numeric: usize,
+        label: &str,
+    ) -> Result<()> {
+        let timestamp = TimeStamp::now();
+        let sql = "UPDATE `entry` SET `q`=:q_numeric,`user`=0,`timestamp`=:timestamp
+        	WHERE `catalog`=:catalog_id AND `ext_name`=:label AND `q` IS NULL";
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop(sql, params! {label,q_numeric,catalog_id,timestamp})
+            .await?;
+        Ok(())
+    }
+
     /// Finds some unmatched (Q5) entries where there is a (unique) full match for that name,
     /// and uses it as an auto-match
     async fn maintenance_automatch(&self) -> Result<()> {
@@ -1379,6 +1394,25 @@ impl Storage for StorageMySQL {
             .ok_or(anyhow!("No entry '{}' in catalog #{}", ext_id, catalog_id))?
             .to_owned();
         Ok(ret)
+    }
+
+    async fn get_entry_batch(
+        &self,
+        catalog_id: usize,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<Entry>> {
+        let sql = "SELECT * FROM `entry` WHERE `catalog`=:catalog_id LIMIT :limit OFFSET :offset";
+        Ok(self
+            .get_conn_ro()
+            .await?
+            .exec_iter(sql, params! {catalog_id,limit,offset})
+            .await?
+            .map_and_drop(|row| Self::entry_from_row(&row))
+            .await?
+            .iter()
+            .filter_map(|row| row.to_owned())
+            .collect())
     }
 
     async fn multiple_from_ids(&self, entry_ids: &[usize]) -> Result<HashMap<usize, Entry>> {

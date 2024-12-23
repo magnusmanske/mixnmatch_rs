@@ -124,6 +124,71 @@ impl AutoMatch {
         }
     }
 
+    pub async fn automatch_with_sparql(&mut self, catalog_id: usize) -> Result<()> {
+        let catalog = Catalog::from_id(catalog_id, &self.app).await?;
+        let kv_pairs = catalog.get_key_value_pairs().await?;
+        let sparql_part = kv_pairs
+            .iter()
+            .filter(|(k, _)| *k == "automatch_sparql")
+            .map(|(_, v)| v)
+            .next()
+            .ok_or_else(|| anyhow!("No automatch_sparql key in catalog"))?;
+        let sparql = format!("SELECT ?q ?qLabel WHERE {{ {sparql_part} }}");
+        let mut reader = self.app.wikidata().load_sparql_csv(&sparql).await?;
+        let api = self.app.wikidata().get_mw_api().await?;
+        let mut label2q = HashMap::new();
+        for row in reader.records().filter_map(|r| r.ok()) {
+            let q = api.extract_entity_from_uri(&row[0]).unwrap();
+            let q_label = row[1].to_string();
+            if let Ok(q_numeric) = q[1..].parse::<usize>() {
+                // self.app
+                //     .storage()
+                //     .automatch_entry_by_sparql(catalog_id, q_numeric, q_label)
+                //     .await?;
+                label2q.insert(q_label, q_numeric);
+                if label2q.len() >= 100000 {
+                    self.process_automatch_with_sparql(catalog_id, &label2q)
+                        .await?;
+                    label2q.clear();
+                }
+            }
+        }
+        self.process_automatch_with_sparql(catalog_id, &label2q)
+            .await?;
+        Ok(())
+    }
+
+    async fn process_automatch_with_sparql(
+        &self,
+        catalog_id: usize,
+        label2q: &HashMap<String, usize>,
+    ) -> Result<()> {
+        if label2q.is_empty() {
+            return Ok(());
+        }
+        let mut offset = 0;
+        let batch_size = 50000;
+        loop {
+            println!("Batch offset {offset}");
+            let mut entry_batch = self
+                .app
+                .storage()
+                .get_entry_batch(catalog_id, batch_size, offset)
+                .await?;
+            for entry in &mut entry_batch {
+                if let Some(q) = label2q.get(&entry.ext_name) {
+                    entry.set_app(&self.app);
+                    let _ = entry.set_match(&format!("Q{}", q), USER_AUTO).await;
+                }
+            }
+            if entry_batch.len() < batch_size {
+                break;
+            }
+            offset += entry_batch.len();
+        }
+        Ok(())
+    }
+
     pub async fn automatch_by_sitelink(&mut self, catalog_id: usize) -> Result<()> {
         let language = Catalog::from_id(catalog_id, &self.app).await?.search_wp;
         let site = format!("{}wiki", &language);
