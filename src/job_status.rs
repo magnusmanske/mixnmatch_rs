@@ -1,4 +1,4 @@
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Copy)]
 pub enum JobStatus {
     #[default]
     Todo,
@@ -25,7 +25,7 @@ impl JobStatus {
             _ => None,
         }
     }
-    pub fn as_str(&self) -> &str {
+    pub const fn as_str(&self) -> &str {
         match *self {
             JobStatus::Todo => "TODO",
             JobStatus::Done => "DONE",
