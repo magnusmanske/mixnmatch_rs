@@ -283,7 +283,7 @@ impl DataSource {
     fn extract_columns(json: &serde_json::Value) -> Vec<String> {
         let columns: Vec<String> = json
             .get("columns")
-            .map_or_else(|| vec![], |c| c.as_array().unwrap_or(&vec![]).to_owned())
+            .map_or_else(Vec::new, |c| c.as_array().unwrap_or(&vec![]).to_owned())
             .iter()
             .filter_map(|v| v.as_str())
             .map(|s| s.to_string())

@@ -323,7 +323,7 @@ impl WDRC {
 
     fn sync_redirects_add_redirect(
         j: Value,
-        new_ts: &String,
+        new_ts: &str,
         redirects: &mut HashMap<isize, isize>,
     ) -> String {
         let from = j["item"]
@@ -336,10 +336,7 @@ impl WDRC {
             .map(AppState::item2numeric)
             .and_then(|i| i)
             .unwrap_or(0);
-        let ts = j["timestamp"]
-            .as_str()
-            .unwrap_or_else(|| new_ts)
-            .to_string();
+        let ts = j["timestamp"].as_str().unwrap_or(new_ts).to_string();
         redirects.insert(from, to);
         ts
     }

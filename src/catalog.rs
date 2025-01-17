@@ -32,7 +32,7 @@ impl Catalog {
         Ok(ret)
     }
 
-    /// Returns a HashMap of key-value pairs for the catalog.
+    /// Returns a `HashMap` of key-value pairs for the catalog.
     pub async fn get_key_value_pairs(&self) -> Result<HashMap<String, String>> {
         self.app()?
             .storage()
@@ -40,17 +40,16 @@ impl Catalog {
             .await
     }
 
-    /// Sets the MixNMatch object. Automatically done when created via from_id().
+    /// Sets the `MixNMatch` object. Automatically done when created via `from_id()`.
     //TODO test
     pub fn set_mnm(&mut self, app: &AppState) {
         self.app = Some(app.clone());
     }
 
     fn app(&self) -> Result<&AppState> {
-        match &self.app {
-            Some(app) => Ok(app),
-            None => Err(anyhow!("Catalog {}: app not set", self.id)),
-        }
+        self.app
+            .as_ref()
+            .map_or_else(|| Err(anyhow!("Catalog {}: app not set", self.id)), Ok)
     }
 
     //TODO test
@@ -68,16 +67,21 @@ impl Catalog {
             let snak = Snak::new_item("P248", &value);
             snaks.push(snak);
         }
-        if self.wd_prop.is_some() && self.wd_qual.is_none() {
-            let prop = self.wd_prop.unwrap(); // Safe
-            let prop = format!("P{prop}");
-            let value = AuxiliaryRow::fix_external_id(&prop, &entry.ext_id);
-            let snak = Snak::new_external_id(&prop, &value);
-            snaks.push(snak);
-        } else if !entry.ext_url.is_empty() {
-            let snak = Snak::new_string("P854", &entry.ext_url);
-            snaks.push(snak);
+        match (self.wd_prop, self.wd_qual) {
+            (Some(prop), None) => {
+                let prop = format!("P{prop}");
+                let value = AuxiliaryRow::fix_external_id(&prop, &entry.ext_id);
+                let snak = Snak::new_external_id(&prop, &value);
+                snaks.push(snak);
+            }
+            _ => {
+                if !entry.ext_url.is_empty() {
+                    let snak = Snak::new_string("P854", &entry.ext_url);
+                    snaks.push(snak);
+                }
+            }
         }
+
         if let Some(ts) = entry.get_creation_time().await {
             if let Some(date) = ts.split(' ').next() {
                 let time = format!("+{date}T00:00:00Z");
