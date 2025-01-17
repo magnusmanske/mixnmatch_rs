@@ -1,4 +1,4 @@
-use crate::job::*;
+use crate::job::Job;
 use crate::job_status::JobStatus;
 use crate::mysql_misc::MySQLMisc;
 use crate::storage::Storage;
@@ -6,10 +6,11 @@ use crate::storage_mysql::StorageMySQL;
 use crate::task_size::TaskSize;
 use crate::wdrc::WDRC;
 use crate::wikidata::Wikidata;
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use chrono::Local;
 use dashmap::DashMap;
 use lazy_static::lazy_static;
+use log::{error, info};
 use regex::Regex;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -22,6 +23,8 @@ use tokio::time::sleep;
 use wikimisc::timestamp::TimeStamp;
 
 /// Global function for tests.
+/// # Panics
+/// Used for testing only, panics if the config file is not found.
 pub fn get_test_app() -> AppState {
     let ret = AppState::from_config_file("config.json").expect("Cannot create test MnM");
     *TESTING.lock().unwrap() = true;
@@ -52,13 +55,13 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// Create an AppState object from a config JSON file
+    /// Create an `AppState` object from a config JSON file
     pub fn from_config_file(filename: &str) -> Result<Self> {
-        let mut path = env::current_dir().expect("Can't get CWD");
+        let mut path = env::current_dir()?;
         path.push(filename);
         let file = File::open(&path)?;
         let config: Value = serde_json::from_reader(file)?;
-        Ok(Self::from_config(&config))
+        Self::from_config(&config)
     }
 
     pub fn import_file_path(&self) -> &str {
@@ -69,21 +72,30 @@ impl AppState {
         &self.task_specific_usize
     }
 
-    /// Creatre an AppState object from a config JSON object
-    pub fn from_config(config: &Value) -> Self {
+    /// Creatre an `AppState` object from a config JSON object
+    pub fn from_config(config: &Value) -> Result<Self> {
         let task_specific_usize = config["task_specific_usize"]
             .as_object()
-            .unwrap()
+            .ok_or_else(|| anyhow!("config.task_specific_usize not found, or not an object"))?
             .into_iter()
             .map(|(k, v)| (k.to_owned(), v.as_u64().unwrap_or_default() as usize))
             .collect();
         let task_specific_usize = Arc::new(task_specific_usize);
         let max_concurrent_jobs = config["max_concurrent_jobs"].as_u64().unwrap_or(10) as usize;
-        let bot_name = config["bot_name"].as_str().unwrap().to_string();
-        let bot_password = config["bot_password"].as_str().unwrap().to_string();
-        let import_file_path = config["import_file_path"].as_str().unwrap().to_string();
+        let bot_name = config["bot_name"]
+            .as_str()
+            .ok_or_else(|| anyhow!("config.bot_name not found, or not an object"))?
+            .to_string();
+        let bot_password = config["bot_password"]
+            .as_str()
+            .ok_or_else(|| anyhow!("config.bot_password not found, or not an object"))?
+            .to_string();
+        let import_file_path = config["import_file_path"]
+            .as_str()
+            .ok_or_else(|| anyhow!("config.import_file_path not found, or not an object"))?
+            .to_string();
         let import_file_path = Arc::new(import_file_path);
-        Self {
+        Ok(Self {
             wikidata: Wikidata::new(&config["wikidata"], bot_name, bot_password),
             wdrc: Arc::new(WDRC::new(&config["wdrc"])),
             storage: Arc::new(Box::new(StorageMySQL::new(
@@ -93,14 +105,14 @@ impl AppState {
             import_file_path,
             task_specific_usize,
             max_concurrent_jobs,
-        }
+        })
     }
 
     pub fn storage(&self) -> &Arc<Box<dyn Storage>> {
         &self.storage
     }
 
-    pub fn wikidata(&self) -> &Wikidata {
+    pub const fn wikidata(&self) -> &Wikidata {
         &self.wikidata
     }
 
@@ -151,11 +163,11 @@ impl AppState {
             let mut job = Job::new(&app);
             job.set_from_id(job_id).await?;
             if let Err(e) = job.set_status(JobStatus::Running).await {
-                println!("ERROR SETTING JOB STATUS: {e}")
+                error!("ERROR SETTING JOB STATUS: {e}");
             }
             job.run().await
         });
-        handle.await.expect("Handle unwrap failed")
+        handle.await?
     }
 
     // Kills the app if there are jobs running but have no recent activity
@@ -174,7 +186,7 @@ impl AppState {
                 let (running, running_recent) =
                     app.storage().app_state_seppuku_get_running(&ts).await;
                 if running > 0 && running_recent == 0 {
-                    println!("seppuku: {running} jobs running but no activity within {max_age_min} minutes, commiting seppuku");
+                    error!("seppuku: {running} jobs running but no activity within {max_age_min} minutes, commiting seppuku");
                     std::process::exit(0);
                 }
                 // println!("seppuku: honor intact");
@@ -190,14 +202,14 @@ impl AppState {
         // TO MANUALLY FIND ACTIONS NOT ASSIGNED A TASK SIZE:
         // select distinct action from jobs where action not in (select action from job_sizes);
 
-        println!(
+        info!(
             "\n=== Starting forever loop with max_concurrent_jobs={}",
             self.max_concurrent_jobs
         );
         loop {
             let current_jobs_len = current_jobs.len();
             if current_jobs_len >= self.max_concurrent_jobs {
-                self.hold_on();
+                Self::hold_on();
                 continue;
             }
             match self
@@ -205,7 +217,7 @@ impl AppState {
                 .await
             {
                 Ok(_) => {}
-                Err(e) => eprintln!("Error in forever_loop_run_job: {e}"),
+                Err(e) => error!("Error in forever_loop_run_job: {e}"),
             }
         }
         // self.disconnect().await?; // Never happens
@@ -215,7 +227,7 @@ impl AppState {
         let current_jobs: Arc<DashMap<usize, TaskSize>> = Arc::new(DashMap::new());
         self.storage().reset_running_jobs().await?;
         self.storage().reset_failed_jobs().await?;
-        println!("Old jobs reset, starting bot");
+        info!("Old jobs reset, starting bot");
         self.seppuku();
         let current_time_str = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
         self.storage()
@@ -240,15 +252,15 @@ impl AppState {
                     .iter()
                     .map(|x| x.key().to_owned())
                     .collect::<Vec<_>>();
-                println!("JOBS RUNNING: {:?}", current_job_ids);
+                info!("JOBS RUNNING: {:?}", current_job_ids);
             }
             Ok(false) => {
                 // println!("No jobs available, waiting... (not using: {:?})",job.skip_actions);
-                self.hold_on();
+                Self::hold_on();
             }
             Err(e) => {
-                println!("MAIN LOOP: Something went wrong: {e}");
-                self.hold_on();
+                error!("MAIN LOOP: Something went wrong: {e}");
+                Self::hold_on();
             }
         }
         Ok(())
@@ -279,7 +291,7 @@ impl AppState {
         Ok((job, task_size))
     }
 
-    fn hold_on(&self) {
+    fn hold_on() {
         thread::sleep(time::Duration::from_secs(5));
     }
 
@@ -289,18 +301,18 @@ impl AppState {
         }
         let sys = System::new_all();
         // println!("Uptime: {:?}", System::uptime());
-        print!(
+        info!(
             "Memory: total {}, free {}, used {} MB; ",
             sys.total_memory() / 1024,
             sys.free_memory() / 1024,
             sys.used_memory() / 1024
         );
-        print!(
+        info!(
             "Processes: {}, CPUs: {}; ",
             sys.processes().len(),
             sys.cpus().len()
         );
-        println!(
+        info!(
             "CPU usage: {}%, Load average: {:?}",
             sys.global_cpu_usage(),
             System::load_average()
@@ -327,18 +339,18 @@ impl AppState {
         let job_id = match job.get_id().await {
             Ok(id) => id,
             Err(_e) => {
-                eprintln!("No job ID"); //,e);
+                error!("No job ID"); //,e);
                 return;
             }
         };
         current_jobs.insert(job_id, job_size);
         let current_time_str = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-        println!("{current_time_str}: {} jobs running", current_jobs.len());
+        info!("{current_time_str}: {} jobs running", current_jobs.len());
         Self::print_sysinfo();
         let current_jobs = current_jobs.clone();
         tokio::spawn(async move {
             if let Err(e) = job.run().await {
-                println!("Job {job_id} failed with error {e}")
+                error!("Job {job_id} failed with error {e}")
             }
             current_jobs.remove(&job_id);
         });
