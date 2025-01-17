@@ -6,7 +6,7 @@
     clippy::doc_link_with_quotes,
     clippy::doc_markdown,
     clippy::empty_line_after_outer_attr,
-    clippy::empty_structs_with_brackets,
+    // clippy::empty_structs_with_brackets,
     clippy::float_cmp,
     clippy::float_cmp_const,
     clippy::float_equality_without_abs,
