@@ -51,7 +51,6 @@ pub mod catalog;
 pub mod coordinate_matcher;
 pub mod datasource;
 pub mod entry;
-pub mod error;
 pub mod extended_entry;
 pub mod issue;
 pub mod job;

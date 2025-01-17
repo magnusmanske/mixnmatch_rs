@@ -1,4 +1,4 @@
-use crate::{error::MnMError, mysql_misc::MySQLMisc, wikidata_commands::WikidataCommand};
+use crate::{mysql_misc::MySQLMisc, wikidata_commands::WikidataCommand};
 use anyhow::{anyhow, Result};
 use itertools::Itertools;
 use log::error;
@@ -245,7 +245,7 @@ impl Wikidata {
         }
         let mw_api = match self.mw_api.as_mut() {
             Some(api) => api,
-            None => return Err(MnMError::ApiUnreachable.into()),
+            None => return Err(anyhow!("API unreachable")),
         };
         if mw_api.user().logged_in() {
             // Already logged in

@@ -91,10 +91,13 @@ impl CoordinateMatcher {
 
     async fn process_row(&self, row: &LocationRow) -> Result<()> {
         let (max_distance, max_distance_sparql) = self.get_max_distance_sparql_for_entry(row);
-        let ext_name = match row.ext_name.split('(').next() {
-            Some(ext_name) => ext_name.trim().to_lowercase(),
-            None => panic!("This never happens!"),
-        };
+        let ext_name = row
+            .ext_name
+            .split('(')
+            .next()
+            .ok_or_else(|| anyhow!("Can't split {}", &row.ext_name))?
+            .trim()
+            .to_lowercase();
 
         let mut matches = vec![];
         let results = self.process_row_get_results(row, &max_distance).await?;
@@ -195,10 +198,11 @@ impl CoordinateMatcher {
 
     // Returns true if no results were found
     async fn try_match_via_sparql_query(&self, row: &LocationRow, max_distance: f64) -> bool {
-        let type_query = match self.get_entry_type(row) {
-            Some(type_q) => format!("?place wdt:P31/wdt:P279* wd:{type_q}"),
-            None => String::default(),
-        };
+        let type_query = self
+            .get_entry_type(row)
+            .map_or_else(String::default, |type_q| {
+                format!("?place wdt:P31/wdt:P279* wd:{type_q}")
+            });
         let sparql = format!(
             "SELECT DISTINCT ?place ?distance WHERE {{
 		    SERVICE wikibase:around {{
@@ -223,10 +227,8 @@ impl CoordinateMatcher {
                 }
                 if let Some(place) = b["place"]["value"].as_str() {
                     if let Ok(place) = self.mw_api.extract_entity_from_uri(place) {
-                        let q_already_set_to_place = match row.q {
-                            Some(q) => format!("Q{q}") != place,
-                            None => false,
-                        };
+                        let q_already_set_to_place =
+                            row.q.is_some_and(|q| format!("Q{q}") != place);
                         if !q_already_set_to_place {
                             candidates.push(place);
                         }
@@ -248,10 +250,9 @@ impl CoordinateMatcher {
 
     // (max_distance,max_distance_sparql)
     fn get_max_distance_sparql_for_entry(&self, row: &LocationRow) -> (String, f64) {
-        let max_distance = match self.get_permission_value("location_distance", row.catalog_id) {
-            Some(s) => s.to_owned(),
-            None => DEFAULT_MAX_DISTANCE.to_string(),
-        };
+        let max_distance = self
+            .get_permission_value("location_distance", row.catalog_id)
+            .map_or_else(|| DEFAULT_MAX_DISTANCE.to_string(), |s| s.to_owned());
         let mut max_distance_sparql = MAX_AUTOMATCH_DISTANCE; // Default
         if let Some(captures) = RE_KILOMETERS.captures(&max_distance) {
             if let Ok(value) = captures[1].parse::<f64>() {
@@ -324,8 +325,8 @@ mod tests {
             .await
             .unwrap();
         cm.run().await.unwrap();
-        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
-        assert_eq!(entry.q, Some(12060465));
-        entry.unmatch().await.unwrap();
+        let mut entry2 = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+        assert_eq!(entry2.q, Some(12060465));
+        entry2.unmatch().await.unwrap();
     }
 }
