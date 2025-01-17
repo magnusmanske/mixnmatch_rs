@@ -1,6 +1,7 @@
 use crate::{error::MnMError, mysql_misc::MySQLMisc, wikidata_commands::WikidataCommand};
 use anyhow::{anyhow, Result};
 use itertools::Itertools;
+use log::error;
 use mysql_async::{from_row, prelude::*};
 use serde_json::{json, Value};
 use std::{
@@ -50,7 +51,7 @@ impl Wikidata {
 
     // Database things
 
-    /// Returns [(item_id, page)]
+    /// Returns [(`item_id`, `page`)]
     pub async fn get_items_for_pages_on_wiki(
         &self,
         pages: Vec<String>,
@@ -298,7 +299,7 @@ impl Wikidata {
             params.insert("text".to_string(), wikitext.to_string());
             params.insert("token".to_string(), mw_api.get_edit_token().await?);
             if mw_api.post_query_api_json_mut(&params).await.is_err() {
-                println!("set_wikipage_text failed for [[{}]]", &title);
+                error!("set_wikipage_text failed for [[{}]]", &title);
             }
         }
         Ok(())
@@ -307,7 +308,7 @@ impl Wikidata {
     //TODO test
     pub async fn execute_commands(&mut self, commands: Vec<WikidataCommand>) -> Result<()> {
         if Self::testing() {
-            println!("SKIPPING COMMANDS {:?}", commands);
+            error!("SKIPPING COMMANDS {commands:?}");
             return Ok(());
         }
         if commands.is_empty() {
@@ -319,8 +320,8 @@ impl Wikidata {
         }
 
         self.api_log_in().await?;
-        for (item_id, commands) in &item2commands {
-            self.execute_item_command(commands, item_id).await?;
+        for (item_id, subcommands) in &item2commands {
+            self.execute_item_command(subcommands, item_id).await?;
         }
 
         Ok(())
@@ -350,7 +351,7 @@ impl Wikidata {
                 params.insert("summary".to_string(), comment);
             }
             if mw_api.post_query_api_json_mut(&params).await.is_err() {
-                println!("wbeditentiry failed for Q{}: {:?}", item_id, commands);
+                error!("wbeditentiry failed for Q{item_id}: {commands:?}");
             }
         }
         Ok(())

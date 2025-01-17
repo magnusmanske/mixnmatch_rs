@@ -258,7 +258,7 @@ impl AutoMatch {
         let mut items = match self.app.wikidata().search_with_type_api(name, type_q).await {
             Ok(items) => items,
             Err(_e) => {
-                // eprintln!("search_with_type_and_entity_id: {e}");
+                // error!("search_with_type_and_entity_id: {e}");
                 return None;
             }
         };

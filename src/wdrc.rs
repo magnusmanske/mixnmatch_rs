@@ -66,7 +66,7 @@ impl WDRC {
             .collect())
     }
 
-    fn yesterday(&self) -> String {
+    fn yesterday() -> String {
         let yesterday = chrono::Utc::now() - chrono::Duration::days(1);
         TimeStamp::datetime(&yesterday)
     }
@@ -76,7 +76,7 @@ impl WDRC {
             .storage()
             .get_kv_value("wdrc_sync_redirects")
             .await?
-            .unwrap_or_else(|| self.yesterday());
+            .unwrap_or_else(Self::yesterday);
         let mut new_ts = last_ts.to_owned();
         let mut redirects = HashMap::new();
         for j in self
@@ -117,7 +117,7 @@ impl WDRC {
             .storage()
             .get_kv_value("wdrc_apply_deletions")
             .await?
-            .unwrap_or_else(|| self.yesterday());
+            .unwrap_or_else(Self::yesterday);
         let new_ts = last_ts.to_owned();
         Ok((last_ts, new_ts))
     }
@@ -161,9 +161,9 @@ impl WDRC {
         &self,
         property: usize,
         entity_ids: Vec<String>,
-        app: &AppState,
+        app_state: &AppState,
     ) -> Option<HashMap<String, isize>> {
-        let api = app.wikidata().get_mw_api().await.ok()?;
+        let api = app_state.wikidata().get_mw_api().await.ok()?;
         let entities = wikimisc::wikibase::entity_container::EntityContainer::new();
         entities.load_entities(&api, &entity_ids).await.ok()?;
         let mut propval2item: HashMap<String, Vec<isize>> = HashMap::new();
@@ -225,11 +225,11 @@ impl WDRC {
             .map(|propval| propval.to_string())
             .collect();
 
-        let results = app
+        let new_results = app
             .storage()
             .maintenance_sync_property(catalogs, &propval2item, params)
             .await?;
-        for (id, ext_id, user, _mnm_q) in results {
+        for (id, ext_id, user, _mnm_q) in new_results {
             if user.is_none() || user == Some(USER_AUTO) {
                 let wd_item_q = match propval2item.get(&ext_id) {
                     Some(wd_item_q) => *wd_item_q,
@@ -246,7 +246,7 @@ impl WDRC {
             .storage()
             .get_kv_value("wdrc_sync_properties")
             .await?
-            .unwrap_or_else(|| self.yesterday());
+            .unwrap_or_else(Self::yesterday);
         let prop2catalog_ids = self.get_prop2catalog_ids(app).await?;
         let results = app
             .wdrc()
@@ -264,8 +264,8 @@ impl WDRC {
             .into_iter()
             .map(|(item, property, _ts)| (item, property))
             .collect_vec();
-        for results in all_results.chunks(batch_size) {
-            self.sync_properties_process_results(results, &prop2catalog_ids, app)
+        for tmp_results in all_results.chunks(batch_size) {
+            self.sync_properties_process_results(tmp_results, &prop2catalog_ids, app)
                 .await?;
         }
         app.storage()
@@ -291,8 +291,8 @@ impl WDRC {
             .iter()
             .map(|property| self.sync_property(*property, &results, prop2catalog_ids, app))
             .collect_vec();
-        let results = join_all(futures).await;
-        let failed = results.into_iter().filter(|r| r.is_err()).collect_vec();
+        let new_results = join_all(futures).await;
+        let failed = new_results.into_iter().filter(|r| r.is_err()).collect_vec();
         if let Some(Err(e)) = failed.first() {
             return Err(anyhow!("{e}"));
         }

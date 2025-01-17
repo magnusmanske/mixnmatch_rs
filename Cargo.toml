@@ -31,6 +31,7 @@ fancy-regex = "*"
 dashmap = "5"
 anyhow = "*"
 sysinfo = "*"
+log = "*"
 
 [profile.release]
 lto = 'thin'

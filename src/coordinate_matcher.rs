@@ -4,6 +4,7 @@ use crate::entry::Entry;
 use crate::job::{Job, Jobbable};
 use anyhow::{anyhow, Result};
 use lazy_static::lazy_static;
+use log::error;
 use mediawiki::api::Api;
 use regex::{Regex, RegexBuilder};
 use std::collections::HashMap;
@@ -129,7 +130,7 @@ impl CoordinateMatcher {
                     .try_match_via_sparql_query(row, max_distance_sparql)
                     .await
             {
-                eprintln!("CoordinateMatcher: TODO create item");
+                error!("CoordinateMatcher: TODO create item");
             }
         } else if self.is_permission("allow_location_match", row.catalog_id, "yes")
             && !self.try_match_via_wikidata_search(row, &matches).await
