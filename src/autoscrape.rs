@@ -1,10 +1,10 @@
 use crate::app_state::AppState;
-use crate::autoscrape_levels::*;
+use crate::autoscrape_levels::AutoscrapeLevel;
 use crate::autoscrape_resolve::RE_SIMPLE_SPACE;
 use crate::autoscrape_scraper::AutoscrapeScraper;
 use crate::catalog::Catalog;
 use crate::extended_entry::ExtendedEntry;
-use crate::job::*;
+use crate::job::{Job, Jobbable};
 use anyhow::Result;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -66,10 +66,8 @@ pub trait JsonStuff {
             let s = value
                 .as_str()
                 .ok_or_else(|| AutoscrapeError::BadType(json.to_owned()))?;
-            match s.parse::<u64>() {
-                Ok(ret) => Ok(ret),
-                _ => Err(AutoscrapeError::BadType(json.to_owned())),
-            }
+            s.parse::<u64>()
+                .map_or_else(|_| Err(AutoscrapeError::BadType(json.to_owned())), Ok)
         } else {
             value
                 .as_u64()
@@ -128,15 +126,15 @@ impl Autoscrape {
         Ok(ret)
     }
 
-    pub fn catalog_id(&self) -> usize {
+    pub const fn catalog_id(&self) -> usize {
         self.catalog_id
     }
 
-    pub fn app(&self) -> &AppState {
+    pub const fn app(&self) -> &AppState {
         &self.app
     }
 
-    pub fn levels(&self) -> &Vec<AutoscrapeLevel> {
+    pub const fn levels(&self) -> &Vec<AutoscrapeLevel> {
         &self.levels
     }
 
@@ -163,13 +161,12 @@ impl Autoscrape {
     pub async fn init(&mut self) {
         let mut levels = self.levels.clone();
         for level in &mut levels {
-            level.init(self).await
+            level.init(self).await;
         }
         self.levels = levels;
     }
 
     /// Iterates one permutation. Returns true if all possible permutations have been done.
-    //TODO test
     pub async fn tick(&mut self) -> bool {
         let mut l = self.levels.len(); // start with deepest level; level numbers starting at 1
         while l > 0 {
@@ -423,7 +420,7 @@ impl Autoscrape {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app_state::get_test_app;
+    use crate::{app_state::get_test_app, autoscrape_levels::AutoscrapeRange};
 
     const TEST_CATALOG_ID: usize = 91; //5526 ;
     const _TEST_ENTRY_ID: usize = 143962196;
@@ -443,7 +440,7 @@ mod tests {
         let mut cnt: usize = 1;
         autoscrape.init().await;
         while !autoscrape.tick().await {
-            cnt += 1
+            cnt += 1;
         }
         assert_eq!(cnt, 319);
     }

@@ -76,23 +76,12 @@ impl StorageMySQL {
         bad_catalogs: &[usize],
         max_results: usize,
     ) -> String {
-        let conditions = match catalog_id {
+        let conditions_catalog_id = match catalog_id {
             Some(catalog_id) => format!("`catalog`={catalog_id}"),
-            None => {
-                let r: f64 = rand::thread_rng().gen();
-                let mut sql = format!("`random`>={r} ORDER BY `random` LIMIT {max_results}");
-                if !bad_catalogs.is_empty() {
-                    let s = bad_catalogs
-                        .iter()
-                        .map(|id| format!("{id}"))
-                        .collect::<Vec<String>>()
-                        .join(",");
-                    sql += &format!("AND `catalog` NOT IN ({s})");
-                }
-                sql
-            }
-        } + &MatchState::not_fully_matched().get_sql();
-        format!("SELECT `lat`,`lon`,`id`,`catalog`,`ext_name`,`type`,`q` FROM `vw_location` WHERE `ext_name`!='' AND {conditions}",)
+            None => Self::coordinate_matcher_main_query_sql_subquery(bad_catalogs, max_results),
+        };
+        let conditions_not_fully_matched = &MatchState::not_fully_matched().get_sql();
+        format!("SELECT `lat`,`lon`,`id`,`catalog`,`ext_name`,`type`,`q` FROM `vw_location` WHERE `ext_name`!='' AND {conditions_catalog_id} {conditions_not_fully_matched}")
     }
 
     fn location_row_from_row(row: &Row) -> Option<LocationRow> {
@@ -150,10 +139,9 @@ impl StorageMySQL {
 
     /// Computes the column of the overview table that is affected, given a user ID and item ID
     fn get_overview_column_name_for_user_and_q(
-        &self,
         user_id: &Option<usize>,
         q: &Option<isize>,
-    ) -> &str {
+    ) -> String {
         match (user_id, q) {
             (Some(0), _) => "autoq",
             (Some(_), None) => "noq",
@@ -162,10 +150,10 @@ impl StorageMySQL {
             (Some(_), _) => "manual",
             _ => "noq",
         }
+        .to_string()
     }
 
     fn jobs_get_next_job_construct_sql(
-        &self,
         status: JobStatus,
         depends_on: Option<JobStatus>,
         no_actions: &[String],
@@ -248,6 +236,23 @@ impl StorageMySQL {
             .map_and_drop(from_row::<(usize, String, String)>)
             .await?;
         Ok(results)
+    }
+
+    fn coordinate_matcher_main_query_sql_subquery(
+        bad_catalogs: &[usize],
+        max_results: usize,
+    ) -> String {
+        let r: f64 = rand::thread_rng().gen();
+        let mut sql = format!("`random`>={r} ORDER BY `random` LIMIT {max_results}");
+        if !bad_catalogs.is_empty() {
+            let s = bad_catalogs
+                .iter()
+                .map(|id| format!("{id}"))
+                .collect::<Vec<String>>()
+                .join(",");
+            sql += &format!("AND `catalog` NOT IN ({s})");
+        }
+        sql
     }
 }
 
@@ -497,9 +502,9 @@ impl Storage for StorageMySQL {
         user_id: Option<usize>,
         q: Option<isize>,
     ) -> Result<()> {
-        let add_column = self.get_overview_column_name_for_user_and_q(&user_id, &q);
+        let add_column = Self::get_overview_column_name_for_user_and_q(&user_id, &q);
         let reduce_column =
-            self.get_overview_column_name_for_user_and_q(&old_entry.user, &old_entry.q);
+            Self::get_overview_column_name_for_user_and_q(&old_entry.user, &old_entry.q);
         let catalog_id = old_entry.catalog;
         let sql = format!(
             "UPDATE overview SET {}={}+1,{}={}-1 WHERE catalog=:catalog_id",
@@ -520,7 +525,7 @@ impl Storage for StorageMySQL {
     async fn avoid_auto_match(&self, entry_id: usize, q_numeric: Option<isize>) -> Result<bool> {
         let mut sql = format!("SELECT id FROM `log` WHERE `entry_id`={entry_id}");
         if let Some(q) = q_numeric {
-            sql += &format!(" AND (q IS NULL OR q={})", &q)
+            sql += &format!(" AND (q IS NULL OR q={})", &q);
         }
         sql += " LIMIT 1";
         let has_rows = !self
@@ -771,11 +776,11 @@ impl Storage for StorageMySQL {
         // DEACTIVATED THIS TAKES TOO LONG
 
         // Reset
-        let sql = r#"DROP TABLE IF EXISTS tmp_automatches"#;
-        conn.exec_drop(sql, Empty).await?;
+        let sql1 = r#"DROP TABLE IF EXISTS tmp_automatches"#;
+        conn.exec_drop(sql1, Empty).await?;
 
         // Generate sub-list of potential matches
-        let sql = r#"CREATE table tmp_automatches
+        let sql2 = r#"CREATE table tmp_automatches
 	       SELECT DISTINCT e2.id AS entry_id,e1.q AS q
 	       FROM entry e1,entry e2,person_dates p1,person_dates p2,catalog c1,catalog c2
 	       WHERE p1.entry_id=e1.id AND p2.entry_id=e2.id AND p1.year_born=p2.year_born
@@ -786,19 +791,19 @@ impl Storage for StorageMySQL {
 	       AND e1.catalog=c1.id AND c1.active=1
 	       AND e2.catalog=c2.id AND c2.active=1
 	       limit 1000"#;
-        conn.exec_drop(sql, Empty).await?;
+        conn.exec_drop(sql2, Empty).await?;
 
         // Apply sub-list
-        let sql = r#"UPDATE entry
+        let sql3 = r#"UPDATE entry
         	INNER JOIN tmp_automatches ON entry.id=entry_id
         	SET entry.q=tmp_automatches.q,user=0,timestamp=date_format(now(),"%Y%m%d%H%i%S")
          	WHERE entry.q!=tmp_automatches.q AND (entry.q IS NULL or entry.user=0)
           	AND NOT EXISTS (SELECT * FROM log WHERE entry.id=log.entry_id AND `action`='remove_q' AND log.q=tmp_automatches.q);"#;
-        conn.exec_drop(sql, Empty).await?;
+        conn.exec_drop(sql3, Empty).await?;
 
         // Cleanup
-        let sql = r#"DROP TABLE IF EXISTS tmp_automatches"#;
-        conn.exec_drop(sql, Empty).await?;
+        let sql4 = r#"DROP TABLE IF EXISTS tmp_automatches"#;
+        conn.exec_drop(sql4, Empty).await?;
 
         Ok(())
     }
@@ -835,16 +840,16 @@ impl Storage for StorageMySQL {
             .map(|i| format!("{}", *i))
             .collect::<Vec<String>>()
             .join(",");
-        let sql =
+        let sql1 =
             format!("SELECT DISTINCT `catalog` FROM `entry` WHERE `q` IN ({deletions_string})");
         let mut conn = self.get_conn().await?;
         let catalog_ids = conn
-            .exec_iter(sql, ())
+            .exec_iter(sql1, ())
             .await?
             .map_and_drop(from_row::<usize>)
             .await?;
-        let sql = format!("UPDATE `entry` SET `q`=NULL,`user`=NULL,`timestamp`=NULL WHERE `q` IN ({deletions_string})");
-        conn.exec_drop(sql, ()).await?;
+        let sql2 = format!("UPDATE `entry` SET `q`=NULL,`user`=NULL,`timestamp`=NULL WHERE `q` IN ({deletions_string})");
+        conn.exec_drop(sql2, ()).await?;
         Ok(catalog_ids)
     }
 
@@ -917,7 +922,7 @@ impl Storage for StorageMySQL {
     /// and uses it as an auto-match
     async fn maintenance_automatch(&self) -> Result<()> {
         let mut conn = self.get_conn().await?;
-        let sql = "SELECT e1.id,e2.q FROM entry e1,entry e2
+        let sql1 = "SELECT e1.id,e2.q FROM entry e1,entry e2
             WHERE e1.ext_name=e2.ext_name AND e1.id!=e2.id
             AND e1.type='Q5' AND e2.type='Q5'
             AND e1.q IS NULL
@@ -926,14 +931,14 @@ impl Storage for StorageMySQL {
             (SELECT count(DISTINCT q) FROM entry e3 WHERE e3.ext_name=e2.ext_name AND e3.type=e2.type AND e3.q IS NOT NULL AND e3.user>0)=1
             LIMIT 500";
         let new_automatches = conn
-            .exec_iter(sql, ())
+            .exec_iter(sql1, ())
             .await?
             .map_and_drop(from_row::<(usize, isize)>)
             .await?;
-        let sql = "UPDATE `entry` SET `q`=:q,`user`=0,`timestamp`=:timestamp WHERE `id`=:entry_id AND `q` IS NULL" ;
+        let sql2 = "UPDATE `entry` SET `q`=:q,`user`=0,`timestamp`=:timestamp WHERE `id`=:entry_id AND `q` IS NULL" ;
         for (entry_id, q) in &new_automatches {
             let timestamp = TimeStamp::now();
-            conn.exec_drop(sql, params! {entry_id,q,timestamp}).await?;
+            conn.exec_drop(sql2, params! {entry_id,q,timestamp}).await?;
         }
         Ok(())
     }
@@ -1134,7 +1139,7 @@ impl Storage for StorageMySQL {
         no_actions: &[String],
         next_ts: Option<String>,
     ) -> Option<usize> {
-        let sql = self.jobs_get_next_job_construct_sql(status, depends_on, no_actions, next_ts);
+        let sql = Self::jobs_get_next_job_construct_sql(status, depends_on, no_actions, next_ts);
         let mut conn = self.get_conn().await.ok()?;
         conn.exec_iter(sql, ())
             .await
@@ -1847,89 +1852,82 @@ impl Storage for StorageMySQL {
 
 #[cfg(test)]
 mod tests {
-    use std::{env, fs::File};
-
     use super::*;
 
     // #lizard forgives
     #[test]
     fn test_jobs_get_next_job_construct_sql() {
-        let mut path = env::current_dir().expect("Can't get CWD");
-        path.push("config.json");
-        let file = File::open(&path).unwrap();
-        let config: Value = serde_json::from_reader(file).unwrap();
-        let storage = StorageMySQL {
-            pool: StorageMySQL::create_pool(&config["wikidata"]),
-            pool_ro: StorageMySQL::create_pool(&config["wikidata"]),
-        };
-
         let catalog_filter =
             "AND NOT EXISTS (SELECT * FROM catalog WHERE catalog.id=jobs.catalog AND active!=1)";
 
         // High priority
-        let sql = storage.jobs_get_next_job_construct_sql(JobStatus::HighPriority, None, &[], None);
+        let sql1 =
+            StorageMySQL::jobs_get_next_job_construct_sql(JobStatus::HighPriority, None, &[], None);
         let expected = format!(
             "SELECT `id` FROM `jobs` WHERE `status`='{}' {catalog_filter} AND `depends_on` IS NULL ORDER BY `last_ts` LIMIT 1",
             JobStatus::HighPriority.as_str()
         );
-        assert_eq!(sql, expected);
+        assert_eq!(sql1, expected);
 
         // Low priority
-        let sql = storage.jobs_get_next_job_construct_sql(JobStatus::LowPriority, None, &[], None);
-        let expected = format!(
+        let sql2 =
+            StorageMySQL::jobs_get_next_job_construct_sql(JobStatus::LowPriority, None, &[], None);
+        let expected2 = format!(
             "SELECT `id` FROM `jobs` WHERE `status`='{}' {catalog_filter} AND `depends_on` IS NULL ORDER BY `last_ts` LIMIT 1",
             JobStatus::LowPriority.as_str()
         );
-        assert_eq!(sql, expected);
+        assert_eq!(sql2, expected2);
 
         // Next dependent
-        let sql = storage.jobs_get_next_job_construct_sql(
+        let sql2a = StorageMySQL::jobs_get_next_job_construct_sql(
             JobStatus::Todo,
             Some(JobStatus::Done),
             &[],
             None,
         );
-        let expected = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' {catalog_filter} AND `depends_on` IS NOT NULL AND `depends_on` IN (SELECT `id` FROM `jobs` WHERE `status`='{}') ORDER BY `last_ts` LIMIT 1",JobStatus::Todo.as_str(),JobStatus::Done.as_str()) ;
-        assert_eq!(sql, expected);
+        let expected2a = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' {catalog_filter} AND `depends_on` IS NOT NULL AND `depends_on` IN (SELECT `id` FROM `jobs` WHERE `status`='{}') ORDER BY `last_ts` LIMIT 1",JobStatus::Todo.as_str(),JobStatus::Done.as_str()) ;
+        assert_eq!(sql2a, expected2a);
 
         // get_next_initial_allowed_job
         let avoid = vec!["test1".to_string(), "test2".to_string()];
-        let sql = storage.jobs_get_next_job_construct_sql(JobStatus::Todo, None, &avoid, None);
+        let sql3 =
+            StorageMySQL::jobs_get_next_job_construct_sql(JobStatus::Todo, None, &avoid, None);
         let not_in = avoid.join("','");
-        let expected = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' {catalog_filter} AND `depends_on` IS NULL AND `action` NOT IN ('{}') ORDER BY `last_ts` LIMIT 1",JobStatus::Todo.as_str(),&not_in) ;
-        assert_eq!(sql, expected);
+        let expected3 = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' {catalog_filter} AND `depends_on` IS NULL AND `action` NOT IN ('{}') ORDER BY `last_ts` LIMIT 1",JobStatus::Todo.as_str(),&not_in) ;
+        assert_eq!(sql3, expected3);
 
         // get_next_initial_job
-        let sql = storage.jobs_get_next_job_construct_sql(JobStatus::Todo, None, &[], None);
-        let expected = format!(
+        let sql4 = StorageMySQL::jobs_get_next_job_construct_sql(JobStatus::Todo, None, &[], None);
+        let expected4 = format!(
             "SELECT `id` FROM `jobs` WHERE `status`='{}' {catalog_filter} AND `depends_on` IS NULL ORDER BY `last_ts` LIMIT 1",
             JobStatus::Todo.as_str()
         );
-        assert_eq!(sql, expected);
+        assert_eq!(sql4, expected4);
 
         // get_next_scheduled_job
         let timestamp = TimeStamp::now();
-        let sql = storage.jobs_get_next_job_construct_sql(
+        let sql5 = StorageMySQL::jobs_get_next_job_construct_sql(
             JobStatus::Done,
             None,
             &[],
             Some(timestamp.to_owned()),
         );
-        let expected = format!(
+        let expected5 = format!(
             "SELECT `id` FROM `jobs` WHERE `status`='{}' {catalog_filter} AND `next_ts`!='' AND `next_ts`<='{}' ORDER BY `next_ts` LIMIT 1",
             JobStatus::Done.as_str(),
             &timestamp
         );
-        assert_eq!(sql, expected);
+        assert_eq!(sql5, expected5);
 
         // get_next_initial_job with avoid
         let no_actions = vec!["foo".to_string(), "bar".to_string()];
-        let sql = storage.jobs_get_next_job_construct_sql(JobStatus::Todo, None, &no_actions, None);
-        let expected = format!(
+        let sql6 =
+            StorageMySQL::jobs_get_next_job_construct_sql(JobStatus::Todo, None, &no_actions, None);
+        let expected6 = format!(
             "SELECT `id` FROM `jobs` WHERE `status`='{}' {catalog_filter} AND `depends_on` IS NULL AND `action` NOT IN ('foo','bar') ORDER BY `last_ts` LIMIT 1",
             JobStatus::Todo.as_str()
         );
-        assert_eq!(sql, expected);
+        assert_eq!(sql6, expected6);
     }
 }
 

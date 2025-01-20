@@ -19,7 +19,7 @@
     clippy::mod_module_files,
     non_ascii_idents,
     noop_method_call,
-    clippy::option_if_let_else,
+    // clippy::option_if_let_else,
     // clippy::print_stderr,
     clippy::print_stdout,
     clippy::semicolon_if_nothing_returned,
@@ -34,7 +34,7 @@
     clippy::use_debug,
     clippy::used_underscore_binding,
     clippy::useless_let_if_seq,
-    clippy::wildcard_dependencies,
+    // clippy::wildcard_dependencies,
     clippy::wildcard_imports
 )]
 
@@ -73,6 +73,7 @@ pub mod wikidata;
 pub mod wikidata_commands;
 
 use anyhow::Result;
+use log::error;
 use std::env;
 
 #[derive(Debug, Default)]
@@ -158,7 +159,7 @@ async fn run() -> Result<()> {
 async fn main() -> Result<()> {
     match run().await {
         Ok(_) => {}
-        Err(e) => println!("CATASTROPHIC FAILURE: {e}"),
+        Err(e) => error!("CATASTROPHIC FAILURE: {e}"),
     }
     Ok(())
 }

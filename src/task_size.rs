@@ -1,6 +1,6 @@
 use std::{cmp::Ordering, fmt};
 
-#[derive(Eq, Clone, Debug)]
+#[derive(Eq, Clone, Copy, Debug)]
 pub enum TaskSize {
     TINY,
     SMALL,
@@ -28,7 +28,7 @@ impl PartialEq for TaskSize {
 }
 
 impl TaskSize {
-    pub fn value(&self) -> u8 {
+    pub const fn value(&self) -> u8 {
         match self {
             TaskSize::TINY => 1,
             TaskSize::SMALL => 2,

@@ -1,11 +1,18 @@
 use crate::app_state::AppState;
 use crate::app_state::USER_AUX_MATCH;
-use crate::catalog::*;
-use crate::entry::*;
-use crate::issue::*;
-use crate::job::*;
+use crate::catalog::Catalog;
+use crate::entry::CoordinateLocation;
+use crate::entry::Entry;
+use crate::issue::Issue;
+use crate::issue::IssueType;
+use crate::job::Job;
+use crate::job::Jobbable;
 use crate::wikidata::META_ITEMS;
-use crate::wikidata_commands::*;
+use crate::wikidata_commands::WikidataCommand;
+use crate::wikidata_commands::WikidataCommandPropertyValue;
+use crate::wikidata_commands::WikidataCommandPropertyValueGroup;
+use crate::wikidata_commands::WikidataCommandValue;
+use crate::wikidata_commands::WikidataCommandWhat;
 use anyhow::Result;
 use futures::future::join_all;
 use lazy_static::lazy_static;
@@ -192,10 +199,7 @@ impl AuxiliaryMatcher {
         aux: AuxiliaryResults,
     ) -> Option<(AuxiliaryResults, Vec<String>)> {
         let query = format!("haswbstatement:\"{}={}\"", aux.prop(), aux.value);
-        match self.app.wikidata().search_api(&query).await {
-            Ok(results) => Some((aux, results)),
-            Err(_) => None,
-        }
+        (self.app.wikidata().search_api(&query).await).map_or(None, |results| Some((aux, results)))
     }
 
     //TODO test
@@ -266,7 +270,7 @@ impl AuxiliaryMatcher {
         items_to_check: &mut Vec<(String, AuxiliaryResults)>,
     ) -> Result<()> {
         for aux in results {
-            if self.is_catalog_property_combination_suspect(catalog_id, aux.property) {
+            if Self::is_catalog_property_combination_suspect(catalog_id, aux.property) {
                 continue;
             }
             let query = format!("haswbstatement:\"{}={}\"", aux.prop(), aux.value);
@@ -307,7 +311,7 @@ impl AuxiliaryMatcher {
         for results_chunk in results.chunks(search_batch_size) {
             let mut futures = vec![];
             for aux in results_chunk {
-                if !self.is_catalog_property_combination_suspect(catalog_id, aux.property) {
+                if !Self::is_catalog_property_combination_suspect(catalog_id, aux.property) {
                     let future = self.search_property_value(aux.to_owned());
                     futures.push(future);
                 }
@@ -431,24 +435,23 @@ impl AuxiliaryMatcher {
     }
 
     //TODO test
-    fn is_statement_in_entity(&self, entity: &Entity, property: &str, value: &str) -> bool {
+    fn is_statement_in_entity(entity: &Entity, property: &str, value: &str) -> bool {
         entity
             .claims_with_property(property)
             .iter()
             .filter_map(|claim| {
-                match &claim.main_snak().data_value() {
-                    Some(datavalue) => {
-                        match datavalue.value() {
-                            Value::StringValue(s) => Some(s.to_string()),
-                            Value::Entity(e) => Some(e.id().to_string()),
-                            Value::Coordinate(c) => {
-                                Some(format!("@{}/{}", c.latitude(), c.longitude()))
-                            }
-                            _ => None, // TODO more types?
+                claim
+                    .main_snak()
+                    .data_value()
+                    .as_ref()
+                    .and_then(|datavalue| match datavalue.value() {
+                        Value::StringValue(s) => Some(s.to_string()),
+                        Value::Entity(e) => Some(e.id().to_string()),
+                        Value::Coordinate(c) => {
+                            Some(format!("@{}/{}", c.latitude(), c.longitude()))
                         }
-                    }
-                    _ => None,
-                }
+                        _ => None, // TODO more types?
+                    })
             })
             .any(|simplified_value| value == simplified_value)
     }
@@ -459,7 +462,7 @@ impl AuxiliaryMatcher {
             return false;
         }
         // Is that specific value in the entity?
-        if self.is_statement_in_entity(entity, &aux.prop(), &aux.value) {
+        if Self::is_statement_in_entity(entity, &aux.prop(), &aux.value) {
             if let Ok(entry) = Entry::from_id(aux.entry_id, &self.app).await {
                 let _ = entry.set_auxiliary_in_wikidata(aux.aux_id, true).await;
             };
@@ -634,7 +637,7 @@ impl AuxiliaryMatcher {
             .unwrap_or_default();
 
         for result in results {
-            if self.is_catalog_property_combination_suspect(catalog_id, result.property) {
+            if Self::is_catalog_property_combination_suspect(catalog_id, result.property) {
                 continue;
             }
             aux.entry(result.q_numeric)
@@ -748,7 +751,7 @@ impl AuxiliaryMatcher {
     }
 
     //TODO test
-    fn is_catalog_property_combination_suspect(&self, catalog_id: usize, prop: usize) -> bool {
+    fn is_catalog_property_combination_suspect(catalog_id: usize, prop: usize) -> bool {
         AUX_BLACKLISTED_CATALOGS_PROPERTIES.contains(&(catalog_id, prop))
     }
 
@@ -779,10 +782,15 @@ mod tests {
         let mw_api = app.wikidata().get_mw_api().await.unwrap();
         let entities = EntityContainer::new();
         let entity = entities.load_entity(&mw_api, "Q13520818").await.unwrap();
-        let am = AuxiliaryMatcher::new(&app);
-        assert!(am.is_statement_in_entity(&entity, "P31", "Q5"));
-        assert!(am.is_statement_in_entity(&entity, "P214", "30701597"));
-        assert!(!am.is_statement_in_entity(&entity, "P214", "30701596"));
+        assert!(AuxiliaryMatcher::is_statement_in_entity(
+            &entity, "P31", "Q5"
+        ));
+        assert!(AuxiliaryMatcher::is_statement_in_entity(
+            &entity, "P214", "30701597"
+        ));
+        assert!(!AuxiliaryMatcher::is_statement_in_entity(
+            &entity, "P214", "30701596"
+        ));
     }
 
     #[tokio::test]
@@ -800,22 +808,22 @@ mod tests {
         };
         let am = AuxiliaryMatcher::new(&app);
         assert!(am.entity_already_has_property(&aux, &entity).await);
-        let aux = AuxiliaryResults {
+        let aux2 = AuxiliaryResults {
             aux_id: 0,
             entry_id: 0,
             q_numeric: TEST_ITEM_ID,
             property: 214,
             value: "foobar".to_string(),
         };
-        assert!(am.entity_already_has_property(&aux, &entity).await);
-        let aux = AuxiliaryResults {
+        assert!(am.entity_already_has_property(&aux2, &entity).await);
+        let aux3 = AuxiliaryResults {
             aux_id: 0,
             entry_id: 0,
             q_numeric: TEST_ITEM_ID,
             property: 212,
             value: "foobar".to_string(),
         };
-        assert!(!am.entity_already_has_property(&aux, &entity).await);
+        assert!(!am.entity_already_has_property(&aux3, &entity).await);
     }
 
     #[tokio::test]

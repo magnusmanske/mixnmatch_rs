@@ -1,9 +1,9 @@
 use crate::app_state::AppState;
 use crate::catalog::Catalog;
 use crate::datasource::DataSource;
-use crate::entry::*;
+use crate::entry::Entry;
 use crate::extended_entry::ExtendedEntry;
-use crate::job::*;
+use crate::job::{Job, Jobbable};
 use anyhow::Result;
 use csv::StringRecord;
 use std::collections::HashSet;
@@ -91,7 +91,6 @@ impl UpdateCatalog {
     }
 
     fn update_from_tabbed_file_check_result(
-        &self,
         result: Result<StringRecord, csv::Error>,
         datasource: &mut DataSource,
     ) -> Result<Option<StringRecord>> {
@@ -164,7 +163,7 @@ impl UpdateCatalog {
         let mut reader = datasource.get_reader(&self.app).await?;
         let mut row_cache = vec![];
         while let Some(result) = reader.records().next() {
-            let result = match self.update_from_tabbed_file_check_result(result, datasource)? {
+            let result = match Self::update_from_tabbed_file_check_result(result, datasource)? {
                 Some(result) => result,
                 None => continue,
             };
@@ -197,7 +196,7 @@ impl UpdateCatalog {
         row_cache: &mut Vec<StringRecord>,
     ) -> Result<()> {
         if datasource.fail_on_error {
-            self.process_rows(row_cache, datasource).await?
+            self.process_rows(row_cache, datasource).await?;
         } else {
             // Ignore error
             let _ = self.process_rows(row_cache, datasource).await;
@@ -322,24 +321,24 @@ mod tests {
         let app = get_test_app();
 
         let url = "http://www.example.org".to_string();
-        let ds = DataSource::new(
+        let datasource_1 = DataSource::new(
             TEST_CATALOG_ID,
             &json!({"source_url":&url,"columns":["id","name"]}),
         )
         .unwrap();
         assert_eq!(
-            ds.get_source_location(&app).unwrap(),
+            datasource_1.get_source_location(&app).unwrap(),
             DataSourceLocation::Url(url)
         );
 
         let uuid = "4b115b29-2ad9-4f43-90ed-7023b51a6337";
-        let ds = DataSource::new(
+        let datasource_2 = DataSource::new(
             TEST_CATALOG_ID,
             &json!({"file_uuid":&uuid,"columns":["id","name"]}),
         )
         .unwrap();
         assert_eq!(
-            ds.get_source_location(&app).unwrap(),
+            datasource_2.get_source_location(&app).unwrap(),
             DataSourceLocation::FilePath(format!("{}/{}", app.import_file_path(), uuid))
         );
     }

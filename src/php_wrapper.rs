@@ -7,6 +7,7 @@ use chrono::Utc;
 use log::info;
 use std::process::Command;
 
+#[derive(Debug, Default, Clone, Copy)]
 pub struct PhpWrapper {}
 
 impl PhpWrapper {

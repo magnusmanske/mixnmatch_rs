@@ -1,10 +1,12 @@
 use crate::app_state::AppState;
 use crate::app_state::USER_AUTO;
 use crate::app_state::USER_DATE_MATCH;
-use crate::catalog::*;
-use crate::entry::*;
-use crate::issue::*;
-use crate::job::*;
+use crate::catalog::Catalog;
+use crate::entry::Entry;
+use crate::issue::Issue;
+use crate::issue::IssueType;
+use crate::job::Job;
+use crate::job::Jobbable;
 use crate::person::Person;
 use anyhow::{anyhow, Result};
 use chrono::prelude::*;
@@ -12,6 +14,7 @@ use chrono::{NaiveDateTime, Utc};
 use futures::future::join_all;
 use itertools::Itertools;
 use lazy_static::lazy_static;
+use log::info;
 use mediawiki::api::Api;
 use regex::Regex;
 use serde_json::json;
@@ -21,20 +24,21 @@ lazy_static! {
     static ref RE_YEAR: Regex = Regex::new(r"(\d{3,4})").expect("Regexp error");
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum DateMatchField {
     Born,
     Died,
 }
 
 impl DateMatchField {
-    fn get_field_name(&self) -> &'static str {
+    const fn get_field_name(&self) -> &'static str {
         match self {
             DateMatchField::Born => "born",
             DateMatchField::Died => "died",
         }
     }
 
-    fn get_property(&self) -> &'static str {
+    const fn get_property(&self) -> &'static str {
         match self {
             DateMatchField::Born => "P569",
             DateMatchField::Died => "P570",
@@ -42,13 +46,14 @@ impl DateMatchField {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum DatePrecision {
     Day,
     Year,
 }
 
 impl DatePrecision {
-    fn as_i32(&self) -> i32 {
+    const fn as_i32(&self) -> i32 {
         match self {
             DatePrecision::Day => 10,
             DatePrecision::Year => 4,
@@ -138,7 +143,7 @@ impl AutoMatch {
         let api = self.app.wikidata().get_mw_api().await?;
         let mut label2q = HashMap::new();
         for row in reader.records().filter_map(|r| r.ok()) {
-            let q = api.extract_entity_from_uri(&row[0]).unwrap();
+            let q = api.extract_entity_from_uri(&row[0])?;
             let q_label = row[1].to_string();
             if let Ok(q_numeric) = q[1..].parse::<usize>() {
                 // self.app
@@ -169,7 +174,7 @@ impl AutoMatch {
         let mut offset = 0;
         let batch_size = 50000;
         loop {
-            println!("Batch offset {offset}");
+            info!("Batch offset {offset}");
             let mut entry_batch = self
                 .app
                 .storage()
@@ -644,7 +649,7 @@ impl AutoMatch {
                 break;
             }
             let _ = self.remember_offset(offset).await;
-            offset += results.len()
+            offset += results.len();
         }
         let _ = self.clear_offset().await;
         Ok(())
@@ -685,7 +690,7 @@ impl AutoMatch {
                 break;
             }
             let _ = self.remember_offset(offset).await;
-            offset += results.len()
+            offset += results.len();
         }
         let _ = self.clear_offset().await;
         Ok(())
@@ -999,8 +1004,8 @@ impl AutoMatch {
             let future = self.search_with_type_and_entity_id(entry_id, label, type_q);
             futures.push(future);
             for alias in &aliases {
-                let future = self.search_with_type_and_entity_id(entry_id, alias, type_q);
-                futures.push(future);
+                let future_tmp = self.search_with_type_and_entity_id(entry_id, alias, type_q);
+                futures.push(future_tmp);
             }
         }
 
@@ -1106,9 +1111,9 @@ mod tests {
         am.automatch_by_sitelink(TEST_CATALOG_ID).await.unwrap();
 
         // Check in-database changes
-        let entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
-        assert_eq!(entry.q, Some(13520818));
-        assert_eq!(entry.user, Some(USER_AUTO));
+        let entry2 = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+        assert_eq!(entry2.q, Some(13520818));
+        assert_eq!(entry2.user, Some(USER_AUTO));
 
         // Clear
         am.purge_automatches(TEST_CATALOG_ID).await.unwrap();
@@ -1126,26 +1131,26 @@ mod tests {
         assert!(entry.is_fully_matched());
 
         // Purge catalog
-        let am = AutoMatch::new(&app);
-        am.purge_automatches(TEST_CATALOG_ID).await.unwrap();
+        let am2 = AutoMatch::new(&app);
+        am2.purge_automatches(TEST_CATALOG_ID).await.unwrap();
 
         // Check that the entry is still fully matched
-        let entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
-        assert!(entry.is_fully_matched());
+        let entry2 = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+        assert!(entry2.is_fully_matched());
 
         // Set an automatch
-        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
-        entry.unmatch().await.unwrap();
-        entry.set_match("Q1", 0).await.unwrap();
-        assert!(entry.is_partially_matched());
+        let mut entry3 = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+        entry3.unmatch().await.unwrap();
+        entry3.set_match("Q1", 0).await.unwrap();
+        assert!(entry3.is_partially_matched());
 
         // Purge catalog
-        let am = AutoMatch::new(&app);
-        am.purge_automatches(TEST_CATALOG_ID).await.unwrap();
+        let am4 = AutoMatch::new(&app);
+        am4.purge_automatches(TEST_CATALOG_ID).await.unwrap();
 
         // Check that the entry is now unmatched
-        let entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
-        assert!(entry.is_unmatched());
+        let entry4 = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+        assert!(entry4.is_unmatched());
     }
 
     #[tokio::test]
@@ -1160,8 +1165,8 @@ mod tests {
         let mut am = AutoMatch::new(&app);
 
         // Set prelim match
-        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
-        entry.set_match("Q13520818", 0).await.unwrap();
+        let mut entry2 = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+        entry2.set_match("Q13520818", 0).await.unwrap();
 
         // Run automatch
         am.match_person_by_single_date(TEST_CATALOG_ID, DateMatchField::Born, DatePrecision::Day)
@@ -1169,12 +1174,12 @@ mod tests {
             .unwrap();
 
         // Check match
-        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
-        assert_eq!(entry.q, Some(13520818));
-        assert_eq!(entry.user, Some(USER_DATE_MATCH));
+        let mut entry3 = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+        assert_eq!(entry3.q, Some(13520818));
+        assert_eq!(entry3.user, Some(USER_DATE_MATCH));
 
         // Cleanup
-        entry.unmatch().await.unwrap();
+        entry3.unmatch().await.unwrap();
         am.purge_automatches(TEST_CATALOG_ID).await.unwrap();
     }
 }

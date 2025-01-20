@@ -350,7 +350,7 @@ impl AppState {
         let current_jobs = current_jobs.clone();
         tokio::spawn(async move {
             if let Err(e) = job.run().await {
-                error!("Job {job_id} failed with error {e}")
+                error!("Job {job_id} failed with error {e}");
             }
             current_jobs.remove(&job_id);
         });
