@@ -1,118 +1,7 @@
-#![forbid(unsafe_code)]
-#![warn(
-    clippy::cognitive_complexity,
-    clippy::dbg_macro,
-    clippy::debug_assert_with_mut_call,
-    clippy::doc_link_with_quotes,
-    clippy::doc_markdown,
-    clippy::empty_line_after_outer_attr,
-    // clippy::empty_structs_with_brackets,
-    clippy::float_cmp,
-    clippy::float_cmp_const,
-    clippy::float_equality_without_abs,
-    keyword_idents,
-    clippy::missing_const_for_fn,
-    missing_copy_implementations,
-    missing_debug_implementations,
-    // clippy::missing_errors_doc,
-    clippy::missing_panics_doc,
-    clippy::mod_module_files,
-    non_ascii_idents,
-    noop_method_call,
-    // clippy::option_if_let_else,
-    // clippy::print_stderr,
-    clippy::print_stdout,
-    clippy::semicolon_if_nothing_returned,
-    clippy::unseparated_literal_suffix,
-    clippy::shadow_unrelated,
-    clippy::similar_names,
-    clippy::suspicious_operation_groupings,
-    unused_crate_dependencies,
-    unused_extern_crates,
-    unused_import_braces,
-    clippy::unused_self,
-    clippy::use_debug,
-    clippy::used_underscore_binding,
-    clippy::useless_let_if_seq,
-    // clippy::wildcard_dependencies,
-    clippy::wildcard_imports
-)]
-
-pub mod api;
-pub mod app_state;
-pub mod automatch;
-pub mod autoscrape;
-pub mod autoscrape_levels;
-pub mod autoscrape_resolve;
-pub mod autoscrape_scraper;
-pub mod auxiliary_matcher;
-pub mod bespoke_scrapers;
-pub mod catalog;
-pub mod coordinate_matcher;
-pub mod datasource;
-pub mod entry;
-pub mod extended_entry;
-pub mod issue;
-pub mod job;
-pub mod job_row;
-pub mod job_status;
-pub mod maintenance;
-pub mod match_state;
-pub mod microsync;
-pub mod mysql_misc;
-pub mod person;
-pub mod php_wrapper;
-pub mod storage;
-pub mod storage_mysql;
-pub mod task_size;
-// pub mod storage_wikibase;
-pub mod taxon_matcher;
-pub mod update_catalog;
-pub mod wdrc;
-pub mod wikidata;
-pub mod wikidata_commands;
-
 use anyhow::Result;
 use log::error;
+use mixnmatch::{app_state::AppState, automatch::AutoMatch};
 use std::env;
-
-#[derive(Debug, Default)]
-pub struct PropTodo {
-    pub id: usize,
-    pub prop_num: u64,
-    pub name: String,
-    pub default_type: String,
-    pub status: String,
-    pub note: String,
-    pub user_id: u64,
-    pub items_using: Option<u64>,
-    pub number_of_records: Option<u64>,
-}
-
-impl PropTodo {
-    pub fn new(prop_num: u64, name: String) -> Self {
-        Self {
-            prop_num,
-            name,
-            status: "NO_CATALOG".to_string(),
-            ..Default::default()
-        }
-    }
-
-    pub fn from_row(r: mysql_async::Row) -> Option<Self> {
-        Some(Self {
-            id: r.get(0)?,
-            prop_num: r.get(1)?,
-            name: r.get(2)?,
-            default_type: r.get(3)?,
-            status: r.get(4)?,
-            note: r.get(5)?,
-            user_id: r.get(6)?,
-            items_using: r.get(7)?,
-            number_of_records: r.get(8)?,
-        })
-    }
-}
 
 async fn run() -> Result<()> {
     let argv: Vec<String> = env::args_os().map(|s| s.into_string().unwrap()).collect();
@@ -120,7 +9,7 @@ async fn run() -> Result<()> {
         .get(2)
         .map(|s| s.to_owned())
         .unwrap_or("config.json".into());
-    let app = app_state::AppState::from_config_file(&config_file)?;
+    let app = AppState::from_config_file(&config_file)?;
     match argv.get(1).map(|s| s.as_str()) {
         Some("job") => {
             app.run_single_job(
@@ -146,7 +35,7 @@ async fn run() -> Result<()> {
             // bespoke_scrapers::BespokeScraper6479::new(&app).run().await;
             // let maintenance = maintenance::Maintenance::new(&app);
             // maintenance.match_by_name_and_full_dates().await
-            let mut am = automatch::AutoMatch::new(&app);
+            let mut am = AutoMatch::new(&app);
             am.automatch_with_sparql(444).await
         }
         Some("server") => app.forever_loop().await,
@@ -163,27 +52,3 @@ async fn main() -> Result<()> {
     }
     Ok(())
 }
-
-/*
-ssh magnus@login.toolforge.org -L 3309:wikidatawiki.web.db.svc.eqiad.wmflabs:3306 -N &
-ssh magnus@login.toolforge.org -L 3308:tools-db:3306 -N &
-cargo test -- --test-threads=1
-cargo test  -- --nocapture
-
-git pull && ./build.sh && \rm ~/rustbot.* ; toolforge jobs restart rustbot
-
-
-git pull && ./build.sh && toolforge jobs delete rustbot ; \rm ~/rustbot.* ; \
-toolforge jobs run --image tf-php74 --mem 5Gi --cpu 3 --continuous --command '/data/project/mix-n-match/mixnmatch_rs/run.sh' rustbot
-
-rm ~/build.err ; \
-toolforge jobs run build --command "bash -c 'source ~/.profile && cd ~/mixnmatch_rs && cargo build --release'" --image php7.4 --mem 2G --cpu 3 --wait ; \
-cat ~/build.err
-
-
-# WAS:
-toolforge jobs run --image tf-php74 --mem 1000Mi --continuous --command '/data/project/mix-n-match/mixnmatch_rs/run.sh' rustbot
-
-toolforge jobs delete rustbot2 ; \rm ~/rustbot2.* ; \
-toolforge jobs run --image tf-php74 --mem 1000Mi --continuous --command '/data/project/mix-n-match/mixnmatch_rs/run.sh second' rustbot2
-*/

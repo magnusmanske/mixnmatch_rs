@@ -8,10 +8,10 @@ use crate::{
     job_row::JobRow,
     job_status::JobStatus,
     match_state::MatchState,
+    prop_todo::PropTodo,
     task_size::TaskSize,
     taxon_matcher::{RankedNames, TaxonNameField},
     update_catalog::UpdateInfo,
-    PropTodo,
 };
 use anyhow::Result;
 use async_trait::async_trait;
