@@ -38,7 +38,7 @@
     clippy::wildcard_imports
 )]
 
-// pub mod api;
+pub mod api;
 pub mod app_state;
 pub mod automatch;
 pub mod autoscrape;
