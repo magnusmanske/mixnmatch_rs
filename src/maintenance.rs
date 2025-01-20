@@ -8,6 +8,7 @@ use anyhow::{anyhow, Result};
 use futures::future::join_all;
 use std::collections::{HashMap, HashSet};
 
+#[derive(Debug, Clone)]
 pub struct Maintenance {
     app: AppState,
 }

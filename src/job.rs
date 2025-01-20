@@ -1,20 +1,23 @@
 use crate::app_state::AppState;
-use crate::automatch::*;
-use crate::autoscrape::*;
-use crate::auxiliary_matcher::*;
+use crate::automatch::AutoMatch;
+use crate::automatch::DateMatchField;
+use crate::automatch::DatePrecision;
+use crate::autoscrape::Autoscrape;
+use crate::auxiliary_matcher::AuxiliaryMatcher;
 use crate::coordinate_matcher::CoordinateMatcher;
 use crate::job_row::JobRow;
 use crate::job_status::JobStatus;
-use crate::maintenance::*;
+use crate::maintenance::Maintenance;
 use crate::match_state::MatchState;
-use crate::microsync::*;
-use crate::php_wrapper::*;
-use crate::taxon_matcher::*;
-use crate::update_catalog::*;
+use crate::microsync::Microsync;
+use crate::php_wrapper::PhpWrapper;
+use crate::taxon_matcher::TaxonMatcher;
+use crate::update_catalog::UpdateCatalog;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use chrono::Duration;
 use chrono::Local;
+use log::info;
 use serde_json::json;
 use std::error::Error;
 use std::fmt;
@@ -50,13 +53,10 @@ pub trait Jobbable {
             Some(json) => json,
             None => return 0,
         };
-        match json.as_object() {
-            Some(o) => match o.get("offset") {
-                Some(offset) => offset.as_u64().unwrap_or(0) as usize,
-                None => 0,
-            },
-            None => 0,
-        }
+        json.as_object().map_or(0, |o| {
+            o.get("offset")
+                .map_or(0, |offset| offset.as_u64().unwrap_or(0) as usize)
+        })
     }
 
     //TODO test
@@ -156,13 +156,13 @@ impl Job {
         let note = Some(format!("{error}"));
         self.set_note(note).await?;
         let job_id = self.get_id().await?;
-        println!("Job {job_id} catalog {catalog_id}:{action} FAILED: {error}");
+        info!("Job {job_id} catalog {catalog_id}:{action} FAILED: {error}");
         Ok(())
     }
 
     async fn run_ok(&mut self, catalog_id: usize, action: String) -> Result<(), anyhow::Error> {
         self.set_status(JobStatus::Done).await?;
-        println!(
+        info!(
             "Job {} catalog {}:{} completed.",
             self.get_id().await?,
             catalog_id,
@@ -223,7 +223,7 @@ impl Job {
         None
     }
 
-    /// Returns the current `json` as an Option<serde_json::Value>
+    /// Returns the current `json` as an Option<`serde_json::Value`>
     //TODO test
     pub async fn get_json_value(&self) -> Option<serde_json::Value> {
         serde_json::from_str(self.get_json().await.ok()?.as_ref()?).ok()
@@ -241,7 +241,7 @@ impl Job {
             .await
     }
 
-    /// Sets the value for `json` locally and in database, from a serde_json::Value
+    /// Sets the value for `json` locally and in database, from a `serde_json::Value`
     //TODO test
     pub async fn set_json(&mut self, json: Option<serde_json::Value>) -> Result<()> {
         let job_id = self.get_id().await?;
@@ -277,7 +277,7 @@ impl Job {
             return Err(anyhow!("Job::run_this_job: Blocked"));
         }
         let current_time_str = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-        println!("{current_time_str}: Starting job {:?}", self.get_id().await);
+        info!("{current_time_str}: Starting job {:?}", self.get_id().await);
         let catalog_id = self.get_catalog().await?;
         match self.get_action().await?.as_str() {
             "automatch" => {

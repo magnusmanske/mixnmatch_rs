@@ -1,6 +1,6 @@
 use crate::app_state::AppState;
 use crate::datasource::DataSource;
-use crate::entry::*;
+use crate::entry::{CoordinateLocation, Entry};
 use crate::update_catalog::UpdateCatalogError;
 use anyhow::{anyhow, Result};
 use lazy_static::lazy_static;
