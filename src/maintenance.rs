@@ -3,7 +3,7 @@ use crate::auxiliary_matcher::AuxiliaryMatcher;
 use crate::catalog::Catalog;
 use crate::entry::Entry;
 use crate::match_state::MatchState;
-use crate::PropTodo;
+use crate::prop_todo::PropTodo;
 use anyhow::{anyhow, Result};
 use futures::future::join_all;
 use std::collections::{HashMap, HashSet};

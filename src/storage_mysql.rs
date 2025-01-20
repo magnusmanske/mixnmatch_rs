@@ -12,10 +12,10 @@ use crate::{
     match_state::MatchState,
     microsync::EXT_URL_UNIQUE_SEPARATOR,
     mysql_misc::MySQLMisc,
+    prop_todo::PropTodo,
     task_size::TaskSize,
     taxon_matcher::{RankedNames, TaxonMatcher, TaxonNameField, TAXON_RANKS},
     update_catalog::UpdateInfo,
-    PropTodo,
 };
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
