@@ -116,6 +116,7 @@ impl Wikidata {
         Ok(results)
     }
 
+    // TODO https://lists.wikimedia.org/hyperkitty/list/wikidata-tech@lists.wikimedia.org/thread/7AMRB7G4CZ6BBOILAA6PK4QX44MUAHT4/
     pub async fn search_with_type(&self, name: &str) -> Result<Vec<String>> {
         let sql = "SELECT concat('Q',wbit_item_id) AS q
         			FROM wbt_text,wbt_item_terms,wbt_term_in_lang,wbt_text_in_lang
@@ -132,8 +133,13 @@ impl Wikidata {
         Ok(results)
     }
 
+    // TODO https://lists.wikimedia.org/hyperkitty/list/wikidata-tech@lists.wikimedia.org/thread/7AMRB7G4CZ6BBOILAA6PK4QX44MUAHT4/
     pub async fn search_without_type(&self, name: &str) -> Result<Vec<String>> {
-        let sql = "SELECT concat('Q',wbit_item_id) AS q FROM wbt_text,wbt_item_terms,wbt_term_in_lang,wbt_text_in_lang WHERE wbit_term_in_lang_id=wbtl_id AND wbtl_text_in_lang_id=wbxl_id AND wbxl_text_id=wbx_id  AND wbx_text=:name GROUP BY name,q";
+        let sql = "SELECT concat('Q',wbit_item_id) AS q
+        	FROM wbt_text,wbt_item_terms,wbt_term_in_lang,wbt_text_in_lang
+         	WHERE wbit_term_in_lang_id=wbtl_id AND wbtl_text_in_lang_id=wbxl_id AND wbxl_text_id=wbx_id
+          	AND wbx_text=:name
+           GROUP BY name,q";
         let results = self
             .get_conn()
             .await?
