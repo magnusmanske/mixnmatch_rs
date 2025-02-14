@@ -27,6 +27,7 @@ dashmap = "5"
 anyhow = "*"
 sysinfo = "*"
 log = "*"
+axum = "*"
 
 [profile.release]
 lto = 'thin'
