@@ -143,7 +143,7 @@ impl Entry {
             q: None,
             user: None,
             timestamp: None,
-            random: rand::thread_rng().gen(),
+            random: rand::rng().random(),
             type_name: None,
             app: None,
         }

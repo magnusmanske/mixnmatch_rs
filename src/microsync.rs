@@ -657,7 +657,7 @@ mod tests {
     async fn test_get_formatter_url_for_prop() {
         assert_eq!(
             Microsync::get_formatter_url_for_prop(214).await.unwrap(),
-            "https://viaf.org/viaf/$1/".to_string()
+            "https://viaf.org/viaf/$1".to_string()
         );
         assert_eq!(
             Microsync::get_formatter_url_for_prop(215).await.unwrap(),

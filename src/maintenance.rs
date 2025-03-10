@@ -493,7 +493,7 @@ mod tests {
         Entry::from_id(TEST_ENTRY_ID, &app)
             .await
             .unwrap()
-            .set_match("Q100000067", 2)
+            .set_match("Q85756032", 2)
             .await
             .unwrap();
         let ms = Maintenance::new(&app);
@@ -501,7 +501,7 @@ mod tests {
             .await
             .unwrap();
         let entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
-        assert_eq!(entry.q, Some(91013264));
+        assert_eq!(entry.q, Some(3819700));
     }
 
     #[tokio::test]
