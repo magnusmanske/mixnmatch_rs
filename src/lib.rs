@@ -27,7 +27,7 @@
     clippy::shadow_unrelated,
     clippy::similar_names,
     clippy::suspicious_operation_groupings,
-    unused_crate_dependencies,
+    // unused_crate_dependencies,
     unused_extern_crates,
     unused_import_braces,
     clippy::unused_self,

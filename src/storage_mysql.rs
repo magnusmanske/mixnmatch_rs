@@ -242,7 +242,7 @@ impl StorageMySQL {
         bad_catalogs: &[usize],
         max_results: usize,
     ) -> String {
-        let r: f64 = rand::thread_rng().gen();
+        let r: f64 = rand::rng().random();
         let mut sql = format!("`random`>={r} ORDER BY `random` LIMIT {max_results}");
         if !bad_catalogs.is_empty() {
             let s = bad_catalogs

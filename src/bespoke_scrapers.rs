@@ -163,7 +163,7 @@ impl BespokeScraper121 {
                 } else {
                     Some(TimeStamp::now())
                 },
-                random: rand::thread_rng().gen(),
+                random: rand::rng().random(),
                 type_name: Some("Q5".to_string()),
                 app: None, //Some(self.app.clone()),
             },
@@ -293,7 +293,7 @@ impl BespokeScraper6479 {
                 q: None,
                 user: None,
                 timestamp: None,
-                random: rand::thread_rng().gen(),
+                random: rand::rng().random(),
                 type_name: Some("Q5".to_string()),
                 app: None, //Some(self.app.clone()),
             },

@@ -148,7 +148,7 @@ impl AutoscrapeScraper {
                 q: None,
                 user: None,
                 timestamp: None,
-                random: rand::thread_rng().gen(),
+                random: rand::rng().random(),
                 type_name,
                 app: Some(autoscrape.app().clone()),
             },
