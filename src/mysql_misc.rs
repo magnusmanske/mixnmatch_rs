@@ -12,6 +12,11 @@ pub trait MySQLMisc {
         self.pool().get_conn()
     }
 
+    // TODO FIXME this should return a connection to the x0 (wbt_) cluster
+    fn get_conn_wbt(&self) -> GetConn {
+        self.pool().get_conn()
+    }
+
     async fn disconnect_db(&self) -> Result<()> {
         self.pool().clone().disconnect().await?;
         Ok(())

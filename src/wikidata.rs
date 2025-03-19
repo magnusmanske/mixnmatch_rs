@@ -124,7 +124,7 @@ impl Wikidata {
 	                AND EXISTS (SELECT * FROM page,pagelinks,linktarget WHERE page_title=concat('Q',wbit_item_id) AND page_namespace=0 AND pl_target_id=lt_id AND pl_from=page_id AND lt_namespace=0 AND lt_title=:type_q)
 					GROUP BY name,q";
         let results = self
-            .get_conn()
+            .get_conn_wbt()
             .await?
             .exec_iter(sql, params! {name})
             .await?
@@ -141,7 +141,7 @@ impl Wikidata {
           	AND wbx_text=:name
            GROUP BY name,q";
         let results = self
-            .get_conn()
+            .get_conn_wbt()
             .await?
             .exec_iter(sql, params! {name})
             .await?
