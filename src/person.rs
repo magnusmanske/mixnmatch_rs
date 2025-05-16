@@ -26,7 +26,7 @@ lazy_static! {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct Person {}
+pub struct Person;
 
 impl Person {
     pub fn sanitize_simplify_name(name: &str) -> String {

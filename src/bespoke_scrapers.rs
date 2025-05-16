@@ -12,6 +12,8 @@ use regex::{Captures, Regex};
 use std::collections::HashMap;
 use wikimisc::timestamp::TimeStamp;
 
+/* WHEN YOU CREATE A NEW WRAPPER, ALSO ADD IT TO `php_wrapper.rs` IN `fn bespoke_scraper`! **/
+
 #[async_trait]
 pub trait BespokeScraper {
     fn new(app: &AppState) -> Self;

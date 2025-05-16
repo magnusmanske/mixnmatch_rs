@@ -8,7 +8,7 @@ use log::info;
 use std::process::Command;
 
 #[derive(Debug, Default, Clone, Copy)]
-pub struct PhpWrapper {}
+pub struct PhpWrapper;
 
 impl PhpWrapper {
     fn new_command(script: &str) -> Command {
