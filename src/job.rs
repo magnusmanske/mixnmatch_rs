@@ -310,6 +310,11 @@ impl Job {
                 am.set_current_job(self);
                 am.automatch_complex(catalog_id).await
             }
+            "automatch_people_with_initials" => {
+                let mut am = AutoMatch::new(&self.app);
+                am.set_current_job(self);
+                am.automatch_people_with_initials(catalog_id).await
+            }
             "purge_automatches" => {
                 let mut am = AutoMatch::new(&self.app);
                 am.set_current_job(self);
