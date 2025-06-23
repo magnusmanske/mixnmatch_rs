@@ -275,6 +275,27 @@ impl Storage for StorageMySQL {
         Ok(())
     }
 
+    async fn catalog_get_entries_of_people_with_initials(
+        &self,
+        catalog_id: usize,
+    ) -> Result<Vec<Entry>> {
+        let select = Self::entry_sql_select();
+        let sql = format!(
+            "{select} WHERE `type`='Q5' AND (q IS NULL OR user=0) AND ext_name rlike '\\\\. ' AND catalog=:catalog_id",
+        );
+        let ret = self
+            .get_conn_ro()
+            .await?
+            .exec_iter(sql, params! {catalog_id})
+            .await?
+            .map_and_drop(|row| Self::entry_from_row(&row))
+            .await?
+            .iter()
+            .filter_map(|row| row.to_owned())
+            .collect();
+        Ok(ret)
+    }
+
     async fn match_taxa_get_ranked_names_batch(
         &self,
         ranks: &[&str],

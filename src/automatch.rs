@@ -12,6 +12,7 @@ use anyhow::{anyhow, Result};
 use chrono::prelude::*;
 use chrono::{NaiveDateTime, Utc};
 use futures::future::join_all;
+use futures::StreamExt;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use log::info;
@@ -1018,6 +1019,75 @@ impl AutoMatch {
         search_results.sort();
         search_results.dedup();
         search_results
+    }
+
+    async fn get_json_from_url_and_entry(
+        client: &reqwest::Client,
+        url: String,
+        entry: Entry,
+    ) -> Result<(serde_json::Value, Entry)> {
+        let result = client
+            .get(url)
+            .send()
+            .await?
+            .json::<serde_json::Value>()
+            .await?;
+        Ok((result, entry))
+    }
+
+    fn json_array_of_strings_to_vec_item_ids(json: &serde_json::Value) -> Vec<usize> {
+        match json.as_array() {
+            Some(array) => array
+                .iter()
+                .map(|item| item.as_str().unwrap()[1..].parse().unwrap())
+                .collect(),
+            None => Vec::new(),
+        }
+    }
+
+    pub async fn automatch_people_with_initials(&self, catalog_id: usize) -> Result<()> {
+        let client = crate::autoscrape::Autoscrape::reqwest_client_external()?;
+        let all_entries = self
+            .app
+            .storage()
+            .catalog_get_entries_of_people_with_initials(catalog_id)
+            .await?;
+        for entries in all_entries.chunks(50) {
+            let futures: Vec<_> = entries
+                .iter()
+                .map(|entry| {
+                    let url = format!(
+                        "https://wd-infernal.toolforge.org/initial_search/{}",
+                        urlencoding::encode(&entry.ext_name)
+                    );
+                    Self::get_json_from_url_and_entry(&client, url, entry.to_owned())
+                })
+                .collect();
+
+            let stream = futures::stream::iter(futures).buffer_unordered(5);
+            let mut results = stream.collect::<Vec<_>>().await;
+            for (json, entry) in results.iter_mut().flatten() {
+                let items = Self::json_array_of_strings_to_vec_item_ids(json);
+                match items.len() {
+                    0 => {
+                        if !entry.is_unmatched() {
+                            let _ = entry.unmatch().await;
+                        }
+                    }
+                    1 => {
+                        let _ = entry.set_match(&format!("{}", items[0]), USER_AUTO).await;
+                    }
+                    _ => {
+                        let items = items
+                            .iter()
+                            .map(|q| format!("Q{q}"))
+                            .collect::<Vec<String>>();
+                        let _ = entry.set_multi_match(&items).await;
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }
 

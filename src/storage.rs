@@ -64,6 +64,10 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
         catalog_id: usize,
     ) -> Result<HashMap<String, String>>;
     async fn catalog_refresh_overview_table(&self, catalog_id: usize) -> Result<()>;
+    async fn catalog_get_entries_of_people_with_initials(
+        &self,
+        catalog_id: usize,
+    ) -> Result<Vec<Entry>>;
 
     // Microsync
 
