@@ -1,4 +1,4 @@
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct MatchState {
     pub unmatched: bool,
     pub partially_matched: bool,
@@ -7,7 +7,7 @@ pub struct MatchState {
 }
 
 impl MatchState {
-    pub fn unmatched() -> Self {
+    pub const fn unmatched() -> Self {
         Self {
             unmatched: true,
             partially_matched: false,
@@ -15,7 +15,7 @@ impl MatchState {
         }
     }
 
-    pub fn fully_matched() -> Self {
+    pub const fn fully_matched() -> Self {
         Self {
             unmatched: false,
             partially_matched: false,
@@ -23,7 +23,7 @@ impl MatchState {
         }
     }
 
-    pub fn not_fully_matched() -> Self {
+    pub const fn not_fully_matched() -> Self {
         Self {
             unmatched: true,
             partially_matched: true,
@@ -31,7 +31,7 @@ impl MatchState {
         }
     }
 
-    pub fn any_matched() -> Self {
+    pub const fn any_matched() -> Self {
         Self {
             unmatched: false,
             partially_matched: true,
@@ -42,13 +42,13 @@ impl MatchState {
     pub fn get_sql(&self) -> String {
         let mut parts = vec![];
         if self.unmatched {
-            parts.push("(`q` IS NULL)")
+            parts.push("(`q` IS NULL)");
         }
         if self.partially_matched {
-            parts.push("(`q`>0 AND `user`=0)")
+            parts.push("(`q`>0 AND `user`=0)");
         }
         if self.fully_matched {
-            parts.push("(`q`>0 AND `user`>0)")
+            parts.push("(`q`>0 AND `user`>0)");
         }
         if parts.is_empty() {
             return "".to_string();

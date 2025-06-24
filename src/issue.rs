@@ -5,7 +5,7 @@ use std::fmt;
 
 use crate::app_state::AppState;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum IssueError {
     UnregognizedType,
     UnregognizedStatus,
@@ -24,6 +24,7 @@ impl fmt::Display for IssueError {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum IssueType {
     WdDuplicate,
     Mismatch,
@@ -44,7 +45,7 @@ impl IssueType {
         }
     }
 
-    pub fn to_str(&self) -> &str {
+    pub const fn to_str(&self) -> &str {
         match self {
             IssueType::WdDuplicate => "WD_DUPLICATE",
             IssueType::Mismatch => "MISMATCH",
@@ -55,6 +56,7 @@ impl IssueType {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum IssueStatus {
     Open,
     Done,
@@ -75,7 +77,7 @@ impl IssueStatus {
         }
     }
 
-    pub fn to_str(&self) -> &str {
+    pub const fn to_str(&self) -> &str {
         match self {
             IssueStatus::Open => "OPEN",
             IssueStatus::Done => "DONE",
@@ -86,6 +88,7 @@ impl IssueStatus {
     }
 }
 
+#[derive(Debug)]
 pub struct Issue {
     pub entry_id: usize,
     pub issue_type: IssueType,

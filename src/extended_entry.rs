@@ -1,6 +1,6 @@
 use crate::app_state::AppState;
 use crate::datasource::DataSource;
-use crate::entry::*;
+use crate::entry::{CoordinateLocation, Entry};
 use crate::update_catalog::UpdateCatalogError;
 use anyhow::{anyhow, Result};
 use lazy_static::lazy_static;
@@ -122,7 +122,7 @@ impl ExtendedEntry {
         }
         if entry.q.is_none() {
             if let Some(q) = self.entry.q {
-                println!("UPDATING Q{q} for {}", entry.id);
+                // println!("UPDATING Q{q} for {}", entry.id);
                 entry.set_match(&format!("Q{q}"), 4).await?;
             }
         }
@@ -290,16 +290,16 @@ impl ExtendedEntry {
         };
 
         // Convert from POINT
-        let value = match RE_POINT.captures(cell) {
-            Some(captures) => {
+        let value = RE_POINT.captures(cell).map_or_else(
+            || cell.to_string(),
+            |captures| {
                 if let (Some(lat), Some(lon)) = (captures.get(1), captures.get(2)) {
                     format!("{},{}", lat.as_str(), lon.as_str())
                 } else {
                     cell.to_string()
                 }
-            }
-            None => cell.to_string(),
-        };
+            },
+        );
 
         // Do location if necessary
         // TODO for all location properties, not only P625 hardcoded

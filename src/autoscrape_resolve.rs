@@ -86,10 +86,10 @@ impl AutoscrapeResolve {
             .as_str()
             .ok_or_else(|| AutoscrapeError::UnknownLevelType(json.to_string()))?;
         let re_pattern = &Self::fix_regex(pattern);
-        let regex = AutoscrapeRegex::new(re_pattern).ok();
+        let regex_ok = AutoscrapeRegex::new(re_pattern).ok();
         let err = AutoscrapeError::UnknownLevelType(json.to_string());
-        let regex = regex.ok_or(err)?;
-        regexs.push((regex, replacement.to_string()));
+        let regex_final = regex_ok.ok_or(err)?;
+        regexs.push((regex_final, replacement.to_string()));
         Ok(())
     }
 

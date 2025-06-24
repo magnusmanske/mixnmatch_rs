@@ -1,6 +1,7 @@
-use crate::{error::MnMError, mysql_misc::MySQLMisc, wikidata_commands::WikidataCommand};
+use crate::{mysql_misc::MySQLMisc, wikidata_commands::WikidataCommand};
 use anyhow::{anyhow, Result};
 use itertools::Itertools;
+use log::error;
 use mysql_async::{from_row, prelude::*};
 use serde_json::{json, Value};
 use std::{
@@ -50,7 +51,7 @@ impl Wikidata {
 
     // Database things
 
-    /// Returns [(item_id, page)]
+    /// Returns [(`item_id`, `page`)]
     pub async fn get_items_for_pages_on_wiki(
         &self,
         pages: Vec<String>,
@@ -115,6 +116,7 @@ impl Wikidata {
         Ok(results)
     }
 
+    // TODO https://lists.wikimedia.org/hyperkitty/list/wikidata-tech@lists.wikimedia.org/thread/7AMRB7G4CZ6BBOILAA6PK4QX44MUAHT4/
     pub async fn search_with_type(&self, name: &str) -> Result<Vec<String>> {
         let sql = "SELECT concat('Q',wbit_item_id) AS q
         			FROM wbt_text,wbt_item_terms,wbt_term_in_lang,wbt_text_in_lang
@@ -122,7 +124,7 @@ impl Wikidata {
 	                AND EXISTS (SELECT * FROM page,pagelinks,linktarget WHERE page_title=concat('Q',wbit_item_id) AND page_namespace=0 AND pl_target_id=lt_id AND pl_from=page_id AND lt_namespace=0 AND lt_title=:type_q)
 					GROUP BY name,q";
         let results = self
-            .get_conn()
+            .get_conn_wbt()
             .await?
             .exec_iter(sql, params! {name})
             .await?
@@ -131,10 +133,15 @@ impl Wikidata {
         Ok(results)
     }
 
+    // TODO https://lists.wikimedia.org/hyperkitty/list/wikidata-tech@lists.wikimedia.org/thread/7AMRB7G4CZ6BBOILAA6PK4QX44MUAHT4/
     pub async fn search_without_type(&self, name: &str) -> Result<Vec<String>> {
-        let sql = "SELECT concat('Q',wbit_item_id) AS q FROM wbt_text,wbt_item_terms,wbt_term_in_lang,wbt_text_in_lang WHERE wbit_term_in_lang_id=wbtl_id AND wbtl_text_in_lang_id=wbxl_id AND wbxl_text_id=wbx_id  AND wbx_text=:name GROUP BY name,q";
+        let sql = "SELECT concat('Q',wbit_item_id) AS q
+        	FROM wbt_text,wbt_item_terms,wbt_term_in_lang,wbt_text_in_lang
+         	WHERE wbit_term_in_lang_id=wbtl_id AND wbtl_text_in_lang_id=wbxl_id AND wbxl_text_id=wbx_id
+          	AND wbx_text=:name
+           GROUP BY name,q";
         let results = self
-            .get_conn()
+            .get_conn_wbt()
             .await?
             .exec_iter(sql, params! {name})
             .await?
@@ -244,7 +251,7 @@ impl Wikidata {
         }
         let mw_api = match self.mw_api.as_mut() {
             Some(api) => api,
-            None => return Err(MnMError::ApiUnreachable.into()),
+            None => return Err(anyhow!("API unreachable")),
         };
         if mw_api.user().logged_in() {
             // Already logged in
@@ -298,7 +305,7 @@ impl Wikidata {
             params.insert("text".to_string(), wikitext.to_string());
             params.insert("token".to_string(), mw_api.get_edit_token().await?);
             if mw_api.post_query_api_json_mut(&params).await.is_err() {
-                println!("set_wikipage_text failed for [[{}]]", &title);
+                error!("set_wikipage_text failed for [[{}]]", &title);
             }
         }
         Ok(())
@@ -307,7 +314,7 @@ impl Wikidata {
     //TODO test
     pub async fn execute_commands(&mut self, commands: Vec<WikidataCommand>) -> Result<()> {
         if Self::testing() {
-            println!("SKIPPING COMMANDS {:?}", commands);
+            error!("SKIPPING COMMANDS {commands:?}");
             return Ok(());
         }
         if commands.is_empty() {
@@ -319,8 +326,8 @@ impl Wikidata {
         }
 
         self.api_log_in().await?;
-        for (item_id, commands) in &item2commands {
-            self.execute_item_command(commands, item_id).await?;
+        for (item_id, subcommands) in &item2commands {
+            self.execute_item_command(subcommands, item_id).await?;
         }
 
         Ok(())
@@ -350,7 +357,7 @@ impl Wikidata {
                 params.insert("summary".to_string(), comment);
             }
             if mw_api.post_query_api_json_mut(&params).await.is_err() {
-                println!("wbeditentiry failed for Q{}: {:?}", item_id, commands);
+                error!("wbeditentiry failed for Q{item_id}: {commands:?}");
             }
         }
         Ok(())

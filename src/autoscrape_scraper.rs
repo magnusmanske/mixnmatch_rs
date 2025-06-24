@@ -2,7 +2,7 @@ use crate::autoscrape::{
     Autoscrape, AutoscrapeError, AutoscrapeRegex, AutoscrapeRegexBuilder, JsonStuff,
 };
 use crate::autoscrape_resolve::{AutoscrapeResolve, AutoscrapeResolveAux};
-use crate::entry::*;
+use crate::entry::{Entry, ENTRY_NEW_ID};
 use crate::extended_entry::ExtendedEntry;
 use anyhow::Result;
 use rand::prelude::*;
@@ -92,8 +92,9 @@ impl AutoscrapeScraper {
     }
 
     pub fn process_html_page(&self, html: &str, autoscrape: &Autoscrape) -> Vec<ExtendedEntry> {
-        match &self.regex_block {
-            Some(regex_block) => {
+        self.regex_block.as_ref().map_or_else(
+            || self.process_html_block(html, autoscrape),
+            |regex_block| {
                 regex_block
                     .captures_iter(html)
                     //.filter_map(|caps|caps.ok())
@@ -101,9 +102,8 @@ impl AutoscrapeScraper {
                     .map(|s| s.as_str().to_string())
                     .flat_map(|s| self.process_html_block(&s, autoscrape))
                     .collect()
-            }
-            None => self.process_html_block(html, autoscrape),
-        }
+            },
+        )
     }
 
     pub fn url(&self) -> &str {
@@ -148,7 +148,7 @@ impl AutoscrapeScraper {
                 q: None,
                 user: None,
                 timestamp: None,
-                random: rand::thread_rng().gen(),
+                random: rand::rng().random(),
                 type_name,
                 app: Some(autoscrape.app().clone()),
             },
@@ -177,7 +177,7 @@ impl AutoscrapeScraper {
                     AutoscrapeRegexBuilder::new(&Self::fix_regex(s))
                         .multi_line(true)
                         .build()?,
-                )
+                );
             }
         }
         Ok(ret)

@@ -19,7 +19,7 @@ lazy_static! {
         Regex::new(r"^\|(.+)\|$").expect("Regexp construction");
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Default)]
+#[derive(Debug, PartialEq, Eq, Clone, Default, Copy)]
 pub struct LineCounter {
     pub all: usize,
     pub added: usize,
@@ -69,10 +69,7 @@ impl Pattern {
             Some(patterns) => patterns,
             None => return Err(UpdateCatalogError::BadPattern.into()),
         };
-        let pattern = match patterns.get(1).map(|s| s.as_str()) {
-            Some(s) => s,
-            None => pattern,
-        };
+        let pattern = patterns.get(1).map(|s| s.as_str()).map_or(pattern, |s| s);
         Ok(Self {
             use_column_label: use_column_label.to_string(),
             column_number: match data.get("col") {
@@ -284,14 +281,13 @@ impl DataSource {
     }
 
     fn extract_columns(json: &serde_json::Value) -> Vec<String> {
-        let columns: Vec<String> = match json.get("columns") {
-            Some(c) => c.as_array().unwrap_or(&vec![]).to_owned(),
-            None => vec![],
-        }
-        .iter()
-        .filter_map(|v| v.as_str())
-        .map(|s| s.to_string())
-        .collect();
+        let columns: Vec<String> = json
+            .get("columns")
+            .map_or_else(Vec::new, |c| c.as_array().unwrap_or(&vec![]).to_owned())
+            .iter()
+            .filter_map(|v| v.as_str())
+            .map(|s| s.to_string())
+            .collect();
         columns
     }
 }

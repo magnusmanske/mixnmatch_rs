@@ -1,13 +1,14 @@
-use crate::app_state::{AppState, USER_AUX_MATCH};
+use crate::app_state::{AppState, USER_AUX_MATCH, USER_DATE_MATCH};
 use crate::auxiliary_matcher::AuxiliaryMatcher;
 use crate::catalog::Catalog;
 use crate::entry::Entry;
 use crate::match_state::MatchState;
-use crate::PropTodo;
+use crate::prop_todo::PropTodo;
 use anyhow::{anyhow, Result};
 use futures::future::join_all;
 use std::collections::{HashMap, HashSet};
 
+#[derive(Debug, Clone)]
 pub struct Maintenance {
     app: AppState,
 }
@@ -34,6 +35,27 @@ impl Maintenance {
         }
     }
 
+    /// For unmatched entries with day-precision birth and death dates,
+    /// finds other, matched entries with the same name and full dates,
+    /// then matches them.
+    pub async fn match_by_name_and_full_dates(&self) -> Result<()> {
+        const BATCH_SIZE: usize = 100;
+        let mut results = self
+            .app
+            .storage()
+            .maintenance_match_people_via_name_and_full_dates(BATCH_SIZE)
+            .await?;
+        results.sort();
+        results.dedup();
+        for (entry_id, q) in results {
+            if let Ok(mut entry) = Entry::from_id(entry_id, &self.app).await {
+                // Ignore error
+                let _ = entry.set_match(&format!("Q{q}"), USER_DATE_MATCH).await;
+            };
+        }
+        Ok(())
+    }
+
     pub async fn create_match_person_dates_jobs_for_catalogs(&self) -> Result<()> {
         self.app
             .storage()
@@ -51,7 +73,7 @@ impl Maintenance {
         Ok(())
     }
 
-    async fn update_props_todo_update_items_using(&self) -> Result<()> {
+    async fn update_props_todo_update_items_using_get_props_todo(&self) -> Result<HashSet<u64>> {
         let props_todo: HashSet<u64> = self
             .app
             .storage()
@@ -61,78 +83,98 @@ impl Maintenance {
             .filter(|p| p.items_using.is_none()) // Only those without number; comment out to update everything
             .map(|p| p.prop_num)
             .collect();
+        Ok(props_todo)
+    }
+
+    async fn update_props_todo_update_items_using_get_bindings(
+        &self,
+    ) -> Result<Vec<serde_json::Value>> {
         let mw_api = self.app.wikidata().get_mw_api().await?;
         let sparql = r#"select ?p (count(?q) AS ?cnt) { ?q ?p [] } group by ?p"#;
         let results = match mw_api.sparql_query(sparql).await {
             Ok(results) => results,
-            Err(_) => return Ok(()),
+            Err(_) => return Ok(vec![]),
         };
         let bindings = match results["results"]["bindings"].as_array() {
             Some(bindings) => bindings,
-            None => return Ok(()),
+            None => return Ok(vec![]),
         };
+        Ok(bindings.to_owned())
+    }
+
+    async fn update_props_todo_update_items_using(&self) -> Result<()> {
+        let props_todo = self
+            .update_props_todo_update_items_using_get_props_todo()
+            .await?;
+        let bindings = self
+            .update_props_todo_update_items_using_get_bindings()
+            .await?;
         for b in bindings {
-            let (prop_url, cnt) = match (b["p"]["value"].as_str(), b["cnt"]["value"].as_str()) {
-                (Some(prop_url), Some(cnt)) => (prop_url, cnt),
-                _ => continue,
-            };
-            let (url, prop) = match prop_url.rsplit_once('/') {
-                Some((url, prop)) => (url, prop),
-                _ => continue,
-            };
-            if prop.chars().nth(0) != Some('P') || url != "http://www.wikidata.org/prop/direct" {
-                continue;
-            }
-            let prop_num = match prop[1..].parse::<u64>() {
-                Ok(prop_num) => prop_num,
-                Err(_) => continue,
-            };
-            if !props_todo.contains(&prop_num) {
-                continue;
-            }
-            let cnt = match cnt.parse::<u64>() {
-                Ok(cnt) => cnt,
-                Err(_) => continue,
-            };
-            let _ = self
-                .app
-                .storage()
-                .set_props_todo_items_using(prop_num, cnt)
+            self.update_props_todo_update_items_using_process_binding(b, &props_todo)
                 .await;
         }
         Ok(())
     }
 
-    async fn update_props_todo_add_new_properties(&self) -> Result<()> {
-        let mw_api = self.app.wikidata().get_mw_api().await?;
+    async fn update_props_todo_update_items_using_process_binding(
+        &self,
+        b: serde_json::Value,
+        props_todo: &HashSet<u64>,
+    ) {
+        let (prop_url, cnt) = match (b["p"]["value"].as_str(), b["cnt"]["value"].as_str()) {
+            (Some(prop_url), Some(cnt)) => (prop_url, cnt),
+            _ => return,
+        };
+        let (url, prop) = match prop_url.rsplit_once('/') {
+            Some((url, prop)) => (url, prop),
+            _ => return,
+        };
+        if prop.chars().nth(0) != Some('P') || url != "http://www.wikidata.org/prop/direct" {
+            return;
+        }
+        let prop_num = match prop[1..].parse::<u64>() {
+            Ok(prop_num) => prop_num,
+            Err(_) => return,
+        };
+        if !props_todo.contains(&prop_num) {
+            return;
+        }
+        let cnt = match cnt.parse::<u64>() {
+            Ok(cnt) => cnt,
+            Err(_) => return,
+        };
+        let _ = self
+            .app
+            .storage()
+            .set_props_todo_items_using(prop_num, cnt)
+            .await;
+    }
+
+    async fn update_props_todo_add_new_properties_get_bindings(
+        &self,
+        mw_api: &mediawiki::Api,
+    ) -> Result<Vec<serde_json::Value>> {
         let sparql = r#"SELECT ?p ?pLabel {
-        	VALUES ?auth { wd:Q19595382 wd:Q62589316 wd:Q42396390 } .
-         	?p rdf:type wikibase:Property ; wdt:P31/wdt:P279* ?auth .
-          	MINUS { ?p wdt:P2264 [] } .
-            SERVICE wikibase:label { bd:serviceParam wikibase:language "[AUTO_LANGUAGE],mul,en". }
-        }"#;
+    	VALUES ?auth { wd:Q19595382 wd:Q62589316 wd:Q42396390 } .
+     	?p rdf:type wikibase:Property ; wdt:P31/wdt:P279* ?auth .
+      	MINUS { ?p wdt:P2264 [] } .
+        SERVICE wikibase:label { bd:serviceParam wikibase:language "[AUTO_LANGUAGE],mul,en". }
+    }"#;
         let results = match mw_api.sparql_query(sparql).await {
             Ok(results) => results,
-            Err(_) => return Ok(()),
+            Err(_) => return Ok(vec![]),
         };
         let bindings = match results["results"]["bindings"].as_array() {
             Some(bindings) => bindings,
-            None => return Ok(()),
+            None => return Ok(vec![]),
         };
-        let mut properties = vec![];
-        let mut prop_names = HashMap::new();
-        for b in bindings {
-            if let Some(entity_url) = b["p"]["value"].as_str() {
-                if let Ok(entity) = mw_api.extract_entity_from_uri(entity_url) {
-                    if let Ok(prop_num) = entity[1..].parse::<u64>() {
-                        properties.push(prop_num);
-                        if let Some(prop_name) = b["pLabel"]["value"].as_str() {
-                            prop_names.insert(prop_num, prop_name);
-                        }
-                    }
-                }
-            }
-        }
+        Ok(bindings.to_owned())
+    }
+
+    async fn update_props_todo_add_new_properties(&self) -> Result<()> {
+        let (properties, prop_names) = self
+            .update_props_todo_add_new_properties_get_props()
+            .await?;
         let extisting_props = self.app.storage().get_props_todo().await?;
         let existing_hash: HashSet<u64> = extisting_props.iter().map(|p| p.prop_num).collect();
         let new_props: Vec<PropTodo> = properties
@@ -148,6 +190,31 @@ impl Maintenance {
             .collect();
         self.app.storage().add_props_todo(new_props).await?;
         Ok(())
+    }
+
+    async fn update_props_todo_add_new_properties_get_props(
+        &self,
+    ) -> Result<(Vec<u64>, HashMap<u64, String>)> {
+        let mut properties = vec![];
+        let mut prop_names = HashMap::new();
+        let mw_api = self.app.wikidata().get_mw_api().await?;
+        let bindings = self
+            .update_props_todo_add_new_properties_get_bindings(&mw_api)
+            .await?;
+        for b in bindings {
+            if let Some(entity_url) = b["p"]["value"].as_str() {
+                if let Ok(entity) = mw_api.extract_entity_from_uri(entity_url) {
+                    if let Ok(prop_num) = entity[1..].parse::<u64>() {
+                        properties.push(prop_num);
+                        if let Some(prop_name) = b["pLabel"]["value"].as_str() {
+                            let prop_name = prop_name.to_string();
+                            prop_names.insert(prop_num, prop_name);
+                        }
+                    }
+                }
+            }
+        }
+        Ok((properties, prop_names))
     }
 
     pub async fn automatch_people_via_year_born(&self) -> Result<()> {
@@ -426,7 +493,7 @@ mod tests {
         Entry::from_id(TEST_ENTRY_ID, &app)
             .await
             .unwrap()
-            .set_match("Q100000067", 2)
+            .set_match("Q85756032", 2)
             .await
             .unwrap();
         let ms = Maintenance::new(&app);
@@ -434,7 +501,7 @@ mod tests {
             .await
             .unwrap();
         let entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
-        assert_eq!(entry.q, Some(91013264));
+        assert_eq!(entry.q, Some(3819700));
     }
 
     #[tokio::test]

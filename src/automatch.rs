@@ -1,17 +1,21 @@
 use crate::app_state::AppState;
 use crate::app_state::USER_AUTO;
 use crate::app_state::USER_DATE_MATCH;
-use crate::catalog::*;
-use crate::entry::*;
-use crate::issue::*;
-use crate::job::*;
+use crate::catalog::Catalog;
+use crate::entry::Entry;
+use crate::issue::Issue;
+use crate::issue::IssueType;
+use crate::job::Job;
+use crate::job::Jobbable;
 use crate::person::Person;
 use anyhow::{anyhow, Result};
 use chrono::prelude::*;
 use chrono::{NaiveDateTime, Utc};
 use futures::future::join_all;
+use futures::StreamExt;
 use itertools::Itertools;
 use lazy_static::lazy_static;
+use log::info;
 use mediawiki::api::Api;
 use regex::Regex;
 use serde_json::json;
@@ -21,20 +25,21 @@ lazy_static! {
     static ref RE_YEAR: Regex = Regex::new(r"(\d{3,4})").expect("Regexp error");
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum DateMatchField {
     Born,
     Died,
 }
 
 impl DateMatchField {
-    fn get_field_name(&self) -> &'static str {
+    const fn get_field_name(&self) -> &'static str {
         match self {
             DateMatchField::Born => "born",
             DateMatchField::Died => "died",
         }
     }
 
-    fn get_property(&self) -> &'static str {
+    const fn get_property(&self) -> &'static str {
         match self {
             DateMatchField::Born => "P569",
             DateMatchField::Died => "P570",
@@ -42,13 +47,14 @@ impl DateMatchField {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum DatePrecision {
     Day,
     Year,
 }
 
 impl DatePrecision {
-    fn as_i32(&self) -> i32 {
+    const fn as_i32(&self) -> i32 {
         match self {
             DatePrecision::Day => 10,
             DatePrecision::Year => 4,
@@ -124,6 +130,71 @@ impl AutoMatch {
         }
     }
 
+    pub async fn automatch_with_sparql(&mut self, catalog_id: usize) -> Result<()> {
+        let catalog = Catalog::from_id(catalog_id, &self.app).await?;
+        let kv_pairs = catalog.get_key_value_pairs().await?;
+        let sparql_part = kv_pairs
+            .iter()
+            .filter(|(k, _)| *k == "automatch_sparql")
+            .map(|(_, v)| v)
+            .next()
+            .ok_or_else(|| anyhow!("No automatch_sparql key in catalog"))?;
+        let sparql = format!("SELECT ?q ?qLabel WHERE {{ {sparql_part} }}");
+        let mut reader = self.app.wikidata().load_sparql_csv(&sparql).await?;
+        let api = self.app.wikidata().get_mw_api().await?;
+        let mut label2q = HashMap::new();
+        for row in reader.records().filter_map(|r| r.ok()) {
+            let q = api.extract_entity_from_uri(&row[0])?;
+            let q_label = row[1].to_string();
+            if let Ok(q_numeric) = q[1..].parse::<usize>() {
+                // self.app
+                //     .storage()
+                //     .automatch_entry_by_sparql(catalog_id, q_numeric, q_label)
+                //     .await?;
+                label2q.insert(q_label, q_numeric);
+                if label2q.len() >= 100000 {
+                    self.process_automatch_with_sparql(catalog_id, &label2q)
+                        .await?;
+                    label2q.clear();
+                }
+            }
+        }
+        self.process_automatch_with_sparql(catalog_id, &label2q)
+            .await?;
+        Ok(())
+    }
+
+    async fn process_automatch_with_sparql(
+        &self,
+        catalog_id: usize,
+        label2q: &HashMap<String, usize>,
+    ) -> Result<()> {
+        if label2q.is_empty() {
+            return Ok(());
+        }
+        let mut offset = 0;
+        let batch_size = 50000;
+        loop {
+            info!("Batch offset {offset}");
+            let mut entry_batch = self
+                .app
+                .storage()
+                .get_entry_batch(catalog_id, batch_size, offset)
+                .await?;
+            for entry in &mut entry_batch {
+                if let Some(q) = label2q.get(&entry.ext_name) {
+                    entry.set_app(&self.app);
+                    let _ = entry.set_match(&format!("Q{}", q), USER_AUTO).await;
+                }
+            }
+            if entry_batch.len() < batch_size {
+                break;
+            }
+            offset += entry_batch.len();
+        }
+        Ok(())
+    }
+
     pub async fn automatch_by_sitelink(&mut self, catalog_id: usize) -> Result<()> {
         let language = Catalog::from_id(catalog_id, &self.app).await?.search_wp;
         let site = format!("{}wiki", &language);
@@ -193,7 +264,7 @@ impl AutoMatch {
         let mut items = match self.app.wikidata().search_with_type_api(name, type_q).await {
             Ok(items) => items,
             Err(_e) => {
-                // eprintln!("search_with_type_and_entity_id: {e}");
+                // error!("search_with_type_and_entity_id: {e}");
                 return None;
             }
         };
@@ -579,7 +650,7 @@ impl AutoMatch {
                 break;
             }
             let _ = self.remember_offset(offset).await;
-            offset += results.len()
+            offset += results.len();
         }
         let _ = self.clear_offset().await;
         Ok(())
@@ -620,7 +691,7 @@ impl AutoMatch {
                 break;
             }
             let _ = self.remember_offset(offset).await;
-            offset += results.len()
+            offset += results.len();
         }
         let _ = self.clear_offset().await;
         Ok(())
@@ -934,8 +1005,8 @@ impl AutoMatch {
             let future = self.search_with_type_and_entity_id(entry_id, label, type_q);
             futures.push(future);
             for alias in &aliases {
-                let future = self.search_with_type_and_entity_id(entry_id, alias, type_q);
-                futures.push(future);
+                let future_tmp = self.search_with_type_and_entity_id(entry_id, alias, type_q);
+                futures.push(future_tmp);
             }
         }
 
@@ -948,6 +1019,75 @@ impl AutoMatch {
         search_results.sort();
         search_results.dedup();
         search_results
+    }
+
+    async fn get_json_from_url_and_entry(
+        client: &reqwest::Client,
+        url: String,
+        entry: Entry,
+    ) -> Result<(serde_json::Value, Entry)> {
+        let result = client
+            .get(url)
+            .send()
+            .await?
+            .json::<serde_json::Value>()
+            .await?;
+        Ok((result, entry))
+    }
+
+    fn json_array_of_strings_to_vec_item_ids(json: &serde_json::Value) -> Vec<usize> {
+        match json.as_array() {
+            Some(array) => array
+                .iter()
+                .map(|item| item.as_str().unwrap()[1..].parse().unwrap())
+                .collect(),
+            None => Vec::new(),
+        }
+    }
+
+    pub async fn automatch_people_with_initials(&self, catalog_id: usize) -> Result<()> {
+        let client = crate::autoscrape::Autoscrape::reqwest_client_external()?;
+        let all_entries = self
+            .app
+            .storage()
+            .catalog_get_entries_of_people_with_initials(catalog_id)
+            .await?;
+        for entries in all_entries.chunks(50) {
+            let futures: Vec<_> = entries
+                .iter()
+                .map(|entry| {
+                    let url = format!(
+                        "https://wd-infernal.toolforge.org/initial_search/{}",
+                        urlencoding::encode(&entry.ext_name)
+                    );
+                    Self::get_json_from_url_and_entry(&client, url, entry.to_owned())
+                })
+                .collect();
+
+            let stream = futures::stream::iter(futures).buffer_unordered(5);
+            let mut results = stream.collect::<Vec<_>>().await;
+            for (json, entry) in results.iter_mut().flatten() {
+                let items = Self::json_array_of_strings_to_vec_item_ids(json);
+                match items.len() {
+                    0 => {
+                        if !entry.is_unmatched() {
+                            let _ = entry.unmatch().await;
+                        }
+                    }
+                    1 => {
+                        let _ = entry.set_match(&format!("{}", items[0]), USER_AUTO).await;
+                    }
+                    _ => {
+                        let items = items
+                            .iter()
+                            .map(|q| format!("Q{q}"))
+                            .collect::<Vec<String>>();
+                        let _ = entry.set_multi_match(&items).await;
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1041,9 +1181,9 @@ mod tests {
         am.automatch_by_sitelink(TEST_CATALOG_ID).await.unwrap();
 
         // Check in-database changes
-        let entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
-        assert_eq!(entry.q, Some(13520818));
-        assert_eq!(entry.user, Some(USER_AUTO));
+        let entry2 = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+        assert_eq!(entry2.q, Some(13520818));
+        assert_eq!(entry2.user, Some(USER_AUTO));
 
         // Clear
         am.purge_automatches(TEST_CATALOG_ID).await.unwrap();
@@ -1061,26 +1201,26 @@ mod tests {
         assert!(entry.is_fully_matched());
 
         // Purge catalog
-        let am = AutoMatch::new(&app);
-        am.purge_automatches(TEST_CATALOG_ID).await.unwrap();
+        let am2 = AutoMatch::new(&app);
+        am2.purge_automatches(TEST_CATALOG_ID).await.unwrap();
 
         // Check that the entry is still fully matched
-        let entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
-        assert!(entry.is_fully_matched());
+        let entry2 = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+        assert!(entry2.is_fully_matched());
 
         // Set an automatch
-        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
-        entry.unmatch().await.unwrap();
-        entry.set_match("Q1", 0).await.unwrap();
-        assert!(entry.is_partially_matched());
+        let mut entry3 = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+        entry3.unmatch().await.unwrap();
+        entry3.set_match("Q1", 0).await.unwrap();
+        assert!(entry3.is_partially_matched());
 
         // Purge catalog
-        let am = AutoMatch::new(&app);
-        am.purge_automatches(TEST_CATALOG_ID).await.unwrap();
+        let am4 = AutoMatch::new(&app);
+        am4.purge_automatches(TEST_CATALOG_ID).await.unwrap();
 
         // Check that the entry is now unmatched
-        let entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
-        assert!(entry.is_unmatched());
+        let entry4 = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+        assert!(entry4.is_unmatched());
     }
 
     #[tokio::test]
@@ -1095,8 +1235,8 @@ mod tests {
         let mut am = AutoMatch::new(&app);
 
         // Set prelim match
-        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
-        entry.set_match("Q13520818", 0).await.unwrap();
+        let mut entry2 = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+        entry2.set_match("Q13520818", 0).await.unwrap();
 
         // Run automatch
         am.match_person_by_single_date(TEST_CATALOG_ID, DateMatchField::Born, DatePrecision::Day)
@@ -1104,12 +1244,12 @@ mod tests {
             .unwrap();
 
         // Check match
-        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
-        assert_eq!(entry.q, Some(13520818));
-        assert_eq!(entry.user, Some(USER_DATE_MATCH));
+        let mut entry3 = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+        assert_eq!(entry3.q, Some(13520818));
+        assert_eq!(entry3.user, Some(USER_DATE_MATCH));
 
         // Cleanup
-        entry.unmatch().await.unwrap();
+        entry3.unmatch().await.unwrap();
         am.purge_automatches(TEST_CATALOG_ID).await.unwrap();
     }
 }
