@@ -1,9 +1,9 @@
 use crate::app_state::AppState;
-use crate::auxiliary_matcher::*;
-use crate::catalog::*;
-use crate::entry::*;
-use crate::job::*;
-use crate::maintenance::*;
+use crate::auxiliary_matcher::AUX_PROPERTIES_ALSO_USING_LOWERCASE;
+use crate::catalog::Catalog;
+use crate::entry::Entry;
+use crate::job::{Job, Jobbable};
+use crate::maintenance::Maintenance;
 use crate::match_state::MatchState;
 use anyhow::Result;
 use serde_json::Value;
@@ -133,19 +133,20 @@ impl Microsync {
     ) -> Result<String> {
         let formatter_url = Self::get_formatter_url_for_prop(catalog.wd_prop.unwrap_or(0)).await?;
         let mut ret = wikitext_from_issues_get_header(catalog);
-        self.wikitext_from_issues_add_extid_info(extid_not_in_mnm, &mut ret, &formatter_url);
+        Self::wikitext_from_issues_add_extid_info(extid_not_in_mnm, &mut ret, &formatter_url);
         self.wikitext_from_issues_match_differs(match_differs, &mut ret, &formatter_url)
             .await?;
         ret += &self
             .wikitext_from_issues_multiple_q_in_mnm(multiple_q_in_mnm, &formatter_url)
             .await?;
-        ret += &self
-            .wikitext_from_issues_multiple_extid_in_wd(multiple_extid_in_wikidata, formatter_url);
+        ret += &Self::wikitext_from_issues_multiple_extid_in_wd(
+            multiple_extid_in_wikidata,
+            formatter_url,
+        );
         Ok(ret)
     }
 
     fn wikitext_from_issues_multiple_extid_in_wd(
-        &self,
         multiple_extid_in_wikidata: Vec<MultipleExtIdInWikidata>,
         formatter_url: String,
     ) -> String {
@@ -157,7 +158,7 @@ impl Microsync {
             } else {
                 ret += "{| class='wikitable'\n! External ID !! Items in Mix'n'Match\n";
                 for e in &multiple_extid_in_wikidata {
-                    let ext_id = self.format_ext_id(&e.ext_id, "", &formatter_url);
+                    let ext_id = Self::format_ext_id(&e.ext_id, "", &formatter_url);
                     let items: Vec<String> =
                         e.items.iter().map(|q| format!("{{{{Q|{}}}}}", q)).collect();
                     let items = items.join("<br/>");
@@ -195,7 +196,7 @@ impl Microsync {
                     let mut first = true;
                     let q_mnm = e.q;
                     for (entry_id, ext_id) in &e.entry2ext_id {
-                        ret += &self.wikitext_from_issues_multiple_q_in_mnm_process_row(
+                        ret += &Self::wikitext_from_issues_multiple_q_in_mnm_process_row(
                             &mut first,
                             e,
                             q_mnm,
@@ -214,7 +215,6 @@ impl Microsync {
 
     #[allow(clippy::too_many_arguments)]
     fn wikitext_from_issues_multiple_q_in_mnm_process_row(
-        &self,
         first: &mut bool,
         e: &ExtIdWithMutipleQ,
         q_mnm: isize,
@@ -234,7 +234,7 @@ impl Microsync {
             "|-\n|| ".to_string()
         };
         let ext_name = entry2name.get(entry_id).unwrap_or(ext_id);
-        let ext_id = self.format_ext_id(ext_id, "", formatter_url);
+        let ext_id = Self::format_ext_id(ext_id, "", formatter_url);
         let mnm_url = format!("https://mix-n-match.toolforge.org/#/entry/{}", entry_id);
         format!("{row}[{mnm_url} {entry_id}] || {ext_id} || {ext_name}\n")
     }
@@ -259,7 +259,7 @@ impl Microsync {
                 *ret += "{| class='wikitable'\n! External ID !! External label !! Item in Wikidata !! Item in Mix'n'Match !! Mix'n'match entry\n" ;
                 for e in &match_differs {
                     let ext_name = entry2name.get(&e.entry_id).unwrap_or(&e.ext_id);
-                    let ext_id = self.format_ext_id(&e.ext_id, &e.ext_url, formatter_url);
+                    let ext_id = Self::format_ext_id(&e.ext_id, &e.ext_url, formatter_url);
                     let mnm_url =
                         format!("https://mix-n-match.toolforge.org/#/entry/{}", e.entry_id);
                     let s = format!("|-\n| {ext_id} || {ext_name} || {{{{Q|{}}}}} || {{{{Q|{}}}}} || [{mnm_url} {}]\n",e.q_wd,e.q_mnm,e.entry_id);
@@ -272,7 +272,6 @@ impl Microsync {
     }
 
     fn wikitext_from_issues_add_extid_info(
-        &self,
         extid_not_in_mnm: Vec<ExtIdNoMnM>,
         ret: &mut String,
         formatter_url: &str,
@@ -284,7 +283,7 @@ impl Microsync {
             } else {
                 *ret += "{| class='wikitable'\n! External ID !! Item\n";
                 for e in &extid_not_in_mnm {
-                    let ext_id = self.format_ext_id(&e.ext_id, "", formatter_url);
+                    let ext_id = Self::format_ext_id(&e.ext_id, "", formatter_url);
                     let s = format!("|-\n| {} || {{{{Q|{}}}}}\n", &ext_id, e.q);
                     *ret += &s;
                 }
@@ -293,7 +292,7 @@ impl Microsync {
         }
     }
 
-    fn format_ext_id(&self, ext_id: &str, ext_url: &str, formatter_url: &str) -> String {
+    fn format_ext_id(ext_id: &str, ext_url: &str, formatter_url: &str) -> String {
         // TODO if ( !preg_match('|^[a-zA-Z0-9._ -]+$|',$ext_id) ) $ext_id = "<nowiki>{$ext_id}</nowiki>" ;
         if !formatter_url.is_empty() {
             format!("[{} {}]", formatter_url.replace("$1", ext_id), ext_id)
@@ -310,14 +309,11 @@ impl Microsync {
         );
         let client = wikimisc::wikidata::Wikidata::new().reqwest_client()?;
         let json = client.get(&url).send().await?.json::<Value>().await?;
-        let url = match json["entities"][format!("P{property}")]["claims"]["P1630"][0]["mainsnak"]
+        let url2 = json["entities"][format!("P{property}")]["claims"]["P1630"][0]["mainsnak"]
             ["datavalue"]["value"]
             .as_str()
-        {
-            Some(url) => url.to_string(),
-            None => String::new(),
-        };
-        Ok(url)
+            .map_or_else(String::new, |url_tmp| url_tmp.to_string());
+        Ok(url2)
     }
 
     async fn get_multiple_extid_in_wikidata(
@@ -375,9 +371,10 @@ impl Microsync {
                 let mut entry2ext_id: Vec<(usize, String)> = entry_ids
                     .iter()
                     .zip(ext_ids.iter())
-                    .filter_map(|(entry_id, ext_id)| match entry_id.parse() {
-                        Ok(entry_id) => Some((entry_id, ext_id.to_string())),
-                        _ => None,
+                    .filter_map(|(entry_id, ext_id)| {
+                        entry_id
+                            .parse()
+                            .map_or(None, |entry_id2| Some((entry_id2, ext_id.to_string())))
                     })
                     .collect();
                 entry2ext_id.sort();
@@ -585,10 +582,10 @@ impl Microsync {
 }
 
 fn wikitext_from_issues_get_header(catalog: &Catalog) -> String {
-    let catalog_name = match &catalog.name {
-        Some(s) => s.to_owned(),
-        None => String::new(),
-    };
+    let catalog_name = catalog
+        .name
+        .as_ref()
+        .map_or_else(String::new, |s| s.to_owned());
     let mut ret = String::new();
     ret += &format!(
         "A report for the [{}/ Mix'n'match] tool. '''This page will be replaced regularly!'''\n",
@@ -660,7 +657,7 @@ mod tests {
     async fn test_get_formatter_url_for_prop() {
         assert_eq!(
             Microsync::get_formatter_url_for_prop(214).await.unwrap(),
-            "https://viaf.org/viaf/$1/".to_string()
+            "https://viaf.org/viaf/$1".to_string()
         );
         assert_eq!(
             Microsync::get_formatter_url_for_prop(215).await.unwrap(),
@@ -688,21 +685,22 @@ mod tests {
 
     #[tokio::test]
     async fn test_format_ext_id() {
-        let app = get_test_app();
-        let ms = Microsync::new(&app);
         assert_eq!(
-            ms.format_ext_id("gazebo", "http://foo.bar", "http://foo.baz/$1"),
+            Microsync::format_ext_id("gazebo", "http://foo.bar", "http://foo.baz/$1"),
             "[http://foo.baz/gazebo gazebo]".to_string()
         );
         assert_eq!(
-            ms.format_ext_id("gazebo", "http://foo.bar", ""),
+            Microsync::format_ext_id("gazebo", "http://foo.bar", ""),
             "[http://foo.bar gazebo]".to_string()
         );
         assert_eq!(
-            ms.format_ext_id("gazebo", "", "http://foo.baz/$1"),
+            Microsync::format_ext_id("gazebo", "", "http://foo.baz/$1"),
             "[http://foo.baz/gazebo gazebo]".to_string()
         );
-        assert_eq!(ms.format_ext_id("gazebo", "", ""), "gazebo".to_string());
+        assert_eq!(
+            Microsync::format_ext_id("gazebo", "", ""),
+            "gazebo".to_string()
+        );
     }
 
     #[tokio::test]

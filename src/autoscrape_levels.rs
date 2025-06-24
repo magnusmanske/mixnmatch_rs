@@ -34,10 +34,9 @@ impl Level for AutoscrapeKeys {
     }
 
     fn current(&self) -> String {
-        match self.keys.get(self.position) {
-            Some(v) => v.to_owned(),
-            None => String::new(),
-        }
+        self.keys
+            .get(self.position)
+            .map_or_else(String::new, |v| v.to_owned())
     }
 
     fn get_state(&self) -> Value {
@@ -47,7 +46,7 @@ impl Level for AutoscrapeKeys {
     fn set_state(&mut self, json: &Value) {
         if let Some(position) = json.get("position") {
             if let Some(position) = position.as_u64() {
-                self.position = position as usize
+                self.position = position as usize;
             }
         }
     }
@@ -68,7 +67,7 @@ impl AutoscrapeKeys {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct AutoscrapeRange {
     start: u64,
     end: u64,
@@ -100,7 +99,7 @@ impl Level for AutoscrapeRange {
     fn set_state(&mut self, json: &Value) {
         if let Some(current_value) = json.get("current_value") {
             if let Some(current_value) = current_value.as_u64() {
-                self.current_value = current_value
+                self.current_value = current_value;
             }
         }
     }
@@ -154,12 +153,12 @@ impl Level for AutoscrapeFollow {
     fn set_state(&mut self, json: &Value) {
         if let Some(url) = json.get("url") {
             if let Some(url) = url.as_str() {
-                self.url = url.to_string()
+                self.url = url.to_string();
             }
         }
         if let Some(regex) = json.get("regex") {
             if let Some(regex) = regex.as_str() {
-                self.regex = regex.to_string()
+                self.regex = regex.to_string();
             }
         }
     }
@@ -264,12 +263,12 @@ impl Level for AutoscrapeMediaWiki {
         self.title_cache.clear();
         if let Some(url) = json.get("url") {
             if let Some(url) = url.as_str() {
-                self.url = url.to_string()
+                self.url = url.to_string();
             }
         }
         if let Some(apfrom) = json.get("apfrom") {
             if let Some(apfrom) = apfrom.as_str() {
-                self.apfrom = apfrom.to_string()
+                self.apfrom = apfrom.to_string();
             }
         }
     }
@@ -285,7 +284,7 @@ impl AutoscrapeMediaWiki {
         })
     }
 
-    /// Returns an allpages query result. Order is reversed so A->Z works via pop().
+    /// Returns an allpages query result. Order is reversed so A->Z works via `pop()`.
     async fn refill_cache(&mut self) -> Result<()> {
         let url = format!("{}?action=query&format=json&list=allpages&apnamespace=0&aplimit=500&apfilterredir=nonredirects&apfrom={}",&self.url,&self.apfrom) ;
         if Some(url.to_owned()) == self.last_url {
@@ -404,16 +403,16 @@ impl AutoscrapeLevel {
         Ok(Self { level_type })
     }
 
-    pub fn level_type(&self) -> &AutoscrapeLevelType {
+    pub const fn level_type(&self) -> &AutoscrapeLevelType {
         &self.level_type
     }
 
-    pub fn level_type_mut(&mut self) -> &mut AutoscrapeLevelType {
+    pub const fn level_type_mut(&mut self) -> &mut AutoscrapeLevelType {
         &mut self.level_type
     }
 
     pub async fn init(&mut self, autoscrape: &Autoscrape) {
-        self.level_type.init(autoscrape).await
+        self.level_type.init(autoscrape).await;
     }
 
     pub async fn tick(&mut self) -> bool {

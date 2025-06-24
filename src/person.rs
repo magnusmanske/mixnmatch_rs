@@ -25,8 +25,8 @@ lazy_static! {
         Regex::new(r"^(\S+) .*?(\S+)$").expect("Regex failure");
 }
 
-#[derive(Debug, Clone)]
-pub struct Person {}
+#[derive(Debug, Clone, Copy)]
+pub struct Person;
 
 impl Person {
     pub fn sanitize_simplify_name(name: &str) -> String {

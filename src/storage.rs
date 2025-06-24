@@ -5,11 +5,13 @@ use crate::{
     coordinate_matcher::LocationRow,
     entry::{AuxiliaryRow, CoordinateLocation, Entry},
     issue::Issue,
-    job::{JobRow, JobStatus, TaskSize},
+    job_row::JobRow,
+    job_status::JobStatus,
     match_state::MatchState,
+    prop_todo::PropTodo,
+    task_size::TaskSize,
     taxon_matcher::{RankedNames, TaxonNameField},
     update_catalog::UpdateInfo,
-    PropTodo,
 };
 use anyhow::Result;
 use async_trait::async_trait;
@@ -62,6 +64,10 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
         catalog_id: usize,
     ) -> Result<HashMap<String, String>>;
     async fn catalog_refresh_overview_table(&self, catalog_id: usize) -> Result<()>;
+    async fn catalog_get_entries_of_people_with_initials(
+        &self,
+        catalog_id: usize,
+    ) -> Result<Vec<Entry>>;
 
     // Microsync
 
@@ -148,6 +154,10 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     async fn maintenance_unlink_item_matches(&self, items: Vec<String>) -> Result<()>;
     async fn maintenance_automatch(&self) -> Result<()>;
     async fn maintenance_automatch_people_via_year_born(&self) -> Result<()>;
+    async fn maintenance_match_people_via_name_and_full_dates(
+        &self,
+        batch_size: usize,
+    ) -> Result<Vec<(usize, usize)>>;
     async fn get_items(
         &self,
         catalog_id: usize,
@@ -193,6 +203,13 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     ) -> Option<usize>;
 
     // Automatch
+
+    async fn automatch_entry_by_sparql(
+        &self,
+        catalog_id: usize,
+        q_numeric: usize,
+        label: &str,
+    ) -> Result<()>;
 
     async fn automatch_by_sitelink_get_entries(
         &self,
@@ -254,6 +271,12 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     async fn entry_from_id(&self, entry_id: usize) -> Result<Entry>;
     async fn entry_from_ext_id(&self, catalog_id: usize, ext_id: &str) -> Result<Entry>;
     async fn multiple_from_ids(&self, entry_ids: &[usize]) -> Result<HashMap<usize, Entry>>;
+    async fn get_entry_batch(
+        &self,
+        catalog_id: usize,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<Entry>>;
     async fn entry_insert_as_new(&self, entry: &Entry) -> Result<usize>;
     async fn entry_delete(&self, entry_id: usize) -> Result<()>;
     async fn entry_get_creation_time(&self, entry_id: usize) -> Option<String>;

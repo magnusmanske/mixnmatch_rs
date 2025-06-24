@@ -17,7 +17,7 @@ use wikimisc::wikibase::{
 pub const ENTRY_NEW_ID: usize = 0;
 pub const WESTERN_LANGUAGES: &[&str] = &["en", "de", "fr", "es", "nl", "it", "pt"];
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CoordinateLocation {
     pub lat: f64,
     pub lon: f64,
@@ -85,7 +85,7 @@ impl AuxiliaryRow {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum EntryError {
     TryingToUpdateNewEntry,
     TryingToInsertExistingEntry,
@@ -143,7 +143,7 @@ impl Entry {
             q: None,
             user: None,
             timestamp: None,
-            random: rand::thread_rng().gen(),
+            random: rand::rng().random(),
             type_name: None,
             app: None,
         }
@@ -168,7 +168,7 @@ impl Entry {
         Ok(ret)
     }
 
-    /// Inserts the current entry into the database. id must be ENTRY_NEW_ID.
+    /// Inserts the current entry into the database. id must be `ENTRY_NEW_ID`.
     //TODO test
     pub async fn insert_as_new(&mut self) -> Result<()> {
         if self.id != ENTRY_NEW_ID {
@@ -189,7 +189,7 @@ impl Entry {
         Ok(())
     }
 
-    /// Helper function for from_row().
+    /// Helper function for `from_row()`.
     //TODO test
     pub fn value2opt_string(value: mysql_async::Value) -> Result<Option<String>> {
         match value {
@@ -198,7 +198,7 @@ impl Entry {
         }
     }
 
-    /// Helper function for from_row().
+    /// Helper function for `from_row()`.
     //TODO test
     pub fn value2opt_isize(value: mysql_async::Value) -> Result<Option<isize>> {
         match value {
@@ -207,7 +207,7 @@ impl Entry {
         }
     }
 
-    /// Helper function for from_row().
+    /// Helper function for `from_row()`.
     //TODO test
     pub fn value2opt_usize(value: mysql_async::Value) -> Result<Option<usize>> {
         match value {
@@ -232,12 +232,12 @@ impl Entry {
             .map(|q| format!("https://www.wikidata.org/wiki/Q{q}"))
     }
 
-    /// Sets the AppState object. Automatically done when created via from_id().
+    /// Sets the `AppState` object. Automatically done when created via `from_id()`.
     pub fn set_app(&mut self, app: &AppState) {
         self.app = Some(app.clone());
     }
 
-    /// Returns the MixNMatch object reference.
+    /// Returns the `MixNMatch` object reference.
     pub fn app(&self) -> Result<&AppState> {
         let app = self.app.as_ref().ok_or(anyhow!("Entry: No app set"))?;
         Ok(app)
@@ -253,7 +253,7 @@ impl Entry {
             .await
     }
 
-    /// Updates ext_name locally and in the database
+    /// Updates `ext_name` locally and in the database
     //TODO test
     pub async fn set_ext_name(&mut self, ext_name: &str) -> Result<()> {
         if self.ext_name != ext_name {
@@ -275,7 +275,7 @@ impl Entry {
             .await
     }
 
-    /// Updates ext_desc locally and in the database
+    /// Updates `ext_desc` locally and in the database
     //TODO test
     pub async fn set_ext_desc(&mut self, ext_desc: &str) -> Result<()> {
         if self.ext_desc != ext_desc {
@@ -320,7 +320,7 @@ impl Entry {
             for aux in auxiliary {
                 if let Ok(prop) = ec.load_entity(&api, format!("P{}", aux.prop_numeric)).await {
                     if let Some(claim) = aux.get_claim_for_aux(prop, &references) {
-                        self.add_claim_or_references(item, claim);
+                        Self::add_claim_or_references(item, claim);
                     }
                 }
             }
@@ -335,16 +335,16 @@ impl Entry {
     ) -> Result<()> {
         let (born, died) = self.get_person_dates().await?;
         if let Some(time) = born {
-            let (value, precision) = self.time_precision_from_ymd(&time);
+            let (value, precision) = Self::time_precision_from_ymd(&time);
             let snak = Snak::new_time("P569", &value, precision);
             let claim = Statement::new_normal(snak, vec![], references.to_owned());
-            self.add_claim_or_references(item, claim);
+            Self::add_claim_or_references(item, claim);
         }
         if let Some(time) = died {
-            let (value, precision) = self.time_precision_from_ymd(&time);
+            let (value, precision) = Self::time_precision_from_ymd(&time);
             let snak = Snak::new_time("P570", &value, precision);
             let claim = Statement::new_normal(snak, vec![], references.to_owned());
-            self.add_claim_or_references(item, claim);
+            Self::add_claim_or_references(item, claim);
         }
         Ok(())
     }
@@ -357,7 +357,7 @@ impl Entry {
         if let Some(coord) = self.get_coordinate_location().await? {
             let snak = Snak::new_coordinate("P625", coord.lat, coord.lon);
             let claim = Statement::new_normal(snak, vec![], references.to_owned());
-            self.add_claim_or_references(item, claim);
+            Self::add_claim_or_references(item, claim);
         }
         Ok(())
     }
@@ -395,11 +395,11 @@ impl Entry {
                 names.push(LocaleString::new(*l, &name));
             }
         }
-        for name in names {
+        for name_tmp in names {
             if item.label_in_locale(language).is_none() {
-                item.labels_mut().push(name);
+                item.labels_mut().push(name_tmp);
             } else {
-                aliases.push(name);
+                aliases.push(name_tmp);
             }
         }
 
@@ -419,7 +419,7 @@ impl Entry {
             if !tn.is_empty() {
                 let snak = Snak::new_item("P31", tn);
                 let claim = Statement::new_normal(snak, vec![], references.to_owned());
-                self.add_claim_or_references(item, claim);
+                Self::add_claim_or_references(item, claim);
             }
         }
     }
@@ -435,11 +435,11 @@ impl Entry {
             let prop = catalog.wd_prop.to_owned().unwrap(); // Safe
             let snak = Snak::new_external_id(&format!("P{prop}"), &self.ext_id);
             let claim = Statement::new_normal(snak, vec![], references.to_owned());
-            self.add_claim_or_references(item, claim);
+            Self::add_claim_or_references(item, claim);
         }
     }
 
-    fn add_claim_or_references(&self, item: &mut ItemEntity, mut claim: Statement) {
+    fn add_claim_or_references(item: &mut ItemEntity, mut claim: Statement) {
         // Remove self-referencing references
         if claim
             .references()
@@ -469,7 +469,7 @@ impl Entry {
         item.add_claim(claim);
     }
 
-    fn time_precision_from_ymd(&self, ymd: &str) -> (String, u64) {
+    fn time_precision_from_ymd(ymd: &str) -> (String, u64) {
         let parts: Vec<&str> = ymd.split('-').collect();
         let prefix = if ymd.starts_with('-') { "" } else { "+" };
         match parts.len() {
@@ -489,7 +489,7 @@ impl Entry {
         }
     }
 
-    /// Updates ext_id locally and in the database
+    /// Updates `ext_id` locally and in the database
     //TODO test
     pub async fn set_ext_id(&mut self, ext_id: &str) -> Result<()> {
         if self.ext_id != ext_id {
@@ -503,7 +503,7 @@ impl Entry {
         Ok(())
     }
 
-    /// Updates ext_url locally and in the database
+    /// Updates `ext_url` locally and in the database
     //TODO test
     pub async fn set_ext_url(&mut self, ext_url: &str) -> Result<()> {
         if self.ext_url != ext_url {
@@ -518,7 +518,7 @@ impl Entry {
         Ok(())
     }
 
-    /// Updates type_name locally and in the database
+    /// Updates `type_name` locally and in the database
     //TODO test
     pub async fn set_type_name(&mut self, type_name: Option<String>) -> Result<()> {
         if self.type_name != type_name {
@@ -591,7 +591,7 @@ impl Entry {
         Ok(())
     }
 
-    /// Returns a LocaleString Vec of all aliases of the entry
+    /// Returns a `LocaleString` Vec of all aliases of the entry
     //TODO test
     pub async fn get_aliases(&self) -> Result<Vec<LocaleString>> {
         self.check_valid_id()?;
@@ -610,7 +610,7 @@ impl Entry {
         Ok(())
     }
 
-    /// Returns a language:text HashMap of all language descriptions of the entry
+    /// Returns a language:text `HashMap` of all language descriptions of the entry
     //TODO test
     pub async fn get_language_descriptions(&self) -> Result<HashMap<String, String>> {
         self.check_valid_id()?;
@@ -803,7 +803,7 @@ impl Entry {
     }
 
     /// Checks if the entry is unmatched
-    pub fn is_unmatched(&self) -> bool {
+    pub const fn is_unmatched(&self) -> bool {
         self.q.is_none()
     }
 
@@ -813,7 +813,7 @@ impl Entry {
     }
 
     /// Checks if the entry is fully matched
-    pub fn is_fully_matched(&self) -> bool {
+    pub const fn is_fully_matched(&self) -> bool {
         match self.user {
             Some(user_id) => user_id > 0,
             None => false,
@@ -930,22 +930,22 @@ mod tests {
         assert!(entry.timestamp.is_some());
 
         // Check in-database changes
-        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
-        assert_eq!(entry.q, Some(1));
-        assert_eq!(entry.user, Some(4));
-        assert!(entry.timestamp.is_some());
+        let mut entry2 = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+        assert_eq!(entry2.q, Some(1));
+        assert_eq!(entry2.user, Some(4));
+        assert!(entry2.timestamp.is_some());
 
         // Clear and check in-memory changes
-        entry.unmatch().await.unwrap();
-        assert!(entry.q.is_none());
-        assert!(entry.user.is_none());
-        assert!(entry.timestamp.is_none());
+        entry2.unmatch().await.unwrap();
+        assert!(entry2.q.is_none());
+        assert!(entry2.user.is_none());
+        assert!(entry2.timestamp.is_none());
 
         // Check in-database changes
-        let entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
-        assert!(entry.q.is_none());
-        assert!(entry.user.is_none());
-        assert!(entry.timestamp.is_none());
+        let entry3 = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+        assert!(entry3.q.is_none());
+        assert!(entry3.user.is_none());
+        assert!(entry3.timestamp.is_none());
     }
 
     #[tokio::test]
@@ -966,12 +966,12 @@ mod tests {
             .map(|s| s.to_string())
             .collect();
         entry.set_multi_match(&items).await.unwrap();
-        let result = entry.get_multi_match().await.unwrap();
-        assert_eq!(result, items);
+        let result1 = entry.get_multi_match().await.unwrap();
+        assert_eq!(result1, items);
         entry.remove_multi_match().await.unwrap();
-        let result = entry.get_multi_match().await.unwrap();
+        let result2 = entry.get_multi_match().await.unwrap();
         let empty: Vec<String> = vec![];
-        assert_eq!(result, empty);
+        assert_eq!(result2, empty);
     }
 
     #[tokio::test]
@@ -1007,23 +1007,22 @@ mod tests {
                 "https://mix-n-match.toolforge.org/#/entry/{TEST_ENTRY_ID}"
             ))
         );
-        let entry = Entry::new_from_catalog_and_ext_id(1, "234");
-        assert_eq!(entry.get_entry_url(), None);
+        let entry2 = Entry::new_from_catalog_and_ext_id(1, "234");
+        assert_eq!(entry2.get_entry_url(), None);
     }
 
     #[test]
     fn test_time_precision_from_ymd() {
-        let entry = Entry::new_from_catalog_and_ext_id(1, "234");
         assert_eq!(
-            entry.time_precision_from_ymd("2021-01-01"),
+            Entry::time_precision_from_ymd("2021-01-01"),
             ("+2021-01-01T00:00:00Z".to_string(), 11)
         );
         assert_eq!(
-            entry.time_precision_from_ymd("2021-01"),
+            Entry::time_precision_from_ymd("2021-01"),
             ("+2021-01-01T00:00:00Z".to_string(), 10)
         );
         assert_eq!(
-            entry.time_precision_from_ymd("2021"),
+            Entry::time_precision_from_ymd("2021"),
             ("+2021-01-01T00:00:00Z".to_string(), 9)
         );
     }
@@ -1067,8 +1066,8 @@ mod tests {
         let app = get_test_app();
         let entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
         assert!(entry.check_valid_id().is_ok());
-        let entry = Entry::new_from_catalog_and_ext_id(1, "234");
-        assert!(entry.check_valid_id().is_err());
+        let entry2 = Entry::new_from_catalog_and_ext_id(1, "234");
+        assert!(entry2.check_valid_id().is_err());
     }
 
     #[tokio::test]

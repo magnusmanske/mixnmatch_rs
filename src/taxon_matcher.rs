@@ -1,8 +1,9 @@
 use crate::app_state::AppState;
 use crate::app_state::USER_AUX_MATCH;
 use crate::catalog::Catalog;
-use crate::entry::*;
-use crate::job::*;
+use crate::entry::Entry;
+use crate::job::Job;
+use crate::job::Jobbable;
 use anyhow::Result;
 use lazy_static::lazy_static;
 use regex::{Regex, RegexBuilder};
@@ -32,13 +33,14 @@ lazy_static! {
         .expect("Regex error");
 }
 
+#[derive(Clone, Copy, Debug)]
 pub enum TaxonNameField {
     Name,
     Description,
 }
 
 impl TaxonNameField {
-    pub fn as_str(&self) -> &str {
+    pub const fn as_str(&self) -> &str {
         match self {
             TaxonNameField::Name => "ext_name",
             TaxonNameField::Description => "ext_desc",
@@ -255,9 +257,9 @@ mod tests {
         tm.match_taxa(TEST_CATALOG_ID).await.unwrap();
 
         // Check matching and clear
-        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
-        assert_eq!(entry.q, Some(2940133));
-        assert_eq!(entry.user, Some(4));
-        entry.unmatch().await.unwrap();
+        let mut entry2 = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+        assert_eq!(entry2.q, Some(2940133));
+        assert_eq!(entry2.user, Some(4));
+        entry2.unmatch().await.unwrap();
     }
 }

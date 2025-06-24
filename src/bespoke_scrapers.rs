@@ -6,10 +6,13 @@ use crate::{
 use anyhow::Result;
 use async_trait::async_trait;
 use lazy_static::lazy_static;
+use log::info;
 use rand::Rng;
 use regex::{Captures, Regex};
 use std::collections::HashMap;
 use wikimisc::timestamp::TimeStamp;
+
+/* WHEN YOU CREATE A NEW WRAPPER, ALSO ADD IT TO `php_wrapper.rs` IN `fn bespoke_scraper`! **/
 
 #[async_trait]
 pub trait BespokeScraper {
@@ -28,7 +31,7 @@ pub trait BespokeScraper {
 
     fn log(&self, msg: String) {
         if self.testing() {
-            println!("{}", msg);
+            info!("{}", msg);
         }
     }
 
@@ -48,24 +51,23 @@ pub trait BespokeScraper {
         let existing_entries = Entry::multiple_from_ids(&entry_ids, self.app()).await?;
         for ext_entry in entry_cache {
             let ext_id = &ext_entry.entry.ext_id;
-            let existing_entry = match ext_id2id.get(ext_id) {
-                Some(id) => existing_entries.get(id).cloned(),
-                None => None,
-            };
+            let existing_entry = ext_id2id
+                .get(ext_id)
+                .map_or_else(|| None, |id| existing_entries.get(id).cloned());
             match existing_entry {
                 Some(mut entry) => {
                     if self.keep_existing_names() {
                         ext_entry.entry.ext_name = entry.ext_name.to_string();
                     }
                     if self.testing() {
-                        println!("EXISTS: {:?}", ext_entry);
+                        info!("EXISTS: {:?}", ext_entry);
                     } else {
                         ext_entry.update_existing(&mut entry, self.app()).await?;
                     }
                 }
                 None => {
                     if self.testing() {
-                        println!("CREATE: {:?}", ext_entry);
+                        info!("CREATE: {:?}", ext_entry);
                     } else {
                         ext_entry.insert_new(self.app()).await?;
                     }
@@ -79,6 +81,7 @@ pub trait BespokeScraper {
 // ______________________________________________________
 // SIKART
 
+#[derive(Debug)]
 pub struct BespokeScraper121 {
     app: AppState,
 }
@@ -162,18 +165,18 @@ impl BespokeScraper121 {
                 } else {
                     Some(TimeStamp::now())
                 },
-                random: rand::thread_rng().gen(),
+                random: rand::rng().random(),
                 type_name: Some("Q5".to_string()),
                 app: None, //Some(self.app.clone()),
             },
-            born: record.get("GEBURTSDATUM").and_then(|s| self.parse_date(s)),
-            died: record.get("STERBEDATUM").and_then(|s| self.parse_date(s)),
+            born: record.get("GEBURTSDATUM").and_then(|s| Self::parse_date(s)),
+            died: record.get("STERBEDATUM").and_then(|s| Self::parse_date(s)),
             ..Default::default()
         };
         Some(ext_entry)
     }
 
-    fn parse_date(&self, d: &str) -> Option<String> {
+    fn parse_date(d: &str) -> Option<String> {
         lazy_static! {
             static ref re_dmy: Regex = Regex::new(r"^(\d{1,2})\.(\d{1,2})\.(\d{3,})").unwrap();
             static ref re_dm: Regex = Regex::new(r"^(\d{1,2})\.(\d{1,2})").unwrap();
@@ -191,6 +194,7 @@ impl BespokeScraper121 {
 // ______________________________________________________
 // Münzkabinett
 
+#[derive(Debug)]
 pub struct BespokeScraper6479 {
     app: AppState,
 }
@@ -291,7 +295,7 @@ impl BespokeScraper6479 {
                 q: None,
                 user: None,
                 timestamp: None,
-                random: rand::thread_rng().gen(),
+                random: rand::rng().random(),
                 type_name: Some("Q5".to_string()),
                 app: None, //Some(self.app.clone()),
             },

@@ -1,114 +1,27 @@
 use crate::app_state::AppState;
-use crate::automatch::*;
-use crate::autoscrape::*;
-use crate::auxiliary_matcher::*;
+use crate::automatch::AutoMatch;
+use crate::automatch::DateMatchField;
+use crate::automatch::DatePrecision;
+use crate::autoscrape::Autoscrape;
+use crate::auxiliary_matcher::AuxiliaryMatcher;
 use crate::coordinate_matcher::CoordinateMatcher;
-use crate::maintenance::*;
+use crate::job_row::JobRow;
+use crate::job_status::JobStatus;
+use crate::maintenance::Maintenance;
 use crate::match_state::MatchState;
-use crate::microsync::*;
-use crate::php_wrapper::*;
-use crate::taxon_matcher::*;
-use crate::update_catalog::*;
+use crate::microsync::Microsync;
+use crate::php_wrapper::PhpWrapper;
+use crate::taxon_matcher::TaxonMatcher;
+use crate::update_catalog::UpdateCatalog;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use chrono::Duration;
 use chrono::Local;
+use log::info;
 use serde_json::json;
-use std::cmp::Ordering;
 use std::error::Error;
 use std::fmt;
 use wikimisc::timestamp::TimeStamp;
-
-#[derive(Eq, Clone, Debug)]
-pub enum TaskSize {
-    TINY,
-    SMALL,
-    MEDIUM,
-    LARGE,
-    GINORMOUS,
-}
-
-impl Ord for TaskSize {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.value().cmp(&other.value())
-    }
-}
-
-impl PartialOrd for TaskSize {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl PartialEq for TaskSize {
-    fn eq(&self, other: &Self) -> bool {
-        self.value() == other.value()
-    }
-}
-
-impl TaskSize {
-    pub fn value(&self) -> u8 {
-        match self {
-            TaskSize::TINY => 1,
-            TaskSize::SMALL => 2,
-            TaskSize::MEDIUM => 3,
-            TaskSize::LARGE => 4,
-            TaskSize::GINORMOUS => 5,
-        }
-    }
-
-    pub fn new(s: &str) -> Option<Self> {
-        match s.trim().to_lowercase().as_str() {
-            "tiny" => Some(Self::TINY),
-            "small" => Some(Self::SMALL),
-            "medium" => Some(Self::MEDIUM),
-            "large" => Some(Self::LARGE),
-            "ginormous" => Some(Self::GINORMOUS),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default, PartialEq)]
-pub enum JobStatus {
-    #[default]
-    Todo,
-    Done,
-    Failed,
-    Running,
-    HighPriority,
-    LowPriority,
-    Blocked,
-    Deactivated,
-}
-
-impl JobStatus {
-    pub fn new(s: &str) -> Option<Self> {
-        match s {
-            "TODO" => Some(JobStatus::Todo),
-            "DONE" => Some(JobStatus::Done),
-            "FAILED" => Some(JobStatus::Failed),
-            "RUNNING" => Some(JobStatus::Running),
-            "HIGH_PRIORITY" => Some(JobStatus::HighPriority),
-            "LOW_PRIORITY" => Some(JobStatus::LowPriority),
-            "BLOCKED" => Some(JobStatus::Blocked),
-            "DEACTIVATED" => Some(JobStatus::Deactivated),
-            _ => None,
-        }
-    }
-    pub fn as_str(&self) -> &str {
-        match *self {
-            JobStatus::Todo => "TODO",
-            JobStatus::Done => "DONE",
-            JobStatus::Failed => "FAILED",
-            JobStatus::Running => "RUNNING",
-            JobStatus::HighPriority => "HIGH_PRIORITY",
-            JobStatus::LowPriority => "LOW_PRIORITY",
-            JobStatus::Blocked => "BLOCKED",
-            JobStatus::Deactivated => "DEACTIVATED",
-        }
-    }
-}
 
 /// A trait that allows to manage temporary job data (eg offset)
 #[async_trait]
@@ -140,13 +53,10 @@ pub trait Jobbable {
             Some(json) => json,
             None => return 0,
         };
-        match json.as_object() {
-            Some(o) => match o.get("offset") {
-                Some(offset) => offset.as_u64().unwrap_or(0) as usize,
-                None => 0,
-            },
-            None => 0,
-        }
+        json.as_object().map_or(0, |o| {
+            o.get("offset")
+                .map_or(0, |offset| offset.as_u64().unwrap_or(0) as usize)
+        })
     }
 
     //TODO test
@@ -183,69 +93,6 @@ impl fmt::Display for JobError {
         match self {
             JobError::S(s) => write!(f, "JobError::S: {s}"),
             JobError::TimeError => write!(f, "JobError::TimeError"),
-        }
-    }
-}
-
-type JobRowMySql = (
-    usize,
-    String,
-    usize,
-    Option<String>,
-    Option<usize>,
-    String,
-    String,
-    Option<String>,
-    Option<usize>,
-    String,
-    usize,
-);
-
-#[derive(Debug, Clone, Default)]
-pub struct JobRow {
-    pub id: usize,
-    pub action: String,
-    pub catalog: usize,
-    pub json: Option<String>,
-    pub depends_on: Option<usize>,
-    pub status: JobStatus,
-    pub last_ts: String,
-    pub note: Option<String>,
-    pub repeat_after_sec: Option<usize>,
-    pub next_ts: String,
-    pub user_id: usize,
-}
-
-impl JobRow {
-    pub fn from_row(x: JobRowMySql) -> Self {
-        Self {
-            id: x.0,
-            action: x.1,
-            catalog: x.2,
-            json: x.3,
-            depends_on: x.4,
-            status: JobStatus::new(&x.5).unwrap_or(JobStatus::Todo),
-            last_ts: x.6,
-            note: x.7,
-            repeat_after_sec: x.8,
-            next_ts: x.9,
-            user_id: x.10,
-        }
-    }
-
-    pub fn new(action: &str, catalog_id: usize) -> JobRow {
-        Self {
-            id: 0,
-            action: action.to_string(),
-            catalog: catalog_id,
-            json: None,
-            depends_on: None,
-            status: JobStatus::Todo,
-            last_ts: TimeStamp::now(),
-            note: None,
-            repeat_after_sec: None,
-            next_ts: "".to_string(),
-            user_id: 0,
         }
     }
 }
@@ -309,13 +156,13 @@ impl Job {
         let note = Some(format!("{error}"));
         self.set_note(note).await?;
         let job_id = self.get_id().await?;
-        println!("Job {job_id} catalog {catalog_id}:{action} FAILED: {error}");
+        info!("Job {job_id} catalog {catalog_id}:{action} FAILED: {error}");
         Ok(())
     }
 
     async fn run_ok(&mut self, catalog_id: usize, action: String) -> Result<(), anyhow::Error> {
         self.set_status(JobStatus::Done).await?;
-        println!(
+        info!(
             "Job {} catalog {}:{} completed.",
             self.get_id().await?,
             catalog_id,
@@ -376,7 +223,7 @@ impl Job {
         None
     }
 
-    /// Returns the current `json` as an Option<serde_json::Value>
+    /// Returns the current `json` as an Option<`serde_json::Value`>
     //TODO test
     pub async fn get_json_value(&self) -> Option<serde_json::Value> {
         serde_json::from_str(self.get_json().await.ok()?.as_ref()?).ok()
@@ -394,7 +241,7 @@ impl Job {
             .await
     }
 
-    /// Sets the value for `json` locally and in database, from a serde_json::Value
+    /// Sets the value for `json` locally and in database, from a `serde_json::Value`
     //TODO test
     pub async fn set_json(&mut self, json: Option<serde_json::Value>) -> Result<()> {
         let job_id = self.get_id().await?;
@@ -430,7 +277,7 @@ impl Job {
             return Err(anyhow!("Job::run_this_job: Blocked"));
         }
         let current_time_str = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-        println!("{current_time_str}: Starting job {:?}", self.get_id().await);
+        info!("{current_time_str}: Starting job {:?}", self.get_id().await);
         let catalog_id = self.get_catalog().await?;
         match self.get_action().await?.as_str() {
             "automatch" => {
@@ -462,6 +309,11 @@ impl Job {
                 let mut am = AutoMatch::new(&self.app);
                 am.set_current_job(self);
                 am.automatch_complex(catalog_id).await
+            }
+            "automatch_people_with_initials" => {
+                let mut am = AutoMatch::new(&self.app);
+                am.set_current_job(self);
+                am.automatch_people_with_initials(catalog_id).await
             }
             "purge_automatches" => {
                 let mut am = AutoMatch::new(&self.app);
@@ -530,6 +382,11 @@ impl Job {
                 ms.check_catalog(catalog_id).await
             }
 
+            "maintenance_name_and_full_dates" => {
+                Maintenance::new(&self.app)
+                    .match_by_name_and_full_dates()
+                    .await
+            }
             "maintenance_automatch" => Maintenance::new(&self.app).automatch().await,
             "update_props_todo" => Maintenance::new(&self.app).update_props_todo().await,
             "remove_p17_for_humans" => Maintenance::new(&self.app).remove_p17_for_humans().await,
@@ -634,7 +491,7 @@ impl Job {
             None => return Ok(String::new()),
         };
         let seconds = Duration::try_seconds(seconds).unwrap();
-        let utc = TimeStamp::from_str(&self.data().await?.last_ts.clone())
+        let utc = TimeStamp::str2utc(&self.data().await?.last_ts)
             .ok_or(anyhow!("Can't parse timestamp in last_ts"))?
             .checked_add_signed(seconds)
             .ok_or(JobError::TimeError)?;
@@ -742,13 +599,5 @@ mod tests {
         job.data = job_row;
         let next_ts = job.get_next_ts().await.unwrap();
         assert_eq!(next_ts, "20221027000101");
-    }
-
-    #[test]
-    fn test_task_size() {
-        assert!(TaskSize::TINY < TaskSize::SMALL);
-        assert!(TaskSize::SMALL < TaskSize::MEDIUM);
-        assert!(TaskSize::MEDIUM < TaskSize::LARGE);
-        assert!(TaskSize::LARGE < TaskSize::GINORMOUS);
     }
 }
