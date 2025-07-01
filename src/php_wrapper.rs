@@ -1,6 +1,6 @@
 use crate::{
     app_state::AppState,
-    bespoke_scrapers::{BespokeScraper, BespokeScraper121, BespokeScraper6479},
+    bespoke_scrapers::{BespokeScraper, BespokeScraper121, BespokeScraper6479, BespokeScraper6975},
 };
 use anyhow::Result;
 use chrono::Utc;
@@ -47,6 +47,7 @@ impl PhpWrapper {
         match catalog_id {
             121 => BespokeScraper121::new(app).run().await,
             6479 => BespokeScraper6479::new(app).run().await,
+            6975 => BespokeScraper6975::new(app).run().await,
             _ => Self::run_command_with_catalog_id(catalog_id, "bespoke_scraper.php"),
         }
     }

@@ -1,6 +1,6 @@
 use anyhow::Result;
 use log::error;
-use mixnmatch::{app_state::AppState, automatch::AutoMatch};
+use mixnmatch::{app_state::AppState, bespoke_scrapers::BespokeScraper};
 use std::env;
 
 async fn run() -> Result<()> {
@@ -32,13 +32,15 @@ async fn run() -> Result<()> {
         //     app.run_from_props(props, min_entries).await
         // }
         Some("test") => {
-            // bespoke_scrapers::BespokeScraper6479::new(&app).run().await;
+            mixnmatch::bespoke_scrapers::BespokeScraper6975::new(&app)
+                .run()
+                .await
             // let maintenance = maintenance::Maintenance::new(&app);
             // maintenance.match_by_name_and_full_dates().await
             //
             //  ssh magnus@login.toolforge.org -L 3308:tools-db:3306 -N &
-            let am = AutoMatch::new(&app);
-            am.automatch_people_with_initials(13).await
+            // let am = AutoMatch::new(&app);
+            // am.automatch_people_with_initials(13).await
         }
         Some("server") => app.forever_loop().await,
         Some(other) => panic!("Unrecodnized command '{other}'"),
