@@ -1173,6 +1173,21 @@ impl Storage for StorageMySQL {
 
     // Automatch
 
+    /// Auto-matches unmatched and automatched people to fully matched entries that have the same name and birth year.
+    async fn automatch_people_with_birth_year(&self, catalog_id: usize) -> Result<()> {
+        let sql = r#"UPDATE entry e1
+		    INNER JOIN person_dates p1 ON p1.entry_id=e1.id AND p1.year_born IS NOT NULL
+		    INNER JOIN vw_dates p2 ON p2.ext_name=e1.ext_name AND p2.year_born=p1.year_born AND p2.q IS NOT NULL AND p2.user>0 AND p2.entry_id!=e1.id AND p2.user IS NOT NULL
+		    SET e1.q=p2.q,e1.user=0,timestamp=date_format(now(),'%Y%m%d%H%i%S')
+		    WHERE e1.type='Q5' AND e1.catalog=:catalog_id AND (e1.q is null or e1.user=0)
+		    AND NOT EXISTS (SELECT * FROM log WHERE log.entry_id=e1.id AND log.q=p2.q)"#;
+        self.get_conn_ro()
+            .await?
+            .exec_drop(sql, params! {catalog_id})
+            .await?;
+        Ok(())
+    }
+
     async fn automatch_by_sitelink_get_entries(
         &self,
         catalog_id: usize,
