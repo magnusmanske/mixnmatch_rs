@@ -50,7 +50,7 @@ impl Catalog {
     }
 
     pub async fn create_catalog(&mut self) -> Result<()> {
-        self.id = self.app()?.storage().create_catalog(&self).await?;
+        self.id = self.app()?.storage().create_catalog(self).await?;
         Ok(())
     }
 
@@ -130,14 +130,13 @@ impl Catalog {
         Ok(())
     }
 
-    /// Changes the has_person_date field of a catalog, in both struct and database.
+    /// Changes the `has_person_date` field of a catalog, in both struct and database.
     ///
     /// # Returns
     ///
-    /// * `Result<bool>` - A result indicating whether the has_person_date field was changed to "yes".
+    /// * `Result<bool>` - A result indicating whether the `has_person_date` field was changed to "yes".
     pub async fn check_and_set_person_date(&mut self) -> Result<bool> {
-        let mut has_new_dates = false;
-        if self.has_person_date != "yes"
+        let has_new_dates = if self.has_person_date != "yes"
             && self
                 .app()?
                 .storage()
@@ -145,8 +144,10 @@ impl Catalog {
                 .await?
         {
             self.set_has_person_date("yes").await?;
-            has_new_dates = true;
-        }
+            true
+        } else {
+            false
+        };
         Ok(has_new_dates)
     }
 

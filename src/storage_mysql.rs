@@ -414,15 +414,15 @@ impl Storage for StorageMySQL {
         let url = catalog.url.clone();
         let desc = catalog.desc.clone();
         let type_name = catalog.type_name.clone();
-        let wd_prop = catalog.wd_prop.clone();
-        let wd_qual = catalog.wd_qual.clone();
+        let wd_prop = catalog.wd_prop;
+        let wd_qual = catalog.wd_qual;
         let search_wp = catalog.search_wp.clone();
-        let active = catalog.active.clone();
-        let owner = catalog.owner.clone();
+        let active = catalog.active;
+        let owner = catalog.owner;
         let note = catalog.note.clone();
-        let source_item = catalog.source_item.clone();
+        let source_item = catalog.source_item;
         let has_person_date = catalog.has_person_date.clone();
-        let taxon_run = catalog.taxon_run.clone();
+        let taxon_run = catalog.taxon_run;
         conn.exec_drop(
             sql,
             params! {
@@ -447,6 +447,27 @@ impl Storage for StorageMySQL {
             .map(|id| id as usize)
             .ok_or_else(|| anyhow!("Could not insert catalog"))?;
         Ok(id)
+    }
+
+    /// Get all external IDs for a catalog
+    async fn get_all_external_ids(&self, catalog_id: usize) -> Result<HashMap<String, usize>> {
+        let rows: Vec<Row> = self
+            .get_conn_ro()
+            .await?
+            .exec(
+                "SELECT id, ext_id FROM entry WHERE catalog = :catalog_id",
+                params! {catalog_id},
+            )
+            .await?;
+
+        let mut external_ids = HashMap::new();
+        for row in rows {
+            let id: usize = row.get("id").unwrap();
+            let ext_id: String = row.get("ext_id").unwrap();
+            external_ids.insert(ext_id, id);
+        }
+
+        Ok(external_ids)
     }
 
     async fn number_of_entries_in_catalog(&self, catalog_id: usize) -> Result<usize> {
@@ -1979,7 +2000,7 @@ impl Storage for StorageMySQL {
     // CERSEI
 
     /// Get current scrapers from database
-    async fn get_current_scrapers(&self) -> Result<HashMap<usize, CurrentScraper>> {
+    async fn get_cersei_scrapers(&self) -> Result<HashMap<usize, CurrentScraper>> {
         let mut conn = self.get_conn_ro().await?;
         let sql = "SELECT * FROM `cersei`";
         let rows: Vec<Row> = conn.query(sql).await?;
@@ -2013,6 +2034,7 @@ impl Storage for StorageMySQL {
                 params!{last_sync, scraper_id},
             )
             .await?;
+        Ok(())
     }
 }
 

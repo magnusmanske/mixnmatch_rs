@@ -71,6 +71,7 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
         &self,
         catalog_id: usize,
     ) -> Result<Vec<Entry>>;
+    async fn get_all_external_ids(&self, catalog_id: usize) -> Result<HashMap<String, usize>>;
 
     // Microsync
 
@@ -366,7 +367,7 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     async fn app_state_seppuku_get_running(&self, ts: &str) -> (usize, usize);
 
     // CERSEI
-    async fn get_current_scrapers(&self) -> Result<HashMap<usize, CurrentScraper>>;
+    async fn get_cersei_scrapers(&self) -> Result<HashMap<usize, CurrentScraper>>;
     async fn add_cersei_catalog(&self, catalog_id: usize, scraper_id: usize) -> Result<()>;
     async fn update_cersei_last_update(&self, scraper_id: usize, last_sync: &str) -> Result<()>;
 }
