@@ -2,6 +2,7 @@ use crate::{
     automatch::{ResultInOriginalCatalog, ResultInOtherCatalog},
     auxiliary_matcher::AuxiliaryResults,
     catalog::Catalog,
+    cersei::CurrentScraper,
     coordinate_matcher::LocationRow,
     entry::{AuxiliaryRow, CoordinateLocation, Entry},
     issue::Issue,
@@ -57,8 +58,10 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
 
     // Catalog
 
+    async fn create_catalog(&self, catalog: &Catalog) -> Result<usize>;
     async fn number_of_entries_in_catalog(&self, catalog_id: usize) -> Result<usize>;
     async fn get_catalog_from_id(&self, catalog_id: usize) -> Result<Catalog>;
+    async fn get_catalog_from_name(&self, name: &str) -> Result<Catalog>;
     async fn get_catalog_key_value_pairs(
         &self,
         catalog_id: usize,
@@ -98,6 +101,9 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     async fn get_random_active_catalog_id_with_property(&self) -> Option<usize>;
     async fn get_kv_value(&self, key: &str) -> Result<Option<String>>;
     async fn set_kv_value(&self, key: &str, value: &str) -> Result<()>;
+    async fn do_catalog_entries_have_person_date(&self, catalog_id: usize) -> Result<bool>;
+    async fn set_has_person_date(&self, catalog_id: usize, new_has_person_date: &str)
+        -> Result<()>;
 
     // Issue
 
@@ -358,4 +364,9 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
         candidates_count: usize,
     ) -> Result<()>;
     async fn app_state_seppuku_get_running(&self, ts: &str) -> (usize, usize);
+
+    // CERSEI
+    async fn get_current_scrapers(&self) -> Result<HashMap<usize, CurrentScraper>>;
+    async fn add_cersei_catalog(&self, catalog_id: usize, scraper_id: usize) -> Result<()>;
+    async fn update_cersei_last_update(&self, scraper_id: usize, last_sync: &str) -> Result<()>;
 }

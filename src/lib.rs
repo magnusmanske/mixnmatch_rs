@@ -48,6 +48,7 @@ pub mod autoscrape_scraper;
 pub mod auxiliary_matcher;
 pub mod bespoke_scrapers;
 pub mod catalog;
+// pub mod cersei;
 pub mod coordinate_matcher;
 pub mod datasource;
 pub mod entry;

@@ -4,6 +4,7 @@ use crate::{
     automatch::{ResultInOriginalCatalog, ResultInOtherCatalog},
     auxiliary_matcher::AuxiliaryResults,
     catalog::Catalog,
+    cersei::CurrentScraper,
     coordinate_matcher::LocationRow,
     entry::{AuxiliaryRow, CoordinateLocation, Entry, EntryError},
     issue::Issue,
@@ -401,6 +402,53 @@ impl Storage for StorageMySQL {
 
     // Catalog
 
+    async fn create_catalog(&self, catalog: &Catalog) -> Result<usize> {
+        if catalog.id != crate::catalog::BLANK_CATALOG_ID {
+            return Err(anyhow!("Catalog ID is not blank"));
+        }
+
+        let mut conn = self.get_conn().await?;
+        let sql = r"INSERT IGNORE INTO `catalog` (`name`, `url`, `desc`, `type`, `wd_prop`, `wd_qual`, `search_wp`,`active`,`owner`,`note`,`source_item`,`has_person_date`,`taxon_run`)
+        	VALUES (:name, :url, :desc, :type_name, :wd_prop, :wd_qual, :search_wp, :active, :owner, :note, :source_item, :has_person_date, :taxon_run)";
+        let name = catalog.name.clone();
+        let url = catalog.url.clone();
+        let desc = catalog.desc.clone();
+        let type_name = catalog.type_name.clone();
+        let wd_prop = catalog.wd_prop.clone();
+        let wd_qual = catalog.wd_qual.clone();
+        let search_wp = catalog.search_wp.clone();
+        let active = catalog.active.clone();
+        let owner = catalog.owner.clone();
+        let note = catalog.note.clone();
+        let source_item = catalog.source_item.clone();
+        let has_person_date = catalog.has_person_date.clone();
+        let taxon_run = catalog.taxon_run.clone();
+        conn.exec_drop(
+            sql,
+            params! {
+                name,
+                url,
+                desc,
+                type_name,
+                wd_prop,
+                wd_qual,
+                search_wp,
+                active,
+                owner,
+                note,
+                source_item,
+                has_person_date,
+                taxon_run,
+            },
+        )
+        .await?;
+        let id = conn
+            .last_insert_id()
+            .map(|id| id as usize)
+            .ok_or_else(|| anyhow!("Could not insert catalog"))?;
+        Ok(id)
+    }
+
     async fn number_of_entries_in_catalog(&self, catalog_id: usize) -> Result<usize> {
         let results: Vec<usize> = "SELECT count(*) AS cnt FROM `entry` WHERE `catalog`=:catalog_id"
             .with(params! {catalog_id})
@@ -423,8 +471,24 @@ impl Storage for StorageMySQL {
         drop(conn);
         let ret = rows
             .pop()
-            .ok_or(anyhow!("No catalog #{}", catalog_id))?
+            .ok_or(anyhow!("No catalog #{catalog_id}"))?
             .to_owned();
+        Ok(ret)
+    }
+
+    async fn get_catalog_from_name(&self, name: &str) -> Result<Catalog> {
+        let sql = r"SELECT id,`name`,url,`desc`,`type`,wd_prop,wd_qual,search_wp,active,owner,note,source_item,has_person_date,taxon_run FROM `catalog` WHERE `name`=:name";
+        let mut conn = self.get_conn_ro().await?;
+        let mut rows: Vec<Catalog> = conn
+            .exec_iter(sql, params! {name})
+            .await?
+            .map_and_drop(|row| Self::catalog_from_row(&row))
+            .await?
+            .iter()
+            .filter_map(|row| row.to_owned())
+            .collect();
+        drop(conn);
+        let ret = rows.pop().ok_or(anyhow!("No catalog '{name}'"))?.to_owned();
         Ok(ret)
     }
 
@@ -457,6 +521,33 @@ impl Storage for StorageMySQL {
 	        )";
         let mut conn = self.get_conn().await?;
         conn.exec_drop(sql, params! {catalog_id}).await?;
+        Ok(())
+    }
+
+    async fn do_catalog_entries_have_person_date(&self, catalog_id: usize) -> Result<bool> {
+        let has_dates: Option<Row> = self
+            .get_conn_ro()
+            .await?
+            .exec_first(
+                "SELECT * FROM vw_dates WHERE catalog=:catalog_id LIMIT 1",
+                params! {catalog_id},
+            )
+            .await?;
+        Ok(has_dates.is_some())
+    }
+
+    async fn set_has_person_date(
+        &self,
+        catalog_id: usize,
+        new_has_person_date: &str,
+    ) -> Result<()> {
+        self.get_conn()
+            .await?
+            .exec_drop(
+                "UPDATE `catalog` SET `has_person_date`=:new_has_person_date WHERE `id`=:catalog_id",
+                params! {catalog_id, new_has_person_date},
+            )
+            .await?;
         Ok(())
     }
 
@@ -1883,6 +1974,45 @@ impl Storage for StorageMySQL {
             .first()
             .expect("seppuku: No DB results");
         (running, running_recent)
+    }
+
+    // CERSEI
+
+    /// Get current scrapers from database
+    async fn get_current_scrapers(&self) -> Result<HashMap<usize, CurrentScraper>> {
+        let mut conn = self.get_conn_ro().await?;
+        let sql = "SELECT * FROM `cersei`";
+        let rows: Vec<Row> = conn.query(sql).await?;
+
+        let mut scrapers = HashMap::new();
+        for row in rows {
+            let scraper = CurrentScraper {
+                cersei_scraper_id: row.get("cersei_scraper_id").unwrap(),
+                catalog_id: row.get("catalog_id").unwrap(),
+                last_sync: row.get("last_sync"),
+            };
+            scrapers.insert(scraper.cersei_scraper_id, scraper);
+        }
+
+        Ok(scrapers)
+    }
+
+    async fn add_cersei_catalog(&self, catalog_id: usize, scraper_id: usize) -> Result<()> {
+        let mut conn = self.get_conn().await?;
+        let sql = "INSERT INTO `cersei` (`catalog_id`, `cersei_scraper_id`) VALUES (:catalog_id, :scraper_id)";
+        conn.exec_drop(sql, params! {catalog_id, scraper_id})
+            .await?;
+        Ok(())
+    }
+
+    async fn update_cersei_last_update(&self, scraper_id: usize, last_sync: &str) -> Result<()> {
+        self.get_conn()
+            .await?
+            .exec_drop(
+                "UPDATE `cersei` SET `last_sync`=:last_update WHERE `cersei_scraper_id`=:scraper_id",
+                params!{last_sync, scraper_id},
+            )
+            .await?;
     }
 }
 
