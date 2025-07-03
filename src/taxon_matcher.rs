@@ -137,7 +137,7 @@ impl TaxonMatcher {
         let _ = self.clear_offset().await;
 
         // Update catalog as "done at least once" if necessary
-        catalog.set_taxon_run(&self.app, true).await?;
+        catalog.set_taxon_run(true).await?;
         Ok(())
     }
 
