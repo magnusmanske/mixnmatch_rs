@@ -1045,6 +1045,14 @@ impl AutoMatch {
         }
     }
 
+    pub async fn automatch_people_with_birth_year(&self, catalog_id: usize) -> Result<()> {
+        self.app
+            .storage()
+            .automatch_people_with_birth_year(catalog_id)
+            .await?;
+        Ok(())
+    }
+
     pub async fn automatch_people_with_initials(&self, catalog_id: usize) -> Result<()> {
         let client = crate::autoscrape::Autoscrape::reqwest_client_external()?;
         let all_entries = self

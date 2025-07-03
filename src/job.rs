@@ -295,6 +295,11 @@ impl Job {
                 am.set_current_job(self);
                 am.automatch_from_other_catalogs(catalog_id).await
             }
+            "automatch_people_with_birth_year" => {
+                let mut am = AutoMatch::new(&self.app);
+                am.set_current_job(self);
+                am.automatch_people_with_birth_year(catalog_id).await
+            }
             "automatch_by_sitelink" => {
                 let mut am = AutoMatch::new(&self.app);
                 am.set_current_job(self);
