@@ -843,6 +843,102 @@ impl Storage for StorageMySQL {
 
     // Maintenance
 
+    async fn maintenance_common_names_dates(&self) -> Result<()> {
+        let sqls = [
+            r#"DROP TABLE IF EXISTS tmp1"#,
+            r#"CREATE TABLE tmp1 AS
+			    SELECT ext_name,
+			    catalog,
+			    if(q IS NULL OR user=0,0,1) as matched,
+			    concat(ext_name,'|',year_born,'-',year_died) as nbd,
+			    entry_id
+			    FROM entry,person_dates
+			    WHERE entry_id=entry.id AND year_born!='' AND year_died!=''
+			    AND catalog NOT IN (SELECT id FROM catalog where active=0)"#,
+            r#"CREATE INDEX tmp1a ON tmp1 (nbd)"#,
+            r#"DELETE FROM tmp1 WHERE nbd IN (select nbd from tmp1 where matched=1)"#,
+            r#"TRUNCATE common_names_datesr#",
+		    r#"INSERT IGNORE INTO common_names_dates (`name`,cnt,entry_ids,dates)
+			    SELECT ext_name,count(DISTINCT catalog) as cnt,group_concat(entry_id),regexp_replace(nbd,'^.*\\|','')
+			    FROM tmp1 GROUP BY nbd HAVING cnt>=3"#,
+            r#"DROP TABLE tmp1"#,
+        ];
+        for sql in sqls {
+            self.get_conn().await?.exec_drop(sql, ()).await?;
+        }
+        Ok(())
+    }
+
+    async fn maintenance_common_names_birth_year(&self) -> Result<()> {
+        let sqls = [
+            r#"SET SESSION group_concat_max_len = 1000000000"#,
+            r#"TRUNCATE common_names_birth_year_tmp"#,
+            r#"REPLACE INTO common_names_birth_year_tmp (name,cnt,entry_ids,dates)
+	        SELECT SQL_NO_CACHE (SELECT ext_name FROM entry WHERE entry.id=entry_id AND q IS NULL AND catalog NOT IN (4837,5580,6094)) AS name,count(DISTINCT entry_id) AS cnt,group_concat(entry_id) AS entry_ids, concat(year_born,'-') as dates
+	        FROM person_dates WHERE is_matched=0 AND year_born!='' AND year_born<1960
+	        GROUP BY name,year_born HAVING name IS NOT NULL AND name NOT RLIKE "^\\S*$" AND cnt>=3"#,
+            r#"TRUNCATE common_names_birth_year"#,
+            r#"INSERT INTO common_names_birth_year SELECT * FROM common_names_birth_year_tmp"#,
+            r#"TRUNCATE common_names_birth_year_tmp"#,
+        ];
+        let mut conn = self.get_conn().await?; // One connection because of SESSION
+        for sql in sqls {
+            conn.exec_drop(sql, ()).await?;
+        }
+        Ok(())
+    }
+
+    async fn maintenance_taxa(&self) -> Result<()> {
+        let sqls = [
+            r#"DROP TABLE IF EXISTS tmp_taxa"#,
+            r#"CREATE TABLE tmp_taxa AS
+		        SELECT ext_name,count(distinct catalog) AS cnt FROM entry
+		        WHERE `type`="Q16521"
+		        AND catalog IN (select id from catalog WHERE active=1 and taxon_run=1)
+		        AND q is null
+		        AND ext_name RLIKE "^\\S+ \\S+$"
+		        GROUP BY ext_name
+		        HAVING cnt>=4"#,
+            r#"TRUNCATE common_names_taxon"#,
+            r#"INSERT IGNORE INTO common_names_taxon (`name`,cnt) SELECT ext_name,cnt FROM tmp_taxa"#,
+            r#"DROP TABLE tmp_taxa"#,
+        ];
+        for sql in sqls {
+            self.get_conn().await?.exec_drop(sql, ()).await?;
+        }
+        Ok(())
+    }
+
+    async fn maintenance_artwork(&self) -> Result<()> {
+        let sqls = [
+            r#"TRUNCATE common_names_artwork"#,
+            r#"INSERT IGNORE INTO common_names_artwork (`name`,entry_ids,cnt)
+            SELECT artwork.ext_name,group_concat(artwork.id),count(DISTINCT artwork.catalog) as cnt
+            FROM entry artwork,entry creator,mnm_relation
+            WHERE artwork.id=mnm_relation.entry_id AND creator.id=mnm_relation.target_entry_id AND mnm_relation.property=170
+            AND (artwork.q is null or artwork.user=0)
+            AND creator.q>0 AND creator.user>0
+            AND artwork.ext_name NOT IN ("Sans titre","(Sans titre)","Untitled","No title","Composition","Self Portrait","Self-Portrait")
+            GROUP BY artwork.ext_name,creator.q
+            HAVING cnt>=2 AND cnt=count(DISTINCT artwork.ext_url)"#,
+        ];
+        for sql in sqls {
+            self.get_conn().await?.exec_drop(sql, ()).await?;
+        }
+        Ok(())
+    }
+
+    async fn import_relations_into_aux(&self) -> Result<()> {
+        let sql = r#"INSERT IGNORE INTO auxiliary (entry_id,aux_p,aux_name)
+        				SELECT mnm_relation.entry_id,property,concat("Q",entry.q)
+            			FROM entry,mnm_relation
+               			WHERE target_entry_id=entry.id AND user>0 AND q>0
+                  		AND NOT EXISTS (SELECT * FROM auxiliary WHERE auxiliary.entry_id=mnm_relation.entry_id AND aux_p=property)
+                    	AND property IN (50,170)"#;
+        self.get_conn().await?.exec_drop(sql, ()).await?;
+        Ok(())
+    }
+
     async fn get_props_todo(&self) -> Result<Vec<PropTodo>> {
         let sql = r#"SELECT id,property_num,property_name,default_type,status,note,user_id,items_using,number_of_records FROM props_todo"#;
         let mut conn = self.get_conn_ro().await?;

@@ -141,6 +141,11 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
 
     // Maintenance
 
+    async fn maintenance_common_names_dates(&self) -> Result<()>;
+    async fn maintenance_common_names_birth_year(&self) -> Result<()>;
+    async fn maintenance_taxa(&self) -> Result<()>;
+    async fn maintenance_artwork(&self) -> Result<()>;
+    async fn import_relations_into_aux(&self) -> Result<()>;
     async fn get_props_todo(&self) -> Result<Vec<PropTodo>>;
     async fn add_props_todo(&self, new_props: Vec<PropTodo>) -> Result<()>;
     async fn mark_props_todo_as_has_catalog(&self) -> Result<()>;

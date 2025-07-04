@@ -53,20 +53,6 @@ pub struct CerseiEntriesResponse {
     pub entries: Vec<CerseiEntry>,
 }
 
-// TODO use entry type
-#[derive(Debug)]
-pub struct NewEntry {
-    pub catalog_id: usize,
-    pub entry_id: String,
-    pub name: String,
-    pub desc: String,
-    pub url: String,
-    pub q: Option<String>,
-    pub born: Option<String>,
-    pub died: Option<String>,
-    pub entry_type: Option<String>,
-}
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CerseiRelationRow {
     pub e1_source_id: String,
@@ -212,49 +198,8 @@ impl CerseiSync {
     }
 
     /// Queue a job (simplified - you may need to adapt based on your job queue system)
-    async fn queue_job(&self, _catalog_id: usize, _job_type: &str) -> Result<()> {
-        // TODO
-        // let mut conn = self.pool.get_conn().await?;
-        // conn.exec_drop(
-        //     "INSERT INTO job_queue (catalog_id, job_type, status, created) VALUES (?, ?, 'pending', NOW())",
-        //     (catalog_id, job_type)
-        // ).await?;
-        // println!("Queued job '{}' for catalog {}", job_type, catalog_id);
-        Ok(())
-    }
-
-    /// Add person dates to entry
-    async fn set_person_dates(
-        &self,
-        _entry_id: usize,
-        born: Option<&str>,
-        died: Option<&str>,
-    ) -> Result<()> {
-        if born.is_none() && died.is_none() {
-            return Ok(());
-        }
-
-        // TODO
-        // let mut conn = self.pool.get_conn().await?;
-
-        // if let Some(birth_date) = born {
-        //     if !birth_date.is_empty() {
-        //         conn.exec_drop(
-        //             "INSERT IGNORE INTO aux_person_dates (entry_id, property, value) VALUES (?, 'P569', ?)",
-        //             (entry_id, birth_date)
-        //         ).await?;
-        //     }
-        // }
-
-        // if let Some(death_date) = died {
-        //     if !death_date.is_empty() {
-        //         conn.exec_drop(
-        //             "INSERT IGNORE INTO aux_person_dates (entry_id, property, value) VALUES (?, 'P570', ?)",
-        //             (entry_id, death_date)
-        //         ).await?;
-        //     }
-        // }
-
+    async fn queue_job(&self, catalog_id: usize, job_type: &str) -> Result<()> {
+        crate::job::Job::queue_simple_job(&self.app, catalog_id, job_type, None).await?;
         Ok(())
     }
 
@@ -273,7 +218,7 @@ impl CerseiSync {
     ) -> Result<()> {
         // println!("Syncing scraper {} for catalog {}", scraper_id, catalog_id);
 
-        let existing_ext_ids = self.app.storage().get_all_external_ids(catalog_id).await?;
+        let mut existing_ext_ids = self.app.storage().get_all_external_ids(catalog_id).await?;
         let start_time = Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
         let mut offset = 0;
@@ -348,7 +293,7 @@ impl CerseiSync {
                     ext_name: name.chars().take(127).collect(),
                     ext_desc: ce.description.clone().unwrap_or_default(),
                     ext_url: ce.url.clone().unwrap_or_default(),
-                    q: None, // ce.q.clone(), // TODO
+                    q: ce.q.as_ref().and_then(|q| q.parse::<isize>().ok()),
                     app: Some(self.app.clone()),
                     ..Default::default()
                 };
@@ -395,27 +340,20 @@ impl CerseiSync {
 
                     // Set person dates if available
                     if ne.born.is_some() || ne.died.is_some() {
-                        self.set_person_dates(ne.entry.id, ne.born.as_deref(), ne.died.as_deref())
-                            .await?;
+                        ne.entry.set_person_dates(&ne.born, &ne.died).await?;
                     }
                 } else {
                     // Create new entry
                     match self.add_new_entry(&mut ne.entry).await {
-                        Ok(_entry_id) => {
+                        Ok(entry_id) => {
                             // Update our local cache
-                            // existing_ext_ids.insert(ne.id.clone(), entry_id);
+                            existing_ext_ids.insert(ne.entry.id.to_string(), entry_id);
                             added_new_entries = true;
 
-                            // TODO
                             // Set person dates if available
-                            // if ne.born.is_some() || ne.died.is_some() {
-                            //     self.set_person_dates(
-                            //         entry_id,
-                            //         ne.born.as_deref(),
-                            //         ne.died.as_deref(),
-                            //     )
-                            //     .await?;
-                            // }
+                            if ne.born.is_some() || ne.died.is_some() {
+                                ne.entry.set_person_dates(&ne.born, &ne.died).await?;
+                            }
                         }
                         Err(_e) => {
                             // eprintln!("Error creating entry: {}", e);
@@ -583,17 +521,6 @@ impl CerseiSync {
 
         Ok(())
     }
-
-    /// Import relations into auxiliary tables (simplified)
-    pub async fn import_relations_into_aux(&self) -> Result<()> {
-        // TODO
-        // let mut conn = self.pool.get_conn().await?;
-        // conn.exec_drop(
-        //     "INSERT IGNORE INTO aux_relations SELECT * FROM mnm_relation WHERE created > DATE_SUB(NOW(), INTERVAL 1 DAY)",
-        //     ()
-        // ).await?;
-        Ok(())
-    }
 }
 
 // Command-line interface
@@ -604,7 +531,7 @@ impl CerseiSync {
 //         // Default: create new catalogs and sync all scrapers
 //         cs.create_new_catalogs().await?;
 //         cs.sync_all_scrapers().await?;
-//         cs.import_relations_into_aux().await?;
+//         cs.app.storage().import_relations_into_aux().await?;
 //     } else {
 //         match args[1].as_str() {
 //             "relations" => {
@@ -616,7 +543,7 @@ impl CerseiSync {
 //                 cs.sync_internal_relations(scraper_id, None).await?;
 //             }
 //             "update_aux" => {
-//                 cs.import_relations_into_aux().await?;
+//                 cs.app.storage().import_relations_into_aux().await?;
 //             }
 //             _ => {
 //                 eprintln!("Unknown command: {}", args[1]);
