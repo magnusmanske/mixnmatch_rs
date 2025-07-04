@@ -46,6 +46,10 @@ impl Maintenance {
         self.app.storage().maintenance_taxa().await
     }
 
+    pub async fn common_aux(&self) -> Result<()> {
+        self.app.storage().maintenance_common_aux().await
+    }
+
     pub async fn artwork(&self) -> Result<()> {
         self.app.storage().maintenance_artwork().await
     }

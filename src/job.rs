@@ -399,6 +399,7 @@ impl Job {
                 Maintenance::new(&self.app).common_names_birth_year().await
             }
             "maintenance_taxa" => Maintenance::new(&self.app).taxa().await,
+            "maintenance_common_aux" => Maintenance::new(&self.app).common_aux().await,
             "maintenance_automatch" => Maintenance::new(&self.app).automatch().await,
             "update_props_todo" => Maintenance::new(&self.app).update_props_todo().await,
             "remove_p17_for_humans" => Maintenance::new(&self.app).remove_p17_for_humans().await,
