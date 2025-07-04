@@ -392,6 +392,13 @@ impl Job {
                     .match_by_name_and_full_dates()
                     .await
             }
+            "maintenance_common_names_dates" => {
+                Maintenance::new(&self.app).common_names_dates().await
+            }
+            "maintenance_common_names_birth_year" => {
+                Maintenance::new(&self.app).common_names_birth_year().await
+            }
+            "maintenance_taxa" => Maintenance::new(&self.app).taxa().await,
             "maintenance_automatch" => Maintenance::new(&self.app).automatch().await,
             "update_props_todo" => Maintenance::new(&self.app).update_props_todo().await,
             "remove_p17_for_humans" => Maintenance::new(&self.app).remove_p17_for_humans().await,

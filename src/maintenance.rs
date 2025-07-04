@@ -35,6 +35,21 @@ impl Maintenance {
         }
     }
 
+    pub async fn common_names_birth_year(&self) -> Result<()> {
+        self.app
+            .storage()
+            .maintenance_common_names_birth_year()
+            .await
+    }
+
+    pub async fn taxa(&self) -> Result<()> {
+        self.app.storage().maintenance_taxa().await
+    }
+
+    pub async fn artwork(&self) -> Result<()> {
+        self.app.storage().maintenance_artwork().await
+    }
+
     /// For unmatched entries with day-precision birth and death dates,
     /// finds other, matched entries with the same name and full dates,
     /// then matches them.
@@ -54,6 +69,10 @@ impl Maintenance {
             };
         }
         Ok(())
+    }
+
+    pub async fn common_names_dates(&self) -> Result<()> {
+        self.app.storage().maintenance_common_names_dates().await
     }
 
     pub async fn create_match_person_dates_jobs_for_catalogs(&self) -> Result<()> {
