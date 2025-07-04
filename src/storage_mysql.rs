@@ -869,6 +869,23 @@ impl Storage for StorageMySQL {
         Ok(())
     }
 
+    async fn maintenance_common_aux(&self) -> Result<()> {
+        let sqls = [
+            r#"DROP TABLE IF EXISTS common_aux_tmp"#,
+            r#"CREATE TABLE common_aux_tmp
+			    SELECT aux_p,aux_name,group_concat(id) AS entry_ids,count(*) as cnt,sum(q is null or user=0) as unmatched,
+			    group_concat(DISTINCT IF(q is not null AND user is not null and user>0,q,null)) as fully_matched_qs
+			    FROM vw_aux WHERE aux_p IN (214,227,1207,1273,244)
+			    GROUP BY aux_p,aux_name HAVING cnt>=3 AND unmatched>0"#,
+            r#"DROP TABLE IF EXISTS common_aux"#,
+            r#"RENAME TABLE common_aux_tmp to common_aux"#,
+        ];
+        for sql in sqls {
+            self.get_conn().await?.exec_drop(sql, ()).await?;
+        }
+        Ok(())
+    }
+
     async fn maintenance_common_names_birth_year(&self) -> Result<()> {
         let sqls = [
             r#"SET SESSION group_concat_max_len = 1000000000"#,
