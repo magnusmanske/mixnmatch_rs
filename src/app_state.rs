@@ -258,7 +258,7 @@ impl AppState {
                     .iter()
                     .map(|x| x.key().to_owned())
                     .collect::<Vec<_>>();
-                info!("JOBS RUNNING: {:?}", current_job_ids);
+                info!("JOBS RUNNING: {current_job_ids:?}");
             }
             Ok(false) => {
                 // println!("No jobs available, waiting... (not using: {:?})",job.skip_actions);

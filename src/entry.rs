@@ -745,7 +745,7 @@ impl Entry {
                 .first()
                 .ok_or(anyhow!("get_multi_match err1"))?
                 .split(',')
-                .map(|s| format!("Q{}", s))
+                .map(|q| format!("Q{q}"))
                 .collect();
             Ok(ret)
         }

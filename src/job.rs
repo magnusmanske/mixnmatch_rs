@@ -270,6 +270,7 @@ impl Job {
 
     //TODO test
     // #lizard forgives the complexity
+    #[allow(clippy::cognitive_complexity)]
     async fn run_this_job(&mut self) -> Result<()> {
         // let json = self.get_json().await;
         // println!("STARTING {:?} with option {:?}", &self.data().await?,&json);

@@ -31,7 +31,7 @@ pub trait BespokeScraper {
 
     fn log(&self, msg: String) {
         if self.testing() {
-            info!("{}", msg);
+            info!("{msg}");
         }
     }
 
@@ -60,14 +60,14 @@ pub trait BespokeScraper {
                         ext_entry.entry.ext_name = entry.ext_name.to_string();
                     }
                     if self.testing() {
-                        info!("EXISTS: {:?}", ext_entry);
+                        info!("EXISTS: {ext_entry:?}");
                     } else {
                         ext_entry.update_existing(&mut entry, self.app()).await?;
                     }
                 }
                 None => {
                     if self.testing() {
-                        info!("CREATE: {:?}", ext_entry);
+                        info!("CREATE: {ext_entry:?}");
                     } else {
                         ext_entry.insert_new(self.app()).await?;
                     }

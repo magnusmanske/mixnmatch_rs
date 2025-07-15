@@ -204,7 +204,7 @@ impl AutoscrapeScraper {
             .iter()
             .enumerate()
             .skip(1)
-            .map(|(num, value)| (format!("${}", num), value.to_owned()))
+            .map(|(num, value)| (format!("${num}"), value.to_owned()))
             .collect();
         for (num, level) in autoscrape.levels().iter().enumerate() {
             map.insert(format!("$L{}", num + 1), level.current());
