@@ -579,10 +579,7 @@ impl Storage for StorageMySQL {
         entry_ids: &[usize],
     ) -> Result<HashMap<usize, String>> {
         let placeholders = Self::sql_placeholders(entry_ids.len());
-        let sql = format!(
-            "SELECT `id`,`ext_name` FROM `entry` WHERE `id` IN ({})",
-            placeholders
-        );
+        let sql = format!("SELECT `id`,`ext_name` FROM `entry` WHERE `id` IN ({placeholders})");
         let mut conn = self.get_conn_ro().await?;
         let results = conn
             .exec_iter(sql, entry_ids.to_vec())
@@ -599,7 +596,7 @@ impl Storage for StorageMySQL {
         &self,
         catalog_id: usize,
     ) -> Result<Vec<(isize, String, String)>> {
-        let sql = format!("SELECT q,group_concat(id) AS ids,group_concat(ext_id SEPARATOR '{}') AS ext_ids FROM entry WHERE catalog=:catalog_id AND q IS NOT NULL and q>0 AND user>0 GROUP BY q HAVING count(id)>1 ORDER BY q",EXT_URL_UNIQUE_SEPARATOR);
+        let sql = format!("SELECT q,group_concat(id) AS ids,group_concat(ext_id SEPARATOR '{EXT_URL_UNIQUE_SEPARATOR}') AS ext_ids FROM entry WHERE catalog=:catalog_id AND q IS NOT NULL and q>0 AND user>0 GROUP BY q HAVING count(id)>1 ORDER BY q");
         let mut conn = self.get_conn_ro().await?;
         let results = conn
             .exec_iter(sql, params! {catalog_id})
@@ -1235,7 +1232,7 @@ impl Storage for StorageMySQL {
             .map_and_drop(from_row::<usize>)
             .await?
             .iter()
-            .map(|q| format!("Q{}", q))
+            .map(|q| format!("Q{q}"))
             .collect();
         Ok(ret)
     }
@@ -1584,13 +1581,13 @@ impl Storage for StorageMySQL {
     ) -> Result<Vec<(usize, String, String, String)>> {
         let sql = format!("(
 	                SELECT multi_match.entry_id AS entry_id,born,died,candidates AS qs FROM person_dates,multi_match,entry
-	                WHERE (q IS NULL OR user=0) AND person_dates.entry_id=multi_match.entry_id AND multi_match.catalog=:catalog_id AND length({})=:precision
+	                WHERE (q IS NULL OR user=0) AND person_dates.entry_id=multi_match.entry_id AND multi_match.catalog=:catalog_id AND length({match_field})=:precision
 	                AND entry.id=person_dates.entry_id
 	            ) UNION (
 	                SELECT entry_id,born,died,q qs FROM person_dates,entry
-	                WHERE (q is not null and user=0) AND catalog=:catalog_id AND length({})=:precision AND entry.id=person_dates.entry_id
+	                WHERE (q is not null and user=0) AND catalog=:catalog_id AND length({match_field})=:precision AND entry.id=person_dates.entry_id
 	            )
-	            ORDER BY entry_id LIMIT :batch_size OFFSET :offset",match_field,match_field);
+	            ORDER BY entry_id LIMIT :batch_size OFFSET :offset");
         let mut conn = self.get_conn_ro().await?;
         let results = conn
             .exec_iter(
@@ -1727,7 +1724,7 @@ impl Storage for StorageMySQL {
     async fn entry_delete(&self, entry_id: usize) -> Result<()> {
         let mut conn = self.get_conn().await?;
         for table in TABLES_WITH_ENTRY_ID_FIELDS {
-            let sql = format!("DELETE FROM `{}` WHERE `entry_id`=:entry_id", table);
+            let sql = format!("DELETE FROM `{table}` WHERE `entry_id`=:entry_id");
             conn.exec_drop(sql, params! {entry_id}).await?;
         }
         let sql = "DELETE FROM `entry` WHERE `id`=:entry_id";
