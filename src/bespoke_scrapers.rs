@@ -35,6 +35,44 @@ pub trait BespokeScraper {
         }
     }
 
+    fn http_client(&self) -> reqwest::Client {
+        reqwest::Client::new()
+    }
+
+    async fn add_missing_aux(&self, entry_id: usize, prop_re: &[(usize, Regex)]) -> Result<()> {
+        let entry = Entry::from_id(entry_id, self.app()).await?;
+        let html = self
+            .http_client()
+            .get(&entry.ext_url)
+            .send()
+            .await?
+            .text()
+            .await?;
+
+        let mut new_aux: Vec<(usize, String)> = vec![];
+
+        for (property, re) in prop_re.iter() {
+            if let Some(caps) = re.captures(&html) {
+                if let Some(id) = caps.get(1) {
+                    new_aux.push((*property, id.as_str().to_string()));
+                }
+            }
+        }
+
+        if !new_aux.is_empty() {
+            let existing_aux = entry.get_aux().await?;
+            for (aux_p, aux_name) in new_aux {
+                if !existing_aux
+                    .iter()
+                    .any(|a| a.prop_numeric() == aux_p && a.value() == aux_name)
+                {
+                    let _ = entry.set_auxiliary(aux_p, Some(aux_name)).await;
+                }
+            }
+        }
+        Ok(())
+    }
+
     async fn process_cache(&self, entry_cache: &mut Vec<ExtendedEntry>) -> Result<()> {
         if entry_cache.is_empty() {
             return Ok(());
@@ -335,7 +373,7 @@ impl BespokeScraper6479 {
                     let lat = desc[1].parse::<f64>();
                     let lon = desc[2].parse::<f64>();
                     if let (Ok(lat), Ok(lon)) = (lat, lon) {
-                        ext_entry.location = Some(CoordinateLocation { lat, lon });
+                        ext_entry.location = Some(CoordinateLocation::new(lat, lon));
                     }
                 }
                 Some("Q3257686".to_string())
@@ -507,6 +545,56 @@ impl BespokeScraper6975 {
         } else {
             None
         }
+    }
+}
+
+// ______________________________________________________
+// BMLO ID (P865)
+
+#[derive(Debug)]
+pub struct BespokeScraper7043 {
+    app: AppState,
+}
+
+#[async_trait]
+impl BespokeScraper for BespokeScraper7043 {
+    fn new(app: &AppState) -> Self {
+        Self { app: app.clone() }
+    }
+
+    fn app(&self) -> &AppState {
+        &self.app
+    }
+
+    fn catalog_id(&self) -> usize {
+        7043
+    }
+
+    async fn run(&self) -> Result<()> {
+        // TODO add new?
+
+        lazy_static! {
+            static ref PROP_RE: Vec<(usize, Regex)> = {
+                vec![
+                    (
+                        214,
+                        Regex::new(r#"href="http://viaf.org/viaf/(\d+)"#).unwrap(),
+                    ),
+                    (227, Regex::new(r#"\?gnd=(\d+X?)"#).unwrap()),
+                ]
+            };
+        }
+
+        // Run all existing entries for metadata
+        let ext_ids = self
+            .app()
+            .storage()
+            .get_all_external_ids(self.catalog_id())
+            .await?;
+        for (_ext_id, entry_id) in ext_ids {
+            let _ = self.add_missing_aux(entry_id, &PROP_RE).await;
+        }
+        Ok(())
     }
 }
 

@@ -1957,7 +1957,7 @@ impl Storage for StorageMySQL {
             .map_and_drop(from_row::<(f64, f64)>)
             .await?
             .pop()
-            .map(|(lat, lon)| CoordinateLocation { lat, lon });
+            .map(|(lat, lon)| CoordinateLocation::new(lat, lon));
         Ok(ret)
     }
 
