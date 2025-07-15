@@ -32,9 +32,14 @@ async fn run() -> Result<()> {
         //     app.run_from_props(props, min_entries).await
         // }
         Some("test") => {
-            mixnmatch::bespoke_scrapers::BespokeScraper6975::new(&app)
+            match mixnmatch::bespoke_scrapers::BespokeScraper7043::new(&app)
                 .run()
                 .await
+            {
+                Ok(_) => println!("Test completed successfully"),
+                Err(e) => println!("Test failed with error: {e}"),
+            };
+            Ok(())
             // let maintenance = maintenance::Maintenance::new(&app);
             // maintenance.match_by_name_and_full_dates().await
             //

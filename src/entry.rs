@@ -19,17 +19,31 @@ pub const WESTERN_LANGUAGES: &[&str] = &["en", "de", "fr", "es", "nl", "it", "pt
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CoordinateLocation {
-    pub lat: f64,
-    pub lon: f64,
+    lat: f64,
+    lon: f64,
+}
+
+impl CoordinateLocation {
+    pub fn new(lat: f64, lon: f64) -> Self {
+        Self { lat, lon }
+    }
+
+    pub fn lat(&self) -> f64 {
+        self.lat
+    }
+
+    pub fn lon(&self) -> f64 {
+        self.lon
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub struct AuxiliaryRow {
-    pub row_id: usize,
-    pub prop_numeric: usize,
-    pub value: String,
-    pub in_wikidata: bool,
-    pub entry_is_matched: bool,
+    row_id: usize,
+    prop_numeric: usize,
+    value: String,
+    in_wikidata: bool,
+    entry_is_matched: bool,
 }
 
 impl AuxiliaryRow {
@@ -42,6 +56,22 @@ impl AuxiliaryRow {
             in_wikidata: row.get(3)?,
             entry_is_matched: row.get(4)?,
         })
+    }
+
+    pub fn prop_numeric(&self) -> usize {
+        self.prop_numeric
+    }
+
+    pub fn value(&self) -> &str {
+        &self.value
+    }
+
+    pub fn in_wikidata(&self) -> bool {
+        self.in_wikidata
+    }
+
+    pub fn entry_is_matched(&self) -> bool {
+        self.entry_is_matched
     }
 
     pub fn fix_external_id(prop: &str, value: &str) -> String {

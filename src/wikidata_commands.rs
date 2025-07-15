@@ -141,7 +141,7 @@ impl WikidataCommand {
                 json!({"value":{"entity-type":"item","numeric-id":q,"id":format!("Q{}",q)},"type":"wikibase-entityid"})
             }
             WikidataCommandValue::Location(cl) => {
-                json!({"value":{"latitude":cl.lat,"longitude":cl.lon,"globe":"http://www.wikidata.org/entity/Q2"},"type":"globecoordinate"})
+                json!({"value":{"latitude":cl.lat(),"longitude":cl.lon(),"globe":"http://www.wikidata.org/entity/Q2"},"type":"globecoordinate"})
             } //_ => {panic!("WikidataCommand::as_datavalue: not implemented: {:?}",&self)}
         }
     }
@@ -185,7 +185,7 @@ mod tests {
 
     #[test]
     fn test_as_datavalue3() {
-        let value = WikidataCommandValue::Location(CoordinateLocation { lat: 0.0, lon: 0.0 });
+        let value = WikidataCommandValue::Location(CoordinateLocation::new(0.0, 0.0));
         let datavalue = WikidataCommand::as_datavalue(&value);
         assert_eq!(
             datavalue,
@@ -230,7 +230,7 @@ mod tests {
 
     #[test]
     fn test_value_as_snak3() {
-        let value = WikidataCommandValue::Location(CoordinateLocation { lat: 0.0, lon: 0.0 });
+        let value = WikidataCommandValue::Location(CoordinateLocation::new(0.0, 0.0));
         let snak = WikidataCommand::value_as_snak(0, &value);
         assert_eq!(
             snak,

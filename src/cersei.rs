@@ -210,6 +210,7 @@ impl CerseiSync {
     }
 
     /// Sync a single scraper
+    #[allow(clippy::cognitive_complexity)]
     pub async fn sync_scraper(
         &self,
         scraper_id: usize,

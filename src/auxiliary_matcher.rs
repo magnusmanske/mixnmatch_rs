@@ -76,10 +76,9 @@ impl AuxiliaryResults {
         if captures.len() == 3 {
             let lat = captures.get(1)?.as_str().parse::<f64>().ok()?;
             let lon = captures.get(2)?.as_str().parse::<f64>().ok()?;
-            return Some(WikidataCommandValue::Location(CoordinateLocation {
-                lat,
-                lon,
-            }));
+            return Some(WikidataCommandValue::Location(CoordinateLocation::new(
+                lat, lon,
+            )));
         }
         None
     }
@@ -847,8 +846,12 @@ mod tests {
 
         // Check
         let aux = entry.get_aux().await.unwrap();
-        assert!(aux.iter().any(|x| x.prop_numeric == 214 && x.in_wikidata));
-        assert!(aux.iter().any(|x| x.prop_numeric == 370 && !x.in_wikidata));
+        assert!(aux
+            .iter()
+            .any(|x| x.prop_numeric() == 214 && x.in_wikidata()));
+        assert!(aux
+            .iter()
+            .any(|x| x.prop_numeric() == 370 && !x.in_wikidata()));
 
         // Cleanup
         entry.set_auxiliary(214, None).await.unwrap();
