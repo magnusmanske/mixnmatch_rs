@@ -160,9 +160,9 @@ impl TaxonMatcher {
             let mut name2q: HashMap<String, Vec<String>> = HashMap::new();
             let names = names.join(" ");
             let sparql = format!("SELECT DISTINCT ?q ?name {{
-                        VALUES ?name {{ {} }} VALUES ?instance {{ wd:Q16521 wd:Q4886 }}
+                        VALUES ?name {{ {names} }} VALUES ?instance {{ wd:Q16521 wd:Q4886 }}
                         {{ {{ SELECT DISTINCT ?q ?name ?instance {{ ?q wdt:P225 ?name ; wdt:P31 ?instance {rank} }} }} UNION
-                        {{ SELECT DISTINCT ?q ?name ?instance {{ ?q wdt:P1420 ?name ; wdt:P31 ?instance {rank} }} }} }} }}",names);
+                        {{ SELECT DISTINCT ?q ?name ?instance {{ ?q wdt:P1420 ?name ; wdt:P31 ?instance {rank} }} }} }} }}");
 
             // Run SPARQL
             if let Ok(sparql_result) = mw_api.sparql_query(&sparql).await {

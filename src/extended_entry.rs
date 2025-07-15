@@ -242,8 +242,7 @@ impl ExtendedEntry {
                 "died" => self.died = Self::parse_date(cell),
                 other => {
                     return Err(UpdateCatalogError::UnknownColumnLabel(format!(
-                        "Don't understand label '{}'",
-                        other
+                        "Don't understand label '{other}'"
                     ))
                     .into());
                 }

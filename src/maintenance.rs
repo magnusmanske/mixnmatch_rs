@@ -462,7 +462,7 @@ impl Maintenance {
             .collect();
 
         if !items.is_empty() {
-            let items: Vec<String> = items.iter().map(|q| format!("{}", q)).collect();
+            let items: Vec<String> = items.iter().map(|q| q.to_string()).collect();
             self.app
                 .storage()
                 .maintenance_unlink_item_matches(items)

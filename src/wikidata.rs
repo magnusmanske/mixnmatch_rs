@@ -347,7 +347,7 @@ impl Wikidata {
         if let Some(mw_api) = self.mw_api.as_mut() {
             let mut params: HashMap<String, String> = HashMap::new();
             params.insert("action".to_string(), "wbeditentity".to_string());
-            params.insert("id".to_string(), format!("Q{}", item_id));
+            params.insert("id".to_string(), format!("Q{item_id}"));
             params.insert("data".to_string(), json.to_string());
             params.insert("token".to_string(), mw_api.get_edit_token().await?);
             if !comment.is_empty() {
@@ -371,14 +371,14 @@ impl Wikidata {
         if type_q.is_empty() {
             return self.search_with_limit(name, None).await;
         }
-        let mut query = format!("{} haswbstatement:P31={}", name, type_q);
+        let mut query = format!("{name} haswbstatement:P31={type_q}");
         if type_q != "Q13442814" {
             // Exclude "scholarly article"
-            query = format!("{} -haswbstatement:P31=Q13442814", query);
+            query = format!("{query} -haswbstatement:P31=Q13442814");
         }
         let meta_items: Vec<String> = META_ITEMS
             .iter()
-            .map(|q| format!(" -haswbstatement:P31={}", q))
+            .map(|q| format!(" -haswbstatement:P31={q}"))
             .collect();
         query += &meta_items.join("");
         self.search_with_limit(&query, None).await

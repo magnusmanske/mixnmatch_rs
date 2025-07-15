@@ -95,8 +95,8 @@ impl CandidateDates {
             matches: r
                 .3
                 .split(',')
-                .filter(|s| !s.is_empty())
-                .map(|s| format!("Q{}", s))
+                .filter(|q| !q.is_empty())
+                .map(|q| format!("Q{q}"))
                 .collect(),
         }
     }
@@ -184,7 +184,7 @@ impl AutoMatch {
             for entry in &mut entry_batch {
                 if let Some(q) = label2q.get(&entry.ext_name) {
                     entry.set_app(&self.app);
-                    let _ = entry.set_match(&format!("Q{}", q), USER_AUTO).await;
+                    let _ = entry.set_match(&format!("Q{q}"), USER_AUTO).await;
                 }
             }
             if entry_batch.len() < batch_size {
@@ -234,7 +234,7 @@ impl AutoMatch {
             if let Some(v) = name2entries.get(&title) {
                 for entry_id in v {
                     if let Ok(mut entry) = Entry::from_id(*entry_id, &self.app).await {
-                        let _ = entry.set_match(&format!("Q{}", q), USER_AUTO).await;
+                        let _ = entry.set_match(&format!("Q{q}"), USER_AUTO).await;
                     }
                 }
             }
@@ -545,7 +545,7 @@ impl AutoMatch {
         name_type2id: &HashMap<(String, String), Vec<usize>>,
     ) {
         let q = match r.q {
-            Some(q) => format!("Q{}", q),
+            Some(q) => format!("Q{q}"),
             None => return,
         };
         let key = (r.ext_name.to_owned(), r.type_name.to_owned());
@@ -942,7 +942,7 @@ impl AutoMatch {
         let date = match precision {
             4 => format!("{}", dt.format("%Y")),
             10 => format!("{}", dt.format("%Y-%m-%d")),
-            other => panic!("Bad precision {}", other), // Should never happen
+            other => panic!("Bad precision '{other}'"), // Should never happen
         };
         if (match_field == "born" && date == result.born)
             || (match_field == "died" && date == result.died)

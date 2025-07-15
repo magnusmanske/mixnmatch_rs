@@ -129,7 +129,7 @@ impl CerseiSync {
             loop {
                 let catalog_with_name_exists = Catalog::from_name(&name, &self.app).await.is_ok();
                 if catalog_with_name_exists {
-                    name = format!("{} [CERSEI]", name);
+                    name = format!("{name} [CERSEI]");
                 } else {
                     break;
                 }
@@ -227,13 +227,12 @@ impl CerseiSync {
 
         loop {
             let mut url = format!(
-                "https://cersei.toolforge.org/api/get_entries/{}?offset={}&limit={}&no_json=1&wide=1",
-                scraper_id, offset, limit
+                "https://cersei.toolforge.org/api/get_entries/{scraper_id}?offset={offset}&limit={limit}&no_json=1&wide=1"
             );
 
             if let Some(sync_time) = last_sync {
                 if !sync_time.is_empty() {
-                    url = format!("{}&revision_since={}", url, sync_time);
+                    url = format!("{url}&revision_since={sync_time}");
                 }
             }
 
@@ -305,7 +304,7 @@ impl CerseiSync {
                 };
 
                 if let Some(p31) = ce.p31 {
-                    ne.entry.type_name = Some(format!("Q{}", p31));
+                    ne.entry.type_name = Some(format!("Q{p31}"));
                 }
 
                 if let Some(&_entry_id) = existing_ext_ids.get(&ne.entry.ext_id) {
@@ -444,8 +443,7 @@ impl CerseiSync {
 
         loop {
             let url = format!(
-                "https://cersei.toolforge.org/api/relations/{}/{}?limit={}&earliest={}",
-                scraper_id, offset, batch_size, earliest_param
+                "https://cersei.toolforge.org/api/relations/{scraper_id}/{offset}?limit={batch_size}&earliest={earliest_param}"
             );
 
             let response = self.http_client.get(&url).send().await?;
