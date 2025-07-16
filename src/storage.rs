@@ -5,6 +5,7 @@ use crate::{
     cersei::CurrentScraper,
     coordinate_matcher::LocationRow,
     entry::{AuxiliaryRow, CoordinateLocation, Entry},
+    entry_query::EntryQuery,
     issue::Issue,
     job_row::JobRow,
     job_status::JobStatus,
@@ -23,6 +24,8 @@ use wikimisc::wikibase::LocaleString;
 pub trait Storage: std::fmt::Debug + Send + Sync {
     // fn new(j: &Value) -> impl Storage;
     async fn disconnect(&self) -> Result<()>;
+
+    async fn entry_query(&self, query: &EntryQuery) -> Result<Vec<Entry>>;
 
     // Taxon matcher
 

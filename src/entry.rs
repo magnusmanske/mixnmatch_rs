@@ -322,7 +322,7 @@ impl Entry {
     pub async fn add_to_item(&self, item: &mut ItemEntity) -> Result<()> {
         let catalog = Catalog::from_id(self.catalog, self.app()?).await?;
         let references = catalog.references(self).await;
-        let language = catalog.search_wp.to_owned();
+        let language = catalog.search_wp().to_string();
         self.add_to_item_own_id(&catalog, &references, item);
         self.add_to_item_type(&references, item);
         self.add_to_item_name_and_aliases(&language, item).await?;
@@ -419,17 +419,17 @@ impl Entry {
         let name = &self.ext_name;
         let name = Person::sanitize_simplify_name(name);
         let locale_string = LocaleString::new(language, &name);
-        let mut names = vec![locale_string.to_owned()];
-        if self.type_name == Some("Q5".into()) && WESTERN_LANGUAGES.contains(&language) {
-            for l in WESTERN_LANGUAGES {
-                names.push(LocaleString::new(*l, &name));
-            }
-        }
-        for name_tmp in names {
-            if item.label_in_locale(language).is_none() {
-                item.labels_mut().push(name_tmp);
+        let names = if self.type_name == Some("Q5".into()) && WESTERN_LANGUAGES.contains(&language)
+        {
+            vec![LocaleString::new("mul", &name)]
+        } else {
+            vec![locale_string.to_owned()]
+        };
+        for ls in names {
+            if item.label_in_locale(ls.language()).is_none() {
+                item.labels_mut().push(ls);
             } else {
-                aliases.push(name_tmp);
+                aliases.push(ls);
             }
         }
 
@@ -460,9 +460,7 @@ impl Entry {
         references: &Vec<Reference>,
         item: &mut ItemEntity,
     ) {
-        // Own prop if any
-        if catalog.wd_prop.is_some() && catalog.wd_qual.is_none() {
-            let prop = catalog.wd_prop.to_owned().unwrap(); // Safe
+        if let (Some(prop), None) = (catalog.wd_prop(), catalog.wd_qual()) {
             let snak = Snak::new_external_id(&format!("P{prop}"), &self.ext_id);
             let claim = Statement::new_normal(snak, vec![], references.to_owned());
             Self::add_claim_or_references(item, claim);

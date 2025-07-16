@@ -7,6 +7,7 @@ use crate::{
     cersei::CurrentScraper,
     coordinate_matcher::LocationRow,
     entry::{AuxiliaryRow, CoordinateLocation, Entry, EntryError},
+    entry_query::EntryQuery,
     issue::Issue,
     job_row::JobRow,
     job_status::JobStatus,
@@ -99,23 +100,7 @@ impl StorageMySQL {
 
     // #lizard forgives
     fn catalog_from_row(row: &Row) -> Option<Catalog> {
-        Some(Catalog {
-            id: row.get(0)?,
-            name: row.get(1)?,
-            url: row.get(2)?,
-            desc: row.get(3)?,
-            type_name: row.get(4)?,
-            wd_prop: row.get(5)?,
-            wd_qual: row.get(6)?,
-            search_wp: row.get(7)?,
-            active: row.get(8)?,
-            owner: row.get(9)?,
-            note: row.get(10)?,
-            source_item: row.get(11)?,
-            has_person_date: row.get(12)?,
-            taxon_run: row.get(13)?,
-            app: None,
-        })
+        Catalog::from_mysql_row(row)
     }
 
     async fn entry_set_match_cleanup(
@@ -255,6 +240,52 @@ impl StorageMySQL {
         }
         sql
     }
+
+    fn get_entry_query_sql(query: &EntryQuery) -> Result<(String, Vec<String>)> {
+        let mut parts: Vec<String> = Vec::new();
+        let mut sql = Self::entry_sql_select();
+
+        if let Some(catalog_id) = query.catalog_id {
+            sql += &format!(" WHERE catalog={catalog_id}");
+        }
+        if let Some(entry_type) = &query.entry_type {
+            parts.push(entry_type.to_string());
+            sql += " AND `type`=?";
+        }
+        if let Some(num_dates) = query.num_dates {
+            if num_dates == 1 {
+                sql += " AND EXISTS (SELECT * FROM `person_dates` WHERE entry_id=entry.id AND (year_born!='' OR year_died!=''))";
+            } else if num_dates == 2 {
+                sql += " AND EXISTS (SELECT * FROM `person_dates` WHERE entry_id=entry.id AND (year_born!='' AND year_died!=''))";
+            } else {
+                return Err(anyhow!(
+                    "Invalid number of dates, should be 1 or 2 but id {num_dates}"
+                ));
+            }
+        }
+        if let Some(num_aux) = query.num_aux {
+            sql += &format!(
+                " AND (SELECT count(*) FROM auxiliary WHERE entry_id=entry.id)>={num_aux}"
+            );
+        }
+        if let Some(match_state) = query.match_state {
+            sql += " ";
+            sql += &match_state.get_sql();
+        }
+        if let Some(limit) = query.limit {
+            sql += &format!(" LIMIT {limit}");
+        }
+        if query.has_description {
+            sql += " AND ext_desc!=''";
+        }
+        if query.has_coordinates {
+            sql += " AND EXISTS (SELECT * FROM `location` WHERE entry_id=entry.id)";
+        }
+        if let Some(offset) = query.offset {
+            sql += &format!(" OFFSET {offset}");
+        }
+        Ok((sql, parts))
+    }
 }
 
 // STORAGE TRAIT IMPLEMENTATION
@@ -264,6 +295,21 @@ impl Storage for StorageMySQL {
     async fn disconnect(&self) -> Result<()> {
         self.disconnect_db().await?;
         Ok(())
+    }
+
+    async fn entry_query(&self, query: &EntryQuery) -> Result<Vec<Entry>> {
+        let (sql, parts) = Self::get_entry_query_sql(query)?;
+        let ret = self
+            .get_conn_ro()
+            .await?
+            .exec_iter(sql, parts)
+            .await?
+            .map_and_drop(|row| Self::entry_from_row(&row))
+            .await?
+            .iter()
+            .filter_map(|row| row.to_owned())
+            .collect();
+        Ok(ret)
     }
 
     // Taxon matcher
@@ -403,26 +449,26 @@ impl Storage for StorageMySQL {
     // Catalog
 
     async fn create_catalog(&self, catalog: &Catalog) -> Result<usize> {
-        if catalog.id != crate::catalog::BLANK_CATALOG_ID {
+        if catalog.id() != crate::catalog::BLANK_CATALOG_ID {
             return Err(anyhow!("Catalog ID is not blank"));
         }
 
         let mut conn = self.get_conn().await?;
         let sql = r"INSERT IGNORE INTO `catalog` (`name`, `url`, `desc`, `type`, `wd_prop`, `wd_qual`, `search_wp`,`active`,`owner`,`note`,`source_item`,`has_person_date`,`taxon_run`)
         	VALUES (:name, :url, :desc, :type_name, :wd_prop, :wd_qual, :search_wp, :active, :owner, :note, :source_item, :has_person_date, :taxon_run)";
-        let name = catalog.name.clone();
-        let url = catalog.url.clone();
-        let desc = catalog.desc.clone();
-        let type_name = catalog.type_name.clone();
-        let wd_prop = catalog.wd_prop;
-        let wd_qual = catalog.wd_qual;
-        let search_wp = catalog.search_wp.clone();
-        let active = catalog.active;
-        let owner = catalog.owner;
-        let note = catalog.note.clone();
-        let source_item = catalog.source_item;
-        let has_person_date = catalog.has_person_date.clone();
-        let taxon_run = catalog.taxon_run;
+        let name = catalog.name();
+        let url = catalog.url();
+        let desc = catalog.desc();
+        let type_name = catalog.type_name();
+        let wd_prop = catalog.wd_prop().unwrap_or(0);
+        let wd_qual = catalog.wd_qual();
+        let search_wp = catalog.search_wp();
+        let active = catalog.is_active();
+        let owner = catalog.owner();
+        let note = catalog.note();
+        let source_item = catalog.source_item();
+        let has_person_date = catalog.has_person_date();
+        let taxon_run = catalog.taxon_run();
         conn.exec_drop(
             sql,
             params! {

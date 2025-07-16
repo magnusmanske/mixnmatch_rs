@@ -662,7 +662,7 @@ impl AuxiliaryMatcher {
         };
 
         // Source via catalog property
-        if let Some(wd_prop) = catalog.wd_prop {
+        if let Some(wd_prop) = catalog.wd_prop() {
             self.get_source_for_entry_via_catalog_property(&mut stated_in, wd_prop, entry)
                 .await?;
             return Some(stated_in);
@@ -705,7 +705,7 @@ impl AuxiliaryMatcher {
             None => return Err(None), // No catalog, no source
         };
         let mut stated_in: WikidataCommandPropertyValueGroup = vec![];
-        if let Some(q) = catalog.source_item {
+        if let Some(q) = catalog.source_item() {
             stated_in.push(WikidataCommandPropertyValue {
                 property: 248,
                 value: WikidataCommandValue::Item(q),

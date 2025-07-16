@@ -9,21 +9,21 @@ pub const BLANK_CATALOG_ID: usize = 0;
 
 #[derive(Debug, Clone, Default)]
 pub struct Catalog {
-    pub id: usize,
-    pub name: Option<String>,
-    pub url: Option<String>,
-    pub desc: String,
-    pub type_name: String,
-    pub wd_prop: Option<usize>,
-    pub wd_qual: Option<usize>,
-    pub search_wp: String,
-    pub active: bool,
-    pub owner: usize,
-    pub note: String,
-    pub source_item: Option<usize>,
-    pub has_person_date: String,
-    pub taxon_run: bool,
-    pub app: Option<AppState>,
+    id: usize,
+    name: Option<String>,
+    url: Option<String>,
+    desc: String,
+    type_name: String,
+    wd_prop: Option<usize>,
+    wd_qual: Option<usize>,
+    search_wp: String,
+    active: bool,
+    owner: usize,
+    note: String,
+    source_item: Option<usize>,
+    has_person_date: String,
+    taxon_run: bool,
+    app: Option<AppState>,
 }
 
 impl Catalog {
@@ -49,9 +49,113 @@ impl Catalog {
         }
     }
 
+    pub fn from_mysql_row(row: &mysql_async::Row) -> Option<Self> {
+        Some(Self {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            url: row.get(2)?,
+            desc: row.get(3)?,
+            type_name: row.get(4)?,
+            wd_prop: row.get(5)?,
+            wd_qual: row.get(6)?,
+            search_wp: row.get(7)?,
+            active: row.get(8)?,
+            owner: row.get(9)?,
+            note: row.get(10)?,
+            source_item: row.get(11)?,
+            has_person_date: row.get(12)?,
+            taxon_run: row.get(13)?,
+            app: None,
+        })
+    }
+
     pub async fn create_catalog(&mut self) -> Result<()> {
         self.id = self.app()?.storage().create_catalog(self).await?;
         Ok(())
+    }
+
+    pub fn id(&self) -> usize {
+        self.id
+    }
+
+    pub fn name(&self) -> Option<&String> {
+        self.name.as_ref()
+    }
+
+    pub fn set_name(&mut self, name: Option<String>) {
+        self.name = name;
+    }
+
+    pub fn url(&self) -> Option<&String> {
+        self.url.as_ref()
+    }
+
+    pub fn set_url(&mut self, url: Option<String>) {
+        self.url = url;
+    }
+
+    pub fn desc(&self) -> &str {
+        &self.desc
+    }
+
+    pub fn type_name(&self) -> &str {
+        &self.type_name
+    }
+
+    pub fn wd_prop(&self) -> Option<usize> {
+        self.wd_prop
+    }
+
+    pub fn set_wd_prop(&mut self, wd_prop: Option<usize>) {
+        self.wd_prop = wd_prop;
+    }
+
+    pub fn wd_qual(&self) -> Option<usize> {
+        self.wd_qual
+    }
+
+    pub fn search_wp(&self) -> &str {
+        &self.search_wp
+    }
+
+    pub fn set_search_wp(&mut self, search_wp: &str) {
+        self.search_wp = search_wp.to_string();
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.active
+    }
+
+    pub fn set_active(&mut self, active: bool) {
+        self.active = active;
+    }
+
+    pub fn set_owner(&mut self, owner: usize) {
+        self.owner = owner;
+    }
+
+    pub fn owner(&self) -> usize {
+        self.owner
+    }
+
+    pub fn set_note(&mut self, note: &str) {
+        self.note = note.to_string();
+    }
+
+    pub fn note(&self) -> &str {
+        &self.note
+    }
+
+    pub fn source_item(&self) -> Option<usize> {
+        self.source_item
+    }
+
+    pub fn has_person_date(&self) -> &str {
+        &self.has_person_date
+    }
+
+    pub fn taxon_run(&self) -> bool {
+        self.taxon_run
     }
 
     /// Returns a `HashMap` of key-value pairs for the catalog.

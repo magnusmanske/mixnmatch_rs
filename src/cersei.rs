@@ -137,19 +137,19 @@ impl CerseiSync {
 
             // Create new catalog
             let mut catalog = Catalog::new(&self.app);
-            catalog.name = Some(name.clone());
-            catalog.url = Some(scraper.url.clone());
-            catalog.wd_prop = scraper.property.to_owned();
-            catalog.search_wp = scraper.language.clone();
-            catalog.note = note.clone();
-            catalog.owner = 6;
-            catalog.active = true;
+            catalog.set_name(Some(name.clone()));
+            catalog.set_url(Some(scraper.url.clone()));
+            catalog.set_wd_prop(scraper.property.to_owned());
+            catalog.set_search_wp(&scraper.language);
+            catalog.set_note(&note);
+            catalog.set_owner(6);
+            catalog.set_active(true);
             catalog.create_catalog().await?;
 
             // Link cersei and catalog
             self.app
                 .storage()
-                .add_cersei_catalog(catalog.id, scraper.id)
+                .add_cersei_catalog(catalog.id(), scraper.id)
                 .await?;
         }
 
