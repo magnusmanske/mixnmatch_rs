@@ -283,6 +283,10 @@ impl Entry {
             .await
     }
 
+    pub fn description(&self) -> &str {
+        &self.ext_desc
+    }
+
     /// Updates `ext_name` locally and in the database
     //TODO test
     pub async fn set_ext_name(&mut self, ext_name: &str) -> Result<()> {

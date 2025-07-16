@@ -10,6 +10,7 @@ use std::{
     time::Duration,
 };
 use urlencoding::encode;
+use wikimisc::wikibase::EntityTrait;
 
 pub const WIKIDATA_API_URL: &str = "https://www.wikidata.org/w/api.php";
 pub const META_ITEMS: &[&str] = &[
@@ -242,7 +243,7 @@ impl Wikidata {
         mediawiki::api::Api::new_from_builder(WIKIDATA_API_URL, builder).await
     }
 
-    async fn api_log_in(&mut self) -> Result<()> {
+    pub async fn api_log_in(&mut self) -> Result<()> {
         if self.mw_api.is_none() {
             self.mw_api = Some(self.get_mw_api().await?);
         }
@@ -258,6 +259,33 @@ impl Wikidata {
             .login(self.bot_name.to_owned(), self.bot_password.to_owned())
             .await?;
         Ok(())
+    }
+
+    // Takes an ItemEntity and tries to create a new Wikidata item.
+    // Returns the new item ID, or an error.
+    pub async fn create_new_wikidata_item(
+        &mut self,
+        item: &wikimisc::wikibase::ItemEntity,
+        comment: &str,
+    ) -> Result<String> {
+        self.api_log_in().await?;
+        let mw_api = self
+            .mw_api
+            .as_mut()
+            .ok_or_else(|| anyhow!("Failed to get mutable reference to MW API"))?;
+        let json = item.to_json();
+        let mut params: HashMap<String, String> = HashMap::new();
+        params.insert("action".to_string(), "wbeditentity".to_string());
+        params.insert("new".to_string(), "item".to_string());
+        params.insert("data".to_string(), json.to_string());
+        params.insert("token".to_string(), mw_api.get_edit_token().await?);
+        params.insert("summary".to_string(), comment.to_string());
+        let result = mw_api.post_query_api_json_mut(&params).await?;
+        let new_id = result["entity"]["id"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Could not create new item"))?
+            .to_string();
+        Ok(new_id)
     }
 
     /// Performs a Wikidata API search for the query string. Returns item IDs matching the query.

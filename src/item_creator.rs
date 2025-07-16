@@ -33,9 +33,10 @@ impl ItemCreator {
         Ok(())
     }
 
-    pub async fn generate_item(&self) -> Result<ItemEntity> {
+    pub async fn generate_item(&mut self) -> Result<ItemEntity> {
         let mut item = ItemEntity::new_empty();
-        for entry in self.entries.values() {
+        for entry in self.entries.values_mut() {
+            entry.set_app(&self.app);
             entry.add_to_item(&mut item).await?;
         }
         Ok(item)
