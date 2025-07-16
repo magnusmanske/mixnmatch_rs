@@ -196,7 +196,8 @@ impl AutoMatch {
     }
 
     pub async fn automatch_by_sitelink(&mut self, catalog_id: usize) -> Result<()> {
-        let language = Catalog::from_id(catalog_id, &self.app).await?.search_wp;
+        let catalog = Catalog::from_id(catalog_id, &self.app).await?;
+        let language = catalog.search_wp();
         let site = format!("{}wiki", &language);
         let mut offset = self.get_last_job_offset().await;
         let batch_size = 5000;
@@ -874,7 +875,7 @@ impl AutoMatch {
     pub async fn automatch_complex(&mut self, catalog_id: usize) -> Result<()> {
         let catalog = Catalog::from_id(catalog_id, &self.app).await?;
         let sparql_parts = self.automatch_complex_get_sparql_parts(&catalog).await?;
-        let mut language = catalog.search_wp.to_owned();
+        let mut language = catalog.search_wp().to_string();
         if language.is_empty() {
             language = "en".to_string();
         }

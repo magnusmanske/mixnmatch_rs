@@ -85,7 +85,7 @@ impl Microsync {
             return Ok(()); // TODO error?
         }
         let catalog = Catalog::from_id(catalog_id, &self.app).await?;
-        let property = match (catalog.wd_prop, catalog.wd_qual) {
+        let property = match (catalog.wd_prop(), catalog.wd_qual()) {
             (Some(prop), None) => prop,
             _ => return Ok(()), // Don't fail this job, just silently close it
         };
@@ -131,7 +131,8 @@ impl Microsync {
         match_differs: Vec<MatchDiffers>,
         extid_not_in_mnm: Vec<ExtIdNoMnM>,
     ) -> Result<String> {
-        let formatter_url = Self::get_formatter_url_for_prop(catalog.wd_prop.unwrap_or(0)).await?;
+        let formatter_url =
+            Self::get_formatter_url_for_prop(catalog.wd_prop().unwrap_or(0)).await?;
         let mut ret = wikitext_from_issues_get_header(catalog);
         Self::wikitext_from_issues_add_extid_info(extid_not_in_mnm, &mut ret, &formatter_url);
         self.wikitext_from_issues_match_differs(match_differs, &mut ret, &formatter_url)
@@ -581,10 +582,7 @@ impl Microsync {
 }
 
 fn wikitext_from_issues_get_header(catalog: &Catalog) -> String {
-    let catalog_name = catalog
-        .name
-        .as_ref()
-        .map_or_else(String::new, |s| s.to_owned());
+    let catalog_name = catalog.name().map_or_else(String::new, |s| s.to_owned());
     let mut ret = String::new();
     ret += &format!(
         "A report for the [{MNM_SITE_URL}/ Mix'n'match] tool. '''This page will be replaced regularly!'''\n"
@@ -594,7 +592,9 @@ fn wikitext_from_issues_get_header(catalog: &Catalog) -> String {
     ret += "* 'External ID' refers to the IDs in the original (external) catalog; the same as the statement value for the associated  property.\n\n";
     ret += &format!(
         "==[{MNM_SITE_URL}/#/catalog/{} {}]==\n{}\n\n",
-        catalog.id, &catalog_name, &catalog.desc
+        catalog.id(),
+        &catalog_name,
+        &catalog.desc()
     );
     ret
 }
