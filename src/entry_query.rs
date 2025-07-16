@@ -4,11 +4,12 @@ use crate::match_state::MatchState;
 pub struct EntryQuery {
     pub catalog_id: Option<usize>,
     pub entry_type: Option<String>,
-    pub num_dates: Option<u8>,
-    pub num_aux: Option<usize>,
+    pub min_dates: Option<u8>,
+    pub min_aux: Option<usize>,
     pub match_state: Option<MatchState>,
     pub has_description: bool,
     pub has_coordinates: bool,
+    pub desc_hint: Option<String>,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
 }
@@ -27,14 +28,14 @@ impl EntryQuery {
     }
 
     /// Only return entries with at least the specified number of person dates.
-    pub fn with_num_dates(mut self, num_dates: u8) -> Self {
-        self.num_dates = Some(num_dates);
+    pub fn with_min_dates(mut self, num_dates: u8) -> Self {
+        self.min_dates = Some(num_dates);
         self
     }
 
     /// Only return entries with at least the specified number of auxiliary properties.
-    pub fn with_num_aux(mut self, num_aux: usize) -> Self {
-        self.num_aux = Some(num_aux);
+    pub fn with_min_aux(mut self, num_aux: usize) -> Self {
+        self.min_aux = Some(num_aux);
         self
     }
 
@@ -53,6 +54,12 @@ impl EntryQuery {
     /// Only return entries that have coordinates.
     pub fn with_coordinates(mut self) -> Self {
         self.has_coordinates = true;
+        self
+    }
+
+    /// Only return entries that have a description hint.
+    pub fn with_desc_hint(mut self, desc_hint: &str) -> Self {
+        self.desc_hint = Some(desc_hint.to_string());
         self
     }
 

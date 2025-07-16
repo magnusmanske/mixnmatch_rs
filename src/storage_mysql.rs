@@ -252,8 +252,10 @@ impl StorageMySQL {
             parts.push(entry_type.to_string());
             sql += " AND `type`=?";
         }
-        if let Some(num_dates) = query.num_dates {
-            if num_dates == 1 {
+        if let Some(num_dates) = query.min_dates {
+            if num_dates == 0 {
+                // Skip, same as None but might be more convenient for the caller
+            } else if num_dates == 1 {
                 sql += " AND EXISTS (SELECT * FROM `person_dates` WHERE entry_id=entry.id AND (year_born!='' OR year_died!=''))";
             } else if num_dates == 2 {
                 sql += " AND EXISTS (SELECT * FROM `person_dates` WHERE entry_id=entry.id AND (year_born!='' AND year_died!=''))";
@@ -263,7 +265,7 @@ impl StorageMySQL {
                 ));
             }
         }
-        if let Some(num_aux) = query.num_aux {
+        if let Some(num_aux) = query.min_aux {
             sql += &format!(
                 " AND (SELECT count(*) FROM auxiliary WHERE entry_id=entry.id)>={num_aux}"
             );
@@ -272,14 +274,18 @@ impl StorageMySQL {
             sql += " ";
             sql += &match_state.get_sql();
         }
-        if let Some(limit) = query.limit {
-            sql += &format!(" LIMIT {limit}");
-        }
         if query.has_description {
             sql += " AND ext_desc!=''";
         }
         if query.has_coordinates {
             sql += " AND EXISTS (SELECT * FROM `location` WHERE entry_id=entry.id)";
+        }
+        if let Some(desc_hint) = &query.desc_hint {
+            sql += " AND ext_desc LIKE ?";
+            parts.push(format!("%{desc_hint}%"));
+        }
+        if let Some(limit) = query.limit {
+            sql += &format!(" LIMIT {limit}");
         }
         if let Some(offset) = query.offset {
             sql += &format!(" OFFSET {offset}");
