@@ -253,6 +253,10 @@ impl StorageMySQL {
             parts.push(entry_type.to_string());
             sql += " AND `type`=?";
         }
+        if let Some(name_regexp) = &query.name_regexp {
+            parts.push(name_regexp.to_string());
+            sql += " AND `ext_name` RLIKE ?";
+        }
         if let Some(num_dates) = query.min_dates {
             if num_dates == 0 {
                 // Skip, same as None but might be more convenient for the caller
@@ -349,21 +353,12 @@ impl Storage for StorageMySQL {
         &self,
         catalog_id: usize,
     ) -> Result<Vec<Entry>> {
-        let select = Self::entry_sql_select();
-        let sql = format!(
-            "{select} WHERE `type`='Q5' AND (q IS NULL OR user=0) AND ext_name rlike '\\\\. ' AND catalog=:catalog_id",
-        );
-        let ret = self
-            .get_conn_ro()
-            .await?
-            .exec_iter(sql, params! {catalog_id})
-            .await?
-            .map_and_drop(|row| Self::entry_from_row(&row))
-            .await?
-            .iter()
-            .filter_map(|row| row.to_owned())
-            .collect();
-        Ok(ret)
+        let query = EntryQuery::default()
+            .with_catalog_id(catalog_id)
+            .with_type("Q5")
+            .with_match_state(MatchState::unmatched())
+            .with_name_regexp("\\. ");
+        self.entry_query(&query).await
     }
 
     async fn match_taxa_get_ranked_names_batch(
@@ -1800,17 +1795,11 @@ impl Storage for StorageMySQL {
         limit: usize,
         offset: usize,
     ) -> Result<Vec<Entry>> {
-        let sql = "SELECT * FROM `entry` WHERE `catalog`=:catalog_id LIMIT :limit OFFSET :offset";
-        Ok(self
-            .get_conn_ro()
-            .await?
-            .exec_iter(sql, params! {catalog_id,limit,offset})
-            .await?
-            .map_and_drop(|row| Self::entry_from_row(&row))
-            .await?
-            .iter()
-            .filter_map(|row| row.to_owned())
-            .collect())
+        let query = EntryQuery::default()
+            .with_catalog_id(catalog_id)
+            .with_limit(limit)
+            .with_offset(offset);
+        self.entry_query(&query).await
     }
 
     async fn multiple_from_ids(&self, entry_ids: &[usize]) -> Result<HashMap<usize, Entry>> {
@@ -2289,6 +2278,19 @@ impl Storage for StorageMySQL {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // use crate::app_state::{get_test_app, TEST_MUTEX};
+
+    // #[tokio::test]
+    // async fn test_catalog_get_entries_of_people_with_initials() {
+    //     let _test_lock = TEST_MUTEX.lock();
+    //     let app = get_test_app();
+    //     let results = app
+    //         .storage()
+    //         .catalog_get_entries_of_people_with_initials(6981)
+    //         .await
+    //         .unwrap();
+    //     println!("Found {}", results.len());
+    // }
 
     // #lizard forgives
     #[test]

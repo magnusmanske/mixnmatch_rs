@@ -10,6 +10,7 @@ pub struct EntryQuery {
     pub has_description: bool,
     pub has_coordinates: bool,
     pub desc_hint: Option<String>,
+    pub name_regexp: Option<String>,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
 }
@@ -24,6 +25,12 @@ impl EntryQuery {
     /// Only return entries with the specified type (eg "Q5").
     pub fn with_type(mut self, entry_type: &str) -> Self {
         self.entry_type = Some(entry_type.to_string());
+        self
+    }
+
+    /// Only return entries where `ext_name` fits the specified regexp.
+    pub fn with_name_regexp(mut self, name_regexp: &str) -> Self {
+        self.name_regexp = Some(name_regexp.to_string());
         self
     }
 
