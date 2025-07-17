@@ -95,8 +95,8 @@ impl CandidateDates {
             matches: r
                 .3
                 .split(',')
-                .filter(|s| !s.is_empty())
-                .map(|s| format!("Q{}", s))
+                .filter(|q| !q.is_empty())
+                .map(|q| format!("Q{q}"))
                 .collect(),
         }
     }
@@ -184,7 +184,7 @@ impl AutoMatch {
             for entry in &mut entry_batch {
                 if let Some(q) = label2q.get(&entry.ext_name) {
                     entry.set_app(&self.app);
-                    let _ = entry.set_match(&format!("Q{}", q), USER_AUTO).await;
+                    let _ = entry.set_match(&format!("Q{q}"), USER_AUTO).await;
                 }
             }
             if entry_batch.len() < batch_size {
@@ -196,7 +196,8 @@ impl AutoMatch {
     }
 
     pub async fn automatch_by_sitelink(&mut self, catalog_id: usize) -> Result<()> {
-        let language = Catalog::from_id(catalog_id, &self.app).await?.search_wp;
+        let catalog = Catalog::from_id(catalog_id, &self.app).await?;
+        let language = catalog.search_wp();
         let site = format!("{}wiki", &language);
         let mut offset = self.get_last_job_offset().await;
         let batch_size = 5000;
@@ -234,7 +235,7 @@ impl AutoMatch {
             if let Some(v) = name2entries.get(&title) {
                 for entry_id in v {
                     if let Ok(mut entry) = Entry::from_id(*entry_id, &self.app).await {
-                        let _ = entry.set_match(&format!("Q{}", q), USER_AUTO).await;
+                        let _ = entry.set_match(&format!("Q{q}"), USER_AUTO).await;
                     }
                 }
             }
@@ -545,7 +546,7 @@ impl AutoMatch {
         name_type2id: &HashMap<(String, String), Vec<usize>>,
     ) {
         let q = match r.q {
-            Some(q) => format!("Q{}", q),
+            Some(q) => format!("Q{q}"),
             None => return,
         };
         let key = (r.ext_name.to_owned(), r.type_name.to_owned());
@@ -874,7 +875,7 @@ impl AutoMatch {
     pub async fn automatch_complex(&mut self, catalog_id: usize) -> Result<()> {
         let catalog = Catalog::from_id(catalog_id, &self.app).await?;
         let sparql_parts = self.automatch_complex_get_sparql_parts(&catalog).await?;
-        let mut language = catalog.search_wp.to_owned();
+        let mut language = catalog.search_wp().to_string();
         if language.is_empty() {
             language = "en".to_string();
         }
@@ -942,7 +943,7 @@ impl AutoMatch {
         let date = match precision {
             4 => format!("{}", dt.format("%Y")),
             10 => format!("{}", dt.format("%Y-%m-%d")),
-            other => panic!("Bad precision {}", other), // Should never happen
+            other => panic!("Bad precision '{other}'"), // Should never happen
         };
         if (match_field == "born" && date == result.born)
             || (match_field == "died" && date == result.died)
@@ -1043,6 +1044,14 @@ impl AutoMatch {
                 .collect(),
             None => Vec::new(),
         }
+    }
+
+    pub async fn automatch_people_with_birth_year(&self, catalog_id: usize) -> Result<()> {
+        self.app
+            .storage()
+            .automatch_people_with_birth_year(catalog_id)
+            .await?;
+        Ok(())
     }
 
     pub async fn automatch_people_with_initials(&self, catalog_id: usize) -> Result<()> {

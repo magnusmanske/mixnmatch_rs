@@ -19,17 +19,31 @@ pub const WESTERN_LANGUAGES: &[&str] = &["en", "de", "fr", "es", "nl", "it", "pt
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CoordinateLocation {
-    pub lat: f64,
-    pub lon: f64,
+    lat: f64,
+    lon: f64,
+}
+
+impl CoordinateLocation {
+    pub fn new(lat: f64, lon: f64) -> Self {
+        Self { lat, lon }
+    }
+
+    pub fn lat(&self) -> f64 {
+        self.lat
+    }
+
+    pub fn lon(&self) -> f64 {
+        self.lon
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub struct AuxiliaryRow {
-    pub row_id: usize,
-    pub prop_numeric: usize,
-    pub value: String,
-    pub in_wikidata: bool,
-    pub entry_is_matched: bool,
+    row_id: usize,
+    prop_numeric: usize,
+    value: String,
+    in_wikidata: bool,
+    entry_is_matched: bool,
 }
 
 impl AuxiliaryRow {
@@ -42,6 +56,22 @@ impl AuxiliaryRow {
             in_wikidata: row.get(3)?,
             entry_is_matched: row.get(4)?,
         })
+    }
+
+    pub fn prop_numeric(&self) -> usize {
+        self.prop_numeric
+    }
+
+    pub fn value(&self) -> &str {
+        &self.value
+    }
+
+    pub fn in_wikidata(&self) -> bool {
+        self.in_wikidata
+    }
+
+    pub fn entry_is_matched(&self) -> bool {
+        self.entry_is_matched
     }
 
     pub fn fix_external_id(prop: &str, value: &str) -> String {
@@ -253,6 +283,10 @@ impl Entry {
             .await
     }
 
+    pub fn description(&self) -> &str {
+        &self.ext_desc
+    }
+
     /// Updates `ext_name` locally and in the database
     //TODO test
     pub async fn set_ext_name(&mut self, ext_name: &str) -> Result<()> {
@@ -292,7 +326,7 @@ impl Entry {
     pub async fn add_to_item(&self, item: &mut ItemEntity) -> Result<()> {
         let catalog = Catalog::from_id(self.catalog, self.app()?).await?;
         let references = catalog.references(self).await;
-        let language = catalog.search_wp.to_owned();
+        let language = catalog.search_wp().to_string();
         self.add_to_item_own_id(&catalog, &references, item);
         self.add_to_item_type(&references, item);
         self.add_to_item_name_and_aliases(&language, item).await?;
@@ -387,19 +421,19 @@ impl Entry {
     ) -> Result<()> {
         let mut aliases = self.get_aliases().await?;
         let name = &self.ext_name;
-        let name = Person::sanitize_simplify_name(name);
+        let name = Person::sanitize_name(name);
         let locale_string = LocaleString::new(language, &name);
-        let mut names = vec![locale_string.to_owned()];
-        if self.type_name == Some("Q5".into()) && WESTERN_LANGUAGES.contains(&language) {
-            for l in WESTERN_LANGUAGES {
-                names.push(LocaleString::new(*l, &name));
-            }
-        }
-        for name_tmp in names {
-            if item.label_in_locale(language).is_none() {
-                item.labels_mut().push(name_tmp);
+        let names = if self.type_name == Some("Q5".into()) && WESTERN_LANGUAGES.contains(&language)
+        {
+            vec![LocaleString::new("mul", &name)]
+        } else {
+            vec![locale_string.to_owned()]
+        };
+        for ls in names {
+            if item.label_in_locale(ls.language()).is_none() {
+                item.labels_mut().push(ls);
             } else {
-                aliases.push(name_tmp);
+                aliases.push(ls);
             }
         }
 
@@ -430,9 +464,7 @@ impl Entry {
         references: &Vec<Reference>,
         item: &mut ItemEntity,
     ) {
-        // Own prop if any
-        if catalog.wd_prop.is_some() && catalog.wd_qual.is_none() {
-            let prop = catalog.wd_prop.to_owned().unwrap(); // Safe
+        if let (Some(prop), None) = (catalog.wd_prop(), catalog.wd_qual()) {
             let snak = Snak::new_external_id(&format!("P{prop}"), &self.ext_id);
             let claim = Statement::new_normal(snak, vec![], references.to_owned());
             Self::add_claim_or_references(item, claim);
@@ -745,7 +777,7 @@ impl Entry {
                 .first()
                 .ok_or(anyhow!("get_multi_match err1"))?
                 .split(',')
-                .map(|s| format!("Q{}", s))
+                .map(|q| format!("Q{q}"))
                 .collect();
             Ok(ret)
         }

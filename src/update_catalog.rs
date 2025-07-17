@@ -411,16 +411,16 @@ mod tests {
         assert_eq!(aux.len(), 2);
         assert_eq!(
             aux.iter()
-                .find(|row| row.prop_numeric == 213)
+                .find(|row| row.prop_numeric() == 213)
                 .unwrap()
-                .value,
+                .value(),
             "0000 0000 6555 4670"
         );
         assert_eq!(
             aux.iter()
-                .find(|row| row.prop_numeric == 214)
+                .find(|row| row.prop_numeric() == 214)
                 .unwrap()
-                .value,
+                .value(),
             "91113950"
         );
 

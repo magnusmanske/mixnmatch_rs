@@ -4,8 +4,10 @@ use crate::{
     automatch::{ResultInOriginalCatalog, ResultInOtherCatalog},
     auxiliary_matcher::AuxiliaryResults,
     catalog::Catalog,
+    cersei::CurrentScraper,
     coordinate_matcher::LocationRow,
     entry::{AuxiliaryRow, CoordinateLocation, Entry, EntryError},
+    entry_query::EntryQuery,
     issue::Issue,
     job_row::JobRow,
     job_status::JobStatus,
@@ -98,23 +100,7 @@ impl StorageMySQL {
 
     // #lizard forgives
     fn catalog_from_row(row: &Row) -> Option<Catalog> {
-        Some(Catalog {
-            id: row.get(0)?,
-            name: row.get(1)?,
-            url: row.get(2)?,
-            desc: row.get(3)?,
-            type_name: row.get(4)?,
-            wd_prop: row.get(5)?,
-            wd_qual: row.get(6)?,
-            search_wp: row.get(7)?,
-            active: row.get(8)?,
-            owner: row.get(9)?,
-            note: row.get(10)?,
-            source_item: row.get(11)?,
-            has_person_date: row.get(12)?,
-            taxon_run: row.get(13)?,
-            app: None,
-        })
+        Catalog::from_mysql_row(row)
     }
 
     async fn entry_set_match_cleanup(
@@ -254,6 +240,58 @@ impl StorageMySQL {
         }
         sql
     }
+
+    fn get_entry_query_sql(query: &EntryQuery) -> Result<(String, Vec<String>)> {
+        let mut parts: Vec<String> = Vec::new();
+        let mut sql = Self::entry_sql_select();
+
+        if let Some(catalog_id) = query.catalog_id {
+            sql += &format!(" WHERE catalog={catalog_id}");
+        }
+        if let Some(entry_type) = &query.entry_type {
+            parts.push(entry_type.to_string());
+            sql += " AND `type`=?";
+        }
+        if let Some(num_dates) = query.min_dates {
+            if num_dates == 0 {
+                // Skip, same as None but might be more convenient for the caller
+            } else if num_dates == 1 {
+                sql += " AND EXISTS (SELECT * FROM `person_dates` WHERE entry_id=entry.id AND (year_born!='' OR year_died!=''))";
+            } else if num_dates == 2 {
+                sql += " AND EXISTS (SELECT * FROM `person_dates` WHERE entry_id=entry.id AND (year_born!='' AND year_died!=''))";
+            } else {
+                return Err(anyhow!(
+                    "Invalid number of dates, should be 1 or 2 but id {num_dates}"
+                ));
+            }
+        }
+        if let Some(num_aux) = query.min_aux {
+            sql += &format!(
+                " AND (SELECT count(*) FROM auxiliary WHERE entry_id=entry.id)>={num_aux}"
+            );
+        }
+        if let Some(match_state) = query.match_state {
+            sql += " ";
+            sql += &match_state.get_sql();
+        }
+        if query.has_description {
+            sql += " AND ext_desc!=''";
+        }
+        if query.has_coordinates {
+            sql += " AND EXISTS (SELECT * FROM `location` WHERE entry_id=entry.id)";
+        }
+        if let Some(desc_hint) = &query.desc_hint {
+            sql += " AND ext_desc LIKE ?";
+            parts.push(format!("%{desc_hint}%"));
+        }
+        if let Some(limit) = query.limit {
+            sql += &format!(" LIMIT {limit}");
+        }
+        if let Some(offset) = query.offset {
+            sql += &format!(" OFFSET {offset}");
+        }
+        Ok((sql, parts))
+    }
 }
 
 // STORAGE TRAIT IMPLEMENTATION
@@ -263,6 +301,37 @@ impl Storage for StorageMySQL {
     async fn disconnect(&self) -> Result<()> {
         self.disconnect_db().await?;
         Ok(())
+    }
+
+    async fn entry_query(&self, query: &EntryQuery) -> Result<Vec<Entry>> {
+        let (sql, parts) = Self::get_entry_query_sql(query)?;
+        let ret = self
+            .get_conn_ro()
+            .await?
+            .exec_iter(sql, parts)
+            .await?
+            .map_and_drop(|row| Self::entry_from_row(&row))
+            .await?
+            .iter()
+            .filter_map(|row| row.to_owned())
+            .collect();
+        Ok(ret)
+    }
+
+    async fn get_entry_ids_by_aux(&self, prop_numeric: usize, value: &str) -> Result<Vec<usize>> {
+        let sql = r"SELECT DISTINCT entry_id from auxiliary where aux_p=:prop_numeric and aux_name=:value
+        	UNION
+         	SELECT DISTINCT entry.id FROM entry,catalog WHERE active=1 AND wd_prop=:prop_numeric AND wd_qual IS NULL
+          	AND entry.catalog=catalog.id AND ext_id=:value";
+        let mut conn = self.get_conn_ro().await?;
+        let mut results = conn
+            .exec_iter(sql, params! {prop_numeric, value})
+            .await?
+            .map_and_drop(from_row::<usize>)
+            .await?;
+        results.sort();
+        results.dedup();
+        Ok(results)
     }
 
     // Taxon matcher
@@ -401,6 +470,74 @@ impl Storage for StorageMySQL {
 
     // Catalog
 
+    async fn create_catalog(&self, catalog: &Catalog) -> Result<usize> {
+        if catalog.id() != crate::catalog::BLANK_CATALOG_ID {
+            return Err(anyhow!("Catalog ID is not blank"));
+        }
+
+        let mut conn = self.get_conn().await?;
+        let sql = r"INSERT IGNORE INTO `catalog` (`name`, `url`, `desc`, `type`, `wd_prop`, `wd_qual`, `search_wp`,`active`,`owner`,`note`,`source_item`,`has_person_date`,`taxon_run`)
+        	VALUES (:name, :url, :desc, :type_name, :wd_prop, :wd_qual, :search_wp, :active, :owner, :note, :source_item, :has_person_date, :taxon_run)";
+        let name = catalog.name();
+        let url = catalog.url();
+        let desc = catalog.desc();
+        let type_name = catalog.type_name();
+        let wd_prop = catalog.wd_prop().unwrap_or(0);
+        let wd_qual = catalog.wd_qual();
+        let search_wp = catalog.search_wp();
+        let active = catalog.is_active();
+        let owner = catalog.owner();
+        let note = catalog.note();
+        let source_item = catalog.source_item();
+        let has_person_date = catalog.has_person_date();
+        let taxon_run = catalog.taxon_run();
+        conn.exec_drop(
+            sql,
+            params! {
+                name,
+                url,
+                desc,
+                type_name,
+                wd_prop,
+                wd_qual,
+                search_wp,
+                active,
+                owner,
+                note,
+                source_item,
+                has_person_date,
+                taxon_run,
+            },
+        )
+        .await?;
+        let id = conn
+            .last_insert_id()
+            .map(|id| id as usize)
+            .ok_or_else(|| anyhow!("Could not insert catalog"))?;
+        Ok(id)
+    }
+
+    /// Get all external IDs for a catalog
+    async fn get_all_external_ids(&self, catalog_id: usize) -> Result<HashMap<String, usize>> {
+        let rows: Vec<Row> = self
+            .get_conn_ro()
+            .await?
+            .exec(
+                "SELECT id, ext_id FROM entry WHERE catalog = :catalog_id",
+                params! {catalog_id},
+            )
+            .await?;
+
+        let mut external_ids = HashMap::new();
+        for row in rows {
+            let id: usize = row.get("id").unwrap();
+            let ext_id: String = row.get("ext_id").unwrap();
+            external_ids.insert(ext_id, id);
+        }
+
+        Ok(external_ids)
+    }
+
     async fn number_of_entries_in_catalog(&self, catalog_id: usize) -> Result<usize> {
         let results: Vec<usize> = "SELECT count(*) AS cnt FROM `entry` WHERE `catalog`=:catalog_id"
             .with(params! {catalog_id})
@@ -423,8 +560,24 @@ impl Storage for StorageMySQL {
         drop(conn);
         let ret = rows
             .pop()
-            .ok_or(anyhow!("No catalog #{}", catalog_id))?
+            .ok_or(anyhow!("No catalog #{catalog_id}"))?
             .to_owned();
+        Ok(ret)
+    }
+
+    async fn get_catalog_from_name(&self, name: &str) -> Result<Catalog> {
+        let sql = r"SELECT id,`name`,url,`desc`,`type`,wd_prop,wd_qual,search_wp,active,owner,note,source_item,has_person_date,taxon_run FROM `catalog` WHERE `name`=:name";
+        let mut conn = self.get_conn_ro().await?;
+        let mut rows: Vec<Catalog> = conn
+            .exec_iter(sql, params! {name})
+            .await?
+            .map_and_drop(|row| Self::catalog_from_row(&row))
+            .await?
+            .iter()
+            .filter_map(|row| row.to_owned())
+            .collect();
+        drop(conn);
+        let ret = rows.pop().ok_or(anyhow!("No catalog '{name}'"))?.to_owned();
         Ok(ret)
     }
 
@@ -460,6 +613,33 @@ impl Storage for StorageMySQL {
         Ok(())
     }
 
+    async fn do_catalog_entries_have_person_date(&self, catalog_id: usize) -> Result<bool> {
+        let has_dates: Option<Row> = self
+            .get_conn_ro()
+            .await?
+            .exec_first(
+                "SELECT * FROM vw_dates WHERE catalog=:catalog_id LIMIT 1",
+                params! {catalog_id},
+            )
+            .await?;
+        Ok(has_dates.is_some())
+    }
+
+    async fn set_has_person_date(
+        &self,
+        catalog_id: usize,
+        new_has_person_date: &str,
+    ) -> Result<()> {
+        self.get_conn()
+            .await?
+            .exec_drop(
+                "UPDATE `catalog` SET `has_person_date`=:new_has_person_date WHERE `id`=:catalog_id",
+                params! {catalog_id, new_has_person_date},
+            )
+            .await?;
+        Ok(())
+    }
+
     // Microsync
 
     async fn microsync_load_entry_names(
@@ -467,10 +647,7 @@ impl Storage for StorageMySQL {
         entry_ids: &[usize],
     ) -> Result<HashMap<usize, String>> {
         let placeholders = Self::sql_placeholders(entry_ids.len());
-        let sql = format!(
-            "SELECT `id`,`ext_name` FROM `entry` WHERE `id` IN ({})",
-            placeholders
-        );
+        let sql = format!("SELECT `id`,`ext_name` FROM `entry` WHERE `id` IN ({placeholders})");
         let mut conn = self.get_conn_ro().await?;
         let results = conn
             .exec_iter(sql, entry_ids.to_vec())
@@ -487,7 +664,7 @@ impl Storage for StorageMySQL {
         &self,
         catalog_id: usize,
     ) -> Result<Vec<(isize, String, String)>> {
-        let sql = format!("SELECT q,group_concat(id) AS ids,group_concat(ext_id SEPARATOR '{}') AS ext_ids FROM entry WHERE catalog=:catalog_id AND q IS NOT NULL and q>0 AND user>0 GROUP BY q HAVING count(id)>1 ORDER BY q",EXT_URL_UNIQUE_SEPARATOR);
+        let sql = format!("SELECT q,group_concat(id) AS ids,group_concat(ext_id SEPARATOR '{EXT_URL_UNIQUE_SEPARATOR}') AS ext_ids FROM entry WHERE catalog=:catalog_id AND q IS NOT NULL and q>0 AND user>0 GROUP BY q HAVING count(id)>1 ORDER BY q");
         let mut conn = self.get_conn_ro().await?;
         let results = conn
             .exec_iter(sql, params! {catalog_id})
@@ -730,6 +907,119 @@ impl Storage for StorageMySQL {
     }
 
     // Maintenance
+
+    async fn maintenance_common_names_dates(&self) -> Result<()> {
+        let sqls = [
+            r#"DROP TABLE IF EXISTS tmp1"#,
+            r#"CREATE TABLE tmp1 AS
+			    SELECT ext_name,
+			    catalog,
+			    if(q IS NULL OR user=0,0,1) as matched,
+			    concat(ext_name,'|',year_born,'-',year_died) as nbd,
+			    entry_id
+			    FROM entry,person_dates
+			    WHERE entry_id=entry.id AND year_born!='' AND year_died!=''
+			    AND catalog NOT IN (SELECT id FROM catalog where active=0)"#,
+            r#"CREATE INDEX tmp1a ON tmp1 (nbd)"#,
+            r#"DELETE FROM tmp1 WHERE nbd IN (select nbd from tmp1 where matched=1)"#,
+            r#"TRUNCATE common_names_datesr#",
+		    r#"INSERT IGNORE INTO common_names_dates (`name`,cnt,entry_ids,dates)
+			    SELECT ext_name,count(DISTINCT catalog) as cnt,group_concat(entry_id),regexp_replace(nbd,'^.*\\|','')
+			    FROM tmp1 GROUP BY nbd HAVING cnt>=3"#,
+            r#"DROP TABLE tmp1"#,
+        ];
+        for sql in sqls {
+            self.get_conn().await?.exec_drop(sql, ()).await?;
+        }
+        Ok(())
+    }
+
+    async fn maintenance_common_aux(&self) -> Result<()> {
+        let sqls = [
+            r#"DROP TABLE IF EXISTS common_aux_tmp"#,
+            r#"CREATE TABLE common_aux_tmp
+			    SELECT aux_p,aux_name,group_concat(id) AS entry_ids,count(*) as cnt,sum(q is null or user=0) as unmatched,
+			    group_concat(DISTINCT IF(q is not null AND user is not null and user>0,q,null)) as fully_matched_qs
+			    FROM vw_aux WHERE aux_p IN (214,227,1207,1273,244)
+			    GROUP BY aux_p,aux_name HAVING cnt>=3 AND unmatched>0"#,
+            r#"DROP TABLE IF EXISTS common_aux"#,
+            r#"RENAME TABLE common_aux_tmp to common_aux"#,
+        ];
+        for sql in sqls {
+            self.get_conn().await?.exec_drop(sql, ()).await?;
+        }
+        Ok(())
+    }
+
+    async fn maintenance_common_names_birth_year(&self) -> Result<()> {
+        let sqls = [
+            r#"SET SESSION group_concat_max_len = 1000000000"#,
+            r#"TRUNCATE common_names_birth_year_tmp"#,
+            r#"REPLACE INTO common_names_birth_year_tmp (name,cnt,entry_ids,dates)
+	        SELECT SQL_NO_CACHE (SELECT ext_name FROM entry WHERE entry.id=entry_id AND q IS NULL AND catalog NOT IN (4837,5580,6094)) AS name,count(DISTINCT entry_id) AS cnt,group_concat(entry_id) AS entry_ids, concat(year_born,'-') as dates
+	        FROM person_dates WHERE is_matched=0 AND year_born!='' AND year_born<1960
+	        GROUP BY name,year_born HAVING name IS NOT NULL AND name NOT RLIKE "^\\S*$" AND cnt>=3"#,
+            r#"TRUNCATE common_names_birth_year"#,
+            r#"INSERT INTO common_names_birth_year SELECT * FROM common_names_birth_year_tmp"#,
+            r#"TRUNCATE common_names_birth_year_tmp"#,
+        ];
+        let mut conn = self.get_conn().await?; // One connection because of SESSION
+        for sql in sqls {
+            conn.exec_drop(sql, ()).await?;
+        }
+        Ok(())
+    }
+
+    async fn maintenance_taxa(&self) -> Result<()> {
+        let sqls = [
+            r#"DROP TABLE IF EXISTS tmp_taxa"#,
+            r#"CREATE TABLE tmp_taxa AS
+		        SELECT ext_name,count(distinct catalog) AS cnt FROM entry
+		        WHERE `type`="Q16521"
+		        AND catalog IN (select id from catalog WHERE active=1 and taxon_run=1)
+		        AND q is null
+		        AND ext_name RLIKE "^\\S+ \\S+$"
+		        GROUP BY ext_name
+		        HAVING cnt>=4"#,
+            r#"TRUNCATE common_names_taxon"#,
+            r#"INSERT IGNORE INTO common_names_taxon (`name`,cnt) SELECT ext_name,cnt FROM tmp_taxa"#,
+            r#"DROP TABLE tmp_taxa"#,
+        ];
+        for sql in sqls {
+            self.get_conn().await?.exec_drop(sql, ()).await?;
+        }
+        Ok(())
+    }
+
+    async fn maintenance_artwork(&self) -> Result<()> {
+        let sqls = [
+            r#"TRUNCATE common_names_artwork"#,
+            r#"INSERT IGNORE INTO common_names_artwork (`name`,entry_ids,cnt)
+            SELECT artwork.ext_name,group_concat(artwork.id),count(DISTINCT artwork.catalog) as cnt
+            FROM entry artwork,entry creator,mnm_relation
+            WHERE artwork.id=mnm_relation.entry_id AND creator.id=mnm_relation.target_entry_id AND mnm_relation.property=170
+            AND (artwork.q is null or artwork.user=0)
+            AND creator.q>0 AND creator.user>0
+            AND artwork.ext_name NOT IN ("Sans titre","(Sans titre)","Untitled","No title","Composition","Self Portrait","Self-Portrait")
+            GROUP BY artwork.ext_name,creator.q
+            HAVING cnt>=2 AND cnt=count(DISTINCT artwork.ext_url)"#,
+        ];
+        for sql in sqls {
+            self.get_conn().await?.exec_drop(sql, ()).await?;
+        }
+        Ok(())
+    }
+
+    async fn import_relations_into_aux(&self) -> Result<()> {
+        let sql = r#"INSERT IGNORE INTO auxiliary (entry_id,aux_p,aux_name)
+        				SELECT mnm_relation.entry_id,property,concat("Q",entry.q)
+            			FROM entry,mnm_relation
+               			WHERE target_entry_id=entry.id AND user>0 AND q>0
+                  		AND NOT EXISTS (SELECT * FROM auxiliary WHERE auxiliary.entry_id=mnm_relation.entry_id AND aux_p=property)
+                    	AND property IN (50,170)"#;
+        self.get_conn().await?.exec_drop(sql, ()).await?;
+        Ok(())
+    }
 
     async fn get_props_todo(&self) -> Result<Vec<PropTodo>> {
         let sql = r#"SELECT id,property_num,property_name,default_type,status,note,user_id,items_using,number_of_records FROM props_todo"#;
@@ -1010,7 +1300,7 @@ impl Storage for StorageMySQL {
             .map_and_drop(from_row::<usize>)
             .await?
             .iter()
-            .map(|q| format!("Q{}", q))
+            .map(|q| format!("Q{q}"))
             .collect();
         Ok(ret)
     }
@@ -1172,6 +1462,21 @@ impl Storage for StorageMySQL {
     }
 
     // Automatch
+
+    /// Auto-matches unmatched and automatched people to fully matched entries that have the same name and birth year.
+    async fn automatch_people_with_birth_year(&self, catalog_id: usize) -> Result<()> {
+        let sql = r#"UPDATE entry e1
+		    INNER JOIN person_dates p1 ON p1.entry_id=e1.id AND p1.year_born IS NOT NULL
+		    INNER JOIN vw_dates p2 ON p2.ext_name=e1.ext_name AND p2.year_born=p1.year_born AND p2.q IS NOT NULL AND p2.user>0 AND p2.entry_id!=e1.id AND p2.user IS NOT NULL
+		    SET e1.q=p2.q,e1.user=0,timestamp=date_format(now(),'%Y%m%d%H%i%S')
+		    WHERE e1.type='Q5' AND e1.catalog=:catalog_id AND (e1.q is null or e1.user=0)
+		    AND NOT EXISTS (SELECT * FROM log WHERE log.entry_id=e1.id AND log.q=p2.q)"#;
+        self.get_conn_ro()
+            .await?
+            .exec_drop(sql, params! {catalog_id})
+            .await?;
+        Ok(())
+    }
 
     async fn automatch_by_sitelink_get_entries(
         &self,
@@ -1344,13 +1649,13 @@ impl Storage for StorageMySQL {
     ) -> Result<Vec<(usize, String, String, String)>> {
         let sql = format!("(
 	                SELECT multi_match.entry_id AS entry_id,born,died,candidates AS qs FROM person_dates,multi_match,entry
-	                WHERE (q IS NULL OR user=0) AND person_dates.entry_id=multi_match.entry_id AND multi_match.catalog=:catalog_id AND length({})=:precision
+	                WHERE (q IS NULL OR user=0) AND person_dates.entry_id=multi_match.entry_id AND multi_match.catalog=:catalog_id AND length({match_field})=:precision
 	                AND entry.id=person_dates.entry_id
 	            ) UNION (
 	                SELECT entry_id,born,died,q qs FROM person_dates,entry
-	                WHERE (q is not null and user=0) AND catalog=:catalog_id AND length({})=:precision AND entry.id=person_dates.entry_id
+	                WHERE (q is not null and user=0) AND catalog=:catalog_id AND length({match_field})=:precision AND entry.id=person_dates.entry_id
 	            )
-	            ORDER BY entry_id LIMIT :batch_size OFFSET :offset",match_field,match_field);
+	            ORDER BY entry_id LIMIT :batch_size OFFSET :offset");
         let mut conn = self.get_conn_ro().await?;
         let results = conn
             .exec_iter(
@@ -1487,7 +1792,7 @@ impl Storage for StorageMySQL {
     async fn entry_delete(&self, entry_id: usize) -> Result<()> {
         let mut conn = self.get_conn().await?;
         for table in TABLES_WITH_ENTRY_ID_FIELDS {
-            let sql = format!("DELETE FROM `{}` WHERE `entry_id`=:entry_id", table);
+            let sql = format!("DELETE FROM `{table}` WHERE `entry_id`=:entry_id");
             conn.exec_drop(sql, params! {entry_id}).await?;
         }
         let sql = "DELETE FROM `entry` WHERE `id`=:entry_id";
@@ -1720,7 +2025,7 @@ impl Storage for StorageMySQL {
             .map_and_drop(from_row::<(f64, f64)>)
             .await?
             .pop()
-            .map(|(lat, lon)| CoordinateLocation { lat, lon });
+            .map(|(lat, lon)| CoordinateLocation::new(lat, lon));
         Ok(ret)
     }
 
@@ -1868,6 +2173,46 @@ impl Storage for StorageMySQL {
             .first()
             .expect("seppuku: No DB results");
         (running, running_recent)
+    }
+
+    // CERSEI
+
+    /// Get current scrapers from database
+    async fn get_cersei_scrapers(&self) -> Result<HashMap<usize, CurrentScraper>> {
+        let mut conn = self.get_conn_ro().await?;
+        let sql = "SELECT * FROM `cersei`";
+        let rows: Vec<Row> = conn.query(sql).await?;
+
+        let mut scrapers = HashMap::new();
+        for row in rows {
+            let scraper = CurrentScraper {
+                cersei_scraper_id: row.get("cersei_scraper_id").unwrap(),
+                catalog_id: row.get("catalog_id").unwrap(),
+                last_sync: row.get("last_sync"),
+            };
+            scrapers.insert(scraper.cersei_scraper_id, scraper);
+        }
+
+        Ok(scrapers)
+    }
+
+    async fn add_cersei_catalog(&self, catalog_id: usize, scraper_id: usize) -> Result<()> {
+        let mut conn = self.get_conn().await?;
+        let sql = "INSERT INTO `cersei` (`catalog_id`, `cersei_scraper_id`) VALUES (:catalog_id, :scraper_id)";
+        conn.exec_drop(sql, params! {catalog_id, scraper_id})
+            .await?;
+        Ok(())
+    }
+
+    async fn update_cersei_last_update(&self, scraper_id: usize, last_sync: &str) -> Result<()> {
+        self.get_conn()
+            .await?
+            .exec_drop(
+                "UPDATE `cersei` SET `last_sync`=:last_update WHERE `cersei_scraper_id`=:scraper_id",
+                params!{last_sync, scraper_id},
+            )
+            .await?;
+        Ok(())
     }
 }
 

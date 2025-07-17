@@ -48,11 +48,15 @@ pub mod autoscrape_scraper;
 pub mod auxiliary_matcher;
 pub mod bespoke_scrapers;
 pub mod catalog;
+pub mod cersei;
+pub mod cli;
 pub mod coordinate_matcher;
 pub mod datasource;
 pub mod entry;
+pub mod entry_query;
 pub mod extended_entry;
 pub mod issue;
+pub mod item_creator;
 pub mod job;
 pub mod job_row;
 pub mod job_status;
@@ -62,6 +66,7 @@ pub mod microsync;
 pub mod mysql_misc;
 pub mod person;
 pub mod php_wrapper;
+pub mod process;
 pub mod prop_todo;
 pub mod storage;
 pub mod storage_mysql;
@@ -76,6 +81,7 @@ pub mod wikidata_commands;
 /*
 ssh magnus@login.toolforge.org -L 3309:wikidatawiki.web.db.svc.eqiad.wmflabs:3306 -N &
 ssh magnus@login.toolforge.org -L 3308:tools-db:3306 -N &
+ssh magnus@login.toolforge.org -L 3317:termstore.wikidatawiki.analytics.db.svc.wikimedia.cloud:3306 -N &
 cargo test -- --test-threads=1
 cargo test  -- --nocapture
 

@@ -85,7 +85,7 @@ impl Microsync {
             return Ok(()); // TODO error?
         }
         let catalog = Catalog::from_id(catalog_id, &self.app).await?;
-        let property = match (catalog.wd_prop, catalog.wd_qual) {
+        let property = match (catalog.wd_prop(), catalog.wd_qual()) {
             (Some(prop), None) => prop,
             _ => return Ok(()), // Don't fail this job, just silently close it
         };
@@ -113,9 +113,9 @@ impl Microsync {
 
     //TODO test
     async fn update_wiki_page(&mut self, catalog_id: usize, wikitext: &str) -> Result<()> {
-        let page_title = format!("User:Magnus Manske/Mix'n'match report/{}", catalog_id);
+        let page_title = format!("User:Magnus Manske/Mix'n'match report/{catalog_id}");
         let day = &TimeStamp::now()[0..8];
-        let comment = format!("Update {}", day);
+        let comment = format!("Update {day}");
         self.app
             .wikidata_mut()
             .set_wikipage_text(&page_title, wikitext, &comment)
@@ -131,7 +131,8 @@ impl Microsync {
         match_differs: Vec<MatchDiffers>,
         extid_not_in_mnm: Vec<ExtIdNoMnM>,
     ) -> Result<String> {
-        let formatter_url = Self::get_formatter_url_for_prop(catalog.wd_prop.unwrap_or(0)).await?;
+        let formatter_url =
+            Self::get_formatter_url_for_prop(catalog.wd_prop().unwrap_or(0)).await?;
         let mut ret = wikitext_from_issues_get_header(catalog);
         Self::wikitext_from_issues_add_extid_info(extid_not_in_mnm, &mut ret, &formatter_url);
         self.wikitext_from_issues_match_differs(match_differs, &mut ret, &formatter_url)
@@ -160,9 +161,9 @@ impl Microsync {
                 for e in &multiple_extid_in_wikidata {
                     let ext_id = Self::format_ext_id(&e.ext_id, "", &formatter_url);
                     let items: Vec<String> =
-                        e.items.iter().map(|q| format!("{{{{Q|{}}}}}", q)).collect();
+                        e.items.iter().map(|q| format!("{{{{Q|{q}}}}}")).collect();
                     let items = items.join("<br/>");
-                    let s = format!("|-\n| {ext_id} || {}\n", items);
+                    let s = format!("|-\n| {ext_id} || {items}\n");
                     ret += &s;
                 }
                 ret += "|}\n\n";
@@ -235,7 +236,7 @@ impl Microsync {
         };
         let ext_name = entry2name.get(entry_id).unwrap_or(ext_id);
         let ext_id = Self::format_ext_id(ext_id, "", formatter_url);
-        let mnm_url = format!("https://mix-n-match.toolforge.org/#/entry/{}", entry_id);
+        let mnm_url = format!("https://mix-n-match.toolforge.org/#/entry/{entry_id}");
         format!("{row}[{mnm_url} {entry_id}] || {ext_id} || {ext_name}\n")
     }
 
@@ -297,7 +298,7 @@ impl Microsync {
         if !formatter_url.is_empty() {
             format!("[{} {}]", formatter_url.replace("$1", ext_id), ext_id)
         } else if !ext_url.is_empty() {
-            format!("[{} {}]", ext_url, ext_id)
+            format!("[{ext_url} {ext_id}]")
         } else {
             ext_id.to_string()
         }
@@ -324,10 +325,9 @@ impl Microsync {
         // TODO: lcase?
         let sparql = format!(
             "SELECT ?extid (count(?q) AS ?cnt) (GROUP_CONCAT(?q; SEPARATOR = '|') AS ?items)
-            {{ ?q wdt:P{} ?extid }}
+            {{ ?q wdt:P{property} ?extid }}
             GROUP BY ?extid HAVING (?cnt>1)
-            ORDER BY ?extid",
-            property
+            ORDER BY ?extid"
         );
         Ok(self
             .app
@@ -495,7 +495,7 @@ impl Microsync {
             // Found a match but not in app yet
             Entry::from_id(entry.id, &self.app)
                 .await?
-                .set_match(&format!("Q{}", q), 4)
+                .set_match(&format!("Q{q}"), 4)
                 .await?;
         } else if Some(*q) != entry.q {
             // Fully matched but to different item
@@ -525,7 +525,7 @@ impl Microsync {
         if entry_q <= 0 {
             Entry::from_id(entry.id, &self.app)
                 .await?
-                .set_match(&format!("Q{}", q), 4)
+                .set_match(&format!("Q{q}"), 4)
                 .await?;
         } else {
             let md = MatchDiffers {
@@ -582,21 +582,19 @@ impl Microsync {
 }
 
 fn wikitext_from_issues_get_header(catalog: &Catalog) -> String {
-    let catalog_name = catalog
-        .name
-        .as_ref()
-        .map_or_else(String::new, |s| s.to_owned());
+    let catalog_name = catalog.name().map_or_else(String::new, |s| s.to_owned());
     let mut ret = String::new();
     ret += &format!(
-        "A report for the [{}/ Mix'n'match] tool. '''This page will be replaced regularly!'''\n",
-        MNM_SITE_URL
+        "A report for the [{MNM_SITE_URL}/ Mix'n'match] tool. '''This page will be replaced regularly!'''\n"
     );
     ret += "''Please note:''\n";
     ret += "* If you fix something from this list on Wikidata, please fix it on Mix'n'match as well, if applicable. Otherwise, the error might be re-introduced from there.\n";
     ret += "* 'External ID' refers to the IDs in the original (external) catalog; the same as the statement value for the associated  property.\n\n";
     ret += &format!(
         "==[{MNM_SITE_URL}/#/catalog/{} {}]==\n{}\n\n",
-        catalog.id, &catalog_name, &catalog.desc
+        catalog.id(),
+        &catalog_name,
+        &catalog.desc()
     );
     ret
 }
