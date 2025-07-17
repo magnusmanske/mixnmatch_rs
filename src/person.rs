@@ -34,7 +34,7 @@ impl Person {
         Self::simplify_name(&name)
     }
 
-    fn sanitize_name(name: &str) -> String {
+    pub fn sanitize_name(name: &str) -> String {
         let mut name = name.to_string();
         for re in SANITIZE_NAME_RES.iter() {
             name = re.replace_all(&name, " ").to_string();
@@ -42,7 +42,7 @@ impl Person {
         name.trim().to_string()
     }
 
-    fn simplify_name(name: &str) -> String {
+    pub fn simplify_name(name: &str) -> String {
         let mut name = name.to_string();
         for re in SIMPLIFY_NAME_RES.iter() {
             name = re.replace_all(&name, " ").to_string();

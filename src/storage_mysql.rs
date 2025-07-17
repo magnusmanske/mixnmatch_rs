@@ -318,6 +318,22 @@ impl Storage for StorageMySQL {
         Ok(ret)
     }
 
+    async fn get_entry_ids_by_aux(&self, prop_numeric: usize, value: &str) -> Result<Vec<usize>> {
+        let sql = r"SELECT DISTINCT entry_id from auxiliary where aux_p=:prop_numeric and aux_name=:value
+        	UNION
+         	SELECT DISTINCT entry.id FROM entry,catalog WHERE active=1 AND wd_prop=:prop_numeric AND wd_qual IS NULL
+          	AND entry.catalog=catalog.id AND ext_id=:value";
+        let mut conn = self.get_conn_ro().await?;
+        let mut results = conn
+            .exec_iter(sql, params! {prop_numeric, value})
+            .await?
+            .map_and_drop(from_row::<usize>)
+            .await?;
+        results.sort();
+        results.dedup();
+        Ok(results)
+    }
+
     // Taxon matcher
     async fn set_catalog_taxon_run(&self, catalog_id: usize, taxon_run: bool) -> Result<()> {
         let taxon_run = taxon_run as u16;

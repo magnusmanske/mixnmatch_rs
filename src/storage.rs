@@ -26,6 +26,7 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     async fn disconnect(&self) -> Result<()>;
 
     async fn entry_query(&self, query: &EntryQuery) -> Result<Vec<Entry>>;
+    async fn get_entry_ids_by_aux(&self, prop_numeric: usize, value: &str) -> Result<Vec<usize>>;
 
     // Taxon matcher
 
