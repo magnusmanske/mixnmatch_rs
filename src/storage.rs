@@ -183,6 +183,7 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
         offset: usize,
         state: &MatchState,
     ) -> Result<Vec<String>>;
+    async fn get_catalogs_with_person_dates_without_flag(&self) -> Result<Vec<usize>>;
 
     // Jobs
 
