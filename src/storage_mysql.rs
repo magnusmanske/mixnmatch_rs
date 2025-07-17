@@ -539,6 +539,72 @@ impl Storage for StorageMySQL {
         Ok(external_ids)
     }
 
+    /// This deletes a catalog and all its associated entries.
+    /// USE WITH GREAT CARE!
+    async fn delete_catalog(&self, catalog_id: usize) -> Result<()> {
+        const TABLES_CATALOG_ID: &[&str] = &[
+            "code_fragments",
+            "autoscrape",
+            "jobs",
+            "overview",
+            "wd_matches",
+            "update_info",
+            "catalog_default_statement",
+            "entry",
+        ];
+        const TABLES_ENTRY_ID: &[&str] = &[
+            "aliases",
+            "descriptions",
+            "auxiliary",
+            "issues",
+            "kv_entry",
+            "mnm_relation",
+            "multi_match",
+            "person_dates",
+            "location",
+            "log",
+            "entry_creation",
+            "entry2given_name",
+            "statement_text",
+        ];
+        const BATCH_SIZE: usize = 10000;
+
+        // Delete entry-associated data
+        loop {
+            let eq = EntryQuery::default()
+                .with_catalog_id(catalog_id)
+                .with_limit(BATCH_SIZE);
+            let entry_ids = self
+                .entry_query(&eq)
+                .await?
+                .iter()
+                .filter_map(|entry| entry.id)
+                .collect::<Vec<usize>>();
+            if entry_ids.is_empty() {
+                break;
+            }
+            let entry_ids = Itertools::join(&mut entry_ids.iter(), ",");
+            for table in TABLES_ENTRY_ID {
+                let sql = format!("DELETE FROM `{table}` WHERE `entry_id` IN ({entry_ids})");
+                self.get_conn().await?.exec_drop(sql, ()).await?;
+            }
+            let sql = format!("DELETE FROM `entry` WHERE `id` IN ({entry_ids})");
+            self.get_conn().await?.exec_drop(sql, ()).await?;
+        }
+
+        // Delete catalog-associated data
+        for table in TABLES_CATALOG_ID {
+            let sql = format!("DELETE FROM `{table}` WHERE `catalog`={catalog_id}");
+            self.get_conn().await?.exec_drop(sql, ()).await?;
+        }
+
+        // Delete catalog
+        let sql = format!("DELETE FROM `catalog` WHERE `id`={catalog_id}");
+        self.get_conn().await?.exec_drop(sql, ()).await?;
+
+        Ok(())
+    }
+
     async fn number_of_entries_in_catalog(&self, catalog_id: usize) -> Result<usize> {
         let results: Vec<usize> = "SELECT count(*) AS cnt FROM `entry` WHERE `catalog`=:catalog_id"
             .with(params! {catalog_id})

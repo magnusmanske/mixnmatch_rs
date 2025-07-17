@@ -76,6 +76,7 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
         catalog_id: usize,
     ) -> Result<Vec<Entry>>;
     async fn get_all_external_ids(&self, catalog_id: usize) -> Result<HashMap<String, usize>>;
+    async fn delete_catalog(&self, catalog_id: usize) -> Result<()>;
 
     // Microsync
 
