@@ -3,7 +3,7 @@ use crate::{
     entry::{CoordinateLocation, Entry, ENTRY_NEW_ID},
     extended_entry::ExtendedEntry,
 };
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use lazy_static::lazy_static;
 use log::info;
@@ -31,8 +31,46 @@ pub trait BespokeScraper {
 
     fn log(&self, msg: String) {
         if self.testing() {
-            info!("{}", msg);
+            info!("{msg}");
         }
+    }
+
+    fn http_client(&self) -> reqwest::Client {
+        reqwest::Client::new()
+    }
+
+    async fn add_missing_aux(&self, entry_id: usize, prop_re: &[(usize, Regex)]) -> Result<()> {
+        let entry = Entry::from_id(entry_id, self.app()).await?;
+        let html = self
+            .http_client()
+            .get(&entry.ext_url)
+            .send()
+            .await?
+            .text()
+            .await?;
+
+        let mut new_aux: Vec<(usize, String)> = vec![];
+
+        for (property, re) in prop_re.iter() {
+            if let Some(caps) = re.captures(&html) {
+                if let Some(id) = caps.get(1) {
+                    new_aux.push((*property, id.as_str().to_string()));
+                }
+            }
+        }
+
+        if !new_aux.is_empty() {
+            let existing_aux = entry.get_aux().await?;
+            for (aux_p, aux_name) in new_aux {
+                if !existing_aux
+                    .iter()
+                    .any(|a| a.prop_numeric() == aux_p && a.value() == aux_name)
+                {
+                    let _ = entry.set_auxiliary(aux_p, Some(aux_name)).await;
+                }
+            }
+        }
+        Ok(())
     }
 
     async fn process_cache(&self, entry_cache: &mut Vec<ExtendedEntry>) -> Result<()> {
@@ -60,14 +98,14 @@ pub trait BespokeScraper {
                         ext_entry.entry.ext_name = entry.ext_name.to_string();
                     }
                     if self.testing() {
-                        info!("EXISTS: {:?}", ext_entry);
+                        info!("EXISTS: {ext_entry:?}");
                     } else {
                         ext_entry.update_existing(&mut entry, self.app()).await?;
                     }
                 }
                 None => {
                     if self.testing() {
-                        info!("CREATE: {:?}", ext_entry);
+                        info!("CREATE: {ext_entry:?}");
                     } else {
                         ext_entry.insert_new(self.app()).await?;
                     }
@@ -335,7 +373,7 @@ impl BespokeScraper6479 {
                     let lat = desc[1].parse::<f64>();
                     let lon = desc[2].parse::<f64>();
                     if let (Ok(lat), Ok(lon)) = (lat, lon) {
-                        ext_entry.location = Some(CoordinateLocation { lat, lon });
+                        ext_entry.location = Some(CoordinateLocation::new(lat, lon));
                     }
                 }
                 Some("Q3257686".to_string())
@@ -391,5 +429,195 @@ impl BespokeScraper6479 {
         }
         // println!("{:?}", &ext_entry.aux);
         Some(ext_entry)
+    }
+}
+
+// ______________________________________________________
+//  Zurich Kantonsrat and Regierungsrat member ID (P13468)
+
+#[derive(Debug)]
+pub struct BespokeScraper6975 {
+    app: AppState,
+}
+
+#[async_trait]
+impl BespokeScraper for BespokeScraper6975 {
+    fn new(app: &AppState) -> Self {
+        Self { app: app.clone() }
+    }
+
+    fn app(&self) -> &AppState {
+        &self.app
+    }
+
+    fn catalog_id(&self) -> usize {
+        6975
+    }
+
+    async fn run(&self) -> Result<()> {
+        let url = "https://www.web.statistik.zh.ch/webapp/KRRRPublic/app?page=json&nachname=&vorname=&geburtsjahr=&wohnort=&beruf=&geschlecht=&partei=&parteigruppe=&wk_periode_von=2025&wk_periode_bis=2025&wahlkreis=1.+Wahlkreis+(Z%C3%BCrich+1%2B2)&bemerkungen=&einsitztag=1&einsitzmonat=1&einsitzjahr=2025";
+        let client = reqwest::Client::new();
+        let json: serde_json::Value = client.get(url).send().await?.json().await?;
+        let mut entry_cache = vec![];
+        let arr = json["data"]
+            .as_array()
+            .ok_or_else(|| anyhow!("expected json array from https://www.web.statistik.zh.ch"))?;
+        for record in arr {
+            let ext_entry = match self.record2ext_entry(record) {
+                Some(entry) => entry,
+                None => continue,
+            };
+
+            entry_cache.push(ext_entry);
+            if entry_cache.len() > 100 {
+                self.process_cache(&mut entry_cache).await?;
+                entry_cache.clear();
+            }
+        }
+        self.process_cache(&mut entry_cache).await?;
+        Ok(())
+    }
+
+    // FOR TESTING ONLY
+    // async fn process_cache(&self, entry_cache: &mut Vec<ExtendedEntry>) -> Result<()> {
+    //     println!("{entry_cache:#?}");
+    //     entry_cache.clear();
+    //     Ok(())
+    // }
+}
+
+impl BespokeScraper6975 {
+    fn record2ext_entry(&self, record: &serde_json::Value) -> Option<ExtendedEntry> {
+        let last_name = record[0].as_str().unwrap_or_default();
+        let first_name = record[1].as_str().unwrap_or_default();
+        let born = record[3].as_str().unwrap_or_default();
+        let id = record[4].as_str().unwrap_or_default();
+
+        lazy_static! {
+            static ref re_ext_id: Regex = Regex::new(r"^.*?open_person\('(\d+)'\).*$").unwrap();
+        }
+        if !re_ext_id.is_match(id) {
+            return None;
+        }
+        let ext_id = re_ext_id.replace(id, |caps: &Captures| caps[1].to_string());
+
+        let ext_name = format!("{first_name} {last_name}");
+        let ext_url =
+            format!("https://www.wahlen.zh.ch/krdaten_staatsarchiv/abfrage.php?id={ext_id}");
+
+        let ext_entry = ExtendedEntry {
+            entry: Entry {
+                id: ENTRY_NEW_ID,
+                catalog: self.catalog_id(),
+                ext_id: ext_id.to_string(),
+                ext_url,
+                ext_name,
+                ext_desc: String::new(),
+                q: None,
+                user: None,
+                timestamp: None,
+                random: rand::rng().random(),
+                type_name: Some("Q5".to_string()),
+                app: None, //Some(self.app.clone()),
+            },
+            born: Self::fix_date(born),
+            ..Default::default()
+        };
+        Some(ext_entry)
+    }
+
+    fn fix_date(s: &str) -> Option<String> {
+        lazy_static! {
+            static ref re_zero: Regex = Regex::new(r"^(\d{3,4})\.00\.00$").unwrap();
+            static ref re_dmy: Regex = Regex::new(r"^(\d{1,2})\.(\d{1,2})\.(\d{3,4})$").unwrap();
+            static ref re_ymd: Regex = Regex::new(r"^(\d{3,4})\.(\d{1,2})\.(\d{1,2})$").unwrap();
+            static ref re_iso: Regex = Regex::new(r"^\d{3,4}(-\d{2}){0,2}$").unwrap();
+        }
+        let d = re_zero.replace(s, |caps: &Captures| format!("{:0>4}", &caps[1]));
+        let d = re_dmy.replace(&d, |caps: &Captures| {
+            format!("{:0>4}-{:0>2}-{:0>2}", &caps[3], &caps[2], &caps[1])
+        });
+        let d = re_ymd.replace(&d, |caps: &Captures| {
+            format!("{:0>4}-{:0>2}-{:0>2}", &caps[1], &caps[2], &caps[3])
+        });
+        if re_iso.is_match(&d) {
+            Some(d.to_string())
+        } else {
+            None
+        }
+    }
+}
+
+// ______________________________________________________
+// BMLO ID (P865)
+
+#[derive(Debug)]
+pub struct BespokeScraper7043 {
+    app: AppState,
+}
+
+#[async_trait]
+impl BespokeScraper for BespokeScraper7043 {
+    fn new(app: &AppState) -> Self {
+        Self { app: app.clone() }
+    }
+
+    fn app(&self) -> &AppState {
+        &self.app
+    }
+
+    fn catalog_id(&self) -> usize {
+        7043
+    }
+
+    async fn run(&self) -> Result<()> {
+        // TODO add new?
+
+        lazy_static! {
+            static ref PROP_RE: Vec<(usize, Regex)> = {
+                vec![
+                    (
+                        214,
+                        Regex::new(r#"href="http://viaf.org/viaf/(\d+)"#).unwrap(),
+                    ),
+                    (227, Regex::new(r#"\?gnd=(\d+X?)"#).unwrap()),
+                ]
+            };
+        }
+
+        // Run all existing entries for metadata
+        let ext_ids = self
+            .app()
+            .storage()
+            .get_all_external_ids(self.catalog_id())
+            .await?;
+        for (_ext_id, entry_id) in ext_ids {
+            let _ = self.add_missing_aux(entry_id, &PROP_RE).await;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // #lizard forgives the complexity
+    #[test]
+    fn test_6975_fix_date() {
+        assert_eq!(
+            BespokeScraper6975::fix_date("16.06.1805").unwrap(),
+            "1805-06-16"
+        );
+        assert_eq!(
+            BespokeScraper6975::fix_date("1805.06.16").unwrap(),
+            "1805-06-16"
+        );
+        assert_eq!(
+            BespokeScraper6975::fix_date("1805-06-16").unwrap(),
+            "1805-06-16"
+        );
+        assert_eq!(BespokeScraper6975::fix_date("1805.00.00").unwrap(), "1805");
+        assert_eq!(BespokeScraper6975::fix_date("1805").unwrap(), "1805");
     }
 }

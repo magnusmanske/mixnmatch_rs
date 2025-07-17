@@ -47,6 +47,7 @@ lazy_static! {
 #[derive(Debug, Clone)]
 pub struct AppState {
     wikidata: Wikidata,
+    wdt: Wikidata, // To access Wikidata terms DB replica
     wdrc: Arc<WDRC>,
     storage: Arc<Box<dyn Storage>>,
     import_file_path: Arc<String>,
@@ -96,7 +97,8 @@ impl AppState {
             .to_string();
         let import_file_path = Arc::new(import_file_path);
         Ok(Self {
-            wikidata: Wikidata::new(&config["wikidata"], bot_name, bot_password),
+            wikidata: Wikidata::new(&config["wikidata"], bot_name.clone(), bot_password.clone()),
+            wdt: Wikidata::new(&config["wdt"], bot_name, bot_password),
             wdrc: Arc::new(WDRC::new(&config["wdrc"])),
             storage: Arc::new(Box::new(StorageMySQL::new(
                 &config["mixnmatch"],
@@ -114,6 +116,10 @@ impl AppState {
 
     pub const fn wikidata(&self) -> &Wikidata {
         &self.wikidata
+    }
+
+    pub const fn wdt(&self) -> &Wikidata {
+        &self.wdt
     }
 
     pub fn wikidata_mut(&mut self) -> &mut Wikidata {
@@ -252,7 +258,7 @@ impl AppState {
                     .iter()
                     .map(|x| x.key().to_owned())
                     .collect::<Vec<_>>();
-                info!("JOBS RUNNING: {:?}", current_job_ids);
+                info!("JOBS RUNNING: {current_job_ids:?}");
             }
             Ok(false) => {
                 // println!("No jobs available, waiting... (not using: {:?})",job.skip_actions);

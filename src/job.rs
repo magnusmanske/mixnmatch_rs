@@ -270,6 +270,7 @@ impl Job {
 
     //TODO test
     // #lizard forgives the complexity
+    #[allow(clippy::cognitive_complexity)]
     async fn run_this_job(&mut self) -> Result<()> {
         // let json = self.get_json().await;
         // println!("STARTING {:?} with option {:?}", &self.data().await?,&json);
@@ -294,6 +295,11 @@ impl Job {
                 let mut am = AutoMatch::new(&self.app);
                 am.set_current_job(self);
                 am.automatch_from_other_catalogs(catalog_id).await
+            }
+            "automatch_people_with_birth_year" => {
+                let mut am = AutoMatch::new(&self.app);
+                am.set_current_job(self);
+                am.automatch_people_with_birth_year(catalog_id).await
             }
             "automatch_by_sitelink" => {
                 let mut am = AutoMatch::new(&self.app);
@@ -387,6 +393,15 @@ impl Job {
                     .match_by_name_and_full_dates()
                     .await
             }
+            "maintenance_common_names_dates" => {
+                Maintenance::new(&self.app).common_names_dates().await
+            }
+            "maintenance_common_names_birth_year" => {
+                Maintenance::new(&self.app).common_names_birth_year().await
+            }
+            "maintenance_taxa" => Maintenance::new(&self.app).taxa().await,
+            "maintenance_artwork" => Maintenance::new(&self.app).artwork().await,
+            "maintenance_common_aux" => Maintenance::new(&self.app).common_aux().await,
             "maintenance_automatch" => Maintenance::new(&self.app).automatch().await,
             "update_props_todo" => Maintenance::new(&self.app).update_props_todo().await,
             "remove_p17_for_humans" => Maintenance::new(&self.app).remove_p17_for_humans().await,

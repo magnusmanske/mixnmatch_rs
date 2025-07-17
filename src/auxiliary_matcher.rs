@@ -76,10 +76,9 @@ impl AuxiliaryResults {
         if captures.len() == 3 {
             let lat = captures.get(1)?.as_str().parse::<f64>().ok()?;
             let lon = captures.get(2)?.as_str().parse::<f64>().ok()?;
-            return Some(WikidataCommandValue::Location(CoordinateLocation {
-                lat,
-                lon,
-            }));
+            return Some(WikidataCommandValue::Location(CoordinateLocation::new(
+                lat, lon,
+            )));
         }
         None
     }
@@ -364,7 +363,7 @@ impl AuxiliaryMatcher {
             .iter()
             .filter_map(|s| s.replace('P', "").parse::<usize>().ok())
             .filter(|i| !AUX_BLACKLISTED_PROPERTIES.contains(i))
-            .map(|i| format!("{}", i))
+            .map(|i| i.to_string())
             .collect();
         Ok(extid_props)
     }
@@ -379,7 +378,7 @@ impl AuxiliaryMatcher {
             Self::get_properties_that_have_external_ids(&self.app).await?;
         let blacklisted_properties: Vec<String> = AUX_BLACKLISTED_PROPERTIES
             .iter()
-            .map(|u| format!("{}", u))
+            .map(|u| u.to_string())
             .collect();
 
         let mut offset = self.get_last_job_offset().await;
@@ -420,7 +419,7 @@ impl AuxiliaryMatcher {
     ) -> Result<()> {
         let entities = EntityContainer::new();
         if self.aux2wd_skip_existing_property {
-            let entity_ids: Vec<String> = aux.keys().map(|q| format!("Q{}", q)).collect();
+            let entity_ids: Vec<String> = aux.keys().map(|q| format!("Q{q}")).collect();
             if entities.load_entities(mw_api, &entity_ids).await.is_err() {
                 return Ok(()); // We can't know which items already have specific properties, so skip this batch
             }
@@ -663,7 +662,7 @@ impl AuxiliaryMatcher {
         };
 
         // Source via catalog property
-        if let Some(wd_prop) = catalog.wd_prop {
+        if let Some(wd_prop) = catalog.wd_prop() {
             self.get_source_for_entry_via_catalog_property(&mut stated_in, wd_prop, entry)
                 .await?;
             return Some(stated_in);
@@ -706,7 +705,7 @@ impl AuxiliaryMatcher {
             None => return Err(None), // No catalog, no source
         };
         let mut stated_in: WikidataCommandPropertyValueGroup = vec![];
-        if let Some(q) = catalog.source_item {
+        if let Some(q) = catalog.source_item() {
             stated_in.push(WikidataCommandPropertyValue {
                 property: 248,
                 value: WikidataCommandValue::Item(q),
@@ -722,7 +721,7 @@ impl AuxiliaryMatcher {
         entry: &Entry,
     ) -> Option<()> {
         if stated_in.is_empty() {
-            let prop = format!("P{}", wd_prop);
+            let prop = format!("P{wd_prop}");
             if !self.properties.has_entity(prop.to_owned()) {
                 let mw_api = self.app.wikidata().get_mw_api().await.ok()?;
                 let _ = self.properties.load_entity(&mw_api, prop.to_owned()).await;
@@ -758,7 +757,7 @@ impl AuxiliaryMatcher {
     pub fn get_blacklisted_catalogs() -> Vec<String> {
         let blacklisted_catalogs: Vec<String> = AUX_BLACKLISTED_CATALOGS
             .iter()
-            .map(|u| format!("{}", u))
+            .map(|u| u.to_string())
             .collect();
         blacklisted_catalogs
     }
@@ -847,8 +846,12 @@ mod tests {
 
         // Check
         let aux = entry.get_aux().await.unwrap();
-        assert!(aux.iter().any(|x| x.prop_numeric == 214 && x.in_wikidata));
-        assert!(aux.iter().any(|x| x.prop_numeric == 370 && !x.in_wikidata));
+        assert!(aux
+            .iter()
+            .any(|x| x.prop_numeric() == 214 && x.in_wikidata()));
+        assert!(aux
+            .iter()
+            .any(|x| x.prop_numeric() == 370 && !x.in_wikidata()));
 
         // Cleanup
         entry.set_auxiliary(214, None).await.unwrap();

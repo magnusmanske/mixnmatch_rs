@@ -150,7 +150,7 @@ impl ExtendedEntry {
             .get_aux()
             .await?
             .iter()
-            .map(|a| (a.prop_numeric, a.value.to_owned()))
+            .map(|a| (a.prop_numeric(), a.value().to_owned()))
             .collect();
         for prop_value in &self.aux {
             if !existing.contains(prop_value) {
@@ -242,8 +242,7 @@ impl ExtendedEntry {
                 "died" => self.died = Self::parse_date(cell),
                 other => {
                     return Err(UpdateCatalogError::UnknownColumnLabel(format!(
-                        "Don't understand label '{}'",
-                        other
+                        "Don't understand label '{other}'"
                     ))
                     .into());
                 }
@@ -309,7 +308,7 @@ impl ExtendedEntry {
                 if let (Some(lat), Some(lon)) = (captures.get(1), captures.get(2)) {
                     let lat = lat.as_str().to_string().parse::<f64>()?;
                     let lon = lon.as_str().to_string().parse::<f64>()?;
-                    self.location = Some(CoordinateLocation { lat, lon });
+                    self.location = Some(CoordinateLocation::new(lat, lon));
                 }
             }
         } else {

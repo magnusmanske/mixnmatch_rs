@@ -10,6 +10,7 @@ use std::{
     time::Duration,
 };
 use urlencoding::encode;
+use wikimisc::wikibase::EntityTrait;
 
 pub const WIKIDATA_API_URL: &str = "https://www.wikidata.org/w/api.php";
 pub const META_ITEMS: &[&str] = &[
@@ -117,21 +118,21 @@ impl Wikidata {
     }
 
     // TODO https://lists.wikimedia.org/hyperkitty/list/wikidata-tech@lists.wikimedia.org/thread/7AMRB7G4CZ6BBOILAA6PK4QX44MUAHT4/
-    pub async fn search_with_type(&self, name: &str) -> Result<Vec<String>> {
-        let sql = "SELECT concat('Q',wbit_item_id) AS q
-        			FROM wbt_text,wbt_item_terms,wbt_term_in_lang,wbt_text_in_lang
-           			WHERE wbit_term_in_lang_id=wbtl_id AND wbtl_text_in_lang_id=wbxl_id AND wbxl_text_id=wbx_id  AND wbx_text=:name
-	                AND EXISTS (SELECT * FROM page,pagelinks,linktarget WHERE page_title=concat('Q',wbit_item_id) AND page_namespace=0 AND pl_target_id=lt_id AND pl_from=page_id AND lt_namespace=0 AND lt_title=:type_q)
-					GROUP BY name,q";
-        let results = self
-            .get_conn_wbt()
-            .await?
-            .exec_iter(sql, params! {name})
-            .await?
-            .map_and_drop(from_row::<String>)
-            .await?;
-        Ok(results)
-    }
+    // pub async fn search_with_type(&self, name: &str) -> Result<Vec<String>> {
+    //     let sql = "SELECT concat('Q',wbit_item_id) AS q
+    //     			FROM wbt_text,wbt_item_terms,wbt_term_in_lang,wbt_text_in_lang
+    //        			WHERE wbit_term_in_lang_id=wbtl_id AND wbtl_text_in_lang_id=wbxl_id AND wbxl_text_id=wbx_id  AND wbx_text=:name
+    //              AND EXISTS (SELECT * FROM page,pagelinks,linktarget WHERE page_title=concat('Q',wbit_item_id) AND page_namespace=0 AND pl_target_id=lt_id AND pl_from=page_id AND lt_namespace=0 AND lt_title=:type_q)
+    // 	GROUP BY name,q";
+    //     let results = self
+    //         .get_conn_wbt()
+    //         .await?
+    //         .exec_iter(sql, params! {name})
+    //         .await?
+    //         .map_and_drop(from_row::<String>)
+    //         .await?;
+    //     Ok(results)
+    // }
 
     // TODO https://lists.wikimedia.org/hyperkitty/list/wikidata-tech@lists.wikimedia.org/thread/7AMRB7G4CZ6BBOILAA6PK4QX44MUAHT4/
     pub async fn search_without_type(&self, name: &str) -> Result<Vec<String>> {
@@ -139,7 +140,7 @@ impl Wikidata {
         	FROM wbt_text,wbt_item_terms,wbt_term_in_lang,wbt_text_in_lang
          	WHERE wbit_term_in_lang_id=wbtl_id AND wbtl_text_in_lang_id=wbxl_id AND wbxl_text_id=wbx_id
           	AND wbx_text=:name
-           GROUP BY name,q";
+           GROUP BY wbx_text,q";
         let results = self
             .get_conn_wbt()
             .await?
@@ -172,10 +173,7 @@ impl Wikidata {
     /// Returns a list of deleted items
     pub async fn get_deleted_items(&self, unique_qs: &[String]) -> Result<Vec<String>> {
         let placeholders = Self::sql_placeholders(unique_qs.len());
-        let sql = format!(
-            "SELECT page_title FROM `page` WHERE `page_namespace`=0 AND `page_title` IN ({})",
-            placeholders
-        );
+        let sql = format!("SELECT page_title FROM `page` WHERE `page_namespace`=0 AND `page_title` IN ({placeholders})");
         let found_items: HashSet<String> = self
             .get_conn()
             .await?
@@ -193,16 +191,16 @@ impl Wikidata {
         Ok(not_found)
     }
 
-    pub async fn search_db_with_type(&self, name: &str, type_q: &str) -> Result<Vec<String>> {
+    pub async fn search_db_with_type(&self, name: &str, _type_q: &str) -> Result<Vec<String>> {
         if name.is_empty() {
             return Ok(vec![]);
         }
-        let items = if type_q.is_empty() {
-            self.search_without_type(name).await?
-        } else {
-            self.search_with_type(name).await?
-        };
-        Ok(items)
+        // let items = if type_q.is_empty() {
+        //     self.search_without_type(name).await?
+        // } else {
+        //     self.search_with_type(name).await?
+        // };
+        self.search_without_type(name).await
     }
 
     /// Removes "meta items" (eg disambiguation pages) from an item list.
@@ -245,7 +243,7 @@ impl Wikidata {
         mediawiki::api::Api::new_from_builder(WIKIDATA_API_URL, builder).await
     }
 
-    async fn api_log_in(&mut self) -> Result<()> {
+    pub async fn api_log_in(&mut self) -> Result<()> {
         if self.mw_api.is_none() {
             self.mw_api = Some(self.get_mw_api().await?);
         }
@@ -261,6 +259,63 @@ impl Wikidata {
             .login(self.bot_name.to_owned(), self.bot_password.to_owned())
             .await?;
         Ok(())
+    }
+
+    // Takes an ItemEntity and tries to create a new Wikidata item.
+    // Returns the new item ID, or an error.
+    pub async fn create_new_wikidata_item(
+        &mut self,
+        item: &wikimisc::wikibase::ItemEntity,
+        comment: &str,
+    ) -> Result<String> {
+        self.api_log_in().await?;
+        let mw_api = self
+            .mw_api
+            .as_mut()
+            .ok_or_else(|| anyhow!("Failed to get mutable reference to MW API"))?;
+        let json = item.to_json();
+        let mut params: HashMap<String, String> = HashMap::new();
+        params.insert("action".to_string(), "wbeditentity".to_string());
+        params.insert("new".to_string(), "item".to_string());
+        params.insert("data".to_string(), json.to_string());
+        params.insert("token".to_string(), mw_api.get_edit_token().await?);
+        params.insert("summary".to_string(), comment.to_string());
+        let result = mw_api.post_query_api_json_mut(&params).await?;
+        let new_id = result["entity"]["id"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Could not create new item"))?
+            .to_string();
+        Ok(new_id)
+    }
+
+    pub async fn perform_ac2wd(&mut self, q: &str) -> Result<String> {
+        let url = format!("https://ac2wd.toolforge.org/extend/{q}");
+        let new_data = wikimisc::wikidata::Wikidata::new()
+            .reqwest_client()?
+            .get(url)
+            .send()
+            .await?
+            .json::<Value>()
+            .await?;
+
+        self.api_log_in().await?;
+        let comment = "Import of Authority Control data via https://ac2wd.toolforge.org";
+        let mw_api = self
+            .mw_api
+            .as_mut()
+            .ok_or_else(|| anyhow!("Failed to get mutable reference to MW API"))?;
+        let mut params: HashMap<String, String> = HashMap::new();
+        params.insert("action".to_string(), "wbeditentity".to_string());
+        params.insert("id".to_string(), q.to_string());
+        params.insert("data".to_string(), new_data.to_string());
+        params.insert("token".to_string(), mw_api.get_edit_token().await?);
+        params.insert("summary".to_string(), comment.to_string());
+        let result = mw_api.post_query_api_json_mut(&params).await?;
+        let new_id = result["entity"]["id"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Could not create new item"))?
+            .to_string();
+        Ok(new_id)
     }
 
     /// Performs a Wikidata API search for the query string. Returns item IDs matching the query.
@@ -350,7 +405,7 @@ impl Wikidata {
         if let Some(mw_api) = self.mw_api.as_mut() {
             let mut params: HashMap<String, String> = HashMap::new();
             params.insert("action".to_string(), "wbeditentity".to_string());
-            params.insert("id".to_string(), format!("Q{}", item_id));
+            params.insert("id".to_string(), format!("Q{item_id}"));
             params.insert("data".to_string(), json.to_string());
             params.insert("token".to_string(), mw_api.get_edit_token().await?);
             if !comment.is_empty() {
@@ -374,14 +429,14 @@ impl Wikidata {
         if type_q.is_empty() {
             return self.search_with_limit(name, None).await;
         }
-        let mut query = format!("{} haswbstatement:P31={}", name, type_q);
+        let mut query = format!("{name} haswbstatement:P31={type_q}");
         if type_q != "Q13442814" {
             // Exclude "scholarly article"
-            query = format!("{} -haswbstatement:P31=Q13442814", query);
+            query = format!("{query} -haswbstatement:P31=Q13442814");
         }
         let meta_items: Vec<String> = META_ITEMS
             .iter()
-            .map(|q| format!(" -haswbstatement:P31={}", q))
+            .map(|q| format!(" -haswbstatement:P31={q}"))
             .collect();
         query += &meta_items.join("");
         self.search_with_limit(&query, None).await
@@ -476,5 +531,17 @@ mod tests {
             .collect();
         wd.remove_meta_items(&mut items).await.unwrap();
         assert_eq!(items, ["Q1", "Q2"]);
+    }
+
+    #[tokio::test]
+    async fn test_search_db_with_type() {
+        let app = crate::app_state::get_test_app();
+        let wdt = app.wdt();
+        assert_eq!(
+            wdt.search_db_with_type("Magnus Manske", "Q5")
+                .await
+                .unwrap(),
+            vec!["Q13520818".to_string()]
+        );
     }
 }

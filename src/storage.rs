@@ -2,8 +2,10 @@ use crate::{
     automatch::{ResultInOriginalCatalog, ResultInOtherCatalog},
     auxiliary_matcher::AuxiliaryResults,
     catalog::Catalog,
+    cersei::CurrentScraper,
     coordinate_matcher::LocationRow,
     entry::{AuxiliaryRow, CoordinateLocation, Entry},
+    entry_query::EntryQuery,
     issue::Issue,
     job_row::JobRow,
     job_status::JobStatus,
@@ -22,6 +24,9 @@ use wikimisc::wikibase::LocaleString;
 pub trait Storage: std::fmt::Debug + Send + Sync {
     // fn new(j: &Value) -> impl Storage;
     async fn disconnect(&self) -> Result<()>;
+
+    async fn entry_query(&self, query: &EntryQuery) -> Result<Vec<Entry>>;
+    async fn get_entry_ids_by_aux(&self, prop_numeric: usize, value: &str) -> Result<Vec<usize>>;
 
     // Taxon matcher
 
@@ -57,8 +62,10 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
 
     // Catalog
 
+    async fn create_catalog(&self, catalog: &Catalog) -> Result<usize>;
     async fn number_of_entries_in_catalog(&self, catalog_id: usize) -> Result<usize>;
     async fn get_catalog_from_id(&self, catalog_id: usize) -> Result<Catalog>;
+    async fn get_catalog_from_name(&self, name: &str) -> Result<Catalog>;
     async fn get_catalog_key_value_pairs(
         &self,
         catalog_id: usize,
@@ -68,6 +75,7 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
         &self,
         catalog_id: usize,
     ) -> Result<Vec<Entry>>;
+    async fn get_all_external_ids(&self, catalog_id: usize) -> Result<HashMap<String, usize>>;
 
     // Microsync
 
@@ -98,6 +106,9 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     async fn get_random_active_catalog_id_with_property(&self) -> Option<usize>;
     async fn get_kv_value(&self, key: &str) -> Result<Option<String>>;
     async fn set_kv_value(&self, key: &str, value: &str) -> Result<()>;
+    async fn do_catalog_entries_have_person_date(&self, catalog_id: usize) -> Result<bool>;
+    async fn set_has_person_date(&self, catalog_id: usize, new_has_person_date: &str)
+        -> Result<()>;
 
     // Issue
 
@@ -134,6 +145,12 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
 
     // Maintenance
 
+    async fn maintenance_common_names_dates(&self) -> Result<()>;
+    async fn maintenance_common_names_birth_year(&self) -> Result<()>;
+    async fn maintenance_taxa(&self) -> Result<()>;
+    async fn maintenance_common_aux(&self) -> Result<()>;
+    async fn maintenance_artwork(&self) -> Result<()>;
+    async fn import_relations_into_aux(&self) -> Result<()>;
     async fn get_props_todo(&self) -> Result<Vec<PropTodo>>;
     async fn add_props_todo(&self, new_props: Vec<PropTodo>) -> Result<()>;
     async fn mark_props_todo_as_has_catalog(&self) -> Result<()>;
@@ -152,6 +169,7 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     ) -> Result<Vec<(usize, String, Option<usize>, Option<usize>)>>;
     async fn maintenance_fix_redirects(&self, from: isize, to: isize) -> Result<()>;
     async fn maintenance_unlink_item_matches(&self, items: Vec<String>) -> Result<()>;
+    async fn automatch_people_with_birth_year(&self, catalog_id: usize) -> Result<()>;
     async fn maintenance_automatch(&self) -> Result<()>;
     async fn maintenance_automatch_people_via_year_born(&self) -> Result<()>;
     async fn maintenance_match_people_via_name_and_full_dates(
@@ -357,4 +375,9 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
         candidates_count: usize,
     ) -> Result<()>;
     async fn app_state_seppuku_get_running(&self, ts: &str) -> (usize, usize);
+
+    // CERSEI
+    async fn get_cersei_scrapers(&self) -> Result<HashMap<usize, CurrentScraper>>;
+    async fn add_cersei_catalog(&self, catalog_id: usize, scraper_id: usize) -> Result<()>;
+    async fn update_cersei_last_update(&self, scraper_id: usize, last_sync: &str) -> Result<()>;
 }
