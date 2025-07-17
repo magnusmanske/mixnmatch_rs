@@ -287,7 +287,7 @@ impl Autoscrape {
             match existing_ext_ids.get(&ex.entry.ext_id) {
                 Some(entry_id) => {
                     // Entry already exists
-                    ex.entry.id = *entry_id;
+                    ex.entry.id = Some(*entry_id);
                     // TODO update?
                 }
                 None => {
