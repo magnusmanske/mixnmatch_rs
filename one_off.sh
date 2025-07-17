@@ -1,9 +1,15 @@
 #!/bin/bash
 jobname=$1
-@rm /data/project/mix-n-match/${jobname}.out
-@rm /data/project/mix-n-match/${jobname}.err
+root=/data/project/mix-n-match/mixnmatch_rs
+out_file="${root}/jobstatus/${jobname}.out"
+err_file="${root}/jobstatus/${jobname}.err"
+command="target/release/main $@ --config ${root}/config.json"
+echo "COMMAND: ${command}"
+rm ${out_file}
+rm ${err_file}
+echo "binary: ${root}/target/release/main"
 toolforge jobs run --mem 200Mi --mount=all \
 	--image tool-mix-n-match/tool-mix-n-match:latest \
-	--command "sh -c 'target/release/main $@ --config /data/project/mix-n-match/mixnmatch_rs/config.json'" \
-	--filelog -o /data/project/mix-n-match/${jobname}.out -e /data/project/mix-n-match/${jobname}.err \
+	--command "${command}" \
+	--filelog -o ${out_file} -e ${err_file} \
 	${jobname}
