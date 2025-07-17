@@ -206,7 +206,7 @@ impl CerseiSync {
     /// Add a new entry to the database
     async fn add_new_entry(&self, entry: &mut Entry) -> Result<usize> {
         entry.insert_as_new().await?;
-        Ok(entry.id)
+        entry.get_valid_id()
     }
 
     /// Sync a single scraper
@@ -347,7 +347,7 @@ impl CerseiSync {
                     match self.add_new_entry(&mut ne.entry).await {
                         Ok(entry_id) => {
                             // Update our local cache
-                            existing_ext_ids.insert(ne.entry.id.to_string(), entry_id);
+                            existing_ext_ids.insert(ne.entry.id.unwrap_or(0).to_string(), entry_id);
                             added_new_entries = true;
 
                             // Set person dates if available

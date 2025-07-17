@@ -1,6 +1,6 @@
 use crate::{
     app_state::{AppState, USER_AUX_MATCH},
-    entry::{CoordinateLocation, Entry, ENTRY_NEW_ID},
+    entry::{CoordinateLocation, Entry},
     extended_entry::ExtendedEntry,
     php_wrapper::PhpWrapper,
 };
@@ -192,7 +192,6 @@ impl BespokeScraper121 {
         };
         let ext_entry = ExtendedEntry {
             entry: Entry {
-                id: ENTRY_NEW_ID,
                 catalog: self.catalog_id(),
                 ext_id: record.get("HAUPTNR")?.to_string(),
                 ext_url: record.get("LINK_RECHERCHEPORTAL")?.to_string(),
@@ -215,7 +214,7 @@ impl BespokeScraper121 {
                 },
                 random: rand::rng().random(),
                 type_name: Some("Q5".to_string()),
-                app: None, //Some(self.app.clone()),
+                ..Default::default()
             },
             born: record.get("GEBURTSDATUM").and_then(|s| Self::parse_date(s)),
             died: record.get("STERBEDATUM").and_then(|s| Self::parse_date(s)),
@@ -334,18 +333,14 @@ impl BespokeScraper6479 {
         let ext_id = re_uri.captures(&uri)?[1].to_string();
         let mut ext_entry = ExtendedEntry {
             entry: Entry {
-                id: ENTRY_NEW_ID,
                 catalog: self.catalog_id(),
                 ext_id,
                 ext_url: uri,
                 ext_name: record.get("label_de")?.to_string(),
                 ext_desc: record.get("description_de")?.to_string(),
-                q: None,
-                user: None,
-                timestamp: None,
                 random: rand::rng().random(),
                 type_name: Some("Q5".to_string()),
-                app: None, //Some(self.app.clone()),
+                ..Default::default()
             },
             ..Default::default()
         };
@@ -517,18 +512,14 @@ impl BespokeScraper6975 {
 
         let ext_entry = ExtendedEntry {
             entry: Entry {
-                id: ENTRY_NEW_ID,
                 catalog: self.catalog_id(),
                 ext_id: ext_id.to_string(),
                 ext_url,
                 ext_name,
                 ext_desc: String::new(),
-                q: None,
-                user: None,
-                timestamp: None,
                 random: rand::rng().random(),
                 type_name: Some("Q5".to_string()),
-                app: None, //Some(self.app.clone()),
+                ..Default::default()
             },
             born: Self::fix_date(born),
             ..Default::default()
