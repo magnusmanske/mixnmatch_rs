@@ -472,7 +472,7 @@ impl Storage for StorageMySQL {
     // Catalog
 
     async fn create_catalog(&self, catalog: &Catalog) -> Result<usize> {
-        if catalog.id() != crate::catalog::BLANK_CATALOG_ID {
+        if catalog.id().is_some() {
             return Err(anyhow!("Catalog ID is not blank"));
         }
 

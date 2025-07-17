@@ -5,11 +5,11 @@ use std::collections::HashMap;
 use wikimisc::wikibase::Reference;
 use wikimisc::wikibase::Snak;
 
-pub const BLANK_CATALOG_ID: usize = 0;
+pub type CatalogId = Option<usize>;
 
 #[derive(Debug, Clone, Default)]
 pub struct Catalog {
-    id: usize,
+    id: CatalogId,
     name: Option<String>,
     url: Option<String>,
     desc: String,
@@ -43,7 +43,6 @@ impl Catalog {
 
     pub fn new(app: &AppState) -> Self {
         Self {
-            id: BLANK_CATALOG_ID,
             app: Some(app.clone()),
             ..Default::default()
         }
@@ -70,12 +69,19 @@ impl Catalog {
     }
 
     pub async fn create_catalog(&mut self) -> Result<()> {
-        self.id = self.app()?.storage().create_catalog(self).await?;
+        self.id = Some(self.app()?.storage().create_catalog(self).await?);
         Ok(())
     }
 
-    pub fn id(&self) -> usize {
+    pub fn id(&self) -> CatalogId {
         self.id
+    }
+
+    pub fn get_valid_id(&self) -> Result<usize> {
+        match self.id {
+            Some(id) => Ok(id),
+            None => Err(anyhow!("No catalog ID set")),
+        }
     }
 
     pub fn name(&self) -> Option<&String> {
@@ -162,7 +168,7 @@ impl Catalog {
     pub async fn get_key_value_pairs(&self) -> Result<HashMap<String, String>> {
         self.app()?
             .storage()
-            .get_catalog_key_value_pairs(self.id)
+            .get_catalog_key_value_pairs(self.get_valid_id()?)
             .await
     }
 
@@ -173,16 +179,17 @@ impl Catalog {
     }
 
     fn app(&self) -> Result<&AppState> {
-        self.app
-            .as_ref()
-            .map_or_else(|| Err(anyhow!("Catalog {}: app not set", self.id)), Ok)
+        self.app.as_ref().map_or_else(
+            || Err(anyhow!("Catalog {}: app not set", self.get_valid_id()?)),
+            Ok,
+        )
     }
 
     //TODO test
     pub async fn refresh_overview_table(&self) -> Result<()> {
         self.app()?
             .storage()
-            .catalog_refresh_overview_table(self.id)
+            .catalog_refresh_overview_table(self.get_valid_id()?)
             .await
     }
 
@@ -227,7 +234,7 @@ impl Catalog {
         if self.taxon_run != new_taxon_run {
             self.app()?
                 .storage()
-                .set_catalog_taxon_run(self.id, new_taxon_run)
+                .set_catalog_taxon_run(self.get_valid_id()?, new_taxon_run)
                 .await?;
             self.taxon_run = new_taxon_run;
         }
@@ -244,7 +251,7 @@ impl Catalog {
             && self
                 .app()?
                 .storage()
-                .do_catalog_entries_have_person_date(self.id)
+                .do_catalog_entries_have_person_date(self.get_valid_id()?)
                 .await?
         {
             self.set_has_person_date("yes").await?;
@@ -258,7 +265,7 @@ impl Catalog {
     pub async fn set_has_person_date(&mut self, new_has_person_date: &str) -> Result<()> {
         self.app()?
             .storage()
-            .set_has_person_date(self.id, new_has_person_date)
+            .set_has_person_date(self.get_valid_id()?, new_has_person_date)
             .await?;
         self.has_person_date = new_has_person_date.to_string();
         Ok(())
@@ -268,7 +275,7 @@ impl Catalog {
         let ret = self
             .app()?
             .storage()
-            .number_of_entries_in_catalog(self.id)
+            .number_of_entries_in_catalog(self.get_valid_id()?)
             .await?;
         Ok(ret)
     }
