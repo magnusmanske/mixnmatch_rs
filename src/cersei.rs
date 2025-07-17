@@ -149,7 +149,7 @@ impl CerseiSync {
             // Link cersei and catalog
             self.app
                 .storage()
-                .add_cersei_catalog(catalog.id(), scraper.id)
+                .add_cersei_catalog(catalog.get_valid_id()?, scraper.id)
                 .await?;
         }
 
