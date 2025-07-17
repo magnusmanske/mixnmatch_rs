@@ -53,9 +53,9 @@ enum Commands {
         #[arg(short, long)]
         entry_type: Option<String>,
 
-        // Try search
+        // No search
         #[arg(short, long)]
-        try_search: bool,
+        no_search: bool,
 
         // Description hint
         #[arg(short, long)]
@@ -100,7 +100,7 @@ impl ShellCommands {
                 min_dates,
                 min_aux,
                 entry_type,
-                try_search,
+                no_search: try_search,
                 desc_hint,
             }) => {
                 let app = Self::path2app(config)?;

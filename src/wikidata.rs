@@ -288,6 +288,36 @@ impl Wikidata {
         Ok(new_id)
     }
 
+    pub async fn perform_ac2wd(&mut self, q: &str) -> Result<String> {
+        let url = format!("https://ac2wd.toolforge.org/extend/{q}");
+        let new_data = wikimisc::wikidata::Wikidata::new()
+            .reqwest_client()?
+            .get(url)
+            .send()
+            .await?
+            .json::<Value>()
+            .await?;
+
+        self.api_log_in().await?;
+        let comment = "Import of Authority Control data via https://ac2wd.toolforge.org";
+        let mw_api = self
+            .mw_api
+            .as_mut()
+            .ok_or_else(|| anyhow!("Failed to get mutable reference to MW API"))?;
+        let mut params: HashMap<String, String> = HashMap::new();
+        params.insert("action".to_string(), "wbeditentity".to_string());
+        params.insert("id".to_string(), q.to_string());
+        params.insert("data".to_string(), new_data.to_string());
+        params.insert("token".to_string(), mw_api.get_edit_token().await?);
+        params.insert("summary".to_string(), comment.to_string());
+        let result = mw_api.post_query_api_json_mut(&params).await?;
+        let new_id = result["entity"]["id"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Could not create new item"))?
+            .to_string();
+        Ok(new_id)
+    }
+
     /// Performs a Wikidata API search for the query string. Returns item IDs matching the query.
     pub async fn search_api(&self, query: &str) -> Result<Vec<String>> {
         self.search_with_limit(query, None).await

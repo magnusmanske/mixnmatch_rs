@@ -421,7 +421,7 @@ impl Entry {
     ) -> Result<()> {
         let mut aliases = self.get_aliases().await?;
         let name = &self.ext_name;
-        let name = Person::sanitize_simplify_name(name);
+        let name = Person::sanitize_name(name);
         let locale_string = LocaleString::new(language, &name);
         let names = if self.type_name == Some("Q5".into()) && WESTERN_LANGUAGES.contains(&language)
         {
