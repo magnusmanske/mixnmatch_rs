@@ -678,7 +678,10 @@ impl AuxiliaryMatcher {
         }
 
         // Fallback: Source via Mix'n'match entry URL
-        let mnm_entry_url = format!("https://mix-n-match.toolforge.org/#/entry/{}", entry.id);
+        let mnm_entry_url = format!(
+            "https://mix-n-match.toolforge.org/#/entry/{}",
+            entry.id.unwrap_or(0)
+        );
         stated_in.push(WikidataCommandPropertyValue {
             property: 854,
             value: WikidataCommandValue::String(mnm_entry_url),

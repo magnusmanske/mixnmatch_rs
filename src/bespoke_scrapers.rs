@@ -1,7 +1,8 @@
 use crate::{
     app_state::{AppState, USER_AUX_MATCH},
-    entry::{CoordinateLocation, Entry, ENTRY_NEW_ID},
+    entry::{CoordinateLocation, Entry},
     extended_entry::ExtendedEntry,
+    php_wrapper::PhpWrapper,
 };
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
@@ -12,7 +13,16 @@ use regex::{Captures, Regex};
 use std::collections::HashMap;
 use wikimisc::timestamp::TimeStamp;
 
-/* WHEN YOU CREATE A NEW WRAPPER, ALSO ADD IT TO `php_wrapper.rs` IN `fn bespoke_scraper`! **/
+/** WHEN YOU CREATE A NEW `BespokeScraper`, ALSO ADD IT HERE TO BE CALLED! **/
+pub async fn run_bespoke_scraper(catalog_id: usize, app: &AppState) -> Result<()> {
+    match catalog_id {
+        121 => BespokeScraper121::new(app).run().await,
+        6479 => BespokeScraper6479::new(app).run().await,
+        6975 => BespokeScraper6975::new(app).run().await,
+        7043 => BespokeScraper7043::new(app).run().await,
+        other => PhpWrapper::bespoke_scraper(other).await, // PHP fallback
+    }
+}
 
 #[async_trait]
 pub trait BespokeScraper {
@@ -182,7 +192,6 @@ impl BespokeScraper121 {
         };
         let ext_entry = ExtendedEntry {
             entry: Entry {
-                id: ENTRY_NEW_ID,
                 catalog: self.catalog_id(),
                 ext_id: record.get("HAUPTNR")?.to_string(),
                 ext_url: record.get("LINK_RECHERCHEPORTAL")?.to_string(),
@@ -205,7 +214,7 @@ impl BespokeScraper121 {
                 },
                 random: rand::rng().random(),
                 type_name: Some("Q5".to_string()),
-                app: None, //Some(self.app.clone()),
+                ..Default::default()
             },
             born: record.get("GEBURTSDATUM").and_then(|s| Self::parse_date(s)),
             died: record.get("STERBEDATUM").and_then(|s| Self::parse_date(s)),
@@ -324,18 +333,14 @@ impl BespokeScraper6479 {
         let ext_id = re_uri.captures(&uri)?[1].to_string();
         let mut ext_entry = ExtendedEntry {
             entry: Entry {
-                id: ENTRY_NEW_ID,
                 catalog: self.catalog_id(),
                 ext_id,
                 ext_url: uri,
                 ext_name: record.get("label_de")?.to_string(),
                 ext_desc: record.get("description_de")?.to_string(),
-                q: None,
-                user: None,
-                timestamp: None,
                 random: rand::rng().random(),
                 type_name: Some("Q5".to_string()),
-                app: None, //Some(self.app.clone()),
+                ..Default::default()
             },
             ..Default::default()
         };
@@ -507,18 +512,14 @@ impl BespokeScraper6975 {
 
         let ext_entry = ExtendedEntry {
             entry: Entry {
-                id: ENTRY_NEW_ID,
                 catalog: self.catalog_id(),
                 ext_id: ext_id.to_string(),
                 ext_url,
                 ext_name,
                 ext_desc: String::new(),
-                q: None,
-                user: None,
-                timestamp: None,
                 random: rand::rng().random(),
                 type_name: Some("Q5".to_string()),
-                app: None, //Some(self.app.clone()),
+                ..Default::default()
             },
             born: Self::fix_date(born),
             ..Default::default()

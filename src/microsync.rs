@@ -592,7 +592,7 @@ fn wikitext_from_issues_get_header(catalog: &Catalog) -> String {
     ret += "* 'External ID' refers to the IDs in the original (external) catalog; the same as the statement value for the associated  property.\n\n";
     ret += &format!(
         "==[{MNM_SITE_URL}/#/catalog/{} {}]==\n{}\n\n",
-        catalog.id(),
+        catalog.id().unwrap_or(0),
         &catalog_name,
         &catalog.desc()
     );

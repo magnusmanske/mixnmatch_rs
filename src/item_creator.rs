@@ -31,8 +31,11 @@ impl ItemCreator {
     }
 
     pub fn add_entries(&mut self, entries: &[Entry]) {
-        self.entries
-            .extend(entries.iter().map(|entry| (entry.id, entry.clone())));
+        self.entries.extend(
+            entries
+                .iter()
+                .filter_map(|entry| Some((entry.id?, entry.clone()))),
+        );
     }
 
     pub async fn add_entries_by_id(&mut self, entry_ids: &[usize]) -> Result<()> {
