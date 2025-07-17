@@ -62,6 +62,20 @@ enum Commands {
         desc_hint: Option<String>,
     },
 
+    /// Delete catalog
+    DeleteCatalog {
+        #[arg(short, long, value_name = "FILE")]
+        config: Option<PathBuf>,
+
+        // Catalog ID
+        #[arg(short, long)]
+        id: usize,
+
+        // Really validator
+        #[arg(short, long, required = true)]
+        really: bool,
+    },
+
     /// test
     Test {
         #[arg(short, long, value_name = "FILE")]
@@ -93,6 +107,14 @@ impl ShellCommands {
             }
             Some(Commands::Job { config, id }) => {
                 Self::path2app(config)?.run_single_job(*id).await?;
+            }
+            Some(Commands::DeleteCatalog { config, id, really }) => {
+                let _ = really; // To suppress warning, flag is not actually used
+                let app = Self::path2app(config)?;
+                crate::catalog::Catalog::from_id(*id, &app)
+                    .await?
+                    .delete()
+                    .await?;
             }
             Some(Commands::CreateUnmatched {
                 config,

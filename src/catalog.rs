@@ -164,6 +164,15 @@ impl Catalog {
         self.taxon_run
     }
 
+    pub async fn delete(&mut self) -> Result<()> {
+        self.app()?
+            .storage()
+            .delete_catalog(self.get_valid_id()?)
+            .await?;
+        self.id = None;
+        Ok(())
+    }
+
     /// Returns a `HashMap` of key-value pairs for the catalog.
     pub async fn get_key_value_pairs(&self) -> Result<HashMap<String, String>> {
         self.app()?
