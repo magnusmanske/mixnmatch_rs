@@ -2,6 +2,7 @@ use crate::app_state::{AppState, USER_AUX_MATCH, USER_DATE_MATCH};
 use crate::auxiliary_matcher::AuxiliaryMatcher;
 use crate::catalog::Catalog;
 use crate::entry::Entry;
+use crate::job::Job;
 use crate::match_state::MatchState;
 use crate::prop_todo::PropTodo;
 use anyhow::{anyhow, Result};
@@ -84,6 +85,24 @@ impl Maintenance {
             .storage()
             .create_match_person_dates_jobs_for_catalogs()
             .await?;
+        Ok(())
+    }
+
+    pub async fn update_has_person_date(&self) -> Result<()> {
+        let catalog_ids = self
+            .app
+            .storage()
+            .get_catalogs_with_person_dates_without_flag()
+            .await?;
+        for catalog_id in catalog_ids {
+            Catalog::from_id(catalog_id, &self.app)
+                .await?
+                .set_has_person_date("yes")
+                .await?;
+            Job::queue_simple_job(&self.app, catalog_id, "match_person_dates", None).await?;
+            Job::queue_simple_job(&self.app, catalog_id, "match_on_birthdate", None).await?;
+            Job::queue_simple_job(&self.app, catalog_id, "match_on_deathdate", None).await?;
+        }
         Ok(())
     }
 

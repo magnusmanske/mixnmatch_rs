@@ -425,6 +425,8 @@ impl Job {
                     .await
             }
 
+            "update_has_person_date" => Maintenance::new(&self.app).update_has_person_date().await,
+
             "maintenance_inventory_match" => {
                 Maintenance::new(&self.app)
                     .fully_match_via_collection_inventory_number()

@@ -1367,6 +1367,17 @@ impl Storage for StorageMySQL {
         Ok(ret)
     }
 
+    async fn get_catalogs_with_person_dates_without_flag(&self) -> Result<Vec<usize>> {
+        let sql = "SELECT DISTINCT catalog FROM vw_dates WHERE catalog IN (SELECT id FROM catalog WHERE has_person_date!='yes' AND has_person_date!='no' AND active=1)";
+        let mut conn = self.get_conn_ro().await?;
+        let ret = conn
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(from_row::<usize>)
+            .await?;
+        Ok(ret)
+    }
+
     // Jobs
 
     async fn jobs_get_tasks(&self) -> Result<HashMap<String, TaskSize>> {
