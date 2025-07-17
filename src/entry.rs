@@ -14,7 +14,6 @@ use wikimisc::wikibase::{
     Entity, EntityTrait, ItemEntity, Reference, Snak, SnakDataType, Statement,
 };
 
-pub const ENTRY_NEW_ID: usize = 0;
 pub const WESTERN_LANGUAGES: &[&str] = &["en", "de", "fr", "es", "nl", "it", "pt"];
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -137,9 +136,11 @@ impl fmt::Display for EntryError {
     }
 }
 
+pub type EntryId = Option<usize>;
+
 #[derive(Debug, Clone, Default)]
 pub struct Entry {
-    pub id: usize,
+    pub id: EntryId,
     pub catalog: usize,
     pub ext_id: String,
     pub ext_url: String,
@@ -164,18 +165,10 @@ impl Entry {
 
     pub fn new_from_catalog_and_ext_id(catalog_id: usize, ext_id: &str) -> Self {
         Self {
-            id: ENTRY_NEW_ID,
             catalog: catalog_id,
             ext_id: ext_id.to_string(),
-            ext_url: "".to_string(),
-            ext_name: "".to_string(),
-            ext_desc: "".to_string(),
-            q: None,
-            user: None,
-            timestamp: None,
             random: rand::rng().random(),
-            type_name: None,
-            app: None,
+            ..Default::default()
         }
     }
 
@@ -198,24 +191,25 @@ impl Entry {
         Ok(ret)
     }
 
-    /// Inserts the current entry into the database. id must be `ENTRY_NEW_ID`.
+    /// Inserts the current entry into the database. id must be None.
     //TODO test
-    pub async fn insert_as_new(&mut self) -> Result<()> {
-        if self.id != ENTRY_NEW_ID {
+    pub async fn insert_as_new(&mut self) -> Result<EntryId> {
+        if self.id.is_some() {
             return Err(EntryError::TryingToInsertExistingEntry.into());
         }
         self.id = self.app()?.storage().entry_insert_as_new(self).await?;
-        Ok(())
+        Ok(self.id)
     }
 
     /// Deletes the entry and all of its associated data in the database. Resets the local ID to 0
     //TODO test
     pub async fn delete(&mut self) -> Result<()> {
-        self.check_valid_id()?;
-        let entry_id = self.id;
-        self.app()?.storage().entry_delete(entry_id).await?;
+        self.app()?
+            .storage()
+            .entry_delete(self.get_valid_id()?)
+            .await?;
         // TODO overview table?
-        self.id = ENTRY_NEW_ID;
+        self.id = None;
         Ok(())
     }
 
@@ -247,14 +241,10 @@ impl Entry {
     }
 
     pub fn get_entry_url(&self) -> Option<String> {
-        if self.id == ENTRY_NEW_ID {
-            None
-        } else {
-            Some(format!(
-                "https://mix-n-match.toolforge.org/#/entry/{}",
-                self.id
-            ))
-        }
+        Some(format!(
+            "https://mix-n-match.toolforge.org/#/entry/{}",
+            self.id?
+        ))
     }
 
     pub fn get_item_url(&self) -> Option<String> {
@@ -274,8 +264,7 @@ impl Entry {
     }
 
     pub async fn get_creation_time(&self) -> Option<String> {
-        self.check_valid_id().ok()?;
-        let entry_id = self.id;
+        let entry_id = self.get_valid_id().ok()?;
         self.app()
             .ok()?
             .storage()
@@ -291,11 +280,11 @@ impl Entry {
     //TODO test
     pub async fn set_ext_name(&mut self, ext_name: &str) -> Result<()> {
         if self.ext_name != ext_name {
-            self.check_valid_id()?;
+            self.get_valid_id()?;
             self.ext_name = ext_name.to_string();
             self.app()?
                 .storage()
-                .entry_set_ext_name(ext_name, self.id)
+                .entry_set_ext_name(ext_name, self.get_valid_id()?)
                 .await?;
         }
         Ok(())
@@ -313,11 +302,11 @@ impl Entry {
     //TODO test
     pub async fn set_ext_desc(&mut self, ext_desc: &str) -> Result<()> {
         if self.ext_desc != ext_desc {
-            self.check_valid_id()?;
+            self.get_valid_id()?;
             self.ext_desc = ext_desc.to_string();
             self.app()?
                 .storage()
-                .entry_set_ext_desc(ext_desc, self.id)
+                .entry_set_ext_desc(ext_desc, self.get_valid_id()?)
                 .await?;
         }
         Ok(())
@@ -525,11 +514,11 @@ impl Entry {
     //TODO test
     pub async fn set_ext_id(&mut self, ext_id: &str) -> Result<()> {
         if self.ext_id != ext_id {
-            self.check_valid_id()?;
+            self.get_valid_id()?;
             self.ext_id = ext_id.to_string();
             self.app()?
                 .storage()
-                .entry_set_ext_id(ext_id, self.id)
+                .entry_set_ext_id(ext_id, self.get_valid_id()?)
                 .await?;
         }
         Ok(())
@@ -539,12 +528,10 @@ impl Entry {
     //TODO test
     pub async fn set_ext_url(&mut self, ext_url: &str) -> Result<()> {
         if self.ext_url != ext_url {
-            self.check_valid_id()?;
-            let entry_id = self.id;
             self.ext_url = ext_url.to_string();
             self.app()?
                 .storage()
-                .entry_set_ext_url(ext_url, entry_id)
+                .entry_set_ext_url(ext_url, self.get_valid_id()?)
                 .await?;
         }
         Ok(())
@@ -554,12 +541,10 @@ impl Entry {
     //TODO test
     pub async fn set_type_name(&mut self, type_name: Option<String>) -> Result<()> {
         if self.type_name != type_name {
-            self.check_valid_id()?;
-            let entry_id = self.id;
             self.type_name.clone_from(&type_name);
             self.app()?
                 .storage()
-                .entry_set_type_name(type_name, entry_id)
+                .entry_set_type_name(type_name, self.get_valid_id()?)
                 .await?;
         }
         Ok(())
@@ -573,7 +558,7 @@ impl Entry {
     ) -> Result<()> {
         let (already_born, already_died) = self.get_person_dates().await?;
         if already_born != *born || already_died != *died {
-            let entry_id = self.id;
+            let entry_id = self.id.ok_or(anyhow!("Entry ID not found"))?;
             if born.is_none() && died.is_none() {
                 self.app()?
                     .storage()
@@ -594,8 +579,9 @@ impl Entry {
     /// Returns the birth and death date of a person as a tuple (born,died)
     /// Born/died are Option<String>
     pub async fn get_person_dates(&self) -> Result<(Option<String>, Option<String>)> {
-        self.check_valid_id()?;
-        self.app()?.storage().entry_get_person_dates(self.id).await
+        let entry_id = self.get_valid_id()?;
+
+        self.app()?.storage().entry_get_person_dates(entry_id).await
     }
 
     //TODO test
@@ -604,8 +590,7 @@ impl Entry {
         language: &str,
         text: Option<String>,
     ) -> Result<()> {
-        self.check_valid_id()?;
-        let entry_id = self.id;
+        let entry_id = self.get_valid_id()?;
         match text {
             Some(text) => {
                 self.app()?
@@ -626,18 +611,18 @@ impl Entry {
     /// Returns a `LocaleString` Vec of all aliases of the entry
     //TODO test
     pub async fn get_aliases(&self) -> Result<Vec<LocaleString>> {
-        self.check_valid_id()?;
-        self.app()?.storage().entry_get_aliases(self.id).await
+        self.app()?
+            .storage()
+            .entry_get_aliases(self.get_valid_id()?)
+            .await
     }
 
     pub async fn add_alias(&self, s: &LocaleString) -> Result<()> {
-        self.check_valid_id()?;
-        let entry_id = self.id;
         let language = s.language();
         let label = s.value();
         self.app()?
             .storage()
-            .entry_add_alias(entry_id, language, label)
+            .entry_add_alias(self.get_valid_id()?, language, label)
             .await?;
         Ok(())
     }
@@ -645,17 +630,15 @@ impl Entry {
     /// Returns a language:text `HashMap` of all language descriptions of the entry
     //TODO test
     pub async fn get_language_descriptions(&self) -> Result<HashMap<String, String>> {
-        self.check_valid_id()?;
         self.app()?
             .storage()
-            .entry_get_language_descriptions(self.id)
+            .entry_get_language_descriptions(self.get_valid_id()?)
             .await
     }
 
     //TODO test
     pub async fn set_auxiliary(&self, prop_numeric: usize, value: Option<String>) -> Result<()> {
-        self.check_valid_id()?;
-        let entry_id = self.id;
+        let entry_id = self.get_valid_id()?;
         match value {
             Some(value) => {
                 if !value.is_empty() {
@@ -679,7 +662,7 @@ impl Entry {
     pub async fn set_coordinate_location(&self, cl: &Option<CoordinateLocation>) -> Result<()> {
         let existing_cl = self.get_coordinate_location().await?;
         if existing_cl != *cl {
-            let entry_id = self.id;
+            let entry_id = self.get_valid_id()?;
             match cl {
                 Some(cl) => {
                     self.app()?
@@ -700,31 +683,32 @@ impl Entry {
 
     /// Returns the coordinate locationm or None
     pub async fn get_coordinate_location(&self) -> Result<Option<CoordinateLocation>> {
-        self.check_valid_id()?;
         self.app()?
             .storage()
-            .entry_get_coordinate_location(self.id)
+            .entry_get_coordinate_location(self.get_valid_id()?)
             .await
     }
 
     /// Returns auxiliary data for the entry
     //TODO test
     pub async fn get_aux(&self) -> Result<Vec<AuxiliaryRow>> {
-        self.check_valid_id()?;
-        self.app()?.storage().entry_get_aux(self.id).await
+        self.app()?
+            .storage()
+            .entry_get_aux(self.get_valid_id()?)
+            .await
     }
 
     /// Before q query or an update to the entry in the database, checks if this is a valid entry ID (eg not a new entry)
-    pub fn check_valid_id(&self) -> Result<()> {
+    pub fn get_valid_id(&self) -> Result<usize> {
         match self.id {
-            ENTRY_NEW_ID => Err(EntryError::TryingToUpdateNewEntry.into()),
-            _ => Ok(()),
+            Some(id) => Ok(id),
+            None => Err(anyhow!("No entry ID set")),
         }
     }
 
     /// Sets a match for the entry, and marks the entry as matched in other tables.
     pub async fn set_match(&mut self, q: &str, user_id: usize) -> Result<bool> {
-        self.check_valid_id()?;
+        self.get_valid_id()?;
         let q_numeric = AppState::item2numeric(q).ok_or(anyhow!("'{}' is not a valid item", &q))?;
 
         let timestamp = TimeStamp::now();
@@ -744,7 +728,10 @@ impl Entry {
 
     // Removes the current match from the entry, and marks the entry as unmatched in other tables.
     pub async fn unmatch(&mut self) -> Result<()> {
-        self.app()?.storage().entry_unmatch(self.id).await?;
+        self.app()?
+            .storage()
+            .entry_unmatch(self.get_valid_id()?)
+            .await?;
         self.user = None;
         self.timestamp = None;
         self.q = None;
@@ -754,11 +741,10 @@ impl Entry {
     /// Updates the entry matching status in multiple tables.
     //TODO test
     pub async fn set_match_status(&self, status: &str, is_matched: bool) -> Result<()> {
-        let entry_id = self.id;
         let is_matched = if is_matched { 1 } else { 0 };
         self.app()?
             .storage()
-            .entry_set_match_status(entry_id, status, is_matched)
+            .entry_set_match_status(self.get_valid_id()?, status, is_matched)
             .await
     }
 
@@ -768,7 +754,7 @@ impl Entry {
         let rows: Vec<String> = self
             .app()?
             .storage()
-            .entry_get_multi_matches(self.id)
+            .entry_get_multi_matches(self.get_valid_id()?)
             .await?;
         if rows.len() != 1 {
             Ok(vec![])
@@ -807,7 +793,7 @@ impl Entry {
 
     /// Sets multi-matches for an entry
     pub async fn set_multi_match(&self, items: &[String]) -> Result<()> {
-        let entry_id = self.id;
+        let entry_id = self.get_valid_id()?;
         let app = self.app()?;
         let qs_numeric: Vec<String> = items
             .iter()
@@ -830,7 +816,7 @@ impl Entry {
     pub async fn remove_multi_match(&self) -> Result<()> {
         self.app()?
             .storage()
-            .entry_remove_multi_match(self.id)
+            .entry_remove_multi_match(self.get_valid_id()?)
             .await
     }
 
@@ -1097,9 +1083,9 @@ mod tests {
         let _test_lock = TEST_MUTEX.lock();
         let app = get_test_app();
         let entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
-        assert!(entry.check_valid_id().is_ok());
+        assert!(entry.get_valid_id().is_ok());
         let entry2 = Entry::new_from_catalog_and_ext_id(1, "234");
-        assert!(entry2.check_valid_id().is_err());
+        assert!(entry2.get_valid_id().is_err());
     }
 
     #[tokio::test]

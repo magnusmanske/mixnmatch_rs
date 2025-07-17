@@ -2,7 +2,7 @@ use crate::autoscrape::{
     Autoscrape, AutoscrapeError, AutoscrapeRegex, AutoscrapeRegexBuilder, JsonStuff,
 };
 use crate::autoscrape_resolve::{AutoscrapeResolve, AutoscrapeResolveAux};
-use crate::entry::{Entry, ENTRY_NEW_ID};
+use crate::entry::Entry;
 use crate::extended_entry::ExtendedEntry;
 use anyhow::Result;
 use rand::prelude::*;
@@ -139,18 +139,15 @@ impl AutoscrapeScraper {
         };
         let entry_ex = ExtendedEntry {
             entry: Entry {
-                id: ENTRY_NEW_ID,
                 catalog: autoscrape.catalog_id(),
                 ext_id: self.resolve_id.replace_vars(&map),
                 ext_url: self.resolve_url.replace_vars(&map),
                 ext_name: self.resolve_name.replace_vars(&map),
                 ext_desc: self.resolve_desc.replace_vars(&map),
-                q: None,
-                user: None,
-                timestamp: None,
                 random: rand::rng().random(),
                 type_name,
                 app: Some(autoscrape.app().clone()),
+                ..Default::default()
             },
             aux: self
                 .resolve_aux

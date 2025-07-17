@@ -295,7 +295,7 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
         limit: usize,
         offset: usize,
     ) -> Result<Vec<Entry>>;
-    async fn entry_insert_as_new(&self, entry: &Entry) -> Result<usize>;
+    async fn entry_insert_as_new(&self, entry: &Entry) -> Result<Option<usize>>;
     async fn entry_delete(&self, entry_id: usize) -> Result<()>;
     async fn entry_get_creation_time(&self, entry_id: usize) -> Option<String>;
     async fn entry_set_ext_name(&self, ext_name: &str, entry_id: usize) -> Result<()>;

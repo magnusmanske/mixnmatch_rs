@@ -110,14 +110,15 @@ impl StorageMySQL {
         q_numeric: isize,
     ) -> Result<bool> {
         // Update overview table and misc cleanup
+        let entry_id = entry.get_valid_id()?;
         self.update_overview_table(entry, Some(user_id), Some(q_numeric))
             .await?;
         let is_full_match = user_id > 0 && q_numeric > 0;
         let is_matched = if is_full_match { 1 } else { 0 };
-        self.entry_set_match_status(entry.id, "UNKNOWN", is_matched)
+        self.entry_set_match_status(entry_id, "UNKNOWN", is_matched)
             .await?;
         if user_id != USER_AUTO {
-            self.entry_remove_multi_match(entry.id).await?;
+            self.entry_remove_multi_match(entry_id).await?;
         }
         self.queue_reference_fixer(q_numeric).await?;
         Ok(true)
@@ -1765,11 +1766,14 @@ impl Storage for StorageMySQL {
             .iter()
             .filter_map(|row| row.to_owned())
             .collect();
-        let ret = rows.into_iter().map(|entry| (entry.id, entry)).collect();
+        let ret = rows
+            .into_iter()
+            .map(|entry| (entry.id.unwrap_or(0), entry))
+            .collect();
         Ok(ret)
     }
 
-    async fn entry_insert_as_new(&self, entry: &Entry) -> Result<usize> {
+    async fn entry_insert_as_new(&self, entry: &Entry) -> Result<Option<usize>> {
         let sql = "INSERT IGNORE INTO `entry` (`catalog`,`ext_id`,`ext_url`,`ext_name`,`ext_desc`,`q`,`user`,`timestamp`,`random`,`type`) VALUES (:catalog,:ext_id,:ext_url,:ext_name,:ext_desc,:q,:user,:timestamp,:random,:type_name)";
         let params = params! {
             "catalog" => entry.catalog,
@@ -1786,7 +1790,7 @@ impl Storage for StorageMySQL {
         let mut conn = self.get_conn().await?;
         conn.exec_drop(sql, params).await?;
         let id = conn.last_insert_id().ok_or(EntryError::EntryInsertFailed)? as usize;
-        Ok(id)
+        Ok(Some(id))
     }
 
     async fn entry_delete(&self, entry_id: usize) -> Result<()> {
@@ -2046,7 +2050,7 @@ impl Storage for StorageMySQL {
         q_numeric: isize,
         timestamp: &str,
     ) -> Result<bool> {
-        let entry_id = entry.id;
+        let entry_id = entry.get_valid_id()?;
         let mut sql = "UPDATE `entry` SET `q`=:q_numeric,`user`=:user_id,`timestamp`=:timestamp WHERE `id`=:entry_id AND (`q` IS NULL OR `q`!=:q_numeric OR `user`!=:user_id)".to_string();
         if user_id == USER_AUTO {
             if self.avoid_auto_match(entry_id, Some(q_numeric)).await? {
