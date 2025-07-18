@@ -6,6 +6,7 @@ use crate::{
 };
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
+use futures::StreamExt;
 use lazy_static::lazy_static;
 use log::info;
 use rand::Rng;
@@ -19,6 +20,7 @@ pub async fn run_bespoke_scraper(catalog_id: usize, app: &AppState) -> Result<()
         121 => BespokeScraper121::new(app).run().await,
         6479 => BespokeScraper6479::new(app).run().await,
         6975 => BespokeScraper6975::new(app).run().await,
+        6976 => BespokeScraper6976::new(app).run().await,
         7043 => BespokeScraper7043::new(app).run().await,
         other => PhpWrapper::bespoke_scraper(other).await, // PHP fallback
     }
@@ -596,6 +598,150 @@ impl BespokeScraper for BespokeScraper7043 {
             let _ = self.add_missing_aux(entry_id, &PROP_RE).await;
         }
         Ok(())
+    }
+}
+
+// ______________________________________________________
+// Hessian Biography person (6976)
+
+#[derive(Debug)]
+pub struct BespokeScraper6976 {
+    app: AppState,
+}
+
+#[async_trait]
+impl BespokeScraper for BespokeScraper6976 {
+    fn new(app: &AppState) -> Self {
+        Self { app: app.clone() }
+    }
+
+    fn app(&self) -> &AppState {
+        &self.app
+    }
+
+    fn catalog_id(&self) -> usize {
+        6976
+    }
+
+    async fn run(&self) -> Result<()> {
+        // TODO add new?
+
+        // Run all existing entries for metadata
+        let ext_id2entry_id = self
+            .app()
+            .storage()
+            .get_all_external_ids(self.catalog_id())
+            .await?;
+        let futures = ext_id2entry_id
+            .into_values()
+            .map(|entry_id| self.add_missing_aux(entry_id))
+            .collect::<Vec<_>>();
+
+        // Run 5 in parallel
+        let stream = futures::stream::iter(futures).buffer_unordered(5);
+        let _ = stream.collect::<Vec<_>>().await;
+        Ok(())
+    }
+}
+
+impl BespokeScraper6976 {
+    async fn load_single_line_text_from_url(&self, url: &str) -> Result<String> {
+        let text = self
+            .http_client()
+            .get(url.to_owned())
+            .send()
+            .await?
+            .text()
+            .await?
+            .replace("\n", ""); // Single line
+        Ok(text)
+    }
+
+    async fn add_missing_aux(&self, entry_id: usize) -> Result<()> {
+        const KEYS2PROP: &[(&str, usize)] = &[
+            ("<h3>Vater:</h3>", 22),
+            ("<h3>Mutter:</h3>", 25),
+            ("<h3>Partner:</h3>", 26),
+            ("<h3>Verwandte:</h3>", 1038),
+        ];
+        lazy_static! {
+            static ref RE_DD: Regex = Regex::new(r#"<dd>(.+?)</dd>"#).unwrap();
+            static ref RE_SUBJECT: Regex =
+                Regex::new(r#"<a href="/[a-z]+/subjects/idrec/sn/bio/id/(\d+)""#).unwrap();
+        }
+        let entry = Entry::from_id(entry_id, &self.app).await?;
+        let existing_aux = entry.get_aux().await?;
+        let url = &entry.ext_url;
+        let text = self.load_single_line_text_from_url(url).await?;
+
+        if !existing_aux.iter().any(|aux| aux.prop_numeric() == 227) {
+            if let Some(gnd) = Self::get_main_gnd_from_text(&text) {
+                entry.set_auxiliary(227, Some(gnd)).await?;
+            }
+        }
+
+        for cap_dd_group in RE_DD.captures_iter(&text) {
+            let cap_dd = cap_dd_group.get(1).unwrap().as_str();
+            let subject_ids = RE_SUBJECT
+                .captures_iter(cap_dd)
+                .filter_map(|cap| cap.get(1).map(|m| m.as_str().to_string()))
+                .collect::<Vec<String>>();
+            if subject_ids.is_empty() {
+                continue;
+            }
+            for (key, prop_numeric) in KEYS2PROP {
+                if cap_dd.contains(key) {
+                    let _ = self
+                        .attach_subjects_as_aux(*prop_numeric, &subject_ids, &entry)
+                        .await;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn attach_subjects_as_aux(
+        &self,
+        prop_numeric: usize,
+        subject_ids: &[String],
+        entry: &Entry,
+    ) -> Result<()> {
+        for subject_id in subject_ids {
+            if let Some(gnd) = self.get_subject_gnd(subject_id).await {
+                let query = format!("haswbstatement:P227={gnd}");
+                let items_with_gnd = self
+                    .app
+                    .wikidata()
+                    .search_api(&query)
+                    .await
+                    .unwrap_or_default();
+                if items_with_gnd.len() == 1 {
+                    let item = items_with_gnd[0].clone();
+                    let _ = entry.set_auxiliary(prop_numeric, Some(item)).await;
+                } else if let Ok(target_entry) =
+                    Entry::from_ext_id(self.catalog_id(), &gnd, &self.app).await
+                {
+                    if let Ok(target_entry_id) = target_entry.get_valid_id() {
+                        let _ = entry.add_mnm_relation(prop_numeric, target_entry_id).await;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn get_subject_gnd(&self, subject_id: &str) -> Option<String> {
+        let url = format!("https://www.lagis-hessen.de/de/subjects/idrec/sn/bio/id/{subject_id}");
+        let text = self.load_single_line_text_from_url(&url).await.ok()?;
+        Self::get_main_gnd_from_text(&text)
+    }
+
+    fn get_main_gnd_from_text(text: &str) -> Option<String> {
+        lazy_static! {
+            static ref RE_GND: Regex = Regex::new(r#"<h2>GND-Nummer</h2>\s*<p>(.+?)</p>"#).unwrap();
+        }
+        let captures = RE_GND.captures(text)?;
+        Some(captures[1].to_string())
     }
 }
 

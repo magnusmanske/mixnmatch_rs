@@ -298,6 +298,17 @@ impl Entry {
             .await
     }
 
+    pub async fn add_mnm_relation(
+        &self,
+        prop_numeric: usize,
+        target_entry_id: usize,
+    ) -> Result<()> {
+        self.app()?
+            .storage()
+            .add_mnm_relation(self.get_valid_id()?, prop_numeric, target_entry_id)
+            .await
+    }
+
     /// Updates `ext_desc` locally and in the database
     //TODO test
     pub async fn set_ext_desc(&mut self, ext_desc: &str) -> Result<()> {

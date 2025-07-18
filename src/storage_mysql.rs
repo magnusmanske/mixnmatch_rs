@@ -513,7 +513,7 @@ impl Storage for StorageMySQL {
         Ok(id)
     }
 
-    /// Get all external IDs for a catalog
+    /// Get all external IDs for a catalog (ext_id => entry_id)
     async fn get_all_external_ids(&self, catalog_id: usize) -> Result<HashMap<String, usize>> {
         let rows: Vec<Row> = self
             .get_conn_ro()
@@ -1376,6 +1376,20 @@ impl Storage for StorageMySQL {
             .map_and_drop(from_row::<usize>)
             .await?;
         Ok(ret)
+    }
+
+    async fn add_mnm_relation(
+        &self,
+        entry_id: usize,
+        prop_numeric: usize,
+        target_entry_id: usize,
+    ) -> Result<()> {
+        let sql = "INSERT IGNORE INTO mnm_relation (entry_id, property, target_entry_id) VALUES (?, ?, ?)";
+        self.get_conn()
+            .await?
+            .exec_drop(sql, params![entry_id, prop_numeric, target_entry_id])
+            .await?;
+        Ok(())
     }
 
     // Jobs
