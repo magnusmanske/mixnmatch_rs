@@ -3,10 +3,12 @@ use crate::app_state::USER_AUTO;
 use crate::app_state::USER_DATE_MATCH;
 use crate::catalog::Catalog;
 use crate::entry::Entry;
+use crate::entry_query::EntryQuery;
 use crate::issue::Issue;
 use crate::issue::IssueType;
 use crate::job::Job;
 use crate::job::Jobbable;
+use crate::match_state::MatchState;
 use crate::person::Person;
 use anyhow::{anyhow, Result};
 use chrono::prelude::*;
@@ -15,7 +17,6 @@ use futures::future::join_all;
 use futures::StreamExt;
 use itertools::Itertools;
 use lazy_static::lazy_static;
-use log::info;
 use mediawiki::api::Api;
 use regex::Regex;
 use serde_json::json;
@@ -147,10 +148,7 @@ impl AutoMatch {
             let q = api.extract_entity_from_uri(&row[0])?;
             let q_label = row[1].to_string();
             if let Ok(q_numeric) = q[1..].parse::<usize>() {
-                // self.app
-                //     .storage()
-                //     .automatch_entry_by_sparql(catalog_id, q_numeric, q_label)
-                //     .await?;
+                let q_label = q_label.to_lowercase();
                 label2q.insert(q_label, q_numeric);
                 if label2q.len() >= 100000 {
                     self.process_automatch_with_sparql(catalog_id, &label2q)
@@ -176,14 +174,15 @@ impl AutoMatch {
         let mut offset = 0;
         let batch_size = 50000;
         loop {
-            info!("Batch offset {offset}");
-            let mut entry_batch = self
-                .app
-                .storage()
-                .get_entry_batch(catalog_id, batch_size, offset)
-                .await?;
+            let query = EntryQuery::default()
+                .with_catalog_id(catalog_id)
+                .with_match_state(MatchState::unmatched())
+                .with_limit(batch_size)
+                .with_offset(offset);
+            let mut entry_batch = self.app.storage().entry_query(&query).await?;
             for entry in &mut entry_batch {
-                if let Some(q) = label2q.get(&entry.ext_name) {
+                if let Some(q) = label2q.get(&entry.ext_name.to_lowercase()) {
+                    // println!("Found {q} for {}", entry.ext_name);
                     entry.set_app(&self.app);
                     let _ = entry.set_match(&format!("Q{q}"), USER_AUTO).await;
                 }
