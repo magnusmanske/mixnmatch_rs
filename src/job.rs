@@ -321,6 +321,11 @@ impl Job {
                 am.set_current_job(self);
                 am.automatch_people_with_initials(catalog_id).await
             }
+            "automatch_sparql" => {
+                let mut am = AutoMatch::new(&self.app);
+                am.set_current_job(self);
+                am.automatch_with_sparql(catalog_id).await
+            }
             "purge_automatches" => {
                 let mut am = AutoMatch::new(&self.app);
                 am.set_current_job(self);
