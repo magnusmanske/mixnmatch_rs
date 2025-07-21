@@ -161,6 +161,7 @@ impl AutoMatch {
         }
         self.process_automatch_with_sparql(catalog_id, &label2q)
             .await?;
+        let _ = self.app.storage().use_automatchers(catalog_id, 0).await;
         Ok(())
     }
 
