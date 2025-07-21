@@ -1526,7 +1526,7 @@ impl Storage for StorageMySQL {
 
     async fn jobs_set_note(&self, note: Option<String>, job_id: usize) -> Result<Option<String>> {
         let note_cloned = note.clone().map(|s| s.get(..127).unwrap_or(&s).to_string());
-        let sql = "UPDATE `jobs` SET `note`=:note WHERE `id`=:job_id";
+        let sql = "UPDATE `jobs` SET `note`=substr(:note,1,250) WHERE `id`=:job_id";
         let mut conn = self.get_conn().await?;
         conn.exec_drop(sql, params! {job_id,note}).await?;
         Ok(note_cloned)
