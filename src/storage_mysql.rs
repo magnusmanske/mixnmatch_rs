@@ -1143,6 +1143,15 @@ impl Storage for StorageMySQL {
         Ok(())
     }
 
+    async fn use_automatchers(&self, catalog_id: usize, use_automatchers: u8) -> Result<()> {
+        let sql = r#"REPLACE INTO kv_catalog (catalog_id,kv_entry,kv_value) VALUES (:catalog_id,"use_automatchers",:kv_value)"#;
+        self.get_conn()
+            .await?
+            .exec_drop(sql, params! {catalog_id,use_automatchers})
+            .await?;
+        Ok(())
+    }
+
     async fn maintenance_automatch_people_via_year_born(&self) -> Result<()> {
         let mut conn = self.get_conn().await?;
 
