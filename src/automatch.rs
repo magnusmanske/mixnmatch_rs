@@ -140,7 +140,11 @@ impl AutoMatch {
             .map(|(_, v)| v)
             .next()
             .ok_or_else(|| anyhow!("No automatch_sparql key in catalog"))?;
-        let sparql = format!("SELECT ?q ?qLabel WHERE {{ {sparql_part} }}");
+        let sparql = if sparql_part.starts_with("SELECT ") {
+            sparql_part.to_string()
+        } else {
+            format!("SELECT ?q ?qLabel WHERE {{ {sparql_part} }}")
+        };
         let mut reader = self.app.wikidata().load_sparql_csv(&sparql).await?;
         let api = self.app.wikidata().get_mw_api().await?;
         let mut label2q = HashMap::new();
