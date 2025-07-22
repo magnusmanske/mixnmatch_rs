@@ -515,23 +515,13 @@ impl Storage for StorageMySQL {
 
     /// Get all external IDs for a catalog (ext_id => entry_id)
     async fn get_all_external_ids(&self, catalog_id: usize) -> Result<HashMap<String, usize>> {
-        let rows: Vec<Row> = self
-            .get_conn_ro()
+        let eq = EntryQuery::default().with_catalog_id(catalog_id);
+        Ok(self
+            .entry_query(&eq)
             .await?
-            .exec(
-                "SELECT id, ext_id FROM entry WHERE catalog = :catalog_id",
-                params! {catalog_id},
-            )
-            .await?;
-
-        let mut external_ids = HashMap::new();
-        for row in rows {
-            let id: usize = row.get("id").unwrap();
-            let ext_id: String = row.get("ext_id").unwrap();
-            external_ids.insert(ext_id, id);
-        }
-
-        Ok(external_ids)
+            .iter()
+            .filter_map(|e| Some((e.ext_id.clone(), e.get_valid_id().ok()?)))
+            .collect())
     }
 
     /// This deletes a catalog and all its associated entries.
@@ -2312,19 +2302,16 @@ impl Storage for StorageMySQL {
 #[cfg(test)]
 mod tests {
     use super::*;
-    // use crate::app_state::{get_test_app, TEST_MUTEX};
+    use crate::app_state::{get_test_app, TEST_MUTEX};
 
-    // #[tokio::test]
-    // async fn test_catalog_get_entries_of_people_with_initials() {
-    //     let _test_lock = TEST_MUTEX.lock();
-    //     let app = get_test_app();
-    //     let results = app
-    //         .storage()
-    //         .catalog_get_entries_of_people_with_initials(6981)
-    //         .await
-    //         .unwrap();
-    //     println!("Found {}", results.len());
-    // }
+    #[tokio::test]
+    async fn test_get_all_external_ids() {
+        let _test_lock = TEST_MUTEX.lock();
+        let app = get_test_app();
+        let results = app.storage().get_all_external_ids(1).await.unwrap();
+        assert_eq!(results.len(), 67233);
+        assert!(results.contains_key("100006"));
+    }
 
     // #lizard forgives
     #[test]
