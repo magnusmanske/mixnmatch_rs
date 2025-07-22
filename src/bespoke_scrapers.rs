@@ -93,7 +93,7 @@ pub trait BespokeScraper {
         let ext_id2id: HashMap<String, usize> = self
             .app()
             .storage()
-            .autoscrape_get_entry_ids_for_ext_ids(self.catalog_id(), &ext_ids)
+            .get_entry_ids_for_ext_ids(self.catalog_id(), &ext_ids)
             .await?
             .into_iter()
             .collect();

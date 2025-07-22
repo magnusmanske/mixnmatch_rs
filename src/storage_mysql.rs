@@ -243,11 +243,27 @@ impl StorageMySQL {
     }
 
     fn get_entry_query_sql(query: &EntryQuery) -> Result<(String, Vec<String>)> {
-        let mut parts: Vec<String> = Vec::new();
-        let mut sql = Self::entry_sql_select();
+        let (sql, parts) =
+            Self::get_entry_query_sql_where(query, Self::entry_sql_select(), vec![])?;
+        Ok((sql, parts))
+    }
+
+    fn get_entry_query_sql_where(
+        query: &EntryQuery,
+        mut sql: String,
+        mut parts: Vec<String>,
+    ) -> Result<(String, Vec<String>)> {
+        // Paranoia
+        if query.catalog_id.is_none() && query.ext_ids.is_some() {
+            return Err(anyhow!("Catalog ID is required when using external IDs"));
+        }
+
+        if !sql.trim().ends_with(" WHERE") {
+            sql += " WHERE";
+        }
 
         if let Some(catalog_id) = query.catalog_id {
-            sql += &format!(" WHERE catalog={catalog_id}");
+            sql += &format!(" catalog={catalog_id}");
         }
         if let Some(entry_type) = &query.entry_type {
             parts.push(entry_type.to_string());
@@ -256,6 +272,11 @@ impl StorageMySQL {
         if let Some(name_regexp) = &query.name_regexp {
             parts.push(name_regexp.to_string());
             sql += " AND `ext_name` RLIKE ?";
+        }
+        if let Some(ext_ids) = &query.ext_ids {
+            let placeholders = Self::sql_placeholders(ext_ids.len());
+            sql += &format!(" AND `ext_id` IN ({placeholders})");
+            parts.extend(ext_ids.clone());
         }
         if let Some(num_dates) = query.min_dates {
             if num_dates == 0 {
@@ -441,15 +462,12 @@ impl Storage for StorageMySQL {
         catalog_id: usize,
         ext_ids: &[String],
     ) -> Result<Vec<String>> {
-        let placeholders = Self::sql_placeholders(ext_ids.len());
-        let sql = format!(
-            "SELECT `ext_id` FROM entry WHERE `ext_id` IN ({}) AND `catalog`={}",
-            &placeholders, catalog_id
-        );
-        let existing_ext_ids = sql
-            .with(ext_ids.to_vec()) // TODO don't convert to Vec
-            .map(self.get_conn_ro().await?, |ext_id| ext_id)
-            .await?;
+        let existing_ext_ids = self
+            .get_entry_ids_for_ext_ids(catalog_id, ext_ids)
+            .await?
+            .into_iter()
+            .map(|(ext_id, _entry_id)| ext_id)
+            .collect();
         Ok(existing_ext_ids)
     }
 
@@ -516,12 +534,19 @@ impl Storage for StorageMySQL {
     /// Get all external IDs for a catalog (ext_id => entry_id)
     async fn get_all_external_ids(&self, catalog_id: usize) -> Result<HashMap<String, usize>> {
         let eq = EntryQuery::default().with_catalog_id(catalog_id);
-        Ok(self
-            .entry_query(&eq)
+        let sql = "SELECT ext_id,id FROM entry WHERE".to_string();
+        let (sql, parts) = Self::get_entry_query_sql_where(&eq, sql, vec![])?;
+        println!("{sql}");
+        let ret = self
+            .get_conn_ro()
             .await?
-            .iter()
-            .filter_map(|e| Some((e.ext_id.clone(), e.get_valid_id().ok()?)))
-            .collect())
+            .exec_iter(sql, parts)
+            .await?
+            .map_and_drop(from_row::<(String, usize)>)
+            .await?
+            .into_iter()
+            .collect();
+        Ok(ret)
     }
 
     /// This deletes a catalog and all its associated entries.
@@ -856,23 +881,25 @@ impl Storage for StorageMySQL {
             .await?)
     }
 
-    async fn autoscrape_get_entry_ids_for_ext_ids(
+    /// Returns a list of (ext_id,entry_id) values for the given catalog_id and ext_ids.
+    async fn get_entry_ids_for_ext_ids(
         &self,
         catalog_id: usize,
         ext_ids: &[String],
     ) -> Result<Vec<(String, usize)>> {
-        let placeholders = Self::sql_placeholders(ext_ids.len());
-        let sql = format!(
-            "SELECT `ext_id`,`id` FROM entry WHERE `ext_id` IN ({placeholders}) AND `catalog`={catalog_id}"
-        );
-        let existing_ext_ids: Vec<(String, usize)> = self
+        let eq = EntryQuery::default()
+            .with_catalog_id(catalog_id)
+            .with_ext_ids(ext_ids.to_vec());
+        let sql = "SELECT ext_id,id FROM entry WHERE".to_string();
+        let (sql, parts) = Self::get_entry_query_sql_where(&eq, sql, vec![])?;
+        let ret = self
             .get_conn_ro()
             .await?
-            .exec_iter(sql, ext_ids.to_vec())
+            .exec_iter(sql, parts)
             .await?
             .map_and_drop(from_row::<(String, usize)>)
             .await?;
-        Ok(existing_ext_ids)
+        Ok(ret)
     }
 
     async fn autoscrape_start(&self, autoscrape_id: usize) -> Result<()> {
@@ -1241,19 +1268,18 @@ impl Storage for StorageMySQL {
     async fn maintenance_sync_property(
         &self,
         catalogs: &[usize],
-        propval2item: &HashMap<String, isize>,
-        params: Vec<String>,
-    ) -> Result<Vec<(usize, String, Option<usize>, Option<usize>)>> {
+        ext_ids: Vec<String>,
+    ) -> Result<Vec<(usize, String, Option<usize>)>> {
         let catalogs_str: String = catalogs.iter().map(|id| format!("{id}")).join(",");
-        let qm_propvals = Self::sql_placeholders(propval2item.len());
+        let qm_propvals = Self::sql_placeholders(ext_ids.len());
         let sql = format!(
-            r"SELECT `id`,`ext_id`,`user`,`q` FROM `entry` WHERE `catalog` IN ({catalogs_str}) AND `ext_id` IN ({qm_propvals})"
+            r"SELECT `id`,`ext_id`,`user` FROM `entry` WHERE `catalog` IN ({catalogs_str}) AND `ext_id` IN ({qm_propvals})"
         );
         let mut conn = self.get_conn_ro().await?;
         let results = conn
-            .exec_iter(sql, params)
+            .exec_iter(sql, ext_ids)
             .await?
-            .map_and_drop(from_row::<(usize, String, Option<usize>, Option<usize>)>)
+            .map_and_drop(from_row::<(usize, String, Option<usize>)>)
             .await?;
         Ok(results)
     }
@@ -1796,21 +1822,18 @@ impl Storage for StorageMySQL {
             "{} WHERE `catalog`=:catalog_id AND `ext_id`=:ext_id",
             Self::entry_sql_select()
         );
-        let mut conn = self.get_conn_ro().await?;
-        let mut rows: Vec<Entry> = conn
+        Ok(self
+            .get_conn_ro()
+            .await?
             .exec_iter(sql, params! {catalog_id,ext_id})
             .await?
             .map_and_drop(|row| Self::entry_from_row(&row))
             .await?
             .iter()
             .filter_map(|row| row.to_owned())
-            .collect();
-        // `catalog`/`ext_id` comprises a unique index, so there can be only zero or one row in rows.
-        let ret = rows
-            .pop()
-            .ok_or(anyhow!("No entry '{}' in catalog #{}", ext_id, catalog_id))?
-            .to_owned();
-        Ok(ret)
+            .next()
+            .ok_or(anyhow!("No ext_id '{}' in catalog #{}", ext_id, catalog_id))?
+            .to_owned())
     }
 
     async fn get_entry_batch(

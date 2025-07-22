@@ -220,16 +220,16 @@ impl WDRC {
         }
         let dummy = vec![];
         let catalogs = prop2catalog_ids.get(&property).unwrap_or(&dummy);
-        let params: Vec<String> = propval2item
+        let ext_ids: Vec<String> = propval2item
             .keys()
             .map(|propval| propval.to_string())
             .collect();
 
         let new_results = app
             .storage()
-            .maintenance_sync_property(catalogs, &propval2item, params)
+            .maintenance_sync_property(catalogs, ext_ids)
             .await?;
-        for (id, ext_id, user, _mnm_q) in new_results {
+        for (id, ext_id, user) in new_results {
             if user.is_none() || user == Some(USER_AUTO) {
                 let wd_item_q = match propval2item.get(&ext_id) {
                     Some(wd_item_q) => *wd_item_q,
