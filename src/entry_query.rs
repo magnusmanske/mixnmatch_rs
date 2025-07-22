@@ -12,6 +12,7 @@ pub struct EntryQuery {
     pub desc_hint: Option<String>,
     pub name_regexp: Option<String>,
     pub limit: Option<usize>,
+    pub ext_ids: Option<Vec<String>>,
     pub offset: Option<usize>,
 }
 
@@ -67,6 +68,13 @@ impl EntryQuery {
     /// Only return entries that have a description hint.
     pub fn with_desc_hint(mut self, desc_hint: &str) -> Self {
         self.desc_hint = Some(desc_hint.to_string());
+        self
+    }
+
+    /// Only return entries with the specified external IDs.
+    /// Requires a catalog ID to be specified.
+    pub fn with_ext_ids(mut self, ext_ids: Vec<String>) -> Self {
+        self.ext_ids = Some(ext_ids);
         self
     }
 

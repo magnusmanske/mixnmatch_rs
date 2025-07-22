@@ -280,7 +280,7 @@ impl Autoscrape {
         let existing_ext_ids = self
             .app
             .storage()
-            .autoscrape_get_entry_ids_for_ext_ids(self.catalog_id, &ext_ids)
+            .get_entry_ids_for_ext_ids(self.catalog_id, &ext_ids)
             .await?;
         let existing_ext_ids: HashMap<String, usize> = existing_ext_ids.into_iter().collect();
         for ex in &mut self.entry_batch {
