@@ -30,7 +30,7 @@ pub struct OverviewTableRow {
     na: isize,
     manual: isize,
     nowd: isize,
-    multimatch: isize,
+    multi_match: isize,
     types: String,
 }
 
@@ -44,7 +44,7 @@ impl OverviewTableRow {
             na: row.get("na")?,
             manual: row.get("manual")?,
             nowd: row.get("nowd")?,
-            multimatch: row.get("multimatch")?,
+            multi_match: row.get("multi_match")?,
             types: row.get("types")?,
         })
     }
@@ -60,7 +60,7 @@ impl OverviewTableRow {
             || self.na < 0
             || self.manual < 0
             || self.nowd < 0
-            || self.multimatch < 0
+            || self.multi_match < 0
     }
 }
 

@@ -2347,15 +2347,21 @@ impl Storage for StorageMySQL {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app_state::{get_test_app, TEST_MUTEX};
+    use crate::app_state::get_test_app;
 
     #[tokio::test]
     async fn test_get_all_external_ids() {
-        let _test_lock = TEST_MUTEX.lock();
         let app = get_test_app();
         let results = app.storage().get_all_external_ids(1).await.unwrap();
         assert_eq!(results.len(), 67233);
         assert!(results.contains_key("100006"));
+    }
+
+    #[tokio::test]
+    async fn test_get_overview_table() {
+        let app = get_test_app();
+        let results = app.storage().get_overview_table().await.unwrap();
+        assert!(results.len() > 5000);
     }
 
     // #lizard forgives
