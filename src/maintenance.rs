@@ -62,10 +62,10 @@ impl Maintenance {
         self.app.storage().replace_nowd_with_noq().await?;
 
         // Remove inactive catalogs from overview table
-        self.app
-            .storage()
-            .remove_inactive_catalogs_from_overview()
-            .await?;
+        // self.app
+        //     .storage()
+        //     .remove_inactive_catalogs_from_overview()
+        //     .await?;
 
         // Fix overview rows with weird (<0) numbers
         for otr in self.app.storage().get_overview_table().await? {
