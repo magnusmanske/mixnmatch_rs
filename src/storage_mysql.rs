@@ -15,6 +15,7 @@ use crate::{
     microsync::EXT_URL_UNIQUE_SEPARATOR,
     mysql_misc::MySQLMisc,
     prop_todo::PropTodo,
+    storage::OverviewTableRow,
     task_size::TaskSize,
     taxon_matcher::{RankedNames, TaxonMatcher, TaxonNameField, TAXON_RANKS},
     update_catalog::UpdateInfo,
@@ -673,6 +674,12 @@ impl Storage for StorageMySQL {
         Ok(ret)
     }
 
+    async fn replace_nowd_with_noq(&self) -> Result<()> {
+        let sql = r"UPDATE entry SET q=NULL,user=NULL,timestamp=NULL WHERE q=-1";
+        self.get_conn().await?.exec_drop(sql, ()).await?;
+        Ok(())
+    }
+
     async fn catalog_refresh_overview_table(&self, catalog_id: usize) -> Result<()> {
         let sql = r"REPLACE INTO `overview` (catalog,total,noq,autoq,na,manual,nowd,multi_match,types) VALUES (
 	        :catalog_id,
@@ -788,6 +795,21 @@ impl Storage for StorageMySQL {
         let mut conn = self.get_conn().await?;
         conn.exec_drop(sql, params! {catalog_id}).await?;
         Ok(())
+    }
+
+    async fn get_overview_table(&self) -> Result<Vec<OverviewTableRow>> {
+        let sql = "SELECT * FROM `overview`";
+        let ret = self
+            .get_conn_ro()
+            .await?
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(|row| OverviewTableRow::from_row(&row))
+            .await?
+            .iter()
+            .filter_map(|row| row.to_owned())
+            .collect();
+        Ok(ret)
     }
 
     async fn queue_reference_fixer(&self, q_numeric: isize) -> Result<()> {
