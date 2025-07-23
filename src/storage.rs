@@ -17,8 +17,52 @@ use crate::{
 };
 use anyhow::Result;
 use async_trait::async_trait;
+use mysql_async::Row;
 use std::collections::HashMap;
 use wikimisc::wikibase::LocaleString;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct OverviewTableRow {
+    catalog_id: usize,
+    total: isize,
+    noq: isize,
+    autoq: isize,
+    na: isize,
+    manual: isize,
+    nowd: isize,
+    multimatch: isize,
+    types: String,
+}
+
+impl OverviewTableRow {
+    pub fn from_row(row: &Row) -> Option<Self> {
+        Some(Self {
+            catalog_id: row.get("catalog")?,
+            total: row.get("total")?,
+            noq: row.get("noq")?,
+            autoq: row.get("autoq")?,
+            na: row.get("na")?,
+            manual: row.get("manual")?,
+            nowd: row.get("nowd")?,
+            multimatch: row.get("multimatch")?,
+            types: row.get("types")?,
+        })
+    }
+
+    pub fn catalog_id(&self) -> usize {
+        self.catalog_id
+    }
+
+    pub fn has_weird_numbers(&self) -> bool {
+        self.total < 0
+            || self.noq < 0
+            || self.autoq < 0
+            || self.na < 0
+            || self.manual < 0
+            || self.nowd < 0
+            || self.multimatch < 0
+    }
+}
 
 #[async_trait]
 pub trait Storage: std::fmt::Debug + Send + Sync {
@@ -70,6 +114,7 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
         &self,
         catalog_id: usize,
     ) -> Result<HashMap<String, String>>;
+    async fn replace_nowd_with_noq(&self) -> Result<()>;
     async fn catalog_refresh_overview_table(&self, catalog_id: usize) -> Result<()>;
     async fn catalog_get_entries_of_people_with_initials(
         &self,
@@ -102,6 +147,7 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
         user_id: Option<usize>,
         q: Option<isize>,
     ) -> Result<()>;
+    async fn get_overview_table(&self) -> Result<Vec<OverviewTableRow>>;
     async fn queue_reference_fixer(&self, q_numeric: isize) -> Result<()>;
     async fn avoid_auto_match(&self, entry_id: usize, q_numeric: Option<isize>) -> Result<bool>;
     async fn get_random_active_catalog_id_with_property(&self) -> Option<usize>;

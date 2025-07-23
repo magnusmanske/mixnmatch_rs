@@ -55,6 +55,24 @@ impl Maintenance {
         self.app.storage().maintenance_artwork().await
     }
 
+    /// Various small&cheap maintenance tasks
+    pub async fn misc_catalog_things(&self) -> Result<()> {
+        // Replace all NOWD entries with NOQ (unmatched) entries.
+        // This should never happen anymore, but who knows, it's cheap...
+        self.app.storage().replace_nowd_with_noq().await?;
+
+        // Fix overview rows with weird (<0) numbers
+        for otr in self.app.storage().get_overview_table().await? {
+            if otr.has_weird_numbers() {
+                self.app
+                    .storage()
+                    .catalog_refresh_overview_table(otr.catalog_id())
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
     /// For unmatched entries with day-precision birth and death dates,
     /// finds other, matched entries with the same name and full dates,
     /// then matches them.
