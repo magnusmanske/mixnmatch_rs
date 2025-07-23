@@ -674,6 +674,12 @@ impl Storage for StorageMySQL {
         Ok(ret)
     }
 
+    async fn remove_inactive_catalogs_from_overview(&self) -> Result<()> {
+        let sql = r#"DELETE FROM `overview` WHERE `catalog` IN (SELECT `id` FROM `catalog` WHERE `active`=0)"#;
+        self.get_conn().await?.exec_drop(sql, ()).await?;
+        Ok(())
+    }
+
     async fn replace_nowd_with_noq(&self) -> Result<()> {
         let sql = r"UPDATE entry SET q=NULL,user=NULL,timestamp=NULL WHERE q=-1";
         self.get_conn().await?.exec_drop(sql, ()).await?;
