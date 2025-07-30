@@ -193,6 +193,11 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
 
     // Maintenance
 
+    async fn maintenance_update_auxiliary_props(
+        &self,
+        prop2type: &[(String, String)],
+    ) -> Result<()>;
+    async fn maintenance_use_auxiliary_broken(&self) -> Result<()>;
     async fn maintenance_common_names_dates(&self) -> Result<()>;
     async fn maintenance_common_names_birth_year(&self) -> Result<()>;
     async fn maintenance_taxa(&self) -> Result<()>;

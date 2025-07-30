@@ -1015,6 +1015,46 @@ impl Storage for StorageMySQL {
 
     // Maintenance
 
+    async fn maintenance_update_auxiliary_props(
+        &self,
+        prop2type: &[(String, String)],
+    ) -> Result<()> {
+        if prop2type.is_empty() {
+            return Ok(());
+        }
+        let mut parts = vec![];
+        let mut params = vec![];
+        for (prop, prop_type) in prop2type {
+            let prop = prop.as_str()[1..].to_string(); // Remove leading P
+            parts.push(format!("({prop},?)"));
+            params.push(prop_type.clone());
+        }
+        let sql = format!(
+            "INSERT INTO `auxiliary_props` (`q`, `type`) VALUES {}",
+            parts.join(",")
+        );
+
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop("TRUNCATE `auxiliary_props`", ()).await?;
+        conn.exec_drop(sql, params).await?;
+        Ok(())
+    }
+
+    async fn maintenance_use_auxiliary_broken(&self) -> Result<()> {
+        let sqls = [
+            r#"UPDATE auxiliary a INNER JOIN auxiliary_fix af ON a.aux_p=af.aux_p AND a.aux_name=af.label SET a.aux_name=af.aux_name"#,
+            r#"INSERT IGNORE INTO auxiliary_broken SELECT * FROM auxiliary WHERE aux_name NOT RLIKE "^Q\\d+$" AND aux_p IN (SELECT q FROM auxiliary_props WHERE `type`="WikibaseItem")"#,
+            r#"DELETE FROM auxiliary WHERE aux_name NOT RLIKE "^Q\\d+$" AND aux_p IN (SELECT q FROM auxiliary_props WHERE `type`="WikibaseItem")"#,
+            r#"UPDATE auxiliary_broken a INNER JOIN auxiliary_fix af ON a.aux_p=af.aux_p AND a.aux_name=af.label SET a.aux_name=af.aux_name"#,
+            r#"INSERT IGNORE INTO auxiliary SELECT * FROM auxiliary_broken WHERE aux_name RLIKE "^Q\\d+$""#,
+            r#"DELETE FROM auxiliary_broken WHERE aux_name RLIKE "^Q\\d+$""#,
+        ];
+        for sql in sqls {
+            self.get_conn().await?.exec_drop(sql, ()).await?;
+        }
+        Ok(())
+    }
+
     async fn maintenance_common_names_dates(&self) -> Result<()> {
         let sqls = [
             r#"DROP TABLE IF EXISTS tmp1"#,
@@ -1029,8 +1069,8 @@ impl Storage for StorageMySQL {
 			    AND catalog NOT IN (SELECT id FROM catalog where active=0)"#,
             r#"CREATE INDEX tmp1a ON tmp1 (nbd)"#,
             r#"DELETE FROM tmp1 WHERE nbd IN (select nbd from tmp1 where matched=1)"#,
-            r#"TRUNCATE common_names_datesr#",
-		    r#"INSERT IGNORE INTO common_names_dates (`name`,cnt,entry_ids,dates)
+            r#"TRUNCATE common_names_dates"#,
+            r#"INSERT IGNORE INTO common_names_dates (`name`,cnt,entry_ids,dates)
 			    SELECT ext_name,count(DISTINCT catalog) as cnt,group_concat(entry_id),regexp_replace(nbd,'^.*\\|','')
 			    FROM tmp1 GROUP BY nbd HAVING cnt>=3"#,
             r#"DROP TABLE tmp1"#,

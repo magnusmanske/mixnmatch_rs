@@ -283,6 +283,39 @@ impl Maintenance {
         Ok((properties, prop_names))
     }
 
+    pub async fn fix_auxiliary_item_values(&self) -> Result<()> {
+        self.update_auxiliary_fix_table().await?;
+        self.app
+            .storage()
+            .maintenance_use_auxiliary_broken()
+            .await?;
+        Ok(())
+    }
+
+    async fn update_auxiliary_fix_table(&self) -> Result<()> {
+        let prop2type = self.get_sparql_prop2type().await?;
+        self.app
+            .storage()
+            .maintenance_update_auxiliary_props(&prop2type)
+            .await?;
+        Ok(())
+    }
+
+    async fn get_sparql_prop2type(&self) -> Result<Vec<(String, String)>> {
+        let sparql = "SELECT ?p ?type { ?p a wikibase:Property; wikibase:propertyType ?type }";
+        let mut reader = self.app.wikidata().load_sparql_csv(sparql).await?;
+        let api = self.app.wikidata().get_mw_api().await?;
+        let mut prop2type = vec![];
+        for row in reader.records().filter_map(|r| r.ok()) {
+            let q = api.extract_entity_from_uri(&row[0])?;
+            let property_type = row[1].to_string();
+            if let Some(property_type) = property_type.split('#').next_back() {
+                prop2type.push((q, property_type.to_string()));
+            };
+        }
+        Ok(prop2type)
+    }
+
     pub async fn automatch_people_via_year_born(&self) -> Result<()> {
         self.app
             .storage()
@@ -586,5 +619,14 @@ mod tests {
             .unwrap();
         let entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
         assert_eq!(entry.q, None);
+    }
+
+    #[tokio::test]
+    async fn test_update_auxiliary_fix_table() {
+        let app = get_test_app();
+        let ms = Maintenance::new(&app);
+        let prop2type = ms.get_sparql_prop2type().await.unwrap();
+        assert!(prop2type.len() > 12000);
+        assert!(prop2type.iter().any(|(prop, _)| prop == "P31"));
     }
 }

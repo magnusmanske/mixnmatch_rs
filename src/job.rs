@@ -408,6 +408,11 @@ impl Job {
             "maintenance_artwork" => Maintenance::new(&self.app).artwork().await,
             "maintenance_common_aux" => Maintenance::new(&self.app).common_aux().await,
             "maintenance_automatch" => Maintenance::new(&self.app).automatch().await,
+            "maintenance_auxiliary_item_values" => {
+                Maintenance::new(&self.app)
+                    .fix_auxiliary_item_values()
+                    .await
+            }
             "maintenance_misc_catalog_things" => {
                 Maintenance::new(&self.app).misc_catalog_things().await
             }
