@@ -66,14 +66,7 @@ pub trait BespokeScraper {
 
     async fn add_missing_aux(&self, entry_id: usize, prop_re: &[(usize, Regex)]) -> Result<()> {
         let entry = Entry::from_id(entry_id, self.app()).await?;
-        let html = self
-            .http_client()
-            .get(&entry.ext_url)
-            .send()
-            .await?
-            .text()
-            .await?;
-
+        let html = self.load_single_line_text_from_url(&entry.ext_url).await?;
         let mut new_aux: Vec<(usize, String)> = vec![];
 
         for (property, re) in prop_re.iter() {
@@ -637,6 +630,15 @@ impl BespokeScraper for BespokeScraper6794 {
     }
 
     async fn run(&self) -> Result<()> {
+        lazy_static! {
+            static ref PROP_RE: Vec<(usize, Regex)> = {
+                vec![(
+                    227,
+                    Regex::new(r#"<a href="http://d-nb.info/gnd/(.+?)""#).unwrap(),
+                )]
+            };
+        }
+
         // Run all existing entries for metadata
         let ext_id2entry_id = self
             .app()
@@ -645,7 +647,7 @@ impl BespokeScraper for BespokeScraper6794 {
             .await?;
         let futures = ext_id2entry_id
             .into_values()
-            .map(|entry_id| self.add_missing_aux(entry_id))
+            .map(|entry_id| self.add_missing_aux(entry_id, &PROP_RE))
             .collect::<Vec<_>>();
 
         // Run 5 in parallel
@@ -655,29 +657,6 @@ impl BespokeScraper for BespokeScraper6794 {
     }
 }
 
-impl BespokeScraper6794 {
-    async fn add_missing_aux(&self, entry_id: usize) -> Result<()> {
-        let entry = Entry::from_id(entry_id, &self.app).await?;
-        let existing_aux = entry.get_aux().await?;
-        let url = &entry.ext_url;
-        let text = self.load_single_line_text_from_url(url).await?;
-        if !existing_aux.iter().any(|aux| aux.prop_numeric() == 227) {
-            if let Some(gnd) = Self::get_main_gnd_from_text(&text) {
-                entry.set_auxiliary(227, Some(gnd)).await?;
-            }
-        }
-        Ok(())
-    }
-
-    fn get_main_gnd_from_text(text: &str) -> Option<String> {
-        lazy_static! {
-            static ref RE_GND: Regex =
-                Regex::new(r#"<a href="http://d-nb.info/gnd/(.+?)""#).unwrap();
-        }
-        let captures = RE_GND.captures(text)?;
-        Some(captures[1].to_string())
-    }
-}
 // ______________________________________________________
 // Hessian Biography person (6976)
 
