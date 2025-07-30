@@ -537,7 +537,6 @@ impl Storage for StorageMySQL {
         let eq = EntryQuery::default().with_catalog_id(catalog_id);
         let sql = "SELECT ext_id,id FROM entry WHERE".to_string();
         let (sql, parts) = Self::get_entry_query_sql_where(&eq, sql, vec![])?;
-        println!("{sql}");
         let ret = self
             .get_conn_ro()
             .await?
