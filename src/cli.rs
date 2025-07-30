@@ -135,7 +135,7 @@ impl ShellCommands {
             }
             Some(Commands::Test { config }) => {
                 let app = Self::path2app(config)?;
-                crate::bespoke_scrapers::BespokeScraper6976::new(&app)
+                crate::bespoke_scrapers::BespokeScraper6794::new(&app)
                     .run()
                     .await?;
             }

@@ -19,6 +19,7 @@ pub async fn run_bespoke_scraper(catalog_id: usize, app: &AppState) -> Result<()
     match catalog_id {
         121 => BespokeScraper121::new(app).run().await,
         6479 => BespokeScraper6479::new(app).run().await,
+        6794 => BespokeScraper6794::new(app).run().await,
         6975 => BespokeScraper6975::new(app).run().await,
         6976 => BespokeScraper6976::new(app).run().await,
         7043 => BespokeScraper7043::new(app).run().await,
@@ -49,6 +50,18 @@ pub trait BespokeScraper {
 
     fn http_client(&self) -> reqwest::Client {
         reqwest::Client::new()
+    }
+
+    async fn load_single_line_text_from_url(&self, url: &str) -> Result<String> {
+        let text = self
+            .http_client()
+            .get(url.to_owned())
+            .send()
+            .await?
+            .text()
+            .await?
+            .replace("\n", ""); // Single line
+        Ok(text)
     }
 
     async fn add_missing_aux(&self, entry_id: usize, prop_re: &[(usize, Regex)]) -> Result<()> {
@@ -602,6 +615,70 @@ impl BespokeScraper for BespokeScraper7043 {
 }
 
 // ______________________________________________________
+// Zentrales Personenregister aus den Beständen des Herder-Instituts (6794)
+
+#[derive(Debug)]
+pub struct BespokeScraper6794 {
+    app: AppState,
+}
+
+#[async_trait]
+impl BespokeScraper for BespokeScraper6794 {
+    fn new(app: &AppState) -> Self {
+        Self { app: app.clone() }
+    }
+
+    fn app(&self) -> &AppState {
+        &self.app
+    }
+
+    fn catalog_id(&self) -> usize {
+        6794
+    }
+
+    async fn run(&self) -> Result<()> {
+        // Run all existing entries for metadata
+        let ext_id2entry_id = self
+            .app()
+            .storage()
+            .get_all_external_ids(self.catalog_id())
+            .await?;
+        let futures = ext_id2entry_id
+            .into_values()
+            .map(|entry_id| self.add_missing_aux(entry_id))
+            .collect::<Vec<_>>();
+
+        // Run 5 in parallel
+        let stream = futures::stream::iter(futures).buffer_unordered(5);
+        let _ = stream.collect::<Vec<_>>().await;
+        Ok(())
+    }
+}
+
+impl BespokeScraper6794 {
+    async fn add_missing_aux(&self, entry_id: usize) -> Result<()> {
+        let entry = Entry::from_id(entry_id, &self.app).await?;
+        let existing_aux = entry.get_aux().await?;
+        let url = &entry.ext_url;
+        let text = self.load_single_line_text_from_url(url).await?;
+        if !existing_aux.iter().any(|aux| aux.prop_numeric() == 227) {
+            if let Some(gnd) = Self::get_main_gnd_from_text(&text) {
+                entry.set_auxiliary(227, Some(gnd)).await?;
+            }
+        }
+        Ok(())
+    }
+
+    fn get_main_gnd_from_text(text: &str) -> Option<String> {
+        lazy_static! {
+            static ref RE_GND: Regex =
+                Regex::new(r#"<a href="http://d-nb.info/gnd/(.+?)""#).unwrap();
+        }
+        let captures = RE_GND.captures(text)?;
+        Some(captures[1].to_string())
+    }
+}
+// ______________________________________________________
 // Hessian Biography person (6976)
 
 #[derive(Debug)]
@@ -645,18 +722,6 @@ impl BespokeScraper for BespokeScraper6976 {
 }
 
 impl BespokeScraper6976 {
-    async fn load_single_line_text_from_url(&self, url: &str) -> Result<String> {
-        let text = self
-            .http_client()
-            .get(url.to_owned())
-            .send()
-            .await?
-            .text()
-            .await?
-            .replace("\n", ""); // Single line
-        Ok(text)
-    }
-
     async fn add_missing_aux(&self, entry_id: usize) -> Result<()> {
         const KEYS2PROP: &[(&str, usize)] = &[
             ("<h3>Vater:</h3>", 22),
