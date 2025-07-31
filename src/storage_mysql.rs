@@ -1029,7 +1029,7 @@ impl Storage for StorageMySQL {
             params.push(prop_type.clone());
         }
         let sql = format!(
-            "INSERT INTO `auxiliary_props` (`q`, `type`) VALUES {}",
+            "INSERT INTO `auxiliary_props` (`p`, `type`) VALUES {}",
             parts.join(",")
         );
 
@@ -1043,7 +1043,7 @@ impl Storage for StorageMySQL {
         let sqls = [
             r#"UPDATE auxiliary a INNER JOIN auxiliary_fix af ON a.aux_p=af.aux_p AND a.aux_name=af.label SET a.aux_name=af.aux_name"#,
             r#"INSERT IGNORE INTO auxiliary_broken SELECT * FROM auxiliary WHERE aux_name NOT RLIKE "^Q\\d+$" AND aux_p IN (SELECT q FROM auxiliary_props WHERE `type`="WikibaseItem")"#,
-            r#"DELETE FROM auxiliary WHERE aux_name NOT RLIKE "^Q\\d+$" AND aux_p IN (SELECT q FROM auxiliary_props WHERE `type`="WikibaseItem")"#,
+            r#"DELETE FROM auxiliary WHERE aux_name NOT RLIKE "^Q\\d+$" AND aux_p IN (SELECT p FROM auxiliary_props WHERE `type`="WikibaseItem")"#,
             r#"UPDATE auxiliary_broken a INNER JOIN auxiliary_fix af ON a.aux_p=af.aux_p AND a.aux_name=af.label SET a.aux_name=af.aux_name"#,
             r#"INSERT IGNORE INTO auxiliary SELECT * FROM auxiliary_broken WHERE aux_name RLIKE "^Q\\d+$""#,
             r#"DELETE FROM auxiliary_broken WHERE aux_name RLIKE "^Q\\d+$""#,
