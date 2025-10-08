@@ -6,7 +6,7 @@ use crate::catalog::Catalog;
 use crate::extended_entry::ExtendedEntry;
 use crate::job::{Job, Jobbable};
 use anyhow::Result;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;

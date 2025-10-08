@@ -2,7 +2,7 @@ use crate::autoscrape::{AutoscrapeError, AutoscrapeRegex, JsonStuff};
 use anyhow::Result;
 use lazy_static::lazy_static;
 use regex::{Regex, RegexBuilder};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 
 lazy_static! {
@@ -31,7 +31,7 @@ impl AutoscrapeResolve {
                 return Ok(Self {
                     use_pattern: String::new(),
                     regexs: vec![],
-                })
+                });
             }
         };
         //.ok_or_else(||AutoscrapeError::UnknownLevelType(json.to_owned()))?;
@@ -94,14 +94,12 @@ impl AutoscrapeResolve {
     }
 
     fn from_json_get_regexs_str(json: &Value) -> Vec<Value> {
-        let regexs_str = json
-            .get("rx")
+        json.get("rx")
             .map(|x| x.to_owned())
             .unwrap_or_else(|| json!([]))
             .as_array()
             .map(|x| x.to_owned())
-            .unwrap_or_default();
-        regexs_str
+            .unwrap_or_default()
     }
 }
 

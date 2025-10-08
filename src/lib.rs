@@ -1,10 +1,11 @@
 #![forbid(unsafe_code)]
+#![allow(clippy::collapsible_if)]
 #![warn(
     clippy::cognitive_complexity,
     clippy::dbg_macro,
     clippy::debug_assert_with_mut_call,
     clippy::doc_link_with_quotes,
-    clippy::doc_markdown,
+    // clippy::doc_markdown,
     clippy::empty_line_after_outer_attr,
     clippy::empty_structs_with_brackets,
     clippy::float_cmp,

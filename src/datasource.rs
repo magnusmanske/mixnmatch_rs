@@ -232,11 +232,9 @@ impl DataSource {
     }
 
     fn extract_min_cols(json: &serde_json::Value, columns: &[String]) -> u64 {
-        let min_cols = json
-            .get("min_cols")
+        json.get("min_cols")
             .map(|v| v.as_u64().unwrap_or(columns.len() as u64))
-            .unwrap_or_else(|| columns.len() as u64);
-        min_cols
+            .unwrap_or_else(|| columns.len() as u64)
     }
 
     fn get_ext_id_column(colmap: &HashMap<String, usize>) -> Result<usize> {
@@ -273,11 +271,10 @@ impl DataSource {
             .as_object()
             .cloned()
             .unwrap_or_default();
-        let patterns = patterns
+        patterns
             .iter()
             .filter_map(|(k, v)| Pattern::from_json(k, v).ok())
-            .collect();
-        patterns
+            .collect()
     }
 
     fn extract_columns(json: &serde_json::Value) -> Vec<String> {
