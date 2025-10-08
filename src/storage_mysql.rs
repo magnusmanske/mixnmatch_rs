@@ -17,14 +17,14 @@ use crate::{
     prop_todo::PropTodo,
     storage::OverviewTableRow,
     task_size::TaskSize,
-    taxon_matcher::{RankedNames, TaxonMatcher, TaxonNameField, TAXON_RANKS},
+    taxon_matcher::{RankedNames, TAXON_RANKS, TaxonMatcher, TaxonNameField},
     update_catalog::UpdateInfo,
 };
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use itertools::Itertools;
 use mysql_async::Params::Empty;
-use mysql_async::{from_row, futures::GetConn, prelude::*, Params, Row};
+use mysql_async::{Params, Row, from_row, futures::GetConn, prelude::*};
 use rand::prelude::*;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -84,7 +84,9 @@ impl StorageMySQL {
             None => Self::coordinate_matcher_main_query_sql_subquery(bad_catalogs, max_results),
         };
         let conditions_not_fully_matched = &MatchState::not_fully_matched().get_sql();
-        format!("SELECT `lat`,`lon`,`id`,`catalog`,`ext_name`,`type`,`q` FROM `vw_location` WHERE `ext_name`!='' AND {conditions_catalog_id} {conditions_not_fully_matched}")
+        format!(
+            "SELECT `lat`,`lon`,`id`,`catalog`,`ext_name`,`type`,`q` FROM `vw_location` WHERE `ext_name`!='' AND {conditions_catalog_id} {conditions_not_fully_matched}"
+        )
     }
 
     fn location_row_from_row(row: &Row) -> Option<LocationRow> {
@@ -154,7 +156,10 @@ impl StorageMySQL {
         sql += r#" AND NOT EXISTS (SELECT * FROM catalog WHERE catalog.id=jobs.catalog AND active!=1)"#; // No inactive catalogs
         match depends_on {
             Some(other_status) => {
-                sql += &format!(" AND `depends_on` IS NOT NULL AND `depends_on` IN (SELECT `id` FROM `jobs` WHERE `status`='{}')",other_status.as_str());
+                sql += &format!(
+                    " AND `depends_on` IS NOT NULL AND `depends_on` IN (SELECT `id` FROM `jobs` WHERE `status`='{}')",
+                    other_status.as_str()
+                );
             }
             None => match &next_ts {
                 Some(ts) => {
@@ -753,7 +758,9 @@ impl Storage for StorageMySQL {
         &self,
         catalog_id: usize,
     ) -> Result<Vec<(isize, String, String)>> {
-        let sql = format!("SELECT q,group_concat(id) AS ids,group_concat(ext_id SEPARATOR '{EXT_URL_UNIQUE_SEPARATOR}') AS ext_ids FROM entry WHERE catalog=:catalog_id AND q IS NOT NULL and q>0 AND user>0 GROUP BY q HAVING count(id)>1 ORDER BY q");
+        let sql = format!(
+            "SELECT q,group_concat(id) AS ids,group_concat(ext_id SEPARATOR '{EXT_URL_UNIQUE_SEPARATOR}') AS ext_ids FROM entry WHERE catalog=:catalog_id AND q IS NOT NULL and q>0 AND user>0 GROUP BY q HAVING count(id)>1 ORDER BY q"
+        );
         let mut conn = self.get_conn_ro().await?;
         let results = conn
             .exec_iter(sql, params! {catalog_id})
@@ -770,7 +777,9 @@ impl Storage for StorageMySQL {
     ) -> Result<Vec<(usize, Option<isize>, Option<usize>, String, String)>> {
         let placeholders: Vec<&str> = ext_ids.iter().map(|_| "BINARY ?").collect();
         let placeholders = placeholders.join(",");
-        let sql = format!("SELECT `id`,`q`,`user`,`ext_id`,`ext_url` FROM `entry` WHERE `catalog`={catalog_id} AND `ext_id` IN ({placeholders})");
+        let sql = format!(
+            "SELECT `id`,`q`,`user`,`ext_id`,`ext_url` FROM `entry` WHERE `catalog`={catalog_id} AND `ext_id` IN ({placeholders})"
+        );
         let mut conn = self.get_conn_ro().await?;
         let results = conn
             .exec_iter(sql, ext_ids.to_vec())
@@ -843,7 +852,7 @@ impl Storage for StorageMySQL {
 
     //TODO test
     async fn get_random_active_catalog_id_with_property(&self) -> Option<usize> {
-        let sql = "SELECT id FROM catalog WHERE active=1 AND wd_prop IS NOT NULL and wd_qual IS NULL ORDER by rand() LIMIT 1" ;
+        let sql = "SELECT id FROM catalog WHERE active=1 AND wd_prop IS NOT NULL and wd_qual IS NULL ORDER by rand() LIMIT 1";
         self.get_conn_ro()
             .await
             .ok()?
@@ -930,7 +939,7 @@ impl Storage for StorageMySQL {
     }
 
     async fn autoscrape_start(&self, autoscrape_id: usize) -> Result<()> {
-        let sql = "UPDATE `autoscrape` SET `status`='RUNNING'`last_run_min`=NULL,`last_run_urls`=NULL WHERE `id`=:autoscrape_id" ;
+        let sql = "UPDATE `autoscrape` SET `status`='RUNNING'`last_run_min`=NULL,`last_run_urls`=NULL WHERE `id`=:autoscrape_id";
         if let Ok(mut conn) = self.get_conn().await {
             let _ = conn.exec_drop(sql, params! {autoscrape_id}).await; // Ignore error
         }
@@ -938,7 +947,7 @@ impl Storage for StorageMySQL {
     }
 
     async fn autoscrape_finish(&self, autoscrape_id: usize, last_run_urls: usize) -> Result<()> {
-        let sql = "UPDATE `autoscrape` SET `status`='OK',`last_run_min`=NULL,`last_run_urls`=:last_run_urls WHERE `id`=:autoscrape_id" ;
+        let sql = "UPDATE `autoscrape` SET `status`='OK',`last_run_min`=NULL,`last_run_urls`=:last_run_urls WHERE `id`=:autoscrape_id";
         if let Ok(mut conn) = self.get_conn().await {
             let _ = conn
                 .exec_drop(sql, params! {autoscrape_id,last_run_urls})
@@ -1102,7 +1111,7 @@ impl Storage for StorageMySQL {
             r#"SET SESSION group_concat_max_len = 1000000000"#,
             r#"TRUNCATE common_names_birth_year_tmp"#,
             r#"REPLACE INTO common_names_birth_year_tmp (name,cnt,entry_ids,dates)
-	        SELECT SQL_NO_CACHE (SELECT ext_name FROM entry WHERE entry.id=entry_id AND q IS NULL AND catalog NOT IN (4837,5580,6094)) AS name,count(DISTINCT entry_id) AS cnt,group_concat(entry_id) AS entry_ids, concat(year_born,'-') as dates
+	        SELECT SQL_NO_CACHE (SELECT ext_name FROM entry WHERE entry.id=entry_id AND q IS NULL AND catalog NOT IN (4837,5580,6094,3247)) AS name,count(DISTINCT entry_id) AS cnt,group_concat(entry_id) AS entry_ids, concat(year_born,'-') as dates
 	        FROM person_dates WHERE is_matched=0 AND year_born!='' AND year_born<1960
 	        GROUP BY name,year_born HAVING name IS NOT NULL AND name NOT RLIKE "^\\S*$" AND cnt>=3"#,
             r#"TRUNCATE common_names_birth_year"#,
@@ -1314,7 +1323,9 @@ impl Storage for StorageMySQL {
             .await?
             .map_and_drop(from_row::<usize>)
             .await?;
-        let sql2 = format!("UPDATE `entry` SET `q`=NULL,`user`=NULL,`timestamp`=NULL WHERE `q` IN ({deletions_string})");
+        let sql2 = format!(
+            "UPDATE `entry` SET `q`=NULL,`user`=NULL,`timestamp`=NULL WHERE `q` IN ({deletions_string})"
+        );
         conn.exec_drop(sql2, ()).await?;
         Ok(catalog_ids)
     }
@@ -1400,7 +1411,7 @@ impl Storage for StorageMySQL {
             .await?
             .map_and_drop(from_row::<(usize, isize)>)
             .await?;
-        let sql2 = "UPDATE `entry` SET `q`=:q,`user`=0,`timestamp`=:timestamp WHERE `id`=:entry_id AND `q` IS NULL" ;
+        let sql2 = "UPDATE `entry` SET `q`=:q,`user`=0,`timestamp`=:timestamp WHERE `id`=:entry_id AND `q` IS NULL";
         for (entry_id, q) in &new_automatches {
             let timestamp = TimeStamp::now();
             conn.exec_drop(sql2, params! {entry_id,q,timestamp}).await?;
@@ -1444,9 +1455,10 @@ impl Storage for StorageMySQL {
         state: &MatchState,
     ) -> Result<Vec<String>> {
         let batch_size = 5000;
-        let sql = format!("SELECT DISTINCT `q` FROM `entry` WHERE `catalog`=:catalog_id {} LIMIT :batch_size OFFSET :offset",
+        let sql = format!(
+            "SELECT DISTINCT `q` FROM `entry` WHERE `catalog`=:catalog_id {} LIMIT :batch_size OFFSET :offset",
             state.get_sql()
-        ) ;
+        );
         let mut conn = self.get_conn_ro().await?;
         let ret = conn
             .exec_iter(sql.clone(), params! {catalog_id,offset,batch_size})
@@ -1738,7 +1750,7 @@ impl Storage for StorageMySQL {
         batch_size: usize,
         offset: usize,
     ) -> Result<Vec<ResultInOriginalCatalog>> {
-        let sql = "SELECT `id`,`ext_name`,`type` FROM entry WHERE catalog=:catalog_id AND q IS NULL LIMIT :batch_size OFFSET :offset" ;
+        let sql = "SELECT `id`,`ext_name`,`type` FROM entry WHERE catalog=:catalog_id AND q IS NULL LIMIT :batch_size OFFSET :offset";
         let conn = self.get_conn_ro().await?;
         let results_in_original_catalog: Vec<ResultInOriginalCatalog> = sql
             .with(params! {catalog_id,batch_size,offset})
@@ -2440,7 +2452,11 @@ mod tests {
             &[],
             None,
         );
-        let expected2a = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' {catalog_filter} AND `depends_on` IS NOT NULL AND `depends_on` IN (SELECT `id` FROM `jobs` WHERE `status`='{}') ORDER BY `last_ts` LIMIT 1",JobStatus::Todo.as_str(),JobStatus::Done.as_str()) ;
+        let expected2a = format!(
+            "SELECT `id` FROM `jobs` WHERE `status`='{}' {catalog_filter} AND `depends_on` IS NOT NULL AND `depends_on` IN (SELECT `id` FROM `jobs` WHERE `status`='{}') ORDER BY `last_ts` LIMIT 1",
+            JobStatus::Todo.as_str(),
+            JobStatus::Done.as_str()
+        );
         assert_eq!(sql2a, expected2a);
 
         // get_next_initial_allowed_job
@@ -2448,7 +2464,11 @@ mod tests {
         let sql3 =
             StorageMySQL::jobs_get_next_job_construct_sql(JobStatus::Todo, None, &avoid, None);
         let not_in = avoid.join("','");
-        let expected3 = format!("SELECT `id` FROM `jobs` WHERE `status`='{}' {catalog_filter} AND `depends_on` IS NULL AND `action` NOT IN ('{}') ORDER BY `last_ts` LIMIT 1",JobStatus::Todo.as_str(),&not_in) ;
+        let expected3 = format!(
+            "SELECT `id` FROM `jobs` WHERE `status`='{}' {catalog_filter} AND `depends_on` IS NULL AND `action` NOT IN ('{}') ORDER BY `last_ts` LIMIT 1",
+            JobStatus::Todo.as_str(),
+            &not_in
+        );
         assert_eq!(sql3, expected3);
 
         // get_next_initial_job
