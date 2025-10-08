@@ -2144,7 +2144,7 @@ impl Storage for StorageMySQL {
             .get_conn_ro()
             .await?
             .exec_iter(
-                r"SELECT `language`,`label` FROM `descriptions` WHERE `entry_id`=:entry_id",
+                r"SELECT /* rust:storage:entry_get_language_descriptions */ `language`,`label` FROM `descriptions` WHERE `entry_id`=:entry_id",
                 params! {entry_id},
             )
             .await?
@@ -2158,7 +2158,7 @@ impl Storage for StorageMySQL {
     }
 
     async fn entry_remove_auxiliary(&self, entry_id: usize, prop_numeric: usize) -> Result<()> {
-        let sql = "DELETE FROM `auxiliary` WHERE `entry_id`=:entry_id AND `aux_p`=:prop_numeric";
+        let sql = "DELETE /* rust:storage:entry_remove_auxiliary */ FROM `auxiliary` WHERE `entry_id`=:entry_id AND `aux_p`=:prop_numeric";
         let mut conn = self.get_conn().await?;
         conn.exec_drop(sql, params! {entry_id,prop_numeric}).await?;
         Ok(())
@@ -2170,7 +2170,7 @@ impl Storage for StorageMySQL {
         prop_numeric: usize,
         value: String,
     ) -> Result<()> {
-        let sql = "REPLACE INTO `auxiliary` (`entry_id`,`aux_p`,`aux_name`) VALUES (:entry_id,:prop_numeric,:value)";
+        let sql = "REPLACE /* rust:storage:entry_set_auxiliary */ INTO `auxiliary` (`entry_id`,`aux_p`,`aux_name`) VALUES (:entry_id,:prop_numeric,:value)";
         let mut conn = self.get_conn().await?;
         conn.exec_drop(sql, params! {entry_id,prop_numeric,value})
             .await?;
@@ -2178,7 +2178,7 @@ impl Storage for StorageMySQL {
     }
 
     async fn entry_remove_coordinate_location(&self, entry_id: usize) -> Result<()> {
-        let sql = "DELETE FROM `location` WHERE `entry_id`=:entry_id";
+        let sql = "DELETE /* rust:storage:entry_remove_coordinate_location */ FROM `location` WHERE `entry_id`=:entry_id";
         let mut conn = self.get_conn().await?;
         conn.exec_drop(sql, params! {entry_id}).await?;
         Ok(())
@@ -2190,7 +2190,7 @@ impl Storage for StorageMySQL {
         lat: f64,
         lon: f64,
     ) -> Result<()> {
-        let sql = "REPLACE INTO `location` (`entry_id`,`lat`,`lon`) VALUES (:entry_id,:lat,:lon)";
+        let sql = "REPLACE /* rust:storage:entry_set_coordinate_location */ INTO `location` (`entry_id`,`lat`,`lon`) VALUES (:entry_id,:lat,:lon)";
         let mut conn = self.get_conn().await?;
         conn.exec_drop(sql, params! {entry_id,lat,lon}).await?;
         Ok(())
@@ -2203,7 +2203,7 @@ impl Storage for StorageMySQL {
         let mut conn = self.get_conn_ro().await?;
         let ret = conn
             .exec_iter(
-                r"SELECT `lat`,`lon` FROM `location` WHERE `entry_id`=:entry_id LIMIT 1",
+                r"SELECT /* rust:storage:entry_get_coordinate_location */ `lat`,`lon` FROM `location` WHERE `entry_id`=:entry_id LIMIT 1",
                 params! {entry_id},
             )
             .await?
@@ -2217,7 +2217,7 @@ impl Storage for StorageMySQL {
     async fn entry_get_aux(&self, entry_id: usize) -> Result<Vec<AuxiliaryRow>> {
         let mut conn = self.get_conn_ro().await?;
         let ret = conn
-            .exec_iter(r"SELECT `id`,`aux_p`,`aux_name`,`in_wikidata`,`entry_is_matched` FROM `auxiliary` WHERE `entry_id`=:entry_id",params! {entry_id}).await?
+            .exec_iter(r"SELECT /* rust:storage:entry_get_aux */ `id`,`aux_p`,`aux_name`,`in_wikidata`,`entry_is_matched` FROM `auxiliary` WHERE `entry_id`=:entry_id",params! {entry_id}).await?
             .map_and_drop(|row| AuxiliaryRow::from_row(&row)).await?
             .iter().filter_map(|row|row.to_owned()).collect();
         Ok(ret)
@@ -2232,7 +2232,7 @@ impl Storage for StorageMySQL {
         timestamp: &str,
     ) -> Result<bool> {
         let entry_id = entry.get_valid_id()?;
-        let mut sql = "UPDATE `entry` SET `q`=:q_numeric,`user`=:user_id,`timestamp`=:timestamp WHERE `id`=:entry_id AND (`q` IS NULL OR `q`!=:q_numeric OR `user`!=:user_id)".to_string();
+        let mut sql = "UPDATE /* rust:storage:entry_set_match */ `entry` SET `q`=:q_numeric,`user`=:user_id,`timestamp`=:timestamp WHERE `id`=:entry_id AND (`q` IS NULL OR `q`!=:q_numeric OR `user`!=:user_id)".to_string();
         if user_id == USER_AUTO {
             if self.avoid_auto_match(entry_id, Some(q_numeric)).await? {
                 return Ok(false); // Nothing wrong but shouldn't be matched
