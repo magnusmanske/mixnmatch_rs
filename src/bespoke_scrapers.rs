@@ -4,7 +4,7 @@ use crate::{
     extended_entry::ExtendedEntry,
     php_wrapper::PhpWrapper,
 };
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use futures::StreamExt;
 use lazy_static::lazy_static;
@@ -23,6 +23,7 @@ pub async fn run_bespoke_scraper(catalog_id: usize, app: &AppState) -> Result<()
         6975 => BespokeScraper6975::new(app).run().await,
         6976 => BespokeScraper6976::new(app).run().await,
         7043 => BespokeScraper7043::new(app).run().await,
+        7433 => BespokeScraper7433::new(app).run().await,
         other => PhpWrapper::bespoke_scraper(other).await, // PHP fallback
     }
 }
@@ -788,6 +789,92 @@ impl BespokeScraper6976 {
         Some(captures[1].to_string())
     }
 }
+
+// ______________________________________________________
+// Hessian Biography person (6976)
+
+#[derive(Debug)]
+pub struct BespokeScraper7433 {
+    app: AppState,
+}
+
+#[async_trait]
+impl BespokeScraper for BespokeScraper7433 {
+    fn new(app: &AppState) -> Self {
+        Self { app: app.clone() }
+    }
+
+    fn catalog_id(&self) -> usize {
+        7433
+    }
+
+    fn app(&self) -> &AppState {
+        &self.app
+    }
+
+    async fn run(&self) -> Result<()> {
+        let ext_ids = self
+            .app()
+            .storage()
+            .get_all_external_ids(self.catalog_id())
+            .await?;
+        for page_id in 1..=70 {
+            let mut entry_cache = Vec::new();
+            let url = format!(
+                "https://research.annefrank.org/en/api/search?type=person&format=json&page={page_id}"
+            );
+            let client = reqwest::Client::new();
+            let json: serde_json::Value = client.get(url).send().await?.json().await?;
+            let results = match json["results"].as_array() {
+                Some(results) => results,
+                None => continue,
+            };
+            for result_container in results {
+                let result = match result_container["instance"].as_object() {
+                    Some(result) => result,
+                    None => continue,
+                };
+                let id = match result["uuid"].as_str() {
+                    Some(id) => id,
+                    None => continue,
+                };
+                if ext_ids.contains_key(id) {
+                    continue;
+                }
+                let title = result["title"].as_str().unwrap_or_default();
+                if title.is_empty() {
+                    continue;
+                }
+                let birth_date = result["birth_date"].as_str().map(|s| s.to_string());
+                let death_date = result["death_date"].as_str().map(|s| s.to_string());
+                let desc = result["summary"].as_str().unwrap_or_default();
+                let ext_url = result["url"].as_str().unwrap_or_default();
+                let entry = Entry {
+                    catalog: self.catalog_id(),
+                    ext_id: id.to_string(),
+                    ext_name: title.to_string(),
+                    ext_desc: desc.to_string(),
+                    ext_url: ext_url.to_string(),
+                    random: rand::rng().random(),
+                    type_name: Some("Q5".to_string()),
+                    ..Default::default()
+                };
+                let ee = ExtendedEntry {
+                    entry,
+                    born: birth_date,
+                    died: death_date,
+                    ..Default::default()
+                };
+                entry_cache.push(ee);
+            }
+            self.process_cache(&mut entry_cache).await?;
+            std::thread::sleep(std::time::Duration::from_secs(10));
+        }
+        Ok(())
+    }
+}
+
+impl BespokeScraper7433 {}
 
 #[cfg(test)]
 mod tests {

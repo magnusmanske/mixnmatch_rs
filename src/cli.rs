@@ -1,5 +1,5 @@
 use crate::{app_state::AppState, bespoke_scrapers::BespokeScraper, process::Process};
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
@@ -135,7 +135,7 @@ impl ShellCommands {
             }
             Some(Commands::Test { config }) => {
                 let app = Self::path2app(config)?;
-                crate::bespoke_scrapers::BespokeScraper6794::new(&app)
+                crate::bespoke_scrapers::BespokeScraper7433::new(&app)
                     .run()
                     .await?;
             }
