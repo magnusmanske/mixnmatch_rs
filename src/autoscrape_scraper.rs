@@ -7,7 +7,7 @@ use crate::extended_entry::ExtendedEntry;
 use anyhow::Result;
 use rand::prelude::*;
 use regex::Regex;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Default)]
@@ -137,7 +137,7 @@ impl AutoscrapeScraper {
         } else {
             Some(type_name)
         };
-        let entry_ex = ExtendedEntry {
+        ExtendedEntry {
             entry: Entry {
                 catalog: autoscrape.catalog_id(),
                 ext_id: self.resolve_id.replace_vars(&map),
@@ -159,8 +159,7 @@ impl AutoscrapeScraper {
             aliases: vec![],
             descriptions: HashMap::new(),
             location: None,
-        };
-        entry_ex
+        }
     }
 
     fn regex_entry_from_json_array(rx_entry: &Value, json: &Value) -> Result<Vec<Regex>> {
@@ -184,9 +183,11 @@ impl AutoscrapeScraper {
         let s = rx_entry
             .as_str()
             .ok_or_else(|| AutoscrapeError::BadType(json.to_owned()))?;
-        Ok(vec![AutoscrapeRegexBuilder::new(&Self::fix_regex(s))
-            .multi_line(true)
-            .build()?])
+        Ok(vec![
+            AutoscrapeRegexBuilder::new(&Self::fix_regex(s))
+                .multi_line(true)
+                .build()?,
+        ])
     }
 
     fn process_html_block_generate_map(

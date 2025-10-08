@@ -22,9 +22,9 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
-use wikimisc::wikibase::entity_container::EntityContainer;
 use wikimisc::wikibase::Entity;
 use wikimisc::wikibase::Value;
+use wikimisc::wikibase::entity_container::EntityContainer;
 
 pub const AUX_BLACKLISTED_CATALOGS: &[usize] = &[506];
 pub const AUX_BLACKLISTED_CATALOGS_PROPERTIES: &[(usize, usize)] = &[(2099, 428)];
@@ -338,21 +338,19 @@ impl AuxiliaryMatcher {
     }
 
     fn get_search_batch_size(&mut self) -> usize {
-        let search_batch_size = *self
+        *self
             .app
             .task_specific_usize()
             .get("auxiliary_matcher_search_batch_size")
-            .unwrap_or(&50);
-        search_batch_size
+            .unwrap_or(&50)
     }
 
     fn get_batch_size(&mut self) -> usize {
-        let batch_size = *self
+        *self
             .app
             .task_specific_usize()
             .get("auxiliary_matcher_batch_size")
-            .unwrap_or(&500);
-        batch_size
+            .unwrap_or(&500)
     }
 
     async fn get_extid_props(&mut self) -> Result<Vec<String>> {
@@ -770,7 +768,7 @@ impl AuxiliaryMatcher {
 mod tests {
     use super::*;
     use crate::{
-        app_state::{get_test_app, TEST_MUTEX},
+        app_state::{TEST_MUTEX, get_test_app},
         entry::Entry,
     };
 
@@ -849,12 +847,14 @@ mod tests {
 
         // Check
         let aux = entry.get_aux().await.unwrap();
-        assert!(aux
-            .iter()
-            .any(|x| x.prop_numeric() == 214 && x.in_wikidata()));
-        assert!(aux
-            .iter()
-            .any(|x| x.prop_numeric() == 370 && !x.in_wikidata()));
+        assert!(
+            aux.iter()
+                .any(|x| x.prop_numeric() == 214 && x.in_wikidata())
+        );
+        assert!(
+            aux.iter()
+                .any(|x| x.prop_numeric() == 370 && !x.in_wikidata())
+        );
 
         // Cleanup
         entry.set_auxiliary(214, None).await.unwrap();

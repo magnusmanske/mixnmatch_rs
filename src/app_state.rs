@@ -6,7 +6,7 @@ use crate::storage_mysql::StorageMySQL;
 use crate::task_size::TaskSize;
 use crate::wdrc::WDRC;
 use crate::wikidata::Wikidata;
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use chrono::Local;
 use dashmap::DashMap;
 use lazy_static::lazy_static;
@@ -192,7 +192,9 @@ impl AppState {
                 let (running, running_recent) =
                     app.storage().app_state_seppuku_get_running(&ts).await;
                 if running > 0 && running_recent == 0 {
-                    error!("seppuku: {running} jobs running but no activity within {max_age_min} minutes, commiting seppuku");
+                    error!(
+                        "seppuku: {running} jobs running but no activity within {max_age_min} minutes, commiting seppuku"
+                    );
                     std::process::exit(0);
                 }
                 // println!("seppuku: honor intact");
@@ -366,12 +368,11 @@ impl AppState {
         current_jobs: &Arc<DashMap<usize, TaskSize>>,
         threshold_job_size: &TaskSize,
     ) -> usize {
-        let big_jobs_running = current_jobs
+        current_jobs
             .iter()
             .map(|x| x.value().to_owned())
             .filter(|size| *size > *threshold_job_size)
-            .count();
-        big_jobs_running
+            .count()
     }
 }
 
