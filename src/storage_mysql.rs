@@ -335,6 +335,21 @@ impl Storage for StorageMySQL {
         Ok(())
     }
 
+    async fn get_user_name_from_id(&self, user_id: usize) -> Option<String> {
+        let sql = format!("SELECT name FROM user WHERE id = {user_id}");
+        self.get_conn_ro()
+            .await
+            .ok()?
+            .exec_iter(sql, ())
+            .await
+            .ok()?
+            .map_and_drop(from_row::<String>)
+            .await
+            .ok()?
+            .first()
+            .cloned()
+    }
+
     async fn entry_query(&self, query: &EntryQuery) -> Result<Vec<Entry>> {
         let (sql, parts) = Self::get_entry_query_sql(query)?;
         let ret = self

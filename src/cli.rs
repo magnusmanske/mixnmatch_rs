@@ -1,7 +1,12 @@
-use crate::{app_state::AppState, bespoke_scrapers::BespokeScraper, process::Process};
+use crate::{
+    app_state::AppState, bespoke_scrapers::BespokeScraper, extended_entry::ExtendedEntry,
+    process::Process,
+};
 use anyhow::{Result, anyhow};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
+// use wikibase::{EntityTrait, entity_container::EntityContainer};
+// use wikibase_rest_api::prelude::*;
 
 #[derive(Parser)]
 #[command(arg_required_else_help = true)]
@@ -76,6 +81,12 @@ enum Commands {
         really: bool,
     },
 
+    /// wikibase.cloud
+    WB {
+        #[arg(short, long, value_name = "FILE")]
+        config: Option<PathBuf>,
+    },
+
     /// test
     Test {
         #[arg(short, long, value_name = "FILE")]
@@ -132,6 +143,52 @@ impl ShellCommands {
                         catalog_id, min_dates, min_aux, entry_type, try_search, desc_hint,
                     )
                     .await?;
+            }
+            Some(Commands::WB { config }) => {
+                let config_file = Self::path2str(config);
+                let config_json = AppState::load_config(&config_file)?;
+                let app = AppState::from_config(&config_json)?;
+                let mut wb = app.get_wikibase_from_config(&config_json).await?;
+
+                let catalog_id = 2974;
+                let catalog_item = wb.get_or_create_catalog(&app, catalog_id).await?;
+                // println!("https://mix-n-match.wikibase.cloud/wiki/Item:{catalog_item}");
+                let limit: usize = 1;
+                let mut offset: usize = 0;
+                loop {
+                    let entries = app
+                        .storage()
+                        .get_entry_batch(catalog_id, limit, offset)
+                        .await?;
+
+                    // let ext_ids = entries
+                    //     .iter()
+                    //     .map(|entry| &entry.ext_id)
+                    //     .collect::<Vec<_>>();
+
+                    for entry in &entries {
+                        // println!("{entry:?}");
+                        let mut ext_entry = ExtendedEntry {
+                            entry: entry.to_owned(),
+                            ..Default::default()
+                        };
+                        ext_entry.load_extended_data().await?;
+                        let item = match wb.generate_entry_item(&ext_entry, &catalog_item).await {
+                            Some(item) => item,
+                            None => {
+                                eprintln!("Error generating item for entry {:?}", ext_entry);
+                                continue;
+                            }
+                        };
+                        println!("{item:?}");
+                    }
+
+                    // Should be <limit but for testing... FIXME
+                    if entries.len() < 50 {
+                        break;
+                    }
+                    offset += limit;
+                }
             }
             Some(Commands::Test { config }) => {
                 let app = Self::path2app(config)?;

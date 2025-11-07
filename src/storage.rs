@@ -71,6 +71,7 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
 
     async fn entry_query(&self, query: &EntryQuery) -> Result<Vec<Entry>>;
     async fn get_entry_ids_by_aux(&self, prop_numeric: usize, value: &str) -> Result<Vec<usize>>;
+    async fn get_user_name_from_id(&self, user_id: usize) -> Option<String>;
 
     // Taxon matcher
 
@@ -156,7 +157,7 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     async fn set_kv_value(&self, key: &str, value: &str) -> Result<()>;
     async fn do_catalog_entries_have_person_date(&self, catalog_id: usize) -> Result<bool>;
     async fn set_has_person_date(&self, catalog_id: usize, new_has_person_date: &str)
-        -> Result<()>;
+    -> Result<()>;
 
     // Issue
 
@@ -360,7 +361,7 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     async fn entry_get_creation_time(&self, entry_id: usize) -> Option<String>;
     async fn entry_set_ext_name(&self, ext_name: &str, entry_id: usize) -> Result<()>;
     async fn entry_set_auxiliary_in_wikidata(&self, in_wikidata: bool, aux_id: usize)
-        -> Result<()>;
+    -> Result<()>;
     async fn entry_set_ext_desc(&self, ext_desc: &str, entry_id: usize) -> Result<()>;
     async fn entry_set_ext_id(&self, ext_id: &str, entry_id: usize) -> Result<()>;
     async fn entry_set_ext_url(&self, ext_url: &str, entry_id: usize) -> Result<()>;

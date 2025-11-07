@@ -5,6 +5,7 @@ use crate::storage::Storage;
 use crate::storage_mysql::StorageMySQL;
 use crate::task_size::TaskSize;
 use crate::wdrc::WDRC;
+use crate::wikibase::WikiBase;
 use crate::wikidata::Wikidata;
 use anyhow::{Result, anyhow};
 use chrono::Local;
@@ -58,10 +59,7 @@ pub struct AppState {
 impl AppState {
     /// Create an `AppState` object from a config JSON file
     pub fn from_config_file(filename: &str) -> Result<Self> {
-        let mut path = env::current_dir()?;
-        path.push(filename);
-        let file = File::open(&path)?;
-        let config: Value = serde_json::from_reader(file)?;
+        let config = Self::load_config(filename)?;
         Self::from_config(&config)
     }
 
@@ -108,6 +106,12 @@ impl AppState {
             task_specific_usize,
             max_concurrent_jobs,
         })
+    }
+
+    pub async fn get_wikibase_from_config(&self, config: &Value) -> Result<WikiBase> {
+        WikiBase::new(&config["wikibase"])
+            .await
+            .ok_or(anyhow!("Could not create wikibase"))
     }
 
     pub fn storage(&self) -> &Arc<Box<dyn Storage>> {
@@ -373,6 +377,14 @@ impl AppState {
             .map(|x| x.value().to_owned())
             .filter(|size| *size > *threshold_job_size)
             .count()
+    }
+
+    pub fn load_config(filename: &str) -> Result<Value> {
+        let mut path = env::current_dir()?;
+        path.push(filename);
+        let file = File::open(&path)?;
+        let config: Value = serde_json::from_reader(file)?;
+        Ok(config)
     }
 }
 

@@ -72,6 +72,7 @@ pub mod prop_todo;
 pub mod storage;
 pub mod storage_mysql;
 pub mod task_size;
+pub mod wikibase;
 // pub mod storage_wikibase;
 pub mod taxon_matcher;
 pub mod update_catalog;

@@ -2,7 +2,7 @@ use crate::app_state::AppState;
 use crate::datasource::DataSource;
 use crate::entry::{CoordinateLocation, Entry};
 use crate::update_catalog::UpdateCatalogError;
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use lazy_static::lazy_static;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
@@ -33,6 +33,23 @@ pub struct ExtendedEntry {
 }
 
 impl ExtendedEntry {
+    pub async fn load_extended_data(&mut self) -> Result<()> {
+        self.aux = self
+            .entry
+            .get_aux()
+            .await?
+            .into_iter()
+            .map(|aux| (aux.prop_numeric(), aux.value().to_string()))
+            .collect();
+        self.location = self.entry.get_coordinate_location().await?;
+        (self.born, self.died) = self.entry.get_person_dates().await?;
+        self.aliases = self.entry.get_aliases().await?;
+        self.descriptions = self.entry.get_language_descriptions().await?;
+        // TODO mnm
+        // TODO kv_entry
+        Ok(())
+    }
+
     //TODO test
     pub fn from_row(row: &csv::StringRecord, datasource: &mut DataSource) -> Result<Self> {
         let ext_id = row

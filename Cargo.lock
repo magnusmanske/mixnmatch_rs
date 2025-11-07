@@ -1522,6 +1522,7 @@ dependencies = [
  "tokio",
  "urlencoding",
  "uuid",
+ "wikibase",
  "wikimisc",
 ]
 
