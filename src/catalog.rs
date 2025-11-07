@@ -1,6 +1,6 @@
 use crate::app_state::AppState;
 use crate::entry::AuxiliaryRow;
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use std::collections::HashMap;
 use wikimisc::wikibase::Reference;
 use wikimisc::wikibase::Snak;

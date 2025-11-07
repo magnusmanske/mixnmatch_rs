@@ -30,6 +30,7 @@ anyhow = "*"
 sysinfo = "*"
 log = "*"
 axum = "*"
+wikibase = "*"
 
 [profile.release]
 lto = 'thin'
