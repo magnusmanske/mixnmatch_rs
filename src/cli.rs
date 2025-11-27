@@ -173,7 +173,10 @@ impl ShellCommands {
                             ..Default::default()
                         };
                         ext_entry.load_extended_data().await?;
-                        let item = match wb.generate_entry_item(&ext_entry, &catalog_item).await {
+                        let item = match wb
+                            .generate_entry_item(&app, &ext_entry, &catalog_item)
+                            .await
+                        {
                             Some(item) => item,
                             None => {
                                 eprintln!("Error generating item for entry {:?}", ext_entry);
