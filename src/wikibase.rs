@@ -215,6 +215,7 @@ impl WikiBaseUser {
                 item: ITEM_AUTOMATIC_WORKS_MATCHER,
             }),
             _ => {
+                // TODO cache user ID mappings
                 let user_name = app.storage().get_user_name_from_id(user_id).await?;
                 Some(Self::User {
                     id: user_id,
@@ -259,6 +260,7 @@ impl WikiBase {
 
     pub async fn generate_entry_item(
         &self,
+        app: &AppState,
         ext_entry: &ExtendedEntry,
         catalog_item: &str,
     ) -> Option<ItemEntity> {
@@ -383,6 +385,13 @@ impl WikiBase {
             ));
         }
 
+        if let Some(user_id) = entry.user {
+            if let Some(user) = WikiBaseUser::new_from_id(user_id, app).await {
+                if let Some(snak) = user.get_snak() {
+                    // item.add_claim(Statement::new_normal(snak, vec![], vec![]));
+                }
+            }
+        }
         // if let Some(snak) = self.get_user_snak(catalog.owner(), app).await {
         //     item.add_claim(Statement::new_normal(snak, vec![], vec![]));
         // }
