@@ -1126,7 +1126,7 @@ impl Storage for StorageMySQL {
             r#"SET SESSION group_concat_max_len = 1000000000"#,
             r#"TRUNCATE common_names_birth_year_tmp"#,
             r#"REPLACE INTO common_names_birth_year_tmp (name,cnt,entry_ids,dates)
-	        SELECT SQL_NO_CACHE (SELECT ext_name FROM entry WHERE entry.id=entry_id AND q IS NULL AND catalog NOT IN (4837,5580,6094,3247)) AS name,count(DISTINCT entry_id) AS cnt,group_concat(entry_id) AS entry_ids, concat(year_born,'-') as dates
+	        SELECT SQL_NO_CACHE (SELECT ext_name FROM entry WHERE entry.id=entry_id AND q IS NULL AND catalog NOT IN (4837,5580,6094,3247,7480)) AS name,count(DISTINCT entry_id) AS cnt,group_concat(entry_id) AS entry_ids, concat(year_born,'-') as dates
 	        FROM person_dates WHERE is_matched=0 AND year_born!='' AND year_born<1960
 	        GROUP BY name,year_born HAVING name IS NOT NULL AND name NOT RLIKE "^\\S*$" AND cnt>=3"#,
             r#"TRUNCATE common_names_birth_year"#,

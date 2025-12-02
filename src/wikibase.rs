@@ -387,7 +387,7 @@ impl WikiBase {
 
         if let Some(user_id) = entry.user {
             if let Some(user) = WikiBaseUser::new_from_id(user_id, app).await {
-                if let Some(snak) = user.get_snak() {
+                if let Some(_snak) = user.get_snak() {
                     // item.add_claim(Statement::new_normal(snak, vec![], vec![]));
                 }
             }
