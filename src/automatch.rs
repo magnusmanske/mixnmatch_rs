@@ -10,11 +10,11 @@ use crate::job::Job;
 use crate::job::Jobbable;
 use crate::match_state::MatchState;
 use crate::person::Person;
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use chrono::prelude::*;
 use chrono::{NaiveDateTime, Utc};
-use futures::future::join_all;
 use futures::StreamExt;
+use futures::future::join_all;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use mediawiki::api::Api;
@@ -131,6 +131,46 @@ impl AutoMatch {
         }
     }
 
+    /// Helper method to sort and deduplicate a vector of strings
+    fn sort_and_dedup(items: &mut Vec<String>) {
+        items.sort();
+        items.dedup();
+    }
+
+    /// Helper method to handle match candidates based on their count:
+    /// - 0 candidates: do nothing
+    /// - 1 candidate: set as match with given user_id
+    /// - >1 candidates: create duplicate issue
+    async fn handle_match_candidates(
+        &self,
+        entry_id: usize,
+        candidates: Vec<String>,
+        user_id: usize,
+    ) -> Result<()> {
+        match candidates.len() {
+            0 => Ok(()), // No results
+            1 => {
+                let _ = Entry::from_id(entry_id, &self.app)
+                    .await?
+                    .set_match(&candidates[0], user_id)
+                    .await?;
+                Ok(())
+            }
+            _ => {
+                Issue::new(
+                    entry_id,
+                    IssueType::WdDuplicate,
+                    json!(candidates),
+                    &self.app,
+                )
+                .await?
+                .insert()
+                .await?;
+                Ok(())
+            }
+        }
+    }
+
     pub async fn automatch_with_sparql(&mut self, catalog_id: usize) -> Result<()> {
         let catalog = Catalog::from_id(catalog_id, &self.app).await?;
         let kv_pairs = catalog.get_key_value_pairs().await?;
@@ -186,7 +226,6 @@ impl AutoMatch {
             let mut entry_batch = self.app.storage().entry_query(&query).await?;
             for entry in &mut entry_batch {
                 if let Some(q) = label2q.get(&entry.ext_name.to_lowercase()) {
-                    // println!("Found {q} for {}", entry.ext_name);
                     entry.set_app(&self.app);
                     let _ = entry.set_match(&format!("Q{q}"), USER_AUTO).await;
                 }
@@ -276,8 +315,7 @@ impl AutoMatch {
         if items.is_empty() {
             return None;
         }
-        items.sort();
-        items.dedup();
+        Self::sort_and_dedup(&mut items);
         Some((entry_id, items))
     }
 
@@ -334,22 +372,18 @@ impl AutoMatch {
                 .storage()
                 .automatch_by_search_get_results(catalog_id, offset, batch_size)
                 .await?;
-            // println!("automatch_by_search [{catalog_id}]:Done.");
 
             for result_batch in results.chunks(search_batch_size) {
                 self.automatch_by_search_process_results_batch(result_batch)
                     .await;
             }
-            // println!("automatch_by_search [{catalog_id}]: Batch completed.");
 
             if results.len() < batch_size {
                 break;
             }
-            // println!("automatch_by_search [{catalog_id}]: Another batch...");
             offset += results.len();
             let _ = self.remember_offset(offset).await;
         }
-        // println!("automatch_by_search [{catalog_id}]: All batches completed.");
         let _ = self.clear_offset().await;
         Ok(())
     }
@@ -453,21 +487,14 @@ impl AutoMatch {
     }
 
     async fn automatch_simple_set_matches(&mut self, items: Vec<String>, entry_id: usize) {
-        let item = match items.first() {
-            Some(item) => item,
-            None => return,
-        };
+        if items.is_empty() {
+            return;
+        }
         let mut entry = match Entry::from_id(entry_id, &self.app).await {
             Ok(entry) => entry,
             _ => return, // Ignore error
         };
-        if entry.set_match(item, USER_AUTO).await.is_err() {
-            return; // Ignore error
-        }
-        if items.len() > 1 {
-            // Multi-match
-            let _ = entry.set_multi_match(&items).await.is_err(); // Ignore error
-        }
+        let _ = entry.set_auto_and_multi_match(&items).await; // Ignore error
     }
 
     async fn automatch_simple_items_from_result(
@@ -489,8 +516,7 @@ impl AutoMatch {
             };
             items.append(&mut tmp);
         }
-        items.sort();
-        items.dedup();
+        Self::sort_and_dedup(&mut items);
         if self
             .app
             .wikidata()
@@ -580,28 +606,8 @@ impl AutoMatch {
             Ok(value) => value,
             Err(value) => return Ok(value),
         };
-        match candidate_items.len() {
-            0 => {} // No results
-            1 => {
-                let q = &candidate_items[0];
-                let _ = Entry::from_id(entry_id, &self.app)
-                    .await?
-                    .set_match(q, USER_DATE_MATCH)
-                    .await;
-            }
-            _ => {
-                Issue::new(
-                    entry_id,
-                    IssueType::WdDuplicate,
-                    json!(candidate_items),
-                    &self.app,
-                )
-                .await?
-                .insert()
-                .await?;
-            }
-        }
-        Ok(())
+        self.handle_match_candidates(entry_id, candidate_items, USER_DATE_MATCH)
+            .await
     }
 
     async fn match_person_by_dates_process_result_get_candidate_items(
@@ -757,16 +763,8 @@ impl AutoMatch {
                 );
             }
         }
-        if candidates.len() == 1 {
-            // TODO >1
-            if let Some(q) = candidates.first() {
-                let _ = Entry::from_id(result.entry_id, &self.app)
-                    .await?
-                    .set_match(q, USER_DATE_MATCH)
-                    .await;
-            }
-        };
-        Ok(())
+        self.handle_match_candidates(result.entry_id, candidates, USER_DATE_MATCH)
+            .await
     }
 
     //TODO test
@@ -786,7 +784,10 @@ impl AutoMatch {
         let mut ret = vec![];
         for items in all_items.chunks(100) {
             let item_str = items.join(" wd:");
-            let sparql = format!("SELECT DISTINCT ?q {{ VALUES ?q {{ wd:{} }} . ?q wdt:P569 ?born ; wdt:P570 ?died. FILTER ( year(?born)={}).FILTER ( year(?died)={} ) }}",&item_str,birth_year,death_year);
+            let sparql = format!(
+                "SELECT DISTINCT ?q {{ VALUES ?q {{ wd:{} }} . ?q wdt:P569 ?born ; wdt:P570 ?died. FILTER ( year(?born)={}).FILTER ( year(?died)={} ) }}",
+                &item_str, birth_year, death_year
+            );
             if let Ok(results) = mw_api.sparql_query(&sparql).await {
                 let mut candidates = mw_api.entities_from_sparql_result(&results, "q");
                 ret.append(&mut candidates);
@@ -824,7 +825,9 @@ impl AutoMatch {
             let sr = sr.join(" wd:");
             let sparql_subquery =
                 format!("SELECT DISTINCT ?q {{ {sparql_parts} . VALUES ?q {{ wd:{sr} }} }}");
-            let sparql = format!("SELECT ?q ?qLabel {{ {{ {sparql_subquery} }} SERVICE wikibase:label {{ bd:serviceParam wikibase:language \"{language},[AUTO_LANGUAGE],en\" }} }}");
+            let sparql = format!(
+                "SELECT ?q ?qLabel {{ {{ {sparql_subquery} }} SERVICE wikibase:label {{ bd:serviceParam wikibase:language \"{language},[AUTO_LANGUAGE],en\" }} }}"
+            );
             let mut reader = match self.app.wikidata().load_sparql_csv(&sparql).await {
                 Ok(result) => result,
                 Err(_) => continue, // Ignore error
@@ -853,8 +856,7 @@ impl AutoMatch {
         if search_results.is_empty() {
             return Ok(vec![]);
         }
-        search_results.sort();
-        search_results.dedup();
+        Self::sort_and_dedup(&mut search_results);
         Ok(search_results)
     }
 
@@ -975,7 +977,6 @@ impl AutoMatch {
         }
 
         if let Some(entry) = entries.get_mut(&entry_candidates[0]) {
-            // println!("{q} {q_label} => {}",entry.id);
             let _ = entry.set_auto_and_multi_match(&[q]).await; // Ignore error
         }
     }
@@ -1107,7 +1108,7 @@ impl AutoMatch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app_state::{get_test_app, TEST_MUTEX};
+    use crate::app_state::{TEST_MUTEX, get_test_app};
 
     const TEST_CATALOG_ID: usize = 5526;
     const TEST_ENTRY_ID: usize = 143962196;
@@ -1159,10 +1160,12 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(Entry::from_id(TEST_ENTRY_ID, &app)
-            .await
-            .unwrap()
-            .is_unmatched());
+        assert!(
+            Entry::from_id(TEST_ENTRY_ID, &app)
+                .await
+                .unwrap()
+                .is_unmatched()
+        );
 
         // Run automatch
         let mut am = AutoMatch::new(&app);

@@ -13,7 +13,7 @@ use crate::microsync::Microsync;
 use crate::php_wrapper::PhpWrapper;
 use crate::taxon_matcher::TaxonMatcher;
 use crate::update_catalog::UpdateCatalog;
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use chrono::Duration;
 use chrono::Local;
@@ -24,6 +24,9 @@ use std::fmt;
 use wikimisc::timestamp::TimeStamp;
 
 /// A trait that allows to manage temporary job data (eg offset)
+///
+/// To use this trait, simply add a `job: Option<Job>` field to your struct
+/// and implement only the three required methods. All other methods have default implementations.
 #[async_trait]
 pub trait Jobbable {
     fn set_current_job(&mut self, job: &Job);
