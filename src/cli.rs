@@ -173,17 +173,17 @@ impl ShellCommands {
                             ..Default::default()
                         };
                         ext_entry.load_extended_data().await?;
-                        let item = match wb
+                        let _item = match wb
                             .generate_entry_item(&app, &ext_entry, &catalog_item)
                             .await
                         {
                             Some(item) => item,
                             None => {
-                                eprintln!("Error generating item for entry {:?}", ext_entry);
+                                // eprintln!("Error generating item for entry {:?}", ext_entry);
                                 continue;
                             }
                         };
-                        println!("{item:?}");
+                        // println!("{item:?}");
                     }
 
                     // Should be <limit but for testing... FIXME
