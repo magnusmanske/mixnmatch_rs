@@ -198,10 +198,10 @@ impl TaxonMatcher {
                 match qs.len().cmp(&1) {
                     std::cmp::Ordering::Less => {}
                     std::cmp::Ordering::Equal => {
-                        if let Some(q) = qs.pop() {
+                        if let Some(q) = qs.first() {
                             let _ = Entry::from_id(*entry_id, &self.app)
                                 .await?
-                                .set_match(&q, USER_AUX_MATCH)
+                                .set_match(q, USER_AUX_MATCH)
                                 .await;
                         }
                     }
