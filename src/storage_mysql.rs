@@ -8,7 +8,7 @@ use crate::{
     coordinate_matcher::LocationRow,
     entry::{AuxiliaryRow, CoordinateLocation, Entry, EntryError},
     entry_query::EntryQuery,
-    issue::Issue,
+    issue::{Issue, IssueStatus},
     job_row::JobRow,
     job_status::JobStatus,
     match_state::MatchState,
@@ -904,6 +904,20 @@ impl Storage for StorageMySQL {
 
     // Issue
 
+    async fn get_open_wd_duplicates(&self) -> Result<Vec<Issue>> {
+        let sql = r"SELECT * FROM `issues` WHERE `status`='OPEN' and `type`='WD_DUPLICATE'";
+        let mut conn = self.get_conn_ro().await?;
+        let ret = conn
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(|row| Issue::from_row(&row))
+            .await?
+            .into_iter()
+            .flatten()
+            .collect();
+        Ok(ret)
+    }
+
     async fn issue_insert(&self, issue: &Issue) -> Result<()> {
         let sql = "INSERT IGNORE INTO `issues` (`entry_id`,`type`,`json`,`random`,`catalog`)
         SELECT :entry_id,:issue_type,:json,rand(),`catalog` FROM `entry` WHERE `id`=:entry_id";
@@ -912,6 +926,16 @@ impl Storage for StorageMySQL {
             "issue_type" => issue.issue_type.to_str(),
             "json" => issue.json.to_string(),
             "catalog" => issue.catalog_id,
+        };
+        self.get_conn().await?.exec_drop(sql, params).await?;
+        Ok(())
+    }
+
+    async fn set_issue_status(&self, issue_id: usize, status: IssueStatus) -> Result<()> {
+        let sql = "UPDATE `issues` SET `status`=:status WHERE `id`=:issue_id";
+        let params = params! {
+            "issue_id" => issue_id,
+            "status" => status.to_str(),
         };
         self.get_conn().await?.exec_drop(sql, params).await?;
         Ok(())

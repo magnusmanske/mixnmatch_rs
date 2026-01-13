@@ -396,6 +396,7 @@ impl Job {
                 ms.check_catalog(catalog_id).await
             }
 
+            "fix_duplicate_issues" => crate::issue::Issue::fix_wd_duplicates(&self.app).await,
             "maintenance_name_and_full_dates" => {
                 Maintenance::new(&self.app)
                     .match_by_name_and_full_dates()

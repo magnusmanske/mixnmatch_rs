@@ -6,7 +6,7 @@ use crate::{
     coordinate_matcher::LocationRow,
     entry::{AuxiliaryRow, CoordinateLocation, Entry},
     entry_query::EntryQuery,
-    issue::Issue,
+    issue::{Issue, IssueStatus},
     job_row::JobRow,
     job_status::JobStatus,
     match_state::MatchState,
@@ -161,7 +161,9 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
 
     // Issue
 
+    async fn get_open_wd_duplicates(&self) -> Result<Vec<Issue>>;
     async fn issue_insert(&self, issue: &Issue) -> Result<()>;
+    async fn set_issue_status(&self, issue_id: usize, status: IssueStatus) -> Result<()>;
 
     // Autoscrape
 

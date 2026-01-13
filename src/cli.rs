@@ -1,7 +1,4 @@
-use crate::{
-    app_state::AppState, bespoke_scrapers::BespokeScraper, extended_entry::ExtendedEntry,
-    process::Process,
-};
+use crate::{app_state::AppState, extended_entry::ExtendedEntry, process::Process};
 use anyhow::{Result, anyhow};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
@@ -195,9 +192,7 @@ impl ShellCommands {
             }
             Some(Commands::Test { config }) => {
                 let app = Self::path2app(config)?;
-                crate::bespoke_scrapers::BespokeScraper7433::new(&app)
-                    .run()
-                    .await?;
+                crate::issue::Issue::fix_wd_duplicates(&app).await?;
             }
             _other => return Err(anyhow!("Unrecognized command")),
         }
