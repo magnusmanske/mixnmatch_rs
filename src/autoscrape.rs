@@ -192,7 +192,7 @@ impl Autoscrape {
     //TODO test
     async fn load_url(&mut self, url: &str) -> Option<String> {
         self.urls_loaded += 1;
-        let crosses_threshold = self.urls_loaded % 1000 == 0;
+        let crosses_threshold = self.urls_loaded.is_multiple_of(1000);
         if crosses_threshold {
             let _ = self.remember_state().await;
         }
