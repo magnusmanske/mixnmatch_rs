@@ -580,8 +580,8 @@ impl Entry {
                     .entry_delete_person_dates(entry_id)
                     .await?;
             } else {
-                let born = born.to_owned().unwrap_or("".to_string());
-                let died = died.to_owned().unwrap_or("".to_string());
+                let born = born.clone().unwrap_or_default();
+                let died = died.clone().unwrap_or_default();
                 self.app()?
                     .storage()
                     .entry_set_person_dates(entry_id, born, died)
