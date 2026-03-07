@@ -1168,6 +1168,131 @@ mod tests {
         assert!(!entry2.is_unmatched());
     }
 
+    #[test]
+    fn test_entry_error_display() {
+        assert_eq!(
+            format!("{}", EntryError::TryingToUpdateNewEntry),
+            "EntryError::TryingToUpdateNewEntry"
+        );
+        assert_eq!(
+            format!("{}", EntryError::TryingToInsertExistingEntry),
+            "EntryError::TryingToInsertExistingEntry"
+        );
+        assert_eq!(
+            format!("{}", EntryError::EntryInsertFailed),
+            "EntryError::EntryInsertFailed"
+        );
+    }
+
+    #[test]
+    fn test_value2opt_string() {
+        // Bytes variant should return Some(String)
+        let val = mysql_async::Value::Bytes(b"hello".to_vec());
+        assert_eq!(
+            Entry::value2opt_string(val).unwrap(),
+            Some("hello".to_string())
+        );
+
+        // Non-Bytes variant should return None
+        let val = mysql_async::Value::NULL;
+        assert_eq!(Entry::value2opt_string(val).unwrap(), None);
+
+        // Int variant should return None
+        let val = mysql_async::Value::Int(42);
+        assert_eq!(Entry::value2opt_string(val).unwrap(), None);
+    }
+
+    #[test]
+    fn test_value2opt_isize() {
+        let val = mysql_async::Value::Int(42);
+        assert_eq!(Entry::value2opt_isize(val).unwrap(), Some(42isize));
+
+        let val = mysql_async::Value::Int(-5);
+        assert_eq!(Entry::value2opt_isize(val).unwrap(), Some(-5isize));
+
+        let val = mysql_async::Value::NULL;
+        assert_eq!(Entry::value2opt_isize(val).unwrap(), None);
+
+        let val = mysql_async::Value::Bytes(b"hello".to_vec());
+        assert_eq!(Entry::value2opt_isize(val).unwrap(), None);
+    }
+
+    #[test]
+    fn test_value2opt_usize() {
+        let val = mysql_async::Value::Int(42);
+        assert_eq!(Entry::value2opt_usize(val).unwrap(), Some(42usize));
+
+        let val = mysql_async::Value::NULL;
+        assert_eq!(Entry::value2opt_usize(val).unwrap(), None);
+
+        let val = mysql_async::Value::Bytes(b"hello".to_vec());
+        assert_eq!(Entry::value2opt_usize(val).unwrap(), None);
+    }
+
+    #[test]
+    fn test_get_entry_url_unit() {
+        let mut entry = Entry::new_from_catalog_and_ext_id(1, "test");
+        // No id set => None
+        assert_eq!(entry.get_entry_url(), None);
+
+        entry.id = Some(12345);
+        assert_eq!(
+            entry.get_entry_url(),
+            Some("https://mix-n-match.toolforge.org/#/entry/12345".to_string())
+        );
+    }
+
+    #[test]
+    fn test_get_item_url_unit() {
+        let mut entry = Entry::new_from_catalog_and_ext_id(1, "test");
+        // No q set => None
+        assert_eq!(entry.get_item_url(), None);
+
+        entry.q = Some(42);
+        assert_eq!(
+            entry.get_item_url(),
+            Some("https://www.wikidata.org/wiki/Q42".to_string())
+        );
+    }
+
+    #[test]
+    fn test_fix_external_id() {
+        // P213 (ISNI) should strip spaces
+        assert_eq!(
+            AuxiliaryRow::fix_external_id("P213", "0000 0001 2345 6789"),
+            "0000000123456789"
+        );
+        // Other properties should pass through
+        assert_eq!(
+            AuxiliaryRow::fix_external_id("P214", "some value"),
+            "some value"
+        );
+    }
+
+    #[test]
+    fn test_coordinate_location_accessors() {
+        let cl = CoordinateLocation::new(1.5, -2.5);
+        assert!((cl.lat() - 1.5).abs() < f64::EPSILON);
+        assert!((cl.lon() - (-2.5)).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_get_valid_id_unit() {
+        let entry = Entry::new_from_catalog_and_ext_id(1, "test");
+        assert!(entry.get_valid_id().is_err());
+
+        let mut entry2 = Entry::new_from_catalog_and_ext_id(1, "test");
+        entry2.id = Some(99);
+        assert_eq!(entry2.get_valid_id().unwrap(), 99);
+    }
+
+    #[test]
+    fn test_description() {
+        let mut entry = Entry::new_from_catalog_and_ext_id(1, "test");
+        entry.ext_desc = "A test description".to_string();
+        assert_eq!(entry.description(), "A test description");
+    }
+
     #[tokio::test]
     async fn test_check_valid_id() {
         let _test_lock = TEST_MUTEX.lock();
