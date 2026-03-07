@@ -208,7 +208,7 @@ impl AppState {
 
     pub async fn forever_loop(&self) -> Result<()> {
         let current_jobs = self.forever_loop_initalize().await?;
-        let threshold_job_size = TaskSize::MEDIUM;
+        let threshold_job_size = TaskSize::Medium;
         let threshold_percent = 50;
 
         // TO MANUALLY FIND ACTIONS NOT ASSIGNED A TASK SIZE:
@@ -292,7 +292,7 @@ impl AppState {
         {
             threshold_job_size.to_owned()
         } else {
-            TaskSize::GINORMOUS
+            TaskSize::Ginormous
         };
         // println!("JOBSIZE: {max_job_size} ({big_jobs_running} big jobs running, threshold_percent={threshold_percent})");
         job.skip_actions = task_size
@@ -346,7 +346,7 @@ impl AppState {
         };
         let job_size = task_size
             .get(&action)
-            .unwrap_or(&TaskSize::SMALL)
+            .unwrap_or(&TaskSize::Small)
             .to_owned();
         let job_id = match job.get_id().await {
             Ok(id) => id,
