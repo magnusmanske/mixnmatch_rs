@@ -1268,4 +1268,88 @@ mod tests {
         entry3.unmatch().await.unwrap();
         am.purge_automatches(TEST_CATALOG_ID).await.unwrap();
     }
+
+    #[test]
+    fn test_extract_sane_year_from_date_valid() {
+        assert_eq!(AutoMatch::extract_sane_year_from_date("1990"), Some(1990));
+        assert_eq!(AutoMatch::extract_sane_year_from_date("800"), Some(800));
+        assert_eq!(
+            AutoMatch::extract_sane_year_from_date("1990-05-24"),
+            Some(1990)
+        );
+        assert_eq!(AutoMatch::extract_sane_year_from_date("2000"), Some(2000));
+    }
+
+    #[test]
+    fn test_extract_sane_year_from_date_invalid() {
+        assert_eq!(AutoMatch::extract_sane_year_from_date(""), None);
+        assert_eq!(AutoMatch::extract_sane_year_from_date("abc"), None);
+        assert_eq!(AutoMatch::extract_sane_year_from_date("12"), None); // Only 2 digits, RE_YEAR requires 3+
+    }
+
+    #[test]
+    fn test_extract_sane_year_from_date_future_year() {
+        // A year far in the future should be rejected
+        assert_eq!(AutoMatch::extract_sane_year_from_date("9999"), None);
+    }
+
+    #[test]
+    fn test_date_match_field_get_field_name() {
+        assert_eq!(DateMatchField::Born.get_field_name(), "born");
+        assert_eq!(DateMatchField::Died.get_field_name(), "died");
+    }
+
+    #[test]
+    fn test_date_match_field_get_property() {
+        assert_eq!(DateMatchField::Born.get_property(), "P569");
+        assert_eq!(DateMatchField::Died.get_property(), "P570");
+    }
+
+    #[test]
+    fn test_date_precision_as_i32() {
+        assert_eq!(DatePrecision::Day.as_i32(), 10);
+        assert_eq!(DatePrecision::Year.as_i32(), 4);
+    }
+
+    #[test]
+    fn test_sort_and_dedup() {
+        let mut items = vec![
+            "Q3".to_string(),
+            "Q1".to_string(),
+            "Q2".to_string(),
+            "Q1".to_string(),
+        ];
+        AutoMatch::sort_and_dedup(&mut items);
+        assert_eq!(items, vec!["Q1", "Q2", "Q3"]);
+    }
+
+    #[test]
+    fn test_sort_and_dedup_empty() {
+        let mut items: Vec<String> = vec![];
+        AutoMatch::sort_and_dedup(&mut items);
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn test_candidate_dates_from_row() {
+        let row = (
+            42usize,
+            "1900".to_string(),
+            "1980".to_string(),
+            "1,2,3".to_string(),
+        );
+        let cd = CandidateDates::from_row(&row);
+        assert_eq!(cd.entry_id, 42);
+        assert_eq!(cd.born, "1900");
+        assert_eq!(cd.died, "1980");
+        assert_eq!(cd.matches, vec!["Q1", "Q2", "Q3"]);
+    }
+
+    #[test]
+    fn test_candidate_dates_from_row_empty_matches() {
+        let row = (1usize, "1900".to_string(), "".to_string(), "".to_string());
+        let cd = CandidateDates::from_row(&row);
+        assert_eq!(cd.entry_id, 1);
+        assert!(cd.matches.is_empty());
+    }
 }
