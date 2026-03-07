@@ -37,7 +37,7 @@ enum DataSourceType {
 impl DataSourceType {
     //TODO test
     fn from_str(s: &str) -> DataSourceType {
-        match s.to_string().trim().to_uppercase().as_str() {
+        match s.trim().to_uppercase().as_str() {
             "CSV" => Self::Csv,
             "TSV" => Self::Tsv,
             _ => Self::Unknown,
@@ -286,5 +286,110 @@ impl DataSource {
             .map(|s| s.to_string())
             .collect();
         columns
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_data_source_type_from_str() {
+        assert_eq!(DataSourceType::from_str("CSV"), DataSourceType::Csv);
+        assert_eq!(DataSourceType::from_str("csv"), DataSourceType::Csv);
+        assert_eq!(DataSourceType::from_str("  csv  "), DataSourceType::Csv);
+        assert_eq!(DataSourceType::from_str("TSV"), DataSourceType::Tsv);
+        assert_eq!(DataSourceType::from_str("tsv"), DataSourceType::Tsv);
+        assert_eq!(DataSourceType::from_str("  tsv  "), DataSourceType::Tsv);
+        assert_eq!(DataSourceType::from_str(""), DataSourceType::Unknown);
+        assert_eq!(DataSourceType::from_str("json"), DataSourceType::Unknown);
+        assert_eq!(DataSourceType::from_str("XML"), DataSourceType::Unknown);
+    }
+
+    #[test]
+    fn test_line_counter_default() {
+        let lc = LineCounter::default();
+        assert_eq!(lc.all, 0);
+        assert_eq!(lc.added, 0);
+        assert_eq!(lc.updates, 0);
+        assert_eq!(lc.offset, 0);
+    }
+
+    #[test]
+    fn test_data_source_location_equality() {
+        let url1 = DataSourceLocation::Url("http://example.com".to_string());
+        let url2 = DataSourceLocation::Url("http://example.com".to_string());
+        let url3 = DataSourceLocation::Url("http://other.com".to_string());
+        let file1 = DataSourceLocation::FilePath("/tmp/test".to_string());
+        assert_eq!(url1, url2);
+        assert_ne!(url1, url3);
+        assert_ne!(url1, file1);
+    }
+
+    #[test]
+    fn test_extract_columns() {
+        let json = serde_json::json!({"columns": ["id", "name", "desc"]});
+        let cols = DataSource::extract_columns(&json);
+        assert_eq!(cols, vec!["id", "name", "desc"]);
+    }
+
+    #[test]
+    fn test_extract_columns_empty() {
+        let json = serde_json::json!({});
+        let cols = DataSource::extract_columns(&json);
+        assert!(cols.is_empty());
+    }
+
+    #[test]
+    fn test_extract_bool() {
+        let json = serde_json::json!({"flag": true, "other": "not_bool"});
+        assert!(DataSource::extract_bool("flag", &json));
+        assert!(!DataSource::extract_bool("other", &json));
+        assert!(!DataSource::extract_bool("missing", &json));
+    }
+
+    #[test]
+    fn test_extract_u64() {
+        let json = serde_json::json!({"num": 42});
+        assert_eq!(DataSource::extract_u64("num", &json), 42);
+        assert_eq!(DataSource::extract_u64("missing", &json), 0);
+    }
+
+    #[test]
+    fn test_get_colmap() {
+        let columns = vec![
+            "id".to_string(),
+            "name".to_string(),
+            "".to_string(),
+            "desc".to_string(),
+        ];
+        let colmap = DataSource::get_colmap(&columns);
+        assert_eq!(colmap.get("id"), Some(&0));
+        assert_eq!(colmap.get("name"), Some(&1));
+        assert_eq!(colmap.get("desc"), Some(&3));
+        assert!(colmap.get("").is_none()); // empty column names are skipped
+        assert_eq!(colmap.len(), 3);
+    }
+
+    #[test]
+    fn test_get_ext_id_column() {
+        let mut colmap = std::collections::HashMap::new();
+        colmap.insert("id".to_string(), 0usize);
+        colmap.insert("name".to_string(), 1usize);
+        assert_eq!(DataSource::get_ext_id_column(&colmap).unwrap(), 0);
+    }
+
+    #[test]
+    fn test_get_ext_id_column_missing_id() {
+        let mut colmap = std::collections::HashMap::new();
+        colmap.insert("name".to_string(), 1usize);
+        assert!(DataSource::get_ext_id_column(&colmap).is_err());
+    }
+
+    #[test]
+    fn test_get_ext_id_column_missing_name() {
+        let mut colmap = std::collections::HashMap::new();
+        colmap.insert("id".to_string(), 0usize);
+        assert!(DataSource::get_ext_id_column(&colmap).is_err());
     }
 }
