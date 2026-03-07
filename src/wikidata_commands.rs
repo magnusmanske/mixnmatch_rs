@@ -1,4 +1,4 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 
 use crate::entry::CoordinateLocation;
@@ -267,5 +267,147 @@ mod tests {
             "deprecated",
             "rank_as_str failed"
         );
+    }
+
+    fn make_command(
+        item_id: usize,
+        property: usize,
+        value: WikidataCommandValue,
+        rank: Option<WikidataCommandRank>,
+    ) -> WikidataCommand {
+        WikidataCommand {
+            item_id,
+            what: WikidataCommandWhat::Property(property),
+            value,
+            references: vec![],
+            qualifiers: vec![],
+            comment: None,
+            rank,
+        }
+    }
+
+    #[test]
+    fn test_rank_as_str_none_defaults_to_normal() {
+        let cmd = make_command(1, 31, WikidataCommandValue::Item(5), None);
+        assert_eq!(cmd.rank_as_str(), "normal");
+    }
+
+    #[test]
+    fn test_rank_as_str_some_preferred() {
+        let cmd = make_command(
+            1,
+            31,
+            WikidataCommandValue::Item(5),
+            Some(WikidataCommandRank::Preferred),
+        );
+        assert_eq!(cmd.rank_as_str(), "preferred");
+    }
+
+    #[test]
+    fn test_edit_entity_add_claim_creates_claims_array() {
+        let mut json = json!({});
+        let claim = json!({"mainsnak":{"snaktype":"value"},"type":"statement","rank":"normal"});
+        WikidataCommand::edit_entity_add_claim(&mut json, claim.clone());
+        assert_eq!(json["claims"], json!([claim]));
+    }
+
+    #[test]
+    fn test_edit_entity_add_claim_appends_to_existing() {
+        let claim1 = json!({"mainsnak":{"snaktype":"value","property":"P31"},"type":"statement","rank":"normal"});
+        let claim2 = json!({"mainsnak":{"snaktype":"value","property":"P21"},"type":"statement","rank":"normal"});
+        let mut json = json!({"claims":[claim1.clone()]});
+        WikidataCommand::edit_entity_add_claim(&mut json, claim2.clone());
+        assert_eq!(json["claims"], json!([claim1, claim2]));
+    }
+
+    #[test]
+    fn test_edit_entity_simple_string_claim() {
+        let cmd = make_command(
+            1,
+            214,
+            WikidataCommandValue::String("12345".to_owned()),
+            None,
+        );
+        let mut json = json!({});
+        cmd.edit_entity(&mut json);
+        let claims = json["claims"].as_array().unwrap();
+        assert_eq!(claims.len(), 1);
+        let claim = &claims[0];
+        assert_eq!(claim["type"], "statement");
+        assert_eq!(claim["rank"], "normal");
+        assert_eq!(claim["mainsnak"]["property"], "P214");
+        assert_eq!(claim["mainsnak"]["snaktype"], "value");
+        assert_eq!(claim["mainsnak"]["datavalue"]["value"], "12345");
+        assert_eq!(claim["mainsnak"]["datavalue"]["type"], "string");
+    }
+
+    #[test]
+    fn test_edit_entity_item_claim() {
+        let cmd = make_command(1, 31, WikidataCommandValue::Item(5), None);
+        let mut json = json!({});
+        cmd.edit_entity(&mut json);
+        let claims = json["claims"].as_array().unwrap();
+        assert_eq!(claims.len(), 1);
+        let dv = &claims[0]["mainsnak"]["datavalue"];
+        assert_eq!(dv["type"], "wikibase-entityid");
+        assert_eq!(dv["value"]["numeric-id"], 5);
+        assert_eq!(dv["value"]["id"], "Q5");
+    }
+
+    #[test]
+    fn test_edit_entity_with_references() {
+        let cmd = WikidataCommand {
+            item_id: 1,
+            what: WikidataCommandWhat::Property(214),
+            value: WikidataCommandValue::String("12345".to_owned()),
+            references: vec![vec![WikidataCommandPropertyValue {
+                property: 248,
+                value: WikidataCommandValue::Item(36578),
+            }]],
+            qualifiers: vec![],
+            comment: Some("test".to_string()),
+            rank: None,
+        };
+        let mut json = json!({});
+        cmd.edit_entity(&mut json);
+        let claims = json["claims"].as_array().unwrap();
+        let refs = claims[0]["references"].as_array().unwrap();
+        assert_eq!(refs.len(), 1);
+        assert!(refs[0]["snaks"]["P248"].is_array());
+    }
+
+    #[test]
+    fn test_edit_entity_with_qualifiers() {
+        let cmd = WikidataCommand {
+            item_id: 1,
+            what: WikidataCommandWhat::Property(214),
+            value: WikidataCommandValue::String("12345".to_owned()),
+            references: vec![],
+            qualifiers: vec![WikidataCommandPropertyValue {
+                property: 580,
+                value: WikidataCommandValue::Item(42),
+            }],
+            comment: None,
+            rank: None,
+        };
+        let mut json = json!({});
+        cmd.edit_entity(&mut json);
+        let claims = json["claims"].as_array().unwrap();
+        let quals = &claims[0]["qualifiers"];
+        assert!(quals["P580"].is_array());
+    }
+
+    #[test]
+    fn test_edit_entity_with_preferred_rank() {
+        let cmd = make_command(
+            1,
+            31,
+            WikidataCommandValue::Item(5),
+            Some(WikidataCommandRank::Preferred),
+        );
+        let mut json = json!({});
+        cmd.edit_entity(&mut json);
+        let claims = json["claims"].as_array().unwrap();
+        assert_eq!(claims[0]["rank"], "preferred");
     }
 }
