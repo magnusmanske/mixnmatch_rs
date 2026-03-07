@@ -84,7 +84,9 @@ pub mod wikidata_commands;
 ssh magnus@login.toolforge.org -L 3309:wikidatawiki.web.db.svc.eqiad.wmflabs:3306 -N &
 ssh magnus@login.toolforge.org -L 3308:tools-db:3306 -N &
 ssh magnus@login.toolforge.org -L 3317:termstore.wikidatawiki.analytics.db.svc.wikimedia.cloud:3306 -N &
-cargo test -- --test-threads=1
+cargo test                                          # Run unit tests (DB tests are #[ignore]d)
+cargo test -- --ignored --test-threads=1            # Run DB tests only, single-threaded
+cargo test -- --include-ignored --test-threads=1    # Run all tests, single-threaded
 cargo test  -- --nocapture
 
 git pull && ./build.sh && \rm ~/rustbot.* ; toolforge jobs restart rustbot

@@ -1125,6 +1125,7 @@ mod tests {
     // }
 
     #[tokio::test]
+    #[ignore] // Requires database, must run single-threaded
     async fn test_match_person_by_dates() {
         let _test_lock = TEST_MUTEX.lock();
         let app = get_test_app();
@@ -1148,6 +1149,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore] // Requires database, must run single-threaded
     async fn test_automatch_by_search() {
         let _test_lock = TEST_MUTEX.lock();
         let app = get_test_app();
@@ -1181,6 +1183,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore] // Requires database, must run single-threaded
     async fn test_automatch_by_sitelink() {
         let _test_lock = TEST_MUTEX.lock();
         let app = get_test_app();
@@ -1206,6 +1209,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore] // Requires database, must run single-threaded
     async fn test_purge_automatches() {
         let _test_lock = TEST_MUTEX.lock();
         let app = get_test_app();
@@ -1240,6 +1244,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore] // Requires database, must run single-threaded
     async fn test_match_person_by_single_date() {
         let _test_lock = TEST_MUTEX.lock();
         let app = get_test_app();
