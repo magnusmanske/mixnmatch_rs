@@ -309,7 +309,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        app_state::{get_test_app, TEST_MUTEX},
+        app_state::{TEST_MUTEX, get_test_app},
         datasource::DataSourceLocation,
         extended_entry::ExtendedEntry,
     };
@@ -376,6 +376,41 @@ mod tests {
         assert_eq!(ExtendedEntry::parse_date("2"), None);
         assert_eq!(ExtendedEntry::parse_date("foobar"), None);
         assert_eq!(ExtendedEntry::parse_date(""), None);
+    }
+
+    #[test]
+    fn test_update_catalog_error_display() {
+        assert_eq!(
+            format!("{}", UpdateCatalogError::NoUpdateInfoForCatalog),
+            "UpdateCatalogError::NoUpdateInfoForCatalog"
+        );
+        assert_eq!(
+            format!("{}", UpdateCatalogError::MissingColumn),
+            "UpdateCatalogError::MissingColumn"
+        );
+        assert_eq!(
+            format!("{}", UpdateCatalogError::MissingDataSourceLocation),
+            "UpdateCatalogError::MissingDataSourceLocation"
+        );
+        assert_eq!(
+            format!("{}", UpdateCatalogError::MissingDataSourceType),
+            "UpdateCatalogError::MissingDataSourceType"
+        );
+        assert_eq!(
+            format!("{}", UpdateCatalogError::NotEnoughColumns(5)),
+            "NotEnoughColumns 5"
+        );
+        assert_eq!(
+            format!(
+                "{}",
+                UpdateCatalogError::UnknownColumnLabel("foo".to_string())
+            ),
+            "UnknownColumnLabel foo"
+        );
+        assert_eq!(
+            format!("{}", UpdateCatalogError::BadPattern),
+            "UpdateCatalogError::BadPattern"
+        );
     }
 
     // #lizard forgives
