@@ -2,11 +2,11 @@ use std::{cmp::Ordering, fmt};
 
 #[derive(Eq, Clone, Copy, Debug)]
 pub enum TaskSize {
-    TINY,
-    SMALL,
-    MEDIUM,
-    LARGE,
-    GINORMOUS,
+    Tiny,
+    Small,
+    Medium,
+    Large,
+    Ginormous,
 }
 
 impl Ord for TaskSize {
@@ -30,21 +30,21 @@ impl PartialEq for TaskSize {
 impl TaskSize {
     pub const fn value(&self) -> u8 {
         match self {
-            TaskSize::TINY => 1,
-            TaskSize::SMALL => 2,
-            TaskSize::MEDIUM => 3,
-            TaskSize::LARGE => 4,
-            TaskSize::GINORMOUS => 5,
+            TaskSize::Tiny => 1,
+            TaskSize::Small => 2,
+            TaskSize::Medium => 3,
+            TaskSize::Large => 4,
+            TaskSize::Ginormous => 5,
         }
     }
 
     pub fn new(s: &str) -> Option<Self> {
         match s.trim().to_lowercase().as_str() {
-            "tiny" => Some(Self::TINY),
-            "small" => Some(Self::SMALL),
-            "medium" => Some(Self::MEDIUM),
-            "large" => Some(Self::LARGE),
-            "ginormous" => Some(Self::GINORMOUS),
+            "tiny" => Some(Self::Tiny),
+            "small" => Some(Self::Small),
+            "medium" => Some(Self::Medium),
+            "large" => Some(Self::Large),
+            "ginormous" => Some(Self::Ginormous),
             _ => None,
         }
     }
@@ -62,34 +62,34 @@ mod tests {
 
     #[test]
     fn test_task_size_ordering() {
-        assert!(TaskSize::TINY < TaskSize::SMALL);
-        assert!(TaskSize::SMALL < TaskSize::MEDIUM);
-        assert!(TaskSize::MEDIUM < TaskSize::LARGE);
-        assert!(TaskSize::LARGE < TaskSize::GINORMOUS);
+        assert!(TaskSize::Tiny < TaskSize::Small);
+        assert!(TaskSize::Small < TaskSize::Medium);
+        assert!(TaskSize::Medium < TaskSize::Large);
+        assert!(TaskSize::Large < TaskSize::Ginormous);
     }
 
     #[test]
     fn test_task_size_equality() {
-        assert_eq!(TaskSize::TINY, TaskSize::TINY);
-        assert_eq!(TaskSize::GINORMOUS, TaskSize::GINORMOUS);
-        assert_ne!(TaskSize::TINY, TaskSize::SMALL);
+        assert_eq!(TaskSize::Tiny, TaskSize::Tiny);
+        assert_eq!(TaskSize::Ginormous, TaskSize::Ginormous);
+        assert_ne!(TaskSize::Tiny, TaskSize::Small);
     }
 
     #[test]
     fn test_task_size_new_valid() {
-        assert_eq!(TaskSize::new("tiny"), Some(TaskSize::TINY));
-        assert_eq!(TaskSize::new("small"), Some(TaskSize::SMALL));
-        assert_eq!(TaskSize::new("medium"), Some(TaskSize::MEDIUM));
-        assert_eq!(TaskSize::new("large"), Some(TaskSize::LARGE));
-        assert_eq!(TaskSize::new("ginormous"), Some(TaskSize::GINORMOUS));
+        assert_eq!(TaskSize::new("tiny"), Some(TaskSize::Tiny));
+        assert_eq!(TaskSize::new("small"), Some(TaskSize::Small));
+        assert_eq!(TaskSize::new("medium"), Some(TaskSize::Medium));
+        assert_eq!(TaskSize::new("large"), Some(TaskSize::Large));
+        assert_eq!(TaskSize::new("ginormous"), Some(TaskSize::Ginormous));
     }
 
     #[test]
     fn test_task_size_new_case_insensitive() {
-        assert_eq!(TaskSize::new("TINY"), Some(TaskSize::TINY));
-        assert_eq!(TaskSize::new("Small"), Some(TaskSize::SMALL));
-        assert_eq!(TaskSize::new("MEDIUM"), Some(TaskSize::MEDIUM));
-        assert_eq!(TaskSize::new("  large  "), Some(TaskSize::LARGE));
+        assert_eq!(TaskSize::new("TINY"), Some(TaskSize::Tiny));
+        assert_eq!(TaskSize::new("Small"), Some(TaskSize::Small));
+        assert_eq!(TaskSize::new("MEDIUM"), Some(TaskSize::Medium));
+        assert_eq!(TaskSize::new("  large  "), Some(TaskSize::Large));
     }
 
     #[test]
@@ -101,19 +101,19 @@ mod tests {
 
     #[test]
     fn test_task_size_display() {
-        assert_eq!(format!("{}", TaskSize::TINY), "1");
-        assert_eq!(format!("{}", TaskSize::SMALL), "2");
-        assert_eq!(format!("{}", TaskSize::MEDIUM), "3");
-        assert_eq!(format!("{}", TaskSize::LARGE), "4");
-        assert_eq!(format!("{}", TaskSize::GINORMOUS), "5");
+        assert_eq!(format!("{}", TaskSize::Tiny), "1");
+        assert_eq!(format!("{}", TaskSize::Small), "2");
+        assert_eq!(format!("{}", TaskSize::Medium), "3");
+        assert_eq!(format!("{}", TaskSize::Large), "4");
+        assert_eq!(format!("{}", TaskSize::Ginormous), "5");
     }
 
     #[test]
     fn test_task_size_value() {
-        assert_eq!(TaskSize::TINY.value(), 1);
-        assert_eq!(TaskSize::SMALL.value(), 2);
-        assert_eq!(TaskSize::MEDIUM.value(), 3);
-        assert_eq!(TaskSize::LARGE.value(), 4);
-        assert_eq!(TaskSize::GINORMOUS.value(), 5);
+        assert_eq!(TaskSize::Tiny.value(), 1);
+        assert_eq!(TaskSize::Small.value(), 2);
+        assert_eq!(TaskSize::Medium.value(), 3);
+        assert_eq!(TaskSize::Large.value(), 4);
+        assert_eq!(TaskSize::Ginormous.value(), 5);
     }
 }
