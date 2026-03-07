@@ -1,7 +1,7 @@
 use crate::app_state::{AppState, USER_AUTO};
 use crate::catalog::Catalog;
 use crate::person::Person;
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use mysql_async::{Row, Value};
 use rand::prelude::*;
 use std::collections::HashMap;
@@ -402,7 +402,7 @@ impl Entry {
         item: &mut ItemEntity,
     ) -> Result<()> {
         let mut descriptions = self.get_language_descriptions().await?;
-        if self.ext_desc.is_empty() {
+        if !self.ext_desc.is_empty() {
             descriptions.insert(language.to_owned(), self.ext_desc.to_owned());
         }
         for (lang, desc) in descriptions {
@@ -853,7 +853,7 @@ impl Entry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app_state::{get_test_app, TEST_MUTEX};
+    use crate::app_state::{TEST_MUTEX, get_test_app};
 
     const _TEST_CATALOG_ID: usize = 5526;
     const TEST_ENTRY_ID: usize = 143962196;
