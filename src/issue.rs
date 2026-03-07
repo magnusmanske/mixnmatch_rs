@@ -209,3 +209,109 @@ impl Issue {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_issue_type_new_valid() {
+        assert!(matches!(
+            IssueType::new("WD_DUPLICATE"),
+            Ok(IssueType::WdDuplicate)
+        ));
+        assert!(matches!(
+            IssueType::new("MISMATCH"),
+            Ok(IssueType::Mismatch)
+        ));
+        assert!(matches!(
+            IssueType::new("ITEM_DELETED"),
+            Ok(IssueType::ItemDeleted)
+        ));
+        assert!(matches!(
+            IssueType::new("MISMATCH_DATES"),
+            Ok(IssueType::MismatchDates)
+        ));
+        assert!(matches!(
+            IssueType::new("MULTIPLE"),
+            Ok(IssueType::Multiple)
+        ));
+    }
+
+    #[test]
+    fn test_issue_type_new_invalid() {
+        assert!(IssueType::new("").is_err());
+        assert!(IssueType::new("UNKNOWN").is_err());
+        assert!(IssueType::new("wd_duplicate").is_err());
+    }
+
+    #[test]
+    fn test_issue_type_round_trip() {
+        let types = [
+            IssueType::WdDuplicate,
+            IssueType::Mismatch,
+            IssueType::ItemDeleted,
+            IssueType::MismatchDates,
+            IssueType::Multiple,
+        ];
+        for t in &types {
+            let s = t.to_str();
+            let round_tripped = IssueType::new(s).unwrap();
+            assert_eq!(s, round_tripped.to_str());
+        }
+    }
+
+    #[test]
+    fn test_issue_status_new_valid() {
+        assert!(matches!(IssueStatus::new("OPEN"), Ok(IssueStatus::Open)));
+        assert!(matches!(IssueStatus::new("DONE"), Ok(IssueStatus::Done)));
+        assert!(matches!(
+            IssueStatus::new("INACTIVE_CATALOG"),
+            Ok(IssueStatus::InactiveCatalog)
+        ));
+        assert!(matches!(
+            IssueStatus::new("RESOLVED_ON_WIKIDATA"),
+            Ok(IssueStatus::ResolvedOnWikidata)
+        ));
+        assert!(matches!(IssueStatus::new("JAN01"), Ok(IssueStatus::Jan01)));
+    }
+
+    #[test]
+    fn test_issue_status_new_invalid() {
+        assert!(IssueStatus::new("").is_err());
+        assert!(IssueStatus::new("UNKNOWN").is_err());
+        assert!(IssueStatus::new("open").is_err());
+    }
+
+    #[test]
+    fn test_issue_status_round_trip() {
+        let statuses = [
+            IssueStatus::Open,
+            IssueStatus::Done,
+            IssueStatus::InactiveCatalog,
+            IssueStatus::ResolvedOnWikidata,
+            IssueStatus::Jan01,
+        ];
+        for s in &statuses {
+            let str_val = s.to_str();
+            let round_tripped = IssueStatus::new(str_val).unwrap();
+            assert_eq!(str_val, round_tripped.to_str());
+        }
+    }
+
+    #[test]
+    fn test_issue_error_display() {
+        assert_eq!(
+            format!("{}", IssueError::UnregognizedType),
+            "IssueError::UnregognizedType"
+        );
+        assert_eq!(
+            format!("{}", IssueError::UnregognizedStatus),
+            "IssueError::UnregognizedStatus"
+        );
+        assert_eq!(
+            format!("{}", IssueError::NoIssueWithId(42)),
+            "No issue with ID 42"
+        );
+    }
+}
