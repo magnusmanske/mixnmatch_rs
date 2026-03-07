@@ -1,7 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use core::time::Duration;
-use mysql_async::{futures::GetConn, Opts, OptsBuilder, PoolConstraints, PoolOpts};
+use mysql_async::{Opts, OptsBuilder, PoolConstraints, PoolOpts, futures::GetConn};
 use serde_json::Value;
 
 #[async_trait]
@@ -44,8 +44,6 @@ pub trait MySQLMisc {
     }
 
     fn sql_placeholders(num: usize) -> String {
-        let mut placeholders: Vec<String> = Vec::new();
-        placeholders.resize(num, "?".to_string());
-        placeholders.join(",")
+        vec!["?"; num].join(",")
     }
 }
