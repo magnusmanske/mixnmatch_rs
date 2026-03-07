@@ -1333,7 +1333,7 @@ mod tests {
     #[test]
     fn test_candidate_dates_from_row() {
         let row = (
-            42usize,
+            42_usize,
             "1900".to_string(),
             "1980".to_string(),
             "1,2,3".to_string(),
@@ -1347,7 +1347,7 @@ mod tests {
 
     #[test]
     fn test_candidate_dates_from_row_empty_matches() {
-        let row = (1usize, "1900".to_string(), "".to_string(), "".to_string());
+        let row = (1_usize, "1900".to_string(), "".to_string(), "".to_string());
         let cd = CandidateDates::from_row(&row);
         assert_eq!(cd.entry_id, 1);
         assert!(cd.matches.is_empty());

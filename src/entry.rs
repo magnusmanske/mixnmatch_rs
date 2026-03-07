@@ -1187,46 +1187,46 @@ mod tests {
     #[test]
     fn test_value2opt_string() {
         // Bytes variant should return Some(String)
-        let val = mysql_async::Value::Bytes(b"hello".to_vec());
+        let val_bytes = mysql_async::Value::Bytes(b"hello".to_vec());
         assert_eq!(
-            Entry::value2opt_string(val).unwrap(),
+            Entry::value2opt_string(val_bytes).unwrap(),
             Some("hello".to_string())
         );
 
         // Non-Bytes variant should return None
-        let val = mysql_async::Value::NULL;
-        assert_eq!(Entry::value2opt_string(val).unwrap(), None);
+        let val_null = mysql_async::Value::NULL;
+        assert_eq!(Entry::value2opt_string(val_null).unwrap(), None);
 
         // Int variant should return None
-        let val = mysql_async::Value::Int(42);
-        assert_eq!(Entry::value2opt_string(val).unwrap(), None);
+        let val_int = mysql_async::Value::Int(42);
+        assert_eq!(Entry::value2opt_string(val_int).unwrap(), None);
     }
 
     #[test]
     fn test_value2opt_isize() {
-        let val = mysql_async::Value::Int(42);
-        assert_eq!(Entry::value2opt_isize(val).unwrap(), Some(42isize));
+        let val_pos = mysql_async::Value::Int(42);
+        assert_eq!(Entry::value2opt_isize(val_pos).unwrap(), Some(42_isize));
 
-        let val = mysql_async::Value::Int(-5);
-        assert_eq!(Entry::value2opt_isize(val).unwrap(), Some(-5isize));
+        let val_neg = mysql_async::Value::Int(-5);
+        assert_eq!(Entry::value2opt_isize(val_neg).unwrap(), Some(-5_isize));
 
-        let val = mysql_async::Value::NULL;
-        assert_eq!(Entry::value2opt_isize(val).unwrap(), None);
+        let val_null = mysql_async::Value::NULL;
+        assert_eq!(Entry::value2opt_isize(val_null).unwrap(), None);
 
-        let val = mysql_async::Value::Bytes(b"hello".to_vec());
-        assert_eq!(Entry::value2opt_isize(val).unwrap(), None);
+        let val_bytes = mysql_async::Value::Bytes(b"hello".to_vec());
+        assert_eq!(Entry::value2opt_isize(val_bytes).unwrap(), None);
     }
 
     #[test]
     fn test_value2opt_usize() {
-        let val = mysql_async::Value::Int(42);
-        assert_eq!(Entry::value2opt_usize(val).unwrap(), Some(42usize));
+        let val_int = mysql_async::Value::Int(42);
+        assert_eq!(Entry::value2opt_usize(val_int).unwrap(), Some(42_usize));
 
-        let val = mysql_async::Value::NULL;
-        assert_eq!(Entry::value2opt_usize(val).unwrap(), None);
+        let val_null = mysql_async::Value::NULL;
+        assert_eq!(Entry::value2opt_usize(val_null).unwrap(), None);
 
-        let val = mysql_async::Value::Bytes(b"hello".to_vec());
-        assert_eq!(Entry::value2opt_usize(val).unwrap(), None);
+        let val_bytes = mysql_async::Value::Bytes(b"hello".to_vec());
+        assert_eq!(Entry::value2opt_usize(val_bytes).unwrap(), None);
     }
 
     #[test]
@@ -1332,7 +1332,7 @@ mod tests {
             false,
         );
         let prop = Entity::Property(property);
-        let claim = aux.get_claim_for_aux(prop, &vec![]);
+        let claim = aux.get_claim_for_aux(prop, &[]);
         let expected = Snak::new_item("P12345", "Q5678");
         assert_eq!(*claim.unwrap().main_snak(), expected);
     }
