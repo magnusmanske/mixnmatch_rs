@@ -90,3 +90,115 @@ impl EntryQuery {
         self
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default() {
+        let q = EntryQuery::default();
+        assert!(q.catalog_id.is_none());
+        assert!(q.entry_type.is_none());
+        assert!(q.min_dates.is_none());
+        assert!(q.min_aux.is_none());
+        assert!(q.match_state.is_none());
+        assert!(!q.has_description);
+        assert!(!q.has_coordinates);
+        assert!(q.desc_hint.is_none());
+        assert!(q.name_regexp.is_none());
+        assert!(q.limit.is_none());
+        assert!(q.ext_ids.is_none());
+        assert!(q.offset.is_none());
+    }
+
+    #[test]
+    fn test_with_catalog_id() {
+        let q = EntryQuery::default().with_catalog_id(42);
+        assert_eq!(q.catalog_id, Some(42));
+    }
+
+    #[test]
+    fn test_with_type() {
+        let q = EntryQuery::default().with_type("Q5");
+        assert_eq!(q.entry_type, Some("Q5".to_string()));
+    }
+
+    #[test]
+    fn test_with_name_regexp() {
+        let q = EntryQuery::default().with_name_regexp("^John");
+        assert_eq!(q.name_regexp, Some("^John".to_string()));
+    }
+
+    #[test]
+    fn test_with_min_dates() {
+        let q = EntryQuery::default().with_min_dates(2);
+        assert_eq!(q.min_dates, Some(2));
+    }
+
+    #[test]
+    fn test_with_min_aux() {
+        let q = EntryQuery::default().with_min_aux(3);
+        assert_eq!(q.min_aux, Some(3));
+    }
+
+    #[test]
+    fn test_with_match_state() {
+        let q = EntryQuery::default().with_match_state(MatchState::unmatched());
+        assert!(q.match_state.is_some());
+    }
+
+    #[test]
+    fn test_with_description() {
+        let q = EntryQuery::default().with_description();
+        assert!(q.has_description);
+    }
+
+    #[test]
+    fn test_with_coordinates() {
+        let q = EntryQuery::default().with_coordinates();
+        assert!(q.has_coordinates);
+    }
+
+    #[test]
+    fn test_with_desc_hint() {
+        let q = EntryQuery::default().with_desc_hint("painter");
+        assert_eq!(q.desc_hint, Some("painter".to_string()));
+    }
+
+    #[test]
+    fn test_with_ext_ids() {
+        let ids = vec!["a".to_string(), "b".to_string()];
+        let q = EntryQuery::default().with_ext_ids(ids.clone());
+        assert_eq!(q.ext_ids, Some(ids));
+    }
+
+    #[test]
+    fn test_with_limit() {
+        let q = EntryQuery::default().with_limit(100);
+        assert_eq!(q.limit, Some(100));
+    }
+
+    #[test]
+    fn test_with_offset() {
+        let q = EntryQuery::default().with_offset(50);
+        assert_eq!(q.offset, Some(50));
+    }
+
+    #[test]
+    fn test_chained_builders() {
+        let q = EntryQuery::default()
+            .with_catalog_id(5)
+            .with_type("Q5")
+            .with_min_dates(1)
+            .with_match_state(MatchState::unmatched())
+            .with_limit(10)
+            .with_offset(20);
+        assert_eq!(q.catalog_id, Some(5));
+        assert_eq!(q.entry_type, Some("Q5".to_string()));
+        assert_eq!(q.min_dates, Some(1));
+        assert!(q.match_state.is_some());
+        assert_eq!(q.limit, Some(10));
+        assert_eq!(q.offset, Some(20));
+    }
+}
