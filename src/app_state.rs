@@ -290,7 +290,7 @@ impl AppState {
         let big_jobs_running = Self::count_big_jobs_running(current_jobs, threshold_job_size);
         let max_job_size = if big_jobs_running >= self.max_concurrent_jobs * threshold_percent / 100
         {
-            threshold_job_size.to_owned()
+            *threshold_job_size
         } else {
             TaskSize::Ginormous
         };
@@ -344,10 +344,7 @@ impl AppState {
                 return;
             }
         };
-        let job_size = task_size
-            .get(&action)
-            .unwrap_or(&TaskSize::Small)
-            .to_owned();
+        let job_size = task_size.get(&action).copied().unwrap_or(TaskSize::Small);
         let job_id = match job.get_id().await {
             Ok(id) => id,
             Err(_e) => {
@@ -374,7 +371,7 @@ impl AppState {
     ) -> usize {
         current_jobs
             .iter()
-            .map(|x| x.value().to_owned())
+            .map(|x| *x.value())
             .filter(|size| *size > *threshold_job_size)
             .count()
     }
