@@ -35,3 +35,36 @@ impl PropTodo {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_new_defaults() {
+        let pt = PropTodo::new(123, "Test property".to_string());
+        assert_eq!(pt.id, 0);
+        assert_eq!(pt.prop_num, 123);
+        assert_eq!(pt.name, "Test property");
+        assert_eq!(pt.default_type, "");
+        assert_eq!(pt.status, "NO_CATALOG");
+        assert_eq!(pt.note, "");
+        assert_eq!(pt.user_id, 0);
+        assert!(pt.items_using.is_none());
+        assert!(pt.number_of_records.is_none());
+    }
+
+    #[test]
+    fn test_default() {
+        let pt = PropTodo::default();
+        assert_eq!(pt.id, 0);
+        assert_eq!(pt.prop_num, 0);
+        assert_eq!(pt.name, "");
+        assert_eq!(pt.default_type, "");
+        assert_eq!(pt.status, "");
+        assert_eq!(pt.note, "");
+        assert_eq!(pt.user_id, 0);
+        assert!(pt.items_using.is_none());
+        assert!(pt.number_of_records.is_none());
+    }
+}
