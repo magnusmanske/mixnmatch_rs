@@ -80,7 +80,7 @@ impl AuxiliaryRow {
         }
     }
 
-    fn get_claim_for_aux(&self, prop: Entity, references: &Vec<Reference>) -> Option<Statement> {
+    fn get_claim_for_aux(&self, prop: Entity, references: &[Reference]) -> Option<Statement> {
         let prop = match prop {
             Entity::Property(prop) => prop,
             _ => return None, // Ignore
@@ -364,7 +364,7 @@ impl Entry {
 
     async fn add_to_item_person_dates(
         &self,
-        references: &Vec<Reference>,
+        references: &[Reference],
         item: &mut ItemEntity,
     ) -> Result<()> {
         let (born, died) = self.get_person_dates().await?;
@@ -385,7 +385,7 @@ impl Entry {
 
     async fn add_to_item_coordinates(
         &self,
-        references: &Vec<Reference>,
+        references: &[Reference],
         item: &mut ItemEntity,
     ) -> Result<()> {
         if let Some(coord) = self.get_coordinate_location().await? {
@@ -447,7 +447,7 @@ impl Entry {
         Ok(())
     }
 
-    fn add_to_item_type(&self, references: &Vec<Reference>, item: &mut ItemEntity) {
+    fn add_to_item_type(&self, references: &[Reference], item: &mut ItemEntity) {
         // Type
         if let Some(tn) = &self.type_name {
             if !tn.is_empty() {
@@ -461,7 +461,7 @@ impl Entry {
     fn add_to_item_own_id(
         &self,
         catalog: &Catalog,
-        references: &Vec<Reference>,
+        references: &[Reference],
         item: &mut ItemEntity,
     ) {
         if let (Some(prop), None) = (catalog.wd_prop(), catalog.wd_qual()) {

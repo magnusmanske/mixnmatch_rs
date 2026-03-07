@@ -134,7 +134,7 @@ impl Autoscrape {
         &self.app
     }
 
-    pub const fn levels(&self) -> &Vec<AutoscrapeLevel> {
+    pub fn levels(&self) -> &[AutoscrapeLevel] {
         &self.levels
     }
 

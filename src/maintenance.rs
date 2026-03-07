@@ -5,7 +5,7 @@ use crate::entry::Entry;
 use crate::job::Job;
 use crate::match_state::MatchState;
 use crate::prop_todo::PropTodo;
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use futures::future::join_all;
 use std::collections::{HashMap, HashSet};
 
@@ -406,7 +406,9 @@ impl Maintenance {
         let collection_q = kv_catalog
             .get("collection")
             .ok_or_else(|| anyhow!("Catalog {catalog_id} does not have a 'collection' key"))?;
-        let sparql = format!("SELECT ?q ?id {{ ?q p:P217 ?statement . ?statement pq:P195 wd:{collection_q}; ps:P217 ?id }}");
+        let sparql = format!(
+            "SELECT ?q ?id {{ ?q p:P217 ?statement . ?statement pq:P195 wd:{collection_q}; ps:P217 ?id }}"
+        );
         let results = mw_api.sparql_query(&sparql).await?;
         let results = results["results"]["bindings"]
             .as_array()
@@ -499,7 +501,7 @@ impl Maintenance {
     }
 
     /// Finds redirects in a batch of items, and changes app matches to their respective targets.
-    async fn fix_redirected_items_batch(&self, unique_qs: &Vec<String>) -> Result<()> {
+    async fn fix_redirected_items_batch(&self, unique_qs: &[String]) -> Result<()> {
         let page2rd = self.app.wikidata().get_redirected_items(unique_qs).await?;
         for (from, to) in &page2rd {
             if let (Some(from), Some(to)) =
@@ -524,7 +526,7 @@ impl Maintenance {
     }
 
     /// Finds meta items (disambig etc) in a batch of items, and unlinks app matches to them.
-    async fn unlink_meta_items_batch(&self, unique_qs: &Vec<String>) -> Result<()> {
+    async fn unlink_meta_items_batch(&self, unique_qs: &[String]) -> Result<()> {
         let meta_items = self.app.wikidata().get_meta_items(unique_qs).await?;
         self.unlink_item_matches(&meta_items).await?;
         Ok(())
@@ -558,7 +560,7 @@ impl Maintenance {
 mod tests {
     use super::*;
     use crate::{
-        app_state::{get_test_app, TEST_MUTEX},
+        app_state::{TEST_MUTEX, get_test_app},
         entry::Entry,
     };
 

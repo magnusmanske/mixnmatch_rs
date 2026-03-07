@@ -264,7 +264,7 @@ impl AuxiliaryMatcher {
     // DEPRECATED
     async fn _match_via_auxiliary_serially(
         &mut self,
-        results: &Vec<AuxiliaryResults>,
+        results: &[AuxiliaryResults],
         catalog_id: usize,
         items_to_check: &mut Vec<(String, AuxiliaryResults)>,
     ) -> Result<()> {
@@ -470,7 +470,7 @@ impl AuxiliaryMatcher {
     //TODO test
     async fn aux2wd_process_item(
         &self,
-        aux_data: &Vec<AuxiliaryResults>,
+        aux_data: &[AuxiliaryResults],
         sources: &HashMap<String, WikidataCommandPropertyValueGroup>,
         entities: &EntityContainer,
     ) -> Vec<WikidataCommand> {
@@ -620,7 +620,7 @@ impl AuxiliaryMatcher {
     async fn aux2wd_remap_results(
         &mut self,
         catalog_id: usize,
-        results: &Vec<AuxiliaryResults>,
+        results: &[AuxiliaryResults],
     ) -> (
         HashMap<usize, Vec<AuxiliaryResults>>,
         HashMap<String, WikidataCommandPropertyValueGroup>,
