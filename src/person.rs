@@ -12,15 +12,12 @@ lazy_static! {
     static ref SIMPLIFY_NAME_RES: Vec<Regex> = vec![
         Regex::new(r"\s*\(.*?\)\s*").expect("Regex failure"),
         Regex::new(r"[, ]+(Jr\.{0,1}|Sr\.{0,1}|PhD\.{0,1}|MD|M\.D\.)$").expect("Regex failure"),
-        Regex::new(r"^(Sir|Baron|Baronesse{0,1}|Graf|Gräfin|Prince|Princess|Dr\.|Prof\.|Rev\.)\s+")
-            .expect("Regex failure"),
-        Regex::new(r"^(Sir|Baron|Baronesse{0,1}|Graf|Gräfin|Prince|Princess|Dr\.|Prof\.|Rev\.)\s+")
-            .expect("Regex failure"),
-        Regex::new(r"^(Sir|Baron|Baronesse{0,1}|Graf|Gräfin|Prince|Princess|Dr\.|Prof\.|Rev\.)\s+")
-            .expect("Regex failure"),
         Regex::new(r"\s*(Ritter|Freiherr)\s+").expect("Regex failure"),
         Regex::new(r"\s+").expect("Regex failure"),
     ];
+    static ref SIMPLIFY_NAME_TITLE_RE: Regex =
+        Regex::new(r"^(Sir|Baron|Baronesse{0,1}|Graf|Gräfin|Prince|Princess|Dr\.|Prof\.|Rev\.)\s+")
+            .expect("Regex failure");
     static ref SIMPLIFY_NAME_TWO_RE: Regex =
         Regex::new(r"^(\S+) .*?(\S+)$").expect("Regex failure");
 }
@@ -46,6 +43,15 @@ impl Person {
         let mut name = name.to_string();
         for re in SIMPLIFY_NAME_RES.iter() {
             name = re.replace_all(&name, " ").to_string();
+        }
+        // Strip title prefixes repeatedly (handles multiple stacked titles)
+        loop {
+            name = name.trim().to_string();
+            let replaced = SIMPLIFY_NAME_TITLE_RE.replace_all(&name, "").to_string();
+            if replaced == name {
+                break;
+            }
+            name = replaced;
         }
         name = SIMPLIFY_NAME_TWO_RE.replace_all(&name, "$1 $2").to_string();
         name.trim().to_string()
@@ -186,6 +192,35 @@ mod tests {
         );
         assert_eq!(
             Person::simplify_name("Rev. Jane Doe"),
+            "Jane Doe".to_string()
+        );
+    }
+
+    #[test]
+    fn test_simplify_name_multiple_stacked_titles() {
+        // Multiple stacked titles should all be stripped
+        assert_eq!(
+            Person::simplify_name("Sir Baron Jane Doe"),
+            "Jane Doe".to_string()
+        );
+        assert_eq!(
+            Person::simplify_name("Dr. Prof. Rev. Jane Doe"),
+            "Jane Doe".to_string()
+        );
+        assert_eq!(
+            Person::simplify_name("Prince Sir Baron Graf Jane Doe"),
+            "Jane Doe".to_string()
+        );
+    }
+
+    #[test]
+    fn test_sanitize_simplify_name() {
+        assert_eq!(
+            Person::sanitize_simplify_name("Sir Dr. Jane Middle Doe"),
+            "Jane Doe".to_string()
+        );
+        assert_eq!(
+            Person::sanitize_simplify_name("Mme. Jane Doe (actor)"),
             "Jane Doe".to_string()
         );
     }
