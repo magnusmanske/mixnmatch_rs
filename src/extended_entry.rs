@@ -310,7 +310,7 @@ impl ExtendedEntry {
             || cell.to_string(),
             |captures| {
                 if let (Some(lat), Some(lon)) = (captures.get(1), captures.get(2)) {
-                    format!("{},{}", lat.as_str(), lon.as_str())
+                    format!("{}/{}", lat.as_str(), lon.as_str())
                 } else {
                     cell.to_string()
                 }
@@ -341,5 +341,210 @@ impl ExtendedEntry {
             .captures(text)?
             .get(1)
             .map(|s| s.as_str().to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_type_valid() {
+        assert_eq!(ExtendedEntry::parse_type("Q5"), Some("Q5".to_string()));
+        assert_eq!(
+            ExtendedEntry::parse_type("Q12345"),
+            Some("Q12345".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_type_invalid() {
+        assert_eq!(ExtendedEntry::parse_type(""), None);
+        assert_eq!(ExtendedEntry::parse_type("12345"), None);
+        assert_eq!(ExtendedEntry::parse_type("foobar"), None);
+        assert_eq!(ExtendedEntry::parse_type("P123"), None);
+    }
+
+    #[test]
+    fn test_parse_date_valid() {
+        assert_eq!(
+            ExtendedEntry::parse_date("2022-11-03"),
+            Some("2022-11-03".to_string())
+        );
+        assert_eq!(
+            ExtendedEntry::parse_date("2022-11"),
+            Some("2022-11".to_string())
+        );
+        assert_eq!(ExtendedEntry::parse_date("2022"), Some("2022".to_string()));
+        assert_eq!(ExtendedEntry::parse_date("800"), Some("800".to_string()));
+    }
+
+    #[test]
+    fn test_parse_date_invalid() {
+        assert_eq!(ExtendedEntry::parse_date(""), None);
+        assert_eq!(ExtendedEntry::parse_date("22"), None);
+        assert_eq!(ExtendedEntry::parse_date("foobar"), None);
+    }
+
+    #[test]
+    fn test_parse_alias() {
+        let mut ee = ExtendedEntry::default();
+        assert!(ee.parse_alias("Aen", "John"));
+        assert_eq!(ee.aliases.len(), 1);
+        assert_eq!(ee.aliases[0], LocaleString::new("en", "John"));
+
+        assert!(ee.parse_alias("Ade", "Johann"));
+        assert_eq!(ee.aliases.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_alias_non_alias_label() {
+        let mut ee = ExtendedEntry::default();
+        assert!(!ee.parse_alias("name", "John"));
+        assert!(!ee.parse_alias("P123", "value"));
+        assert!(ee.aliases.is_empty());
+    }
+
+    #[test]
+    fn test_parse_description() {
+        let mut ee = ExtendedEntry::default();
+        assert!(ee.parse_description("Den", "A painter"));
+        assert_eq!(ee.descriptions.get("en"), Some(&"A painter".to_string()));
+
+        assert!(ee.parse_description("Dfr", "Un peintre"));
+        assert_eq!(ee.descriptions.get("fr"), Some(&"Un peintre".to_string()));
+    }
+
+    #[test]
+    fn test_parse_description_non_description_label() {
+        let mut ee = ExtendedEntry::default();
+        assert!(!ee.parse_description("name", "John"));
+        assert!(!ee.parse_description("P123", "value"));
+        assert!(ee.descriptions.is_empty());
+    }
+
+    #[test]
+    fn test_parse_property() {
+        let mut ee = ExtendedEntry::default();
+        assert!(ee.parse_property("P214", "12345").unwrap());
+        assert!(ee.aux.contains(&(214, "12345".to_string())));
+    }
+
+    #[test]
+    fn test_parse_property_non_property_label() {
+        let mut ee = ExtendedEntry::default();
+        assert!(!ee.parse_property("name", "value").unwrap());
+        assert!(!ee.parse_property("Q5", "value").unwrap());
+        assert!(ee.aux.is_empty());
+    }
+
+    #[test]
+    fn test_parse_property_p625_location() {
+        let mut ee = ExtendedEntry::default();
+        assert!(ee.parse_property("P625", "1.5/-2.5").unwrap());
+        assert!(ee.aux.is_empty()); // P625 goes to location, not aux
+        let loc = ee.location.unwrap();
+        assert!((loc.lat() - 1.5).abs() < f64::EPSILON);
+        assert!((loc.lon() - (-2.5)).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_parse_property_point_format() {
+        let mut ee = ExtendedEntry::default();
+        assert!(ee.parse_property("P625", "POINT(1.5 -2.5)").unwrap());
+        let loc = ee.location.unwrap();
+        assert!((loc.lat() - 1.5).abs() < f64::EPSILON);
+        assert!((loc.lon() - (-2.5)).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_process_cell_name() {
+        let mut ee = ExtendedEntry::default();
+        ee.process_cell("name", "John Doe").unwrap();
+        assert_eq!(ee.entry.ext_name, "John Doe");
+    }
+
+    #[test]
+    fn test_process_cell_desc() {
+        let mut ee = ExtendedEntry::default();
+        ee.process_cell("desc", "A painter").unwrap();
+        assert_eq!(ee.entry.ext_desc, "A painter");
+    }
+
+    #[test]
+    fn test_process_cell_url() {
+        let mut ee = ExtendedEntry::default();
+        ee.process_cell("url", "http://example.com").unwrap();
+        assert_eq!(ee.entry.ext_url, "http://example.com");
+    }
+
+    #[test]
+    fn test_process_cell_type() {
+        let mut ee = ExtendedEntry::default();
+        ee.process_cell("type", "Q5").unwrap();
+        assert_eq!(ee.entry.type_name, Some("Q5".to_string()));
+    }
+
+    #[test]
+    fn test_process_cell_born() {
+        let mut ee = ExtendedEntry::default();
+        ee.process_cell("born", "1900").unwrap();
+        assert_eq!(ee.born, Some("1900".to_string()));
+    }
+
+    #[test]
+    fn test_process_cell_died() {
+        let mut ee = ExtendedEntry::default();
+        ee.process_cell("died", "2000-01-15").unwrap();
+        assert_eq!(ee.died, Some("2000-01-15".to_string()));
+    }
+
+    #[test]
+    fn test_process_cell_q_valid() {
+        let mut ee = ExtendedEntry::default();
+        ee.process_cell("q", "Q42").unwrap();
+        assert_eq!(ee.entry.q, Some(42));
+        assert_eq!(ee.entry.user, Some(4));
+        assert!(ee.entry.timestamp.is_some());
+    }
+
+    #[test]
+    fn test_process_cell_q_invalid() {
+        let mut ee = ExtendedEntry::default();
+        ee.process_cell("q", "Q0").unwrap();
+        assert_eq!(ee.entry.q, None);
+        assert!(ee.entry.user.is_none());
+    }
+
+    #[test]
+    fn test_process_cell_q_negative() {
+        let mut ee = ExtendedEntry::default();
+        ee.process_cell("q", "Q-1").unwrap();
+        assert_eq!(ee.entry.q, None);
+    }
+
+    #[test]
+    fn test_process_cell_unknown_label() {
+        let mut ee = ExtendedEntry::default();
+        let result = ee.process_cell("foobar", "value");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_process_cell_id_ignored() {
+        let mut ee = ExtendedEntry::default();
+        // "id" label should be silently ignored
+        ee.process_cell("id", "12345").unwrap();
+    }
+
+    #[test]
+    fn test_get_capture() {
+        let re = Regex::new(r"^Q(\d+)$").unwrap();
+        assert_eq!(
+            ExtendedEntry::get_capture(&re, "Q123"),
+            Some("123".to_string())
+        );
+        assert_eq!(ExtendedEntry::get_capture(&re, "P123"), None);
+        assert_eq!(ExtendedEntry::get_capture(&re, ""), None);
     }
 }
