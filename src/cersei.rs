@@ -1,6 +1,7 @@
 // DO NOT USE, NOT READY!
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use chrono::Utc;
+use lazy_static::lazy_static;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -11,6 +12,14 @@ use crate::app_state::AppState;
 use crate::catalog::Catalog;
 use crate::entry::Entry;
 use crate::extended_entry::ExtendedEntry;
+
+lazy_static! {
+    static ref RE_PARSE_TIME_YEAR: Regex = Regex::new(r"^\+(\d+).*$").expect("Regex failure");
+    static ref RE_PARSE_TIME_MONTH: Regex =
+        Regex::new(r"^\+(\d+-\d{1,2}).*$").expect("Regex failure");
+    static ref RE_PARSE_TIME_DAY: Regex =
+        Regex::new(r"^\+(\d+-\d{1,2}-\d{1,2}).*$").expect("Regex failure");
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CerseiScraper {
@@ -164,22 +173,19 @@ impl CerseiSync {
                 match parts[1] {
                     "9" => {
                         // Year precision
-                        let re = Regex::new(r"^\+(\d+).*$").unwrap();
-                        if let Some(caps) = re.captures(parts[0]) {
+                        if let Some(caps) = RE_PARSE_TIME_YEAR.captures(parts[0]) {
                             return Some(caps[1].to_string());
                         }
                     }
                     "10" => {
                         // Month precision
-                        let re = Regex::new(r"^\+(\d+-\d{1,2}).*$").unwrap();
-                        if let Some(caps) = re.captures(parts[0]) {
+                        if let Some(caps) = RE_PARSE_TIME_MONTH.captures(parts[0]) {
                             return Some(caps[1].to_string());
                         }
                     }
                     "11" => {
                         // Day precision
-                        let re = Regex::new(r"^\+(\d+-\d{1,2}-\d{1,2}).*$").unwrap();
-                        if let Some(caps) = re.captures(parts[0]) {
+                        if let Some(caps) = RE_PARSE_TIME_DAY.captures(parts[0]) {
                             return Some(caps[1].to_string());
                         }
                     }
@@ -565,5 +571,55 @@ mod tests {
         let cs = CerseiSync::new(&app).unwrap();
         let scrapers = cs.get_cersei_scrapers().await.unwrap();
         assert!(scrapers.len() > 10);
+    }
+
+    #[test]
+    fn test_parse_time_year_precision() {
+        let input = "+1990-01-01T00:00:00Z/9".to_string();
+        assert_eq!(
+            CerseiSync::parse_time(Some(&input)),
+            Some("1990".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_time_month_precision() {
+        let input = "+1990-05-01T00:00:00Z/10".to_string();
+        assert_eq!(
+            CerseiSync::parse_time(Some(&input)),
+            Some("1990-05".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_time_day_precision() {
+        let input = "+1990-05-24T00:00:00Z/11".to_string();
+        assert_eq!(
+            CerseiSync::parse_time(Some(&input)),
+            Some("1990-05-24".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_time_none_input() {
+        assert_eq!(CerseiSync::parse_time(None), None);
+    }
+
+    #[test]
+    fn test_parse_time_unknown_precision() {
+        let input = "+1990-05-24T00:00:00Z/7".to_string();
+        assert_eq!(CerseiSync::parse_time(Some(&input)), None);
+    }
+
+    #[test]
+    fn test_parse_time_no_slash() {
+        let input = "+1990-05-24T00:00:00Z".to_string();
+        assert_eq!(CerseiSync::parse_time(Some(&input)), None);
+    }
+
+    #[test]
+    fn test_parse_time_empty_string() {
+        let input = "".to_string();
+        assert_eq!(CerseiSync::parse_time(Some(&input)), None);
     }
 }
