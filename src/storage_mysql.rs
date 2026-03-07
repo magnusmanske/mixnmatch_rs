@@ -2577,6 +2577,57 @@ mod tests {
         );
         assert_eq!(sql6, expected6);
     }
+
+    #[test]
+    fn test_get_overview_column_name_for_user_and_q() {
+        // user=0 (automatch) => "autoq" regardless of q
+        assert_eq!(
+            StorageMySQL::get_overview_column_name_for_user_and_q(&Some(0), &None),
+            "autoq"
+        );
+        assert_eq!(
+            StorageMySQL::get_overview_column_name_for_user_and_q(&Some(0), &Some(42)),
+            "autoq"
+        );
+        assert_eq!(
+            StorageMySQL::get_overview_column_name_for_user_and_q(&Some(0), &Some(0)),
+            "autoq"
+        );
+
+        // user>0, q=None => "noq"
+        assert_eq!(
+            StorageMySQL::get_overview_column_name_for_user_and_q(&Some(5), &None),
+            "noq"
+        );
+
+        // user>0, q=0 (N/A) => "na"
+        assert_eq!(
+            StorageMySQL::get_overview_column_name_for_user_and_q(&Some(5), &Some(0)),
+            "na"
+        );
+
+        // user>0, q=-1 (no Wikidata item) => "nowd"
+        assert_eq!(
+            StorageMySQL::get_overview_column_name_for_user_and_q(&Some(5), &Some(-1)),
+            "nowd"
+        );
+
+        // user>0, q>0 (manual match) => "manual"
+        assert_eq!(
+            StorageMySQL::get_overview_column_name_for_user_and_q(&Some(5), &Some(42)),
+            "manual"
+        );
+
+        // user=None => "noq"
+        assert_eq!(
+            StorageMySQL::get_overview_column_name_for_user_and_q(&None, &None),
+            "noq"
+        );
+        assert_eq!(
+            StorageMySQL::get_overview_column_name_for_user_and_q(&None, &Some(42)),
+            "noq"
+        );
+    }
 }
 
 /* TODO
