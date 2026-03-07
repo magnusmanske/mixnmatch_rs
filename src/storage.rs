@@ -64,6 +64,93 @@ impl OverviewTableRow {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_overview_row(
+        total: isize,
+        noq: isize,
+        autoq: isize,
+        na: isize,
+        manual: isize,
+        nowd: isize,
+        multi_match: isize,
+    ) -> OverviewTableRow {
+        OverviewTableRow {
+            catalog_id: 1,
+            total,
+            noq,
+            autoq,
+            na,
+            manual,
+            nowd,
+            multi_match,
+            types: String::new(),
+        }
+    }
+
+    #[test]
+    fn test_has_weird_numbers_all_positive() {
+        let row = make_overview_row(100, 50, 20, 5, 10, 3, 2);
+        assert!(!row.has_weird_numbers());
+    }
+
+    #[test]
+    fn test_has_weird_numbers_all_zero() {
+        let row = make_overview_row(0, 0, 0, 0, 0, 0, 0);
+        assert!(!row.has_weird_numbers());
+    }
+
+    #[test]
+    fn test_has_weird_numbers_negative_total() {
+        let row = make_overview_row(-1, 0, 0, 0, 0, 0, 0);
+        assert!(row.has_weird_numbers());
+    }
+
+    #[test]
+    fn test_has_weird_numbers_negative_noq() {
+        let row = make_overview_row(0, -1, 0, 0, 0, 0, 0);
+        assert!(row.has_weird_numbers());
+    }
+
+    #[test]
+    fn test_has_weird_numbers_negative_autoq() {
+        let row = make_overview_row(0, 0, -1, 0, 0, 0, 0);
+        assert!(row.has_weird_numbers());
+    }
+
+    #[test]
+    fn test_has_weird_numbers_negative_na() {
+        let row = make_overview_row(0, 0, 0, -1, 0, 0, 0);
+        assert!(row.has_weird_numbers());
+    }
+
+    #[test]
+    fn test_has_weird_numbers_negative_manual() {
+        let row = make_overview_row(0, 0, 0, 0, -1, 0, 0);
+        assert!(row.has_weird_numbers());
+    }
+
+    #[test]
+    fn test_has_weird_numbers_negative_nowd() {
+        let row = make_overview_row(0, 0, 0, 0, 0, -1, 0);
+        assert!(row.has_weird_numbers());
+    }
+
+    #[test]
+    fn test_has_weird_numbers_negative_multi_match() {
+        let row = make_overview_row(0, 0, 0, 0, 0, 0, -1);
+        assert!(row.has_weird_numbers());
+    }
+
+    #[test]
+    fn test_catalog_id_accessor() {
+        let row = make_overview_row(0, 0, 0, 0, 0, 0, 0);
+        assert_eq!(row.catalog_id(), 1);
+    }
+}
+
 #[async_trait]
 pub trait Storage: std::fmt::Debug + Send + Sync {
     // fn new(j: &Value) -> impl Storage;
