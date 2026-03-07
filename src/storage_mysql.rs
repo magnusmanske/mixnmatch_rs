@@ -1694,7 +1694,38 @@ impl Storage for StorageMySQL {
     // Automatch
 
     /// Auto-matches unmatched and automatched people to fully matched entries that have the same name and birth year.
-    async fn automatch_people_with_birth_year(&self, _catalog_id: usize) -> Result<()> {
+    async fn automatch_people_with_birth_year(&self, catalog_id: usize) -> Result<()> {
+        // New version
+        // unmatched entries from catalog 7687 that have the same name and birth or death year than other fully matched entries,
+        // but only one distinct q
+
+        let sql_select = r#"
+		    SELECT v0.entry_id,group_concat(distinct v1.q) AS q
+		    FROM vw_dates v0,vw_dates v1
+		    where v0.ext_name=v1.ext_name
+		    AND ((v0.year_born=v1.year_born AND v0.year_born!='') OR (v0.year_died=v1.year_died AND v0.year_died!=''))
+		    AND v0.catalog=:catalog_id
+		    AND v1.catalog!=v0.catalog
+		    AND (v1.q is not null and v1.user>0 and v1.user is not null)
+		    AND (v0.user=0 or v0.user is null)
+		    group by v0.entry_id
+		    having count(distinct v1.q)=1"#;
+
+        let mut conn = self.get_conn().await?;
+        let entry_id2q = conn
+            .exec_iter(sql_select, params! {catalog_id})
+            .await?
+            .map_and_drop(from_row::<(usize, usize)>)
+            .await?;
+
+        for (entry_id, q) in &entry_id2q {
+            let sql_update = r#"UPDATE entry e1
+            SET e1.q=:q,e1.user=0,timestamp=date_format(now(),'%Y%m%d%H%i%S')
+            WHERE e1.type='Q5' AND e1.id=:entry_id AND (e1.q is null or e1.user=0)
+            AND NOT EXISTS (SELECT * FROM log WHERE log.entry_id=e1.id AND log.q=:q)"#;
+            conn.exec_drop(sql_update, params! {entry_id, q}).await?;
+        }
+
         // DEACTIVATED
         // too expensive
         // https://phabricator.wikimedia.org/T409716
