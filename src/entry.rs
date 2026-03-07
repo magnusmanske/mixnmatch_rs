@@ -836,9 +836,9 @@ impl Entry {
         self.q.is_none()
     }
 
-    /// Checks if the entry is partially matched
+    /// Checks if the entry is partially matched (q > 0 and user == 0)
     pub fn is_partially_matched(&self) -> bool {
-        self.user == Some(0)
+        self.q.is_some_and(|q| q > 0) && self.user == Some(0)
     }
 
     /// Checks if the entry is fully matched
@@ -1087,6 +1087,68 @@ mod tests {
         assert!(entry.is_fully_matched());
         entry.unmatch().await.unwrap();
         assert!(!entry.is_fully_matched());
+    }
+
+    #[test]
+    fn test_is_partially_matched_unit() {
+        // Partially matched: q > 0 and user == 0
+        let mut entry = Entry::new_from_catalog_and_ext_id(1, "test");
+        entry.q = Some(42);
+        entry.user = Some(0);
+        assert!(entry.is_partially_matched());
+
+        // Not partially matched: q is None, user == 0
+        let mut entry2 = Entry::new_from_catalog_and_ext_id(1, "test");
+        entry2.q = None;
+        entry2.user = Some(0);
+        assert!(!entry2.is_partially_matched());
+
+        // Not partially matched: q > 0, user > 0 (fully matched)
+        let mut entry3 = Entry::new_from_catalog_and_ext_id(1, "test");
+        entry3.q = Some(42);
+        entry3.user = Some(5);
+        assert!(!entry3.is_partially_matched());
+
+        // Not partially matched: q is None, user is None (unmatched)
+        let entry4 = Entry::new_from_catalog_and_ext_id(1, "test");
+        assert!(!entry4.is_partially_matched());
+
+        // Not partially matched: q <= 0, user == 0
+        let mut entry5 = Entry::new_from_catalog_and_ext_id(1, "test");
+        entry5.q = Some(0);
+        entry5.user = Some(0);
+        assert!(!entry5.is_partially_matched());
+
+        let mut entry6 = Entry::new_from_catalog_and_ext_id(1, "test");
+        entry6.q = Some(-1);
+        entry6.user = Some(0);
+        assert!(!entry6.is_partially_matched());
+    }
+
+    #[test]
+    fn test_is_fully_matched_unit() {
+        let mut entry = Entry::new_from_catalog_and_ext_id(1, "test");
+        entry.q = Some(42);
+        entry.user = Some(5);
+        assert!(entry.is_fully_matched());
+
+        let mut entry2 = Entry::new_from_catalog_and_ext_id(1, "test");
+        entry2.q = Some(42);
+        entry2.user = Some(0);
+        assert!(!entry2.is_fully_matched());
+
+        let entry3 = Entry::new_from_catalog_and_ext_id(1, "test");
+        assert!(!entry3.is_fully_matched());
+    }
+
+    #[test]
+    fn test_is_unmatched_unit() {
+        let entry = Entry::new_from_catalog_and_ext_id(1, "test");
+        assert!(entry.is_unmatched());
+
+        let mut entry2 = Entry::new_from_catalog_and_ext_id(1, "test");
+        entry2.q = Some(42);
+        assert!(!entry2.is_unmatched());
     }
 
     #[tokio::test]
