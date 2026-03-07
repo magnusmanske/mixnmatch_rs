@@ -502,8 +502,12 @@ impl Entry {
     }
 
     fn time_precision_from_ymd(ymd: &str) -> (String, u64) {
-        let parts: Vec<&str> = ymd.split('-').collect();
-        let prefix = if ymd.starts_with('-') { "" } else { "+" };
+        let (prefix, normalized) = if let Some(rest) = ymd.strip_prefix('-') {
+            ("-", rest)
+        } else {
+            ("+", ymd)
+        };
+        let parts: Vec<&str> = normalized.split('-').collect();
         match parts.len() {
             1 => (format!("{prefix}{}-01-01T00:00:00Z", parts[0]), 9),
             2 => (
@@ -1053,6 +1057,19 @@ mod tests {
         assert_eq!(
             Entry::time_precision_from_ymd("2021"),
             ("+2021-01-01T00:00:00Z".to_string(), 9)
+        );
+        // BCE (negative) years
+        assert_eq!(
+            Entry::time_precision_from_ymd("-500"),
+            ("-500-01-01T00:00:00Z".to_string(), 9)
+        );
+        assert_eq!(
+            Entry::time_precision_from_ymd("-500-06"),
+            ("-500-06-01T00:00:00Z".to_string(), 10)
+        );
+        assert_eq!(
+            Entry::time_precision_from_ymd("-500-06-15"),
+            ("-500-06-15T00:00:00Z".to_string(), 11)
         );
     }
 
