@@ -155,7 +155,10 @@ impl Microsync {
         if !multiple_extid_in_wikidata.is_empty() {
             ret += "== Multiple items for the same external ID in Wikidata ==\n";
             if multiple_extid_in_wikidata.len() > MAX_WIKI_ROWS {
-                ret += &format!("* {} external IDs have at least two items on Wikidata. Too many to show individually.\n\n",multiple_extid_in_wikidata.len());
+                ret += &format!(
+                    "* {} external IDs have at least two items on Wikidata. Too many to show individually.\n\n",
+                    multiple_extid_in_wikidata.len()
+                );
             } else {
                 ret += "{| class='wikitable'\n! External ID !! Items in Mix'n'Match\n";
                 for e in &multiple_extid_in_wikidata {
@@ -181,7 +184,10 @@ impl Microsync {
         if !multiple_q_in_mnm.is_empty() {
             ret += "== Same item for multiple external IDs in Mix'n'match ==\n";
             if multiple_q_in_mnm.len() > MAX_WIKI_ROWS {
-                ret += &format!("* {} items have more than one match in Mix'n'Match. Too many to show individually.\n\n",multiple_q_in_mnm.len());
+                ret += &format!(
+                    "* {} items have more than one match in Mix'n'Match. Too many to show individually.\n\n",
+                    multiple_q_in_mnm.len()
+                );
             } else {
                 let entry_ids: Vec<usize> = multiple_q_in_mnm
                     .iter()
@@ -192,7 +198,7 @@ impl Microsync {
                     .storage()
                     .microsync_load_entry_names(&entry_ids)
                     .await?;
-                ret += "{| class='wikitable'\n! Item in Mix'n'Match !! Mix'n'match entry !! External ID !! External label\n" ;
+                ret += "{| class='wikitable'\n! Item in Mix'n'Match !! Mix'n'match entry !! External ID !! External label\n";
                 for e in &multiple_q_in_mnm {
                     let mut first = true;
                     let q_mnm = e.q;
@@ -249,7 +255,10 @@ impl Microsync {
         if !match_differs.is_empty() {
             *ret += "== Different items for the same external ID ==\n";
             if match_differs.len() > MAX_WIKI_ROWS {
-                *ret += &format!("* {} enties have different items on Mix'n'match and Wikidata. Too many to show individually.\n\n",match_differs.len());
+                *ret += &format!(
+                    "* {} enties have different items on Mix'n'match and Wikidata. Too many to show individually.\n\n",
+                    match_differs.len()
+                );
             } else {
                 let entry_ids: Vec<usize> = match_differs.iter().map(|e| e.entry_id).collect();
                 let entry2name = self
@@ -257,13 +266,16 @@ impl Microsync {
                     .storage()
                     .microsync_load_entry_names(&entry_ids)
                     .await?;
-                *ret += "{| class='wikitable'\n! External ID !! External label !! Item in Wikidata !! Item in Mix'n'Match !! Mix'n'match entry\n" ;
+                *ret += "{| class='wikitable'\n! External ID !! External label !! Item in Wikidata !! Item in Mix'n'Match !! Mix'n'match entry\n";
                 for e in &match_differs {
                     let ext_name = entry2name.get(&e.entry_id).unwrap_or(&e.ext_id);
                     let ext_id = Self::format_ext_id(&e.ext_id, &e.ext_url, formatter_url);
                     let mnm_url =
                         format!("https://mix-n-match.toolforge.org/#/entry/{}", e.entry_id);
-                    let s = format!("|-\n| {ext_id} || {ext_name} || {{{{Q|{}}}}} || {{{{Q|{}}}}} || [{mnm_url} {}]\n",e.q_wd,e.q_mnm,e.entry_id);
+                    let s = format!(
+                        "|-\n| {ext_id} || {ext_name} || {{{{Q|{}}}}} || {{{{Q|{}}}}} || [{mnm_url} {}]\n",
+                        e.q_wd, e.q_mnm, e.entry_id
+                    );
                     *ret += &s;
                 }
                 *ret += "|}\n\n";
@@ -280,7 +292,10 @@ impl Microsync {
         if !extid_not_in_mnm.is_empty() {
             *ret += "== Unknown external ID ==\n";
             if extid_not_in_mnm.len() > MAX_WIKI_ROWS {
-                *ret += &format!("* {} external IDs in Wikidata but not in Mix'n'Match. Too many to show individually.\n\n",extid_not_in_mnm.len());
+                *ret += &format!(
+                    "* {} external IDs in Wikidata but not in Mix'n'Match. Too many to show individually.\n\n",
+                    extid_not_in_mnm.len()
+                );
             } else {
                 *ret += "{| class='wikitable'\n! External ID !! Item\n";
                 for e in &extid_not_in_mnm {
@@ -310,10 +325,11 @@ impl Microsync {
         );
         let client = wikimisc::wikidata::Wikidata::new().reqwest_client()?;
         let json = client.get(&url).send().await?.json::<Value>().await?;
-        let url2 = json["entities"][format!("P{property}")]["claims"]["P1630"][0]["mainsnak"]
-            ["datavalue"]["value"]
-            .as_str()
-            .map_or_else(String::new, |url_tmp| url_tmp.to_string());
+        let url2 =
+            json["entities"][format!("P{property}")]["claims"]["P1630"][0]["mainsnak"]["datavalue"]
+                ["value"]
+                .as_str()
+                .map_or_else(String::new, |url_tmp| url_tmp.to_string());
         Ok(url2)
     }
 
@@ -602,7 +618,7 @@ fn wikitext_from_issues_get_header(catalog: &Catalog) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app_state::{get_test_app, TEST_MUTEX};
+    use crate::app_state::{TEST_MUTEX, get_test_app};
 
     const TEST_CATALOG_ID: usize = 5526;
     const TEST_ENTRY_ID: usize = 143962196;
@@ -617,6 +633,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore] // Requires database, must run single-threaded
     async fn test_get_multiple_q_in_mnm() {
         let _test_lock = TEST_MUTEX.lock();
         let app = get_test_app();

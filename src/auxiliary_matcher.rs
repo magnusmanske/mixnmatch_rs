@@ -827,6 +827,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore] // Requires database, must run single-threaded
     async fn test_add_auxiliary_to_wikidata() {
         let _test_lock = TEST_MUTEX.lock();
         let app = get_test_app();
