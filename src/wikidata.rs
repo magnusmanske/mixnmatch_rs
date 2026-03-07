@@ -1,9 +1,9 @@
 use crate::{mysql_misc::MySQLMisc, wikidata_commands::WikidataCommand};
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use itertools::Itertools;
 use log::error;
 use mysql_async::{from_row, prelude::*};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     collections::{HashMap, HashSet},
     fs::File,
@@ -94,7 +94,7 @@ impl Wikidata {
     }
 
     /// Returns a list of items that link to meta items (disambiguation pages etc)
-    pub async fn get_meta_items(&self, unique_qs: &Vec<String>) -> Result<Vec<String>> {
+    pub async fn get_meta_items(&self, unique_qs: &[String]) -> Result<Vec<String>> {
         let meta_items_link_target_ids = self.get_meta_items_link_targets().await?;
         let placeholders = Self::sql_placeholders(unique_qs.len());
         let sql = format!(
@@ -110,7 +110,7 @@ impl Wikidata {
         let results = self
             .get_conn()
             .await?
-            .exec_iter(sql, unique_qs)
+            .exec_iter(sql, unique_qs.to_vec())
             .await?
             .map_and_drop(from_row::<String>)
             .await?;
@@ -154,7 +154,7 @@ impl Wikidata {
     /// Returns a list of redirected items, with their redirect tatget.
     pub async fn get_redirected_items(
         &self,
-        unique_qs: &Vec<String>,
+        unique_qs: &[String],
     ) -> Result<Vec<(String, String)>> {
         let placeholders = Self::sql_placeholders(unique_qs.len());
         let sql = format!("SELECT page_title,rd_title FROM `page`,`redirect`
@@ -163,7 +163,7 @@ impl Wikidata {
         let results = self
             .get_conn()
             .await?
-            .exec_iter(sql, unique_qs)
+            .exec_iter(sql, unique_qs.to_vec())
             .await?
             .map_and_drop(from_row::<(String, String)>)
             .await?;
@@ -173,7 +173,9 @@ impl Wikidata {
     /// Returns a list of deleted items
     pub async fn get_deleted_items(&self, unique_qs: &[String]) -> Result<Vec<String>> {
         let placeholders = Self::sql_placeholders(unique_qs.len());
-        let sql = format!("SELECT page_title FROM `page` WHERE `page_namespace`=0 AND `page_title` IN ({placeholders})");
+        let sql = format!(
+            "SELECT page_title FROM `page` WHERE `page_namespace`=0 AND `page_title` IN ({placeholders})"
+        );
         let found_items: HashSet<String> = self
             .get_conn()
             .await?
@@ -390,7 +392,7 @@ impl Wikidata {
 
     async fn execute_item_command(
         &mut self,
-        commands: &Vec<WikidataCommand>,
+        commands: &[WikidataCommand],
         item_id: &usize,
     ) -> Result<()> {
         let mut comments: HashSet<String> = HashSet::new();
@@ -456,7 +458,9 @@ impl Wikidata {
         // TODO via mw_api?
         let query = encode(query);
         let srlimit = srlimit.unwrap_or(10);
-        let url = format!("{WIKIDATA_API_URL}?action=query&list=search&format=json&srsearch={query}&srlimit={srlimit}");
+        let url = format!(
+            "{WIKIDATA_API_URL}?action=query&list=search&format=json&srsearch={query}&srlimit={srlimit}"
+        );
         let v = wikimisc::wikidata::Wikidata::new()
             .reqwest_client()?
             .get(url)
