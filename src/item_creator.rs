@@ -1,5 +1,5 @@
 use crate::{app_state::AppState, entry::Entry};
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use futures::future::join_all;
 use std::collections::HashMap;
 use wikimisc::wikibase::ItemEntity;
@@ -128,7 +128,7 @@ impl ItemCreator {
         Ok(())
     }
 
-    fn generate_item_creation_comment(&mut self) -> String {
+    fn generate_item_creation_comment(&self) -> String {
         let entry_links = self
             .entries
             .keys()
@@ -139,8 +139,7 @@ impl ItemCreator {
         } else {
             "entries"
         };
-        let comment = format!("Created from Mix'n'Match {etext} {}", entry_links.join(" "));
-        comment
+        format!("Created from Mix'n'Match {etext} {}", entry_links.join(" "))
     }
 }
 
