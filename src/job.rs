@@ -636,4 +636,16 @@ mod tests {
         let next_ts = job.get_next_ts().await.unwrap();
         assert_eq!(next_ts, "20221027000101");
     }
+
+    #[test]
+    fn test_job_error_display_s() {
+        let err = JobError::S("something went wrong".to_string());
+        assert_eq!(format!("{err}"), "JobError::S: something went wrong");
+    }
+
+    #[test]
+    fn test_job_error_display_time_error() {
+        let err = JobError::TimeError;
+        assert_eq!(format!("{err}"), "JobError::TimeError");
+    }
 }
