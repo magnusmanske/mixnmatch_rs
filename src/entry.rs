@@ -907,36 +907,34 @@ mod tests {
         let _test_lock = TEST_MUTEX.lock();
         let app = get_test_app();
         let entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+
+        // Save whatever is currently in the DB so we can restore it at the end
+        let original = entry.get_coordinate_location().await.unwrap();
+
         let cl = CoordinateLocation {
             lat: 1.234,
             lon: -5.678,
         };
-        assert_eq!(
-            entry.get_coordinate_location().await.unwrap(),
-            Some(cl.to_owned())
-        );
 
-        // Switch
+        // Set a known value
+        entry.set_coordinate_location(&Some(cl)).await.unwrap();
+        assert_eq!(entry.get_coordinate_location().await.unwrap(), Some(cl));
+
+        // Switch lat/lon
         let cl2 = CoordinateLocation {
             lat: cl.lon,
             lon: cl.lat,
         };
-        entry
-            .set_coordinate_location(&Some(cl2.to_owned()))
-            .await
-            .unwrap();
+        entry.set_coordinate_location(&Some(cl2)).await.unwrap();
         assert_eq!(entry.get_coordinate_location().await.unwrap(), Some(cl2));
 
         // Remove
         entry.set_coordinate_location(&None).await.unwrap();
         assert_eq!(entry.get_coordinate_location().await.unwrap(), None);
 
-        // Set back to original and check
-        entry
-            .set_coordinate_location(&Some(cl.to_owned()))
-            .await
-            .unwrap();
-        assert_eq!(entry.get_coordinate_location().await.unwrap(), Some(cl));
+        // Restore original value
+        entry.set_coordinate_location(&original).await.unwrap();
+        assert_eq!(entry.get_coordinate_location().await.unwrap(), original);
     }
 
     #[tokio::test]
