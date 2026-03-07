@@ -367,29 +367,29 @@ mod tests {
         assert_eq!(colmap.get("id"), Some(&0));
         assert_eq!(colmap.get("name"), Some(&1));
         assert_eq!(colmap.get("desc"), Some(&3));
-        assert!(colmap.get("").is_none()); // empty column names are skipped
+        assert!(!colmap.contains_key("")); // empty column names are skipped
         assert_eq!(colmap.len(), 3);
     }
 
     #[test]
     fn test_get_ext_id_column() {
         let mut colmap = std::collections::HashMap::new();
-        colmap.insert("id".to_string(), 0usize);
-        colmap.insert("name".to_string(), 1usize);
+        colmap.insert("id".to_string(), 0_usize);
+        colmap.insert("name".to_string(), 1_usize);
         assert_eq!(DataSource::get_ext_id_column(&colmap).unwrap(), 0);
     }
 
     #[test]
     fn test_get_ext_id_column_missing_id() {
         let mut colmap = std::collections::HashMap::new();
-        colmap.insert("name".to_string(), 1usize);
+        colmap.insert("name".to_string(), 1_usize);
         assert!(DataSource::get_ext_id_column(&colmap).is_err());
     }
 
     #[test]
     fn test_get_ext_id_column_missing_name() {
         let mut colmap = std::collections::HashMap::new();
-        colmap.insert("id".to_string(), 0usize);
+        colmap.insert("id".to_string(), 0_usize);
         assert!(DataSource::get_ext_id_column(&colmap).is_err());
     }
 }
