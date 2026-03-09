@@ -633,7 +633,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore] // Requires database, must run single-threaded
     async fn test_get_multiple_q_in_mnm() {
         let _test_lock = TEST_MUTEX.lock();
         let app = get_test_app();
