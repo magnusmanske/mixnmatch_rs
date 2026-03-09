@@ -225,4 +225,144 @@ mod tests {
         let ret = resolve.replace_vars(&map);
         assert_eq!(ret, (123, "id".to_string()));
     }
+
+    #[test]
+    fn test_fix_html_strips_tags() {
+        assert_eq!(AutoscrapeResolve::fix_html("<b>bold</b>"), "bold");
+        assert_eq!(
+            AutoscrapeResolve::fix_html("<a href=\"x\">link</a> text"),
+            "link text"
+        );
+    }
+
+    #[test]
+    fn test_fix_html_decodes_entities() {
+        assert_eq!(AutoscrapeResolve::fix_html("A &amp; B"), "A & B");
+        assert_eq!(AutoscrapeResolve::fix_html("caf&eacute;"), "café");
+        // Note: &lt;...&gt; gets decoded to <...> which is then stripped as an HTML tag
+        assert_eq!(AutoscrapeResolve::fix_html("&lt;not a tag&gt;"), "");
+    }
+
+    #[test]
+    fn test_fix_html_collapses_whitespace() {
+        assert_eq!(
+            AutoscrapeResolve::fix_html("  hello   world  "),
+            "hello world"
+        );
+        assert_eq!(AutoscrapeResolve::fix_html("a\n\nb"), "a b");
+    }
+
+    #[test]
+    fn test_fix_html_combined() {
+        assert_eq!(
+            AutoscrapeResolve::fix_html("  <b>Hello</b>   &amp;   <i>World</i>  "),
+            "Hello & World"
+        );
+    }
+
+    #[test]
+    fn test_replace_vars_applies_regex() {
+        let json = json!({"test":{
+            "use": "Hello World 123",
+            "rx": [
+                ["\\d+", "NUM"]
+            ]
+        }});
+        let resolve = AutoscrapeResolve::from_json(&json, "test").unwrap();
+        let map = HashMap::new();
+        let ret = resolve.replace_vars(&map);
+        assert_eq!(ret, "Hello World NUM");
+    }
+
+    #[test]
+    fn test_replace_vars_applies_multiple_regexes() {
+        let json = json!({"test":{
+            "use": "foo bar baz",
+            "rx": [
+                ["foo", "FOO"],
+                ["baz", "BAZ"]
+            ]
+        }});
+        let resolve = AutoscrapeResolve::from_json(&json, "test").unwrap();
+        let map = HashMap::new();
+        let ret = resolve.replace_vars(&map);
+        assert_eq!(ret, "FOO bar BAZ");
+    }
+
+    #[test]
+    fn test_replace_vars_var_substitution_then_regex() {
+        let json = json!({"test":{
+            "use": "$NAME ($YEAR)",
+            "rx": [
+                ["\\((.+?)\\)", "- $1"]
+            ]
+        }});
+        let resolve = AutoscrapeResolve::from_json(&json, "test").unwrap();
+        let mut map = HashMap::new();
+        map.insert("$NAME".to_string(), "John".to_string());
+        map.insert("$YEAR".to_string(), "2024".to_string());
+        let ret = resolve.replace_vars(&map);
+        assert_eq!(ret, "John - 2024");
+    }
+
+    #[test]
+    fn test_replace_vars_strips_html_from_result() {
+        let json = json!({"test":{
+            "use": "<b>$VAR</b>",
+        }});
+        let resolve = AutoscrapeResolve::from_json(&json, "test").unwrap();
+        let mut map = HashMap::new();
+        map.insert("$VAR".to_string(), "value".to_string());
+        let ret = resolve.replace_vars(&map);
+        assert_eq!(ret, "value");
+    }
+
+    #[test]
+    fn test_autoscrape_resolve_aux_from_json_without_p_prefix() {
+        let json = json!({"prop": "456", "id": "some-id"});
+        let resolve = AutoscrapeResolveAux::from_json(&json).unwrap();
+        assert_eq!(resolve.property, 456);
+        assert_eq!(resolve.id, "some-id");
+    }
+
+    #[test]
+    fn test_autoscrape_resolve_aux_from_json_bad_prop() {
+        let json = json!({"prop": "not-a-number", "id": "id"});
+        assert!(AutoscrapeResolveAux::from_json(&json).is_err());
+    }
+
+    #[test]
+    fn test_autoscrape_resolve_aux_replace_vars_strips_html() {
+        let json = json!({"prop": "P1", "id": "<b>$X</b>"});
+        let resolve = AutoscrapeResolveAux::from_json(&json).unwrap();
+        let mut map = HashMap::new();
+        map.insert("$X".to_string(), "val".to_string());
+        let ret = resolve.replace_vars(&map);
+        assert_eq!(ret, (1, "val".to_string()));
+    }
+
+    #[test]
+    fn test_autoscrape_resolve_from_json_bad_regex() {
+        let json = json!({"test":{
+            "use": "x",
+            "rx": [
+                ["(unclosed", "replace"]
+            ]
+        }});
+        assert!(AutoscrapeResolve::from_json(&json, "test").is_err());
+    }
+
+    #[test]
+    fn test_autoscrape_resolve_from_json_multiple_rx() {
+        let json = json!({"test":{
+            "use": "x",
+            "rx": [
+                ["a", "A"],
+                ["b", "B"],
+                ["c", "C"]
+            ]
+        }});
+        let resolve = AutoscrapeResolve::from_json(&json, "test").unwrap();
+        assert_eq!(resolve.regexs.len(), 3);
+    }
 }

@@ -1345,4 +1345,99 @@ mod tests {
         let expected = Snak::new_item("P12345", "Q5678");
         assert_eq!(*claim.unwrap().main_snak(), expected);
     }
+
+    #[test]
+    fn test_new_from_catalog_and_ext_id_defaults() {
+        let entry = Entry::new_from_catalog_and_ext_id(42, "ext123");
+        assert_eq!(entry.catalog, 42);
+        assert_eq!(entry.ext_id, "ext123");
+        assert!(entry.id.is_none());
+        assert!(entry.ext_url.is_empty());
+        assert!(entry.ext_name.is_empty());
+        assert!(entry.ext_desc.is_empty());
+        assert!(entry.q.is_none());
+        assert!(entry.user.is_none());
+        assert!(entry.timestamp.is_none());
+        assert!(entry.type_name.is_none());
+        assert!(entry.app.is_none());
+        // random should be in [0, 1)
+        assert!(entry.random >= 0.0 && entry.random < 1.0);
+    }
+
+    #[test]
+    fn test_coordinate_location_equality() {
+        let a = CoordinateLocation::new(51.5, -0.1);
+        let b = CoordinateLocation::new(51.5, -0.1);
+        let c = CoordinateLocation::new(48.8, 2.3);
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn test_coordinate_location_clone() {
+        let original = CoordinateLocation::new(12.34, 56.78);
+        let cloned = original;
+        assert_eq!(original, cloned);
+        assert!((cloned.lat() - 12.34).abs() < f64::EPSILON);
+        assert!((cloned.lon() - 56.78).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_coordinate_location_negative_coords() {
+        let cl = CoordinateLocation::new(-33.8688, 151.2093);
+        assert!((cl.lat() - (-33.8688)).abs() < f64::EPSILON);
+        assert!((cl.lon() - 151.2093).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_auxiliary_row_accessors() {
+        let row = AuxiliaryRow {
+            row_id: 10,
+            prop_numeric: 214,
+            value: "12345678".to_string(),
+            in_wikidata: true,
+            entry_is_matched: false,
+        };
+        assert_eq!(row.prop_numeric(), 214);
+        assert_eq!(row.value(), "12345678");
+        assert!(row.in_wikidata());
+        assert!(!row.entry_is_matched());
+    }
+
+    #[test]
+    fn test_entry_default() {
+        let entry = Entry::default();
+        assert!(entry.id.is_none());
+        assert_eq!(entry.catalog, 0);
+        assert!(entry.ext_id.is_empty());
+        assert!(entry.ext_url.is_empty());
+        assert!(entry.ext_name.is_empty());
+        assert!(entry.ext_desc.is_empty());
+        assert!(entry.q.is_none());
+        assert!(entry.user.is_none());
+        assert!(entry.timestamp.is_none());
+        assert!(entry.type_name.is_none());
+    }
+
+    #[test]
+    fn test_entry_match_state_transitions() {
+        let mut entry = Entry::new_from_catalog_and_ext_id(1, "x");
+        // Starts unmatched
+        assert!(entry.is_unmatched());
+        assert!(!entry.is_partially_matched());
+        assert!(!entry.is_fully_matched());
+
+        // Set to partially matched (q > 0, user == 0)
+        entry.q = Some(100);
+        entry.user = Some(0);
+        assert!(!entry.is_unmatched());
+        assert!(entry.is_partially_matched());
+        assert!(!entry.is_fully_matched());
+
+        // Set to fully matched (q > 0, user > 0)
+        entry.user = Some(5);
+        assert!(!entry.is_unmatched());
+        assert!(!entry.is_partially_matched());
+        assert!(entry.is_fully_matched());
+    }
 }
