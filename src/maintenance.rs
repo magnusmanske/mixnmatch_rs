@@ -568,7 +568,6 @@ mod tests {
     const TEST_ENTRY_ID: usize = 143962196;
 
     #[tokio::test]
-    #[ignore] // Requires database, must run single-threaded
     async fn test_unlink_meta_items() {
         let _test_lock = TEST_MUTEX.lock();
         let app = get_test_app();
@@ -589,7 +588,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore] // Requires database, must run single-threaded
     async fn test_fix_redirects() {
         let _test_lock = TEST_MUTEX.lock();
         let app = get_test_app();
@@ -608,7 +606,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore] // Requires database, must run single-threaded
     async fn test_unlink_deleted_items() {
         let _test_lock = TEST_MUTEX.lock();
         let app = get_test_app();

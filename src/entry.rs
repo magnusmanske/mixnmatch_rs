@@ -863,7 +863,6 @@ mod tests {
     const TEST_ENTRY_ID: usize = 143962196;
 
     #[tokio::test]
-    #[ignore] // Requires database, must run single-threaded
     async fn test_person_dates() {
         let _test_lock = TEST_MUTEX.lock();
         let app = get_test_app();
@@ -902,7 +901,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore] // Requires database, must run single-threaded
     async fn test_coordinate_location() {
         let _test_lock = TEST_MUTEX.lock();
         let app = get_test_app();
@@ -938,7 +936,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore] // Requires database, must run single-threaded
     async fn test_match() {
         let _test_lock = TEST_MUTEX.lock();
         let app = get_test_app();
@@ -990,7 +987,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore] // Requires database, must run single-threaded
     async fn test_multimatch() {
         let _test_lock = TEST_MUTEX.lock();
         let app = get_test_app();
@@ -1010,7 +1006,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore] // Requires database, must run single-threaded
     async fn test_get_item_url() {
         let _test_lock = TEST_MUTEX.lock();
         let app = get_test_app();
@@ -1033,7 +1028,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore] // Requires database, must run single-threaded
     async fn test_get_entry_url() {
         let _test_lock = TEST_MUTEX.lock();
         let app = get_test_app();
@@ -1078,7 +1072,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore] // Requires database, must run single-threaded
     async fn test_is_unmatched() {
         let _test_lock = TEST_MUTEX.lock();
         let app = get_test_app();
@@ -1090,7 +1083,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore] // Requires database, must run single-threaded
     async fn test_is_partially_matched() {
         let _test_lock = TEST_MUTEX.lock();
         let app = get_test_app();
@@ -1102,7 +1094,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore] // Requires database, must run single-threaded
     async fn is_fully_matched() {
         let _test_lock = TEST_MUTEX.lock();
         let app = get_test_app();
@@ -1301,7 +1292,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore] // Requires database, must run single-threaded
     async fn test_check_valid_id() {
         let _test_lock = TEST_MUTEX.lock();
         let app = get_test_app();
@@ -1312,7 +1302,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore] // Requires database, must run single-threaded
     async fn test_add_alias() {
         let _test_lock = TEST_MUTEX.lock();
         let app = get_test_app();
