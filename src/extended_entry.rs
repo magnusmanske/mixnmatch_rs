@@ -329,7 +329,12 @@ impl ExtendedEntry {
                 }
             }
         } else {
-            self.aux.insert((property_num, value));
+            for part in value.split('|') {
+                let part = part.trim();
+                if !part.is_empty() {
+                    self.aux.insert((property_num, part.to_string()));
+                }
+            }
         }
 
         Ok(true)
@@ -546,5 +551,83 @@ mod tests {
         );
         assert_eq!(ExtendedEntry::get_capture(&re, "P123"), None);
         assert_eq!(ExtendedEntry::get_capture(&re, ""), None);
+    }
+
+    #[test]
+    fn test_parse_property_multiple_values() {
+        let mut ee = ExtendedEntry::default();
+        assert!(ee.parse_property("P31", "Q5|Q515").unwrap());
+        assert_eq!(ee.aux.len(), 2);
+        assert!(ee.aux.contains(&(31, "Q5".to_string())));
+        assert!(ee.aux.contains(&(31, "Q515".to_string())));
+    }
+
+    #[test]
+    fn test_parse_property_multiple_values_with_spaces() {
+        let mut ee = ExtendedEntry::default();
+        assert!(ee.parse_property("P31", "Q5 | Q515 | Q123").unwrap());
+        assert_eq!(ee.aux.len(), 3);
+        assert!(ee.aux.contains(&(31, "Q5".to_string())));
+        assert!(ee.aux.contains(&(31, "Q515".to_string())));
+        assert!(ee.aux.contains(&(31, "Q123".to_string())));
+    }
+
+    #[test]
+    fn test_parse_property_multiple_values_empty_parts_ignored() {
+        let mut ee = ExtendedEntry::default();
+        assert!(ee.parse_property("P31", "Q5||Q515|").unwrap());
+        assert_eq!(ee.aux.len(), 2);
+        assert!(ee.aux.contains(&(31, "Q5".to_string())));
+        assert!(ee.aux.contains(&(31, "Q515".to_string())));
+    }
+
+    #[test]
+    fn test_parse_property_single_value_unchanged() {
+        let mut ee = ExtendedEntry::default();
+        assert!(ee.parse_property("P214", "12345").unwrap());
+        assert_eq!(ee.aux.len(), 1);
+        assert!(ee.aux.contains(&(214, "12345".to_string())));
+    }
+
+    #[test]
+    fn test_parse_property_multiple_string_values() {
+        let mut ee = ExtendedEntry::default();
+        assert!(ee.parse_property("P214", "12345|67890").unwrap());
+        assert_eq!(ee.aux.len(), 2);
+        assert!(ee.aux.contains(&(214, "12345".to_string())));
+        assert!(ee.aux.contains(&(214, "67890".to_string())));
+    }
+
+    #[test]
+    fn test_parse_property_duplicate_values() {
+        let mut ee = ExtendedEntry::default();
+        assert!(ee.parse_property("P31", "Q5|Q5").unwrap());
+        // HashSet deduplicates
+        assert_eq!(ee.aux.len(), 1);
+        assert!(ee.aux.contains(&(31, "Q5".to_string())));
+    }
+
+    #[test]
+    fn test_process_cell_property_multiple_values() {
+        let mut ee = ExtendedEntry::default();
+        ee.process_cell("P31", "Q5|Q515").unwrap();
+        assert_eq!(ee.aux.len(), 2);
+        assert!(ee.aux.contains(&(31, "Q5".to_string())));
+        assert!(ee.aux.contains(&(31, "Q515".to_string())));
+    }
+
+    #[test]
+    fn test_process_cell_alias() {
+        let mut ee = ExtendedEntry::default();
+        ee.process_cell("Aen", "Johnny").unwrap();
+        assert_eq!(ee.aliases.len(), 1);
+        assert_eq!(ee.aliases[0], LocaleString::new("en", "Johnny"));
+    }
+
+    #[test]
+    fn test_process_cell_description() {
+        let mut ee = ExtendedEntry::default();
+        ee.process_cell("Den", "A scientist").unwrap();
+        assert_eq!(ee.descriptions.get("en"), Some(&"A scientist".to_string()));
     }
 }
