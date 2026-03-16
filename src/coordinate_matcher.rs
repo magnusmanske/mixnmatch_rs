@@ -2,7 +2,7 @@ use crate::app_state::AppState;
 use crate::app_state::USER_LOCATION_MATCH;
 use crate::entry::Entry;
 use crate::job::{Job, Jobbable};
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use lazy_static::lazy_static;
 use log::error;
 use mediawiki::api::Api;
@@ -12,6 +12,7 @@ use std::collections::HashMap;
 const DEFAULT_MAX_DISTANCE: &str = "500m";
 const MAX_AUTOMATCH_DISTANCE: f64 = 0.1; // km
 const MAX_RESULTS_FOR_RANDOM_CATALOG: usize = 5000;
+const BAD_MATCHES: &[&str] = &["Q811683", "Q19860854", "Q811979"];
 
 lazy_static! {
     static ref RE_METERS: Regex = RegexBuilder::new(r"^([0-9.]+)m$")
@@ -172,7 +173,12 @@ impl CoordinateMatcher {
     }
 
     // Returns true if there is a match
-    async fn try_match_via_wikidata_search(&self, row: &LocationRow, items: &[String]) -> bool {
+    async fn try_match_via_wikidata_search(&self, row: &LocationRow, raw_items: &[String]) -> bool {
+        let items: Vec<_> = raw_items
+            .iter()
+            .filter(|item| !BAD_MATCHES.contains(&item.as_str()))
+            .cloned()
+            .collect();
         if items.is_empty() {
             return false;
         }
@@ -191,7 +197,7 @@ impl CoordinateMatcher {
         } else if items.len() > 1 && entry.is_unmatched() {
             // Only set multimatch if entry is unmatched
             // println!("WARNING: https://mix-n-match.toolforge.org/#/entry/{} seems to match: {items:?}", row.entry_id);
-            let _ = entry.set_auto_and_multi_match(items).await;
+            let _ = entry.set_auto_and_multi_match(&items).await;
         }
         true // Entry is fully or partially matched
     }
