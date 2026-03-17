@@ -12,6 +12,7 @@ use crate::{
     job_row::JobRow,
     job_status::JobStatus,
     match_state::MatchState,
+    meta_entry::{MnmLink, MetaIssue, MetaKvEntry, MetaLogEntry, MetaMnmRelation, MetaStatementText},
     microsync::EXT_URL_UNIQUE_SEPARATOR,
     mysql_misc::MySQLMisc,
     prop_todo::PropTodo,
@@ -2262,10 +2263,11 @@ impl Storage for StorageMySQL {
         entry_id: usize,
         lat: f64,
         lon: f64,
+        precision: Option<f64>,
     ) -> Result<()> {
-        let sql = "REPLACE /* rust:storage:entry_set_coordinate_location */ INTO `location` (`entry_id`,`lat`,`lon`) VALUES (:entry_id,:lat,:lon)";
+        let sql = "REPLACE /* rust:storage:entry_set_coordinate_location */ INTO `location` (`entry_id`,`lat`,`lon`,`precision`) VALUES (:entry_id,:lat,:lon,:precision)";
         let mut conn = self.get_conn().await?;
-        conn.exec_drop(sql, params! {entry_id,lat,lon}).await?;
+        conn.exec_drop(sql, params! {entry_id,lat,lon,precision}).await?;
         Ok(())
     }
 
@@ -2276,14 +2278,18 @@ impl Storage for StorageMySQL {
         let mut conn = self.get_conn_ro().await?;
         let ret = conn
             .exec_iter(
-                r"SELECT /* rust:storage:entry_get_coordinate_location */ `lat`,`lon` FROM `location` WHERE `entry_id`=:entry_id LIMIT 1",
+                r"SELECT /* rust:storage:entry_get_coordinate_location */ `lat`,`lon`,`precision` FROM `location` WHERE `entry_id`=:entry_id LIMIT 1",
                 params! {entry_id},
             )
             .await?
-            .map_and_drop(from_row::<(f64, f64)>)
+            .map_and_drop(|row| {
+                let lat: f64 = row.get(0).unwrap_or_default();
+                let lon: f64 = row.get(1).unwrap_or_default();
+                let precision: Option<f64> = row.get_opt(2).and_then(|r| r.ok());
+                CoordinateLocation::new_with_precision(lat, lon, precision)
+            })
             .await?
-            .pop()
-            .map(|(lat, lon)| CoordinateLocation::new(lat, lon));
+            .pop();
         Ok(ret)
     }
 
@@ -2469,6 +2475,199 @@ impl Storage for StorageMySQL {
                 "UPDATE `cersei` SET `last_sync`=:last_update WHERE `cersei_scraper_id`=:scraper_id",
                 params!{last_sync, scraper_id},
             )
+            .await?;
+        Ok(())
+    }
+
+    // MetaEntry support
+
+    async fn meta_entry_get_mnm_relations(
+        &self,
+        entry_id: usize,
+    ) -> Result<Vec<MetaMnmRelation>> {
+        let sql = "SELECT `property`, `target_entry_id` FROM `mnm_relation` WHERE `entry_id`=:entry_id";
+        let ret = self
+            .get_conn_ro()
+            .await?
+            .exec_iter(sql, params! { entry_id })
+            .await?
+            .map_and_drop(|row| {
+                let property: usize = row.get(0).unwrap_or_default();
+                let target_entry_id: usize = row.get(1).unwrap_or_default();
+                MetaMnmRelation {
+                    property,
+                    target: MnmLink::EntryId(target_entry_id),
+                }
+            })
+            .await?;
+        Ok(ret)
+    }
+
+    async fn meta_entry_get_issues(&self, entry_id: usize) -> Result<Vec<MetaIssue>> {
+        let sql = "SELECT `id`, `type`, `json`, `status`, `user_id`, `resolved_ts`, `catalog` FROM `issues` WHERE `entry_id`=:entry_id";
+        let ret = self
+            .get_conn_ro()
+            .await?
+            .exec_iter(sql, params! { entry_id })
+            .await?
+            .map_and_drop(|row| {
+                let id: Option<usize> = row.get(0);
+                let issue_type: String = row.get(1).unwrap_or_default();
+                let json_str: String = row.get(2).unwrap_or_default();
+                let status: String = row.get(3).unwrap_or_default();
+                let user_id: Option<usize> = row.get(4);
+                let resolved_ts: Option<String> = row.get(5);
+                let catalog_id: usize = row.get(6).unwrap_or_default();
+                MetaIssue {
+                    id,
+                    issue_type,
+                    json: serde_json::from_str(&json_str).unwrap_or_default(),
+                    status,
+                    user_id,
+                    resolved_ts,
+                    catalog_id,
+                }
+            })
+            .await?;
+        Ok(ret)
+    }
+
+    async fn meta_entry_get_kv_entries(&self, entry_id: usize) -> Result<Vec<MetaKvEntry>> {
+        let sql = "SELECT `kv_key`, `kv_value` FROM `kv_entry` WHERE `entry_id`=:entry_id";
+        let ret = self
+            .get_conn_ro()
+            .await?
+            .exec_iter(sql, params! { entry_id })
+            .await?
+            .map_and_drop(|row| {
+                let key: String = row.get(0).unwrap_or_default();
+                let value: String = row.get(1).unwrap_or_default();
+                MetaKvEntry { key, value }
+            })
+            .await?;
+        Ok(ret)
+    }
+
+    async fn meta_entry_get_log_entries(&self, entry_id: usize) -> Result<Vec<MetaLogEntry>> {
+        let sql = "SELECT `id`, `action`, `user`, `timestamp`, `q` FROM `log` WHERE `entry_id`=:entry_id ORDER BY `id`";
+        let ret = self
+            .get_conn_ro()
+            .await?
+            .exec_iter(sql, params! { entry_id })
+            .await?
+            .map_and_drop(|row| {
+                let id: Option<usize> = row.get(0);
+                let action: String = row.get(1).unwrap_or_default();
+                let user: Option<usize> = row.get(2);
+                let timestamp: Option<String> = row.get(3);
+                let q: Option<isize> = row.get(4);
+                MetaLogEntry {
+                    id,
+                    action,
+                    user,
+                    timestamp,
+                    q,
+                }
+            })
+            .await?;
+        Ok(ret)
+    }
+
+    async fn meta_entry_get_statement_text(
+        &self,
+        entry_id: usize,
+    ) -> Result<Vec<MetaStatementText>> {
+        let sql = "SELECT `id`, `property`, `text`, `in_wikidata`, `entry_is_matched`, `q` FROM `statement_text` WHERE `entry_id`=:entry_id";
+        let ret = self
+            .get_conn_ro()
+            .await?
+            .exec_iter(sql, params! { entry_id })
+            .await?
+            .map_and_drop(|row| {
+                let id: Option<usize> = row.get(0);
+                let property: usize = row.get(1).unwrap_or_default();
+                let text: String = row.get(2).unwrap_or_default();
+                let in_wikidata: bool = row.get(3).unwrap_or_default();
+                let entry_is_matched: bool = row.get(4).unwrap_or_default();
+                let q: Option<usize> = row.get(5);
+                MetaStatementText {
+                    id,
+                    property,
+                    text,
+                    in_wikidata,
+                    entry_is_matched,
+                    q,
+                }
+            })
+            .await?;
+        Ok(ret)
+    }
+
+    async fn meta_entry_delete_auxiliary(&self, entry_id: usize) -> Result<()> {
+        self.get_conn()
+            .await?
+            .exec_drop(
+                "DELETE FROM `auxiliary` WHERE `entry_id`=:entry_id",
+                params! { entry_id },
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn meta_entry_delete_aliases(&self, entry_id: usize) -> Result<()> {
+        self.get_conn()
+            .await?
+            .exec_drop(
+                "DELETE FROM `aliases` WHERE `entry_id`=:entry_id",
+                params! { entry_id },
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn meta_entry_delete_descriptions(&self, entry_id: usize) -> Result<()> {
+        self.get_conn()
+            .await?
+            .exec_drop(
+                "DELETE FROM `descriptions` WHERE `entry_id`=:entry_id",
+                params! { entry_id },
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn meta_entry_delete_mnm_relations(&self, entry_id: usize) -> Result<()> {
+        self.get_conn()
+            .await?
+            .exec_drop(
+                "DELETE FROM `mnm_relation` WHERE `entry_id`=:entry_id",
+                params! { entry_id },
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn meta_entry_delete_kv_entries(&self, entry_id: usize) -> Result<()> {
+        self.get_conn()
+            .await?
+            .exec_drop(
+                "DELETE FROM `kv_entry` WHERE `entry_id`=:entry_id",
+                params! { entry_id },
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn meta_entry_set_kv_entry(
+        &self,
+        entry_id: usize,
+        key: &str,
+        value: &str,
+    ) -> Result<()> {
+        let sql = "REPLACE INTO `kv_entry` (`entry_id`, `kv_key`, `kv_value`) VALUES (:entry_id, :key, :value)";
+        self.get_conn()
+            .await?
+            .exec_drop(sql, params! { entry_id, key, value })
             .await?;
         Ok(())
     }

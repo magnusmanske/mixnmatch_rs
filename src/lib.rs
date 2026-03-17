@@ -63,6 +63,7 @@ pub mod job_row;
 pub mod job_status;
 pub mod maintenance;
 pub mod match_state;
+pub mod meta_entry;
 pub mod microsync;
 pub mod mysql_misc;
 pub mod person;

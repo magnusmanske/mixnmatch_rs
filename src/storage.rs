@@ -409,6 +409,7 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
         entry_id: usize,
         lat: f64,
         lon: f64,
+        precision: Option<f64>,
     ) -> Result<()>;
     async fn entry_get_coordinate_location(
         &self,
@@ -443,6 +444,39 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     async fn get_cersei_scrapers(&self) -> Result<HashMap<usize, CurrentScraper>>;
     async fn add_cersei_catalog(&self, catalog_id: usize, scraper_id: usize) -> Result<()>;
     async fn update_cersei_last_update(&self, scraper_id: usize, last_sync: &str) -> Result<()>;
+
+    // MetaEntry support
+    async fn meta_entry_get_mnm_relations(
+        &self,
+        entry_id: usize,
+    ) -> Result<Vec<crate::meta_entry::MetaMnmRelation>>;
+    async fn meta_entry_get_issues(
+        &self,
+        entry_id: usize,
+    ) -> Result<Vec<crate::meta_entry::MetaIssue>>;
+    async fn meta_entry_get_kv_entries(
+        &self,
+        entry_id: usize,
+    ) -> Result<Vec<crate::meta_entry::MetaKvEntry>>;
+    async fn meta_entry_get_log_entries(
+        &self,
+        entry_id: usize,
+    ) -> Result<Vec<crate::meta_entry::MetaLogEntry>>;
+    async fn meta_entry_get_statement_text(
+        &self,
+        entry_id: usize,
+    ) -> Result<Vec<crate::meta_entry::MetaStatementText>>;
+    async fn meta_entry_delete_auxiliary(&self, entry_id: usize) -> Result<()>;
+    async fn meta_entry_delete_aliases(&self, entry_id: usize) -> Result<()>;
+    async fn meta_entry_delete_descriptions(&self, entry_id: usize) -> Result<()>;
+    async fn meta_entry_delete_mnm_relations(&self, entry_id: usize) -> Result<()>;
+    async fn meta_entry_delete_kv_entries(&self, entry_id: usize) -> Result<()>;
+    async fn meta_entry_set_kv_entry(
+        &self,
+        entry_id: usize,
+        key: &str,
+        value: &str,
+    ) -> Result<()>;
 }
 
 #[cfg(test)]

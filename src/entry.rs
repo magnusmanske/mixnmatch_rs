@@ -4,6 +4,7 @@ use crate::person::Person;
 use anyhow::{Result, anyhow};
 use mysql_async::{Row, Value};
 use rand::prelude::*;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
@@ -16,15 +17,28 @@ use wikimisc::wikibase::{
 
 pub const WESTERN_LANGUAGES: &[&str] = &["en", "de", "fr", "es", "nl", "it", "pt"];
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct CoordinateLocation {
     lat: f64,
     lon: f64,
+    precision: Option<f64>,
 }
 
 impl CoordinateLocation {
     pub fn new(lat: f64, lon: f64) -> Self {
-        Self { lat, lon }
+        Self {
+            lat,
+            lon,
+            precision: None,
+        }
+    }
+
+    pub fn new_with_precision(lat: f64, lon: f64, precision: Option<f64>) -> Self {
+        Self {
+            lat,
+            lon,
+            precision,
+        }
     }
 
     pub fn lat(&self) -> f64 {
@@ -34,11 +48,15 @@ impl CoordinateLocation {
     pub fn lon(&self) -> f64 {
         self.lon
     }
+
+    pub fn precision(&self) -> Option<f64> {
+        self.precision
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, PartialOrd)]
+#[derive(Debug, Clone, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct AuxiliaryRow {
-    row_id: usize,
+    row_id: Option<usize>,
     prop_numeric: usize,
     value: String,
     in_wikidata: bool,
@@ -46,15 +64,29 @@ pub struct AuxiliaryRow {
 }
 
 impl AuxiliaryRow {
+    pub fn new(prop_numeric: usize, value: String) -> Self {
+        Self {
+            row_id: None,
+            prop_numeric,
+            value,
+            in_wikidata: false,
+            entry_is_matched: false,
+        }
+    }
+
     //TODO test
     pub fn from_row(row: &Row) -> Option<Self> {
         Some(Self {
-            row_id: row.get(0)?,
+            row_id: row.get(0),
             prop_numeric: row.get(1)?,
             value: row.get(2)?,
             in_wikidata: row.get(3)?,
             entry_is_matched: row.get(4)?,
         })
+    }
+
+    pub fn row_id(&self) -> Option<usize> {
+        self.row_id
     }
 
     pub fn prop_numeric(&self) -> usize {
@@ -138,7 +170,7 @@ impl fmt::Display for EntryError {
 
 pub type EntryId = Option<usize>;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Entry {
     pub id: EntryId,
     pub catalog: usize,
@@ -151,6 +183,7 @@ pub struct Entry {
     pub timestamp: Option<String>,
     pub random: f64,
     pub type_name: Option<String>,
+    #[serde(skip)]
     pub app: Option<AppState>,
 }
 
@@ -682,7 +715,7 @@ impl Entry {
                 Some(cl) => {
                     self.app()?
                         .storage()
-                        .entry_set_coordinate_location(entry_id, cl.lat, cl.lon)
+                        .entry_set_coordinate_location(entry_id, cl.lat, cl.lon, cl.precision)
                         .await?;
                 }
                 None => {
@@ -912,6 +945,7 @@ mod tests {
         let cl = CoordinateLocation {
             lat: 1.234,
             lon: -5.678,
+            precision: None,
         };
 
         // Set a known value
@@ -922,6 +956,7 @@ mod tests {
         let cl2 = CoordinateLocation {
             lat: cl.lon,
             lon: cl.lat,
+            precision: None,
         };
         entry.set_coordinate_location(&Some(cl2)).await.unwrap();
         assert_eq!(entry.get_coordinate_location().await.unwrap(), Some(cl2));
@@ -1314,7 +1349,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_claim_for_aux() {
         let aux = AuxiliaryRow {
-            row_id: 1,
+            row_id: Some(1),
             prop_numeric: 12345,
             value: "Q5678".to_string(),
             in_wikidata: true,
@@ -1381,7 +1416,7 @@ mod tests {
     #[test]
     fn test_auxiliary_row_accessors() {
         let row = AuxiliaryRow {
-            row_id: 10,
+            row_id: Some(10),
             prop_numeric: 214,
             value: "12345678".to_string(),
             in_wikidata: true,
