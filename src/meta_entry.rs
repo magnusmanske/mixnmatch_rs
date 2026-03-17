@@ -4,6 +4,116 @@ use crate::issue::{Issue, IssueType};
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt;
+
+// ── PersonDate: a date with variable precision ─────────────────────────────
+
+/// A date with variable precision: year-only, year-month, or year-month-day.
+/// Negative years represent BCE dates. Serializes to/from the DB string format
+/// ("YYYY", "YYYY-MM", "YYYY-MM-DD").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PersonDate {
+    pub year: i32,
+    pub month: Option<u8>,
+    pub day: Option<u8>,
+}
+
+impl PersonDate {
+    /// Create a year-only date.
+    pub fn year_only(year: i32) -> Self {
+        Self { year, month: None, day: None }
+    }
+
+    /// Create a year-month date.
+    pub fn year_month(year: i32, month: u8) -> Self {
+        Self { year, month: Some(month), day: None }
+    }
+
+    /// Create a full year-month-day date.
+    pub fn year_month_day(year: i32, month: u8, day: u8) -> Self {
+        Self { year, month: Some(month), day: Some(day) }
+    }
+
+    /// Parse from DB string format: "YYYY", "YYYY-MM", or "YYYY-MM-DD"
+    /// (with optional leading '-' for BCE).
+    pub fn from_db_string(s: &str) -> Option<Self> {
+        if s.is_empty() {
+            return None;
+        }
+        let (negative, rest) = if let Some(r) = s.strip_prefix('-') {
+            (true, r)
+        } else {
+            (false, s)
+        };
+        let parts: Vec<&str> = rest.split('-').collect();
+        let year_abs: i32 = parts.first()?.parse().ok()?;
+        let year = if negative { -year_abs } else { year_abs };
+        match parts.len() {
+            1 => Some(Self::year_only(year)),
+            2 => {
+                let month: u8 = parts[1].parse().ok()?;
+                if !(1..=12).contains(&month) { return None; }
+                Some(Self::year_month(year, month))
+            }
+            3 => {
+                let month: u8 = parts[1].parse().ok()?;
+                let day: u8 = parts[2].parse().ok()?;
+                if !(1..=12).contains(&month) || !(1..=31).contains(&day) { return None; }
+                Some(Self::year_month_day(year, month, day))
+            }
+            _ => None,
+        }
+    }
+
+    /// Convert to DB string format.
+    pub fn to_db_string(&self) -> String {
+        let prefix = if self.year < 0 { "-" } else { "" };
+        let abs_year = self.year.unsigned_abs();
+        match (self.month, self.day) {
+            (None, _) => format!("{prefix}{abs_year}"),
+            (Some(m), None) => format!("{prefix}{abs_year}-{m:02}"),
+            (Some(m), Some(d)) => format!("{prefix}{abs_year}-{m:02}-{d:02}"),
+        }
+    }
+
+    /// Wikidata time precision: 9 = year, 10 = month, 11 = day.
+    pub fn wikidata_precision(&self) -> u64 {
+        match (self.month, self.day) {
+            (None, _) => 9,
+            (Some(_), None) => 10,
+            (Some(_), Some(_)) => 11,
+        }
+    }
+
+    /// Format as Wikidata time value string (e.g. "+2021-01-01T00:00:00Z").
+    pub fn to_wikidata_time(&self) -> String {
+        let prefix = if self.year < 0 { "-" } else { "+" };
+        let abs_year = self.year.unsigned_abs();
+        let month = self.month.unwrap_or(1);
+        let day = self.day.unwrap_or(1);
+        format!("{prefix}{abs_year}-{month:02}-{day:02}T00:00:00Z")
+    }
+}
+
+impl fmt::Display for PersonDate {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.to_db_string())
+    }
+}
+
+impl Serialize for PersonDate {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.to_db_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for PersonDate {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        PersonDate::from_db_string(&s)
+            .ok_or_else(|| serde::de::Error::custom(format!("invalid person date: {s}")))
+    }
+}
 
 // ── MnmLink: a flexible link target ────────────────────────────────────────
 
@@ -51,10 +161,10 @@ impl MnmLink {
 
 // ── Serializable sub-structures (only for tables without existing structs) ──
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct MetaPersonDates {
-    pub born: Option<String>,
-    pub died: Option<String>,
+    pub born: Option<PersonDate>,
+    pub died: Option<PersonDate>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -149,7 +259,9 @@ impl MetaEntry {
         let auxiliary = aux_result?;
         let coordinate = coord_result?;
 
-        let (born, died) = person_dates_result?;
+        let (born_str, died_str) = person_dates_result?;
+        let born = born_str.as_deref().and_then(PersonDate::from_db_string);
+        let died = died_str.as_deref().and_then(PersonDate::from_db_string);
         let person_dates = if born.is_some() || died.is_some() {
             Some(MetaPersonDates { born, died })
         } else {
@@ -334,8 +446,8 @@ impl MetaEntry {
 
         // Person dates
         if let Some(pd) = &self.person_dates {
-            let born = pd.born.clone().unwrap_or_default();
-            let died = pd.died.clone().unwrap_or_default();
+            let born = pd.born.map(|d| d.to_db_string()).unwrap_or_default();
+            let died = pd.died.map(|d| d.to_db_string()).unwrap_or_default();
             if !born.is_empty() || !died.is_empty() {
                 storage.entry_set_person_dates(entry_id, born, died).await?;
             }
@@ -448,7 +560,7 @@ mod tests {
             auxiliary: vec![AuxiliaryRow::new(214, "12345".to_string())],
             coordinate: Some(CoordinateLocation::new_with_precision(51.5, -0.1, None)),
             person_dates: Some(MetaPersonDates {
-                born: Some("1950-01-01".to_string()),
+                born: Some(PersonDate::year_month_day(1950, 1, 1)),
                 died: None,
             }),
             mnm_relations: vec![MetaMnmRelation {
@@ -546,5 +658,98 @@ mod tests {
         assert!(pretty.contains('\n'));
         let back = MetaEntry::from_json(&pretty).unwrap();
         assert_eq!(back.entry.ext_name, "Name");
+    }
+
+    #[test]
+    fn test_person_date_from_db_string() {
+        // Year only
+        let d = PersonDate::from_db_string("1950").unwrap();
+        assert_eq!(d, PersonDate::year_only(1950));
+
+        // Year-month
+        let d = PersonDate::from_db_string("1950-03").unwrap();
+        assert_eq!(d, PersonDate::year_month(1950, 3));
+
+        // Year-month-day
+        let d = PersonDate::from_db_string("1950-03-15").unwrap();
+        assert_eq!(d, PersonDate::year_month_day(1950, 3, 15));
+
+        // BCE
+        let d = PersonDate::from_db_string("-500").unwrap();
+        assert_eq!(d, PersonDate::year_only(-500));
+
+        let d = PersonDate::from_db_string("-500-06-15").unwrap();
+        assert_eq!(d, PersonDate::year_month_day(-500, 6, 15));
+
+        // Empty / invalid
+        assert!(PersonDate::from_db_string("").is_none());
+        assert!(PersonDate::from_db_string("abc").is_none());
+        assert!(PersonDate::from_db_string("1950-13").is_none()); // invalid month
+        assert!(PersonDate::from_db_string("1950-01-32").is_none()); // invalid day
+    }
+
+    #[test]
+    fn test_person_date_to_db_string() {
+        assert_eq!(PersonDate::year_only(2021).to_db_string(), "2021");
+        assert_eq!(PersonDate::year_month(2021, 1).to_db_string(), "2021-01");
+        assert_eq!(PersonDate::year_month_day(2021, 1, 5).to_db_string(), "2021-01-05");
+        assert_eq!(PersonDate::year_only(-500).to_db_string(), "-500");
+        assert_eq!(PersonDate::year_month_day(-500, 6, 15).to_db_string(), "-500-06-15");
+    }
+
+    #[test]
+    fn test_person_date_roundtrip_db() {
+        let dates = ["1950", "1950-03", "1950-03-15", "-500", "-500-06", "-500-06-15"];
+        for s in dates {
+            let d = PersonDate::from_db_string(s).unwrap();
+            assert_eq!(d.to_db_string(), s);
+        }
+    }
+
+    #[test]
+    fn test_person_date_wikidata() {
+        let d = PersonDate::year_only(2021);
+        assert_eq!(d.to_wikidata_time(), "+2021-01-01T00:00:00Z");
+        assert_eq!(d.wikidata_precision(), 9);
+
+        let d = PersonDate::year_month(2021, 6);
+        assert_eq!(d.to_wikidata_time(), "+2021-06-01T00:00:00Z");
+        assert_eq!(d.wikidata_precision(), 10);
+
+        let d = PersonDate::year_month_day(2021, 6, 15);
+        assert_eq!(d.to_wikidata_time(), "+2021-06-15T00:00:00Z");
+        assert_eq!(d.wikidata_precision(), 11);
+
+        let d = PersonDate::year_only(-500);
+        assert_eq!(d.to_wikidata_time(), "-500-01-01T00:00:00Z");
+        assert_eq!(d.wikidata_precision(), 9);
+    }
+
+    #[test]
+    fn test_person_date_serde() {
+        let d = PersonDate::year_month_day(1950, 3, 15);
+        let json = serde_json::to_string(&d).unwrap();
+        assert_eq!(json, "\"1950-03-15\"");
+        let back: PersonDate = serde_json::from_str(&json).unwrap();
+        assert_eq!(d, back);
+
+        // BCE
+        let d = PersonDate::year_only(-500);
+        let json = serde_json::to_string(&d).unwrap();
+        assert_eq!(json, "\"-500\"");
+        let back: PersonDate = serde_json::from_str(&json).unwrap();
+        assert_eq!(d, back);
+    }
+
+    #[test]
+    fn test_meta_person_dates_serde() {
+        let pd = MetaPersonDates {
+            born: Some(PersonDate::year_month_day(1950, 1, 1)),
+            died: None,
+        };
+        let json = serde_json::to_string(&pd).unwrap();
+        let back: MetaPersonDates = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.born.unwrap(), PersonDate::year_month_day(1950, 1, 1));
+        assert!(back.died.is_none());
     }
 }

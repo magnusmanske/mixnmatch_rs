@@ -49,16 +49,16 @@ impl DateMatchField {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum DatePrecision {
+pub enum DateStringLength {
     Day,
     Year,
 }
 
-impl DatePrecision {
+impl DateStringLength {
     const fn as_i32(&self) -> i32 {
         match self {
-            DatePrecision::Day => 10,
-            DatePrecision::Year => 4,
+            DateStringLength::Day => 10,
+            DateStringLength::Year => 4,
         }
     }
 }
@@ -671,7 +671,7 @@ impl AutoMatch {
         &mut self,
         catalog_id: usize,
         match_field: DateMatchField,
-        precision: DatePrecision,
+        precision: DateStringLength,
     ) -> Result<()> {
         // let (match_field, match_prop) = match_field.get_field_and_prop();
         let mw_api = self.app.wikidata().get_mw_api().await?;
@@ -1260,9 +1260,13 @@ mod tests {
         entry2.set_match("Q13520818", 0).await.unwrap();
 
         // Run automatch
-        am.match_person_by_single_date(TEST_CATALOG_ID, DateMatchField::Born, DatePrecision::Day)
-            .await
-            .unwrap();
+        am.match_person_by_single_date(
+            TEST_CATALOG_ID,
+            DateMatchField::Born,
+            DateStringLength::Day,
+        )
+        .await
+        .unwrap();
 
         // Check match
         let mut entry3 = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
@@ -1312,8 +1316,8 @@ mod tests {
 
     #[test]
     fn test_date_precision_as_i32() {
-        assert_eq!(DatePrecision::Day.as_i32(), 10);
-        assert_eq!(DatePrecision::Year.as_i32(), 4);
+        assert_eq!(DateStringLength::Day.as_i32(), 10);
+        assert_eq!(DateStringLength::Year.as_i32(), 4);
     }
 
     #[test]
