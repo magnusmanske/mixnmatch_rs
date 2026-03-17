@@ -415,7 +415,6 @@ mod tests {
 
     // #lizard forgives
     #[tokio::test]
-    #[ignore] // Requires database, must run single-threaded
     async fn test_update_from_tabbed_file() {
         let _test_lock = TEST_MUTEX.lock();
         let app = get_test_app();
