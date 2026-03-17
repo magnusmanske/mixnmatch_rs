@@ -20,17 +20,29 @@ pub struct PersonDate {
 impl PersonDate {
     /// Create a year-only date.
     pub fn year_only(year: i32) -> Self {
-        Self { year, month: None, day: None }
+        Self {
+            year,
+            month: None,
+            day: None,
+        }
     }
 
     /// Create a year-month date.
     pub fn year_month(year: i32, month: u8) -> Self {
-        Self { year, month: Some(month), day: None }
+        Self {
+            year,
+            month: Some(month),
+            day: None,
+        }
     }
 
     /// Create a full year-month-day date.
     pub fn year_month_day(year: i32, month: u8, day: u8) -> Self {
-        Self { year, month: Some(month), day: Some(day) }
+        Self {
+            year,
+            month: Some(month),
+            day: Some(day),
+        }
     }
 
     /// Parse from DB string format: "YYYY", "YYYY-MM", or "YYYY-MM-DD"
@@ -51,13 +63,17 @@ impl PersonDate {
             1 => Some(Self::year_only(year)),
             2 => {
                 let month: u8 = parts[1].parse().ok()?;
-                if !(1..=12).contains(&month) { return None; }
+                if !(1..=12).contains(&month) {
+                    return None;
+                }
                 Some(Self::year_month(year, month))
             }
             3 => {
                 let month: u8 = parts[1].parse().ok()?;
                 let day: u8 = parts[2].parse().ok()?;
-                if !(1..=12).contains(&month) || !(1..=31).contains(&day) { return None; }
+                if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+                    return None;
+                }
                 Some(Self::year_month_day(year, month, day))
             }
             _ => None,
@@ -101,13 +117,18 @@ impl fmt::Display for PersonDate {
 }
 
 impl Serialize for PersonDate {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
         serializer.serialize_str(&self.to_db_string())
     }
 }
 
 impl<'de> Deserialize<'de> for PersonDate {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
         let s = String::deserialize(deserializer)?;
         PersonDate::from_db_string(&s)
             .ok_or_else(|| serde::de::Error::custom(format!("invalid person date: {s}")))
@@ -397,10 +418,14 @@ impl MetaEntry {
             storage.entry_set_ext_url(&self.entry.ext_url, entry_id),
             storage.entry_set_type_name(self.entry.type_name.clone(), entry_id),
         );
-        r1?; r2?; r3?; r4?; r5?;
+        r1?;
+        r2?;
+        r3?;
+        r4?;
+        r5?;
 
         // Clear existing associated data and re-write
-        let (r1, r2, r3, r4, r5, r6, r7) = tokio::join!(
+        let (r11, r12, r13, r14, r15, r16, r17) = tokio::join!(
             storage.meta_entry_delete_auxiliary(entry_id),
             storage.entry_remove_coordinate_location(entry_id),
             storage.entry_delete_person_dates(entry_id),
@@ -409,7 +434,13 @@ impl MetaEntry {
             storage.meta_entry_delete_mnm_relations(entry_id),
             storage.meta_entry_delete_kv_entries(entry_id),
         );
-        r1?; r2?; r3?; r4?; r5?; r6?; r7?;
+        r11?;
+        r12?;
+        r13?;
+        r14?;
+        r15?;
+        r16?;
+        r17?;
 
         self.write_associated_data(entry_id, app).await?;
 
@@ -439,7 +470,12 @@ impl MetaEntry {
         // Coordinate
         if let Some(coord) = &self.coordinate {
             storage
-                .entry_set_coordinate_location(entry_id, coord.lat(), coord.lon(), coord.precision())
+                .entry_set_coordinate_location(
+                    entry_id,
+                    coord.lat(),
+                    coord.lon(),
+                    coord.precision(),
+                )
                 .await?;
         }
 
@@ -589,7 +625,8 @@ mod tests {
         assert!(back.entry.app.is_none()); // app is skipped
         assert_eq!(back.auxiliary.len(), 1);
         assert_eq!(back.auxiliary[0].prop_numeric(), 214);
-        assert_eq!(back.coordinate.unwrap().lat(), 51.5);
+        let within_tolerance = (back.coordinate.unwrap().lat() - 51.5).abs() < 0.0001;
+        assert!(within_tolerance, "latitude is not within tolerance");
         assert_eq!(back.mnm_relations.len(), 1);
         assert_eq!(back.descriptions.get("en").unwrap(), "English description");
         assert_eq!(back.aliases.len(), 1);
@@ -646,23 +683,23 @@ mod tests {
     #[test]
     fn test_person_date_from_db_string() {
         // Year only
-        let d = PersonDate::from_db_string("1950").unwrap();
-        assert_eq!(d, PersonDate::year_only(1950));
+        let d1 = PersonDate::from_db_string("1950").unwrap();
+        assert_eq!(d1, PersonDate::year_only(1950));
 
         // Year-month
-        let d = PersonDate::from_db_string("1950-03").unwrap();
-        assert_eq!(d, PersonDate::year_month(1950, 3));
+        let d2 = PersonDate::from_db_string("1950-03").unwrap();
+        assert_eq!(d2, PersonDate::year_month(1950, 3));
 
         // Year-month-day
-        let d = PersonDate::from_db_string("1950-03-15").unwrap();
-        assert_eq!(d, PersonDate::year_month_day(1950, 3, 15));
+        let d3 = PersonDate::from_db_string("1950-03-15").unwrap();
+        assert_eq!(d3, PersonDate::year_month_day(1950, 3, 15));
 
         // BCE
-        let d = PersonDate::from_db_string("-500").unwrap();
-        assert_eq!(d, PersonDate::year_only(-500));
+        let d4 = PersonDate::from_db_string("-500").unwrap();
+        assert_eq!(d4, PersonDate::year_only(-500));
 
-        let d = PersonDate::from_db_string("-500-06-15").unwrap();
-        assert_eq!(d, PersonDate::year_month_day(-500, 6, 15));
+        let d5 = PersonDate::from_db_string("-500-06-15").unwrap();
+        assert_eq!(d5, PersonDate::year_month_day(-500, 6, 15));
 
         // Empty / invalid
         assert!(PersonDate::from_db_string("").is_none());
@@ -675,14 +712,27 @@ mod tests {
     fn test_person_date_to_db_string() {
         assert_eq!(PersonDate::year_only(2021).to_db_string(), "2021");
         assert_eq!(PersonDate::year_month(2021, 1).to_db_string(), "2021-01");
-        assert_eq!(PersonDate::year_month_day(2021, 1, 5).to_db_string(), "2021-01-05");
+        assert_eq!(
+            PersonDate::year_month_day(2021, 1, 5).to_db_string(),
+            "2021-01-05"
+        );
         assert_eq!(PersonDate::year_only(-500).to_db_string(), "-500");
-        assert_eq!(PersonDate::year_month_day(-500, 6, 15).to_db_string(), "-500-06-15");
+        assert_eq!(
+            PersonDate::year_month_day(-500, 6, 15).to_db_string(),
+            "-500-06-15"
+        );
     }
 
     #[test]
     fn test_person_date_roundtrip_db() {
-        let dates = ["1950", "1950-03", "1950-03-15", "-500", "-500-06", "-500-06-15"];
+        let dates = [
+            "1950",
+            "1950-03",
+            "1950-03-15",
+            "-500",
+            "-500-06",
+            "-500-06-15",
+        ];
         for s in dates {
             let d = PersonDate::from_db_string(s).unwrap();
             assert_eq!(d.to_db_string(), s);
@@ -691,21 +741,21 @@ mod tests {
 
     #[test]
     fn test_person_date_wikidata() {
-        let d = PersonDate::year_only(2021);
-        assert_eq!(d.to_wikidata_time(), "+2021-01-01T00:00:00Z");
-        assert_eq!(d.wikidata_precision(), 9);
+        let d1 = PersonDate::year_only(2021);
+        assert_eq!(d1.to_wikidata_time(), "+2021-01-01T00:00:00Z");
+        assert_eq!(d1.wikidata_precision(), 9);
 
-        let d = PersonDate::year_month(2021, 6);
-        assert_eq!(d.to_wikidata_time(), "+2021-06-01T00:00:00Z");
-        assert_eq!(d.wikidata_precision(), 10);
+        let d2 = PersonDate::year_month(2021, 6);
+        assert_eq!(d2.to_wikidata_time(), "+2021-06-01T00:00:00Z");
+        assert_eq!(d2.wikidata_precision(), 10);
 
-        let d = PersonDate::year_month_day(2021, 6, 15);
-        assert_eq!(d.to_wikidata_time(), "+2021-06-15T00:00:00Z");
-        assert_eq!(d.wikidata_precision(), 11);
+        let d3 = PersonDate::year_month_day(2021, 6, 15);
+        assert_eq!(d3.to_wikidata_time(), "+2021-06-15T00:00:00Z");
+        assert_eq!(d3.wikidata_precision(), 11);
 
-        let d = PersonDate::year_only(-500);
-        assert_eq!(d.to_wikidata_time(), "-500-01-01T00:00:00Z");
-        assert_eq!(d.wikidata_precision(), 9);
+        let d4 = PersonDate::year_only(-500);
+        assert_eq!(d4.to_wikidata_time(), "-500-01-01T00:00:00Z");
+        assert_eq!(d4.wikidata_precision(), 9);
     }
 
     #[test]
@@ -717,11 +767,11 @@ mod tests {
         assert_eq!(d, back);
 
         // BCE
-        let d = PersonDate::year_only(-500);
-        let json = serde_json::to_string(&d).unwrap();
-        assert_eq!(json, "\"-500\"");
-        let back: PersonDate = serde_json::from_str(&json).unwrap();
-        assert_eq!(d, back);
+        let d2 = PersonDate::year_only(-500);
+        let json2 = serde_json::to_string(&d2).unwrap();
+        assert_eq!(json2, "\"-500\"");
+        let back2: PersonDate = serde_json::from_str(&json2).unwrap();
+        assert_eq!(d2, back2);
     }
 
     #[test]
