@@ -16,14 +16,22 @@ pub enum MnmLink {
     EntryId(usize),
     /// Link to an entry identified by catalog ID and external ID.
     CatalogExtId { catalog: usize, ext_id: String },
-    /// Link to a Wikidata item (e.g. "Q42").
-    WikidataQid(String),
+    /// Link to a Wikidata item by its numeric ID (e.g. 42 for "Q42").
+    WikidataQid(isize),
 }
 
 impl MnmLink {
-    /// Convenience: build from a Q-number string like "Q42".
-    pub fn from_q(q: &str) -> Self {
-        Self::WikidataQid(q.to_string())
+    /// Build from a Q-number string like "Q42".
+    pub fn from_q(q: &str) -> Option<Self> {
+        AppState::item2numeric(q).map(Self::WikidataQid)
+    }
+
+    /// Return the "Q…" string for a WikidataQid variant.
+    pub fn qid_string(&self) -> Option<String> {
+        match self {
+            Self::WikidataQid(q) => Some(format!("Q{q}")),
+            _ => None,
+        }
     }
 
     /// Try to resolve this link to an entry ID using the given AppState.
@@ -113,6 +121,7 @@ pub struct MetaEntry {
     pub issues: Vec<MetaIssue>,
     pub kv_entries: Vec<MetaKvEntry>,
     pub log_entries: Vec<MetaLogEntry>,
+    pub multi_match: Vec<usize>,
     pub statement_text: Vec<MetaStatementText>,
 }
 
@@ -158,13 +167,24 @@ impl MetaEntry {
         let descriptions = descriptions_result?;
 
         // Fetch additional data via direct SQL through storage
-        let (mnm_relations, issues, kv_entries, log_entries, statement_text) = tokio::join!(
+        let (mnm_relations, issues, kv_entries, log_entries, multi_match_result, statement_text) = tokio::join!(
             Self::load_mnm_relations(entry_id, app),
             Self::load_issues(entry_id, app),
             Self::load_kv_entries(entry_id, app),
             Self::load_log_entries(entry_id, app),
+            storage.entry_get_multi_matches(entry_id),
             Self::load_statement_text(entry_id, app),
         );
+
+        // Parse multi_match candidates string ("1,23456,7") into Vec<usize>
+        let multi_match: Vec<usize> = multi_match_result?
+            .first()
+            .map(|s| {
+                s.split(',')
+                    .filter_map(|q| q.parse::<usize>().ok())
+                    .collect()
+            })
+            .unwrap_or_default();
 
         Ok(Self {
             entry: entry.clone(),
@@ -177,6 +197,7 @@ impl MetaEntry {
             issues: issues?,
             kv_entries: kv_entries?,
             log_entries: log_entries?,
+            multi_match,
             statement_text: statement_text?,
         })
     }
@@ -357,6 +378,20 @@ impl MetaEntry {
             issue_obj.insert().await?;
         }
 
+        // Multi-match
+        if !self.multi_match.is_empty() {
+            let candidates: String = self
+                .multi_match
+                .iter()
+                .map(|q| q.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            let count = self.multi_match.len();
+            storage
+                .entry_set_multi_match(entry_id, candidates, count)
+                .await?;
+        }
+
         Ok(())
     }
 }
@@ -386,10 +421,11 @@ mod tests {
 
     #[test]
     fn test_mnm_link_serde_qid() {
-        let link = MnmLink::WikidataQid("Q42".to_string());
+        let link = MnmLink::WikidataQid(42);
         let json = serde_json::to_string(&link).unwrap();
         let back: MnmLink = serde_json::from_str(&json).unwrap();
         assert_eq!(link, back);
+        assert_eq!(link.qid_string(), Some("Q42".to_string()));
     }
 
     #[test]
@@ -440,6 +476,7 @@ mod tests {
                 timestamp: Some("20240101120000".to_string()),
                 q: Some(42),
             }],
+            multi_match: vec![42, 99],
             statement_text: vec![MetaStatementText {
                 id: Some(1),
                 property: 31,
@@ -463,6 +500,7 @@ mod tests {
         assert_eq!(back.aliases.len(), 1);
         assert_eq!(back.kv_entries.len(), 1);
         assert_eq!(back.log_entries.len(), 1);
+        assert_eq!(back.multi_match, vec![42, 99]);
         assert_eq!(back.statement_text.len(), 1);
         assert_eq!(back.statement_text[0].property, 31);
         assert_eq!(back.statement_text[0].text, "Q5");
@@ -471,7 +509,8 @@ mod tests {
     #[test]
     fn test_mnm_link_from_q() {
         let link = MnmLink::from_q("Q42");
-        assert_eq!(link, MnmLink::WikidataQid("Q42".to_string()));
+        assert_eq!(link, Some(MnmLink::WikidataQid(42)));
+        assert!(MnmLink::from_q("invalid").is_none());
     }
 
     #[test]
@@ -500,6 +539,7 @@ mod tests {
             issues: vec![],
             kv_entries: vec![],
             log_entries: vec![],
+            multi_match: vec![],
             statement_text: vec![],
         };
         let pretty = me.to_json_pretty().unwrap();
