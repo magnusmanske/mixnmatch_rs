@@ -1,6 +1,5 @@
 use crate::app_state::AppState;
 use crate::entry::{AuxiliaryRow, CoordinateLocation, Entry};
-use crate::issue::{Issue, IssueType};
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -483,26 +482,10 @@ impl MetaEntry {
                 .await?;
         }
 
-        // Issues
-        for issue in &self.issues {
-            let issue_type = IssueType::new(&issue.issue_type)?;
-            let issue_obj = Issue::new(entry_id, issue_type, issue.json.clone(), app).await?;
-            issue_obj.insert().await?;
-        }
-
-        // Multi-match
-        if !self.multi_match.is_empty() {
-            let candidates: String = self
-                .multi_match
-                .iter()
-                .map(|q| q.to_string())
-                .collect::<Vec<_>>()
-                .join(",");
-            let count = self.multi_match.len();
-            storage
-                .entry_set_multi_match(entry_id, candidates, count)
-                .await?;
-        }
+        // NOTE: Issues, log entries, and multi-match are read-only in MetaEntry.
+        // Issues are managed via the Issue API. Log entries are historical records
+        // created as side effects of other operations. Multi-match is computed by
+        // the matching system. None of these should be written from a MetaEntry.
 
         Ok(())
     }
