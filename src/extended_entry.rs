@@ -1,4 +1,5 @@
 use crate::app_state::AppState;
+use crate::auxiliary_data::AuxiliaryRow;
 use crate::coordinates::CoordinateLocation;
 use crate::datasource::DataSource;
 use crate::entry::Entry;
@@ -23,7 +24,7 @@ lazy_static! {
 #[derive(Debug, Clone, Default)]
 pub struct ExtendedEntry {
     pub entry: Entry,
-    pub aux: HashSet<(usize, String)>,
+    pub aux: HashSet<AuxiliaryRow>,
     pub born: Option<PersonDate>,
     pub died: Option<PersonDate>,
     pub aliases: Vec<LocaleString>,
@@ -33,13 +34,7 @@ pub struct ExtendedEntry {
 
 impl ExtendedEntry {
     pub async fn load_extended_data(&mut self) -> Result<()> {
-        self.aux = self
-            .entry
-            .get_aux()
-            .await?
-            .into_iter()
-            .map(|aux| (aux.prop_numeric(), aux.value().to_string()))
-            .collect();
+        self.aux = self.entry.get_aux().await?.into_iter().collect();
         self.location = self.entry.get_coordinate_location().await?;
         (self.born, self.died) = self.entry.get_person_dates().await?;
         self.aliases = self.entry.get_aliases().await?;
@@ -162,16 +157,11 @@ impl ExtendedEntry {
     // Does NOT remove ones that don't exist anymore. Who knows how they got into the database.
     //TODO test
     pub async fn sync_auxiliary(&self, entry: &Entry) -> Result<()> {
-        let existing: Vec<(usize, String)> = entry
-            .get_aux()
-            .await?
-            .iter()
-            .map(|a| (a.prop_numeric(), a.value().to_owned()))
-            .collect();
-        for prop_value in &self.aux {
-            if !existing.contains(prop_value) {
+        let existing: HashSet<AuxiliaryRow> = entry.get_aux().await?.into_iter().collect();
+        for aux in &self.aux {
+            if !existing.contains(aux) {
                 entry
-                    .set_auxiliary(prop_value.0, Some(prop_value.1.to_owned()))
+                    .set_auxiliary(aux.prop_numeric(), Some(aux.value().to_owned()))
                     .await?;
             }
         }
@@ -213,9 +203,9 @@ impl ExtendedEntry {
         for alias in &self.aliases {
             self.entry.add_alias(alias).await?;
         }
-        for (prop, value) in &self.aux {
+        for aux in &self.aux {
             self.entry
-                .set_auxiliary(*prop, Some(value.to_owned()))
+                .set_auxiliary(aux.prop_numeric(), Some(aux.value().to_owned()))
                 .await?;
         }
         for (language, text) in &self.descriptions {
@@ -316,7 +306,7 @@ impl ExtendedEntry {
             for part in cell.split('|') {
                 let part = part.trim();
                 if !part.is_empty() {
-                    self.aux.insert((property_num, part.to_string()));
+                    self.aux.insert(AuxiliaryRow::new(property_num, part.to_string()));
                 }
             }
         }
@@ -416,7 +406,7 @@ mod tests {
     fn test_parse_property() {
         let mut ee = ExtendedEntry::default();
         assert!(ee.parse_property("P214", "12345").unwrap());
-        assert!(ee.aux.contains(&(214, "12345".to_string())));
+        assert!(ee.aux.contains(&AuxiliaryRow::new(214, "12345".to_string())));
     }
 
     #[test]
@@ -542,8 +532,8 @@ mod tests {
         let mut ee = ExtendedEntry::default();
         assert!(ee.parse_property("P31", "Q5|Q515").unwrap());
         assert_eq!(ee.aux.len(), 2);
-        assert!(ee.aux.contains(&(31, "Q5".to_string())));
-        assert!(ee.aux.contains(&(31, "Q515".to_string())));
+        assert!(ee.aux.contains(&AuxiliaryRow::new(31, "Q5".to_string())));
+        assert!(ee.aux.contains(&AuxiliaryRow::new(31, "Q515".to_string())));
     }
 
     #[test]
@@ -551,9 +541,9 @@ mod tests {
         let mut ee = ExtendedEntry::default();
         assert!(ee.parse_property("P31", "Q5 | Q515 | Q123").unwrap());
         assert_eq!(ee.aux.len(), 3);
-        assert!(ee.aux.contains(&(31, "Q5".to_string())));
-        assert!(ee.aux.contains(&(31, "Q515".to_string())));
-        assert!(ee.aux.contains(&(31, "Q123".to_string())));
+        assert!(ee.aux.contains(&AuxiliaryRow::new(31, "Q5".to_string())));
+        assert!(ee.aux.contains(&AuxiliaryRow::new(31, "Q515".to_string())));
+        assert!(ee.aux.contains(&AuxiliaryRow::new(31, "Q123".to_string())));
     }
 
     #[test]
@@ -561,8 +551,8 @@ mod tests {
         let mut ee = ExtendedEntry::default();
         assert!(ee.parse_property("P31", "Q5||Q515|").unwrap());
         assert_eq!(ee.aux.len(), 2);
-        assert!(ee.aux.contains(&(31, "Q5".to_string())));
-        assert!(ee.aux.contains(&(31, "Q515".to_string())));
+        assert!(ee.aux.contains(&AuxiliaryRow::new(31, "Q5".to_string())));
+        assert!(ee.aux.contains(&AuxiliaryRow::new(31, "Q515".to_string())));
     }
 
     #[test]
@@ -570,7 +560,7 @@ mod tests {
         let mut ee = ExtendedEntry::default();
         assert!(ee.parse_property("P214", "12345").unwrap());
         assert_eq!(ee.aux.len(), 1);
-        assert!(ee.aux.contains(&(214, "12345".to_string())));
+        assert!(ee.aux.contains(&AuxiliaryRow::new(214, "12345".to_string())));
     }
 
     #[test]
@@ -578,8 +568,8 @@ mod tests {
         let mut ee = ExtendedEntry::default();
         assert!(ee.parse_property("P214", "12345|67890").unwrap());
         assert_eq!(ee.aux.len(), 2);
-        assert!(ee.aux.contains(&(214, "12345".to_string())));
-        assert!(ee.aux.contains(&(214, "67890".to_string())));
+        assert!(ee.aux.contains(&AuxiliaryRow::new(214, "12345".to_string())));
+        assert!(ee.aux.contains(&AuxiliaryRow::new(214, "67890".to_string())));
     }
 
     #[test]
@@ -588,7 +578,7 @@ mod tests {
         assert!(ee.parse_property("P31", "Q5|Q5").unwrap());
         // HashSet deduplicates
         assert_eq!(ee.aux.len(), 1);
-        assert!(ee.aux.contains(&(31, "Q5".to_string())));
+        assert!(ee.aux.contains(&AuxiliaryRow::new(31, "Q5".to_string())));
     }
 
     #[test]
@@ -596,8 +586,8 @@ mod tests {
         let mut ee = ExtendedEntry::default();
         ee.process_cell("P31", "Q5|Q515").unwrap();
         assert_eq!(ee.aux.len(), 2);
-        assert!(ee.aux.contains(&(31, "Q5".to_string())));
-        assert!(ee.aux.contains(&(31, "Q515".to_string())));
+        assert!(ee.aux.contains(&AuxiliaryRow::new(31, "Q5".to_string())));
+        assert!(ee.aux.contains(&AuxiliaryRow::new(31, "Q515".to_string())));
     }
 
     #[test]

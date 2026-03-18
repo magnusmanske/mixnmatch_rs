@@ -1,5 +1,6 @@
 use crate::{
     app_state::{AppState, USER_AUX_MATCH},
+    auxiliary_data::AuxiliaryRow,
     coordinates::CoordinateLocation,
     entry::Entry,
     extended_entry::ExtendedEntry,
@@ -119,10 +120,10 @@ impl BespokeScraper6479 {
         };
         match record.get("gender_en").map(|s| s.as_str()) {
             Some("male") => {
-                ext_entry.aux.insert((21, "Q6581097".to_string()));
+                ext_entry.aux.insert(AuxiliaryRow::new(21, "Q6581097".to_string()));
             }
             Some("female") => {
-                ext_entry.aux.insert((21, "Q6581072".to_string()));
+                ext_entry.aux.insert(AuxiliaryRow::new(21, "Q6581072".to_string()));
             }
             Some("") => {}
             Some(other) => {
@@ -182,13 +183,13 @@ impl BespokeScraper6479 {
             } else if let Some(_lang_title) = re_wp.captures(lod) {
                 // Wikipedia article, ignore, wikidata should cover it
             } else if let Some(id) = re_gnd.captures(lod) {
-                ext_entry.aux.insert((227, id[1].to_string()));
+                ext_entry.aux.insert(AuxiliaryRow::new(227, id[1].to_string()));
             } else if let Some(id) = re_viaf.captures(lod) {
-                ext_entry.aux.insert((214, id[1].to_string()));
+                ext_entry.aux.insert(AuxiliaryRow::new(214, id[1].to_string()));
             } else if let Some(id) = re_nomisma.captures(lod) {
-                ext_entry.aux.insert((2950, id[1].to_string()));
+                ext_entry.aux.insert(AuxiliaryRow::new(2950, id[1].to_string()));
             } else if let Some(id) = re_bm.captures(lod) {
-                ext_entry.aux.insert((1711, id[1].to_string()));
+                ext_entry.aux.insert(AuxiliaryRow::new(1711, id[1].to_string()));
             } else if let Some(_id) = re_zdb.captures(lod) {
                 // Ignore, no property
             } else if let Some(_id) = re_rpc.captures(lod) {
@@ -196,11 +197,11 @@ impl BespokeScraper6479 {
             } else if let Some(_id) = re_lgpn.captures(lod) {
                 // Ignore, no property
             } else if let Some(id) = re_md.captures(lod) {
-                ext_entry.aux.insert((12597, id[1].to_string()));
+                ext_entry.aux.insert(AuxiliaryRow::new(12597, id[1].to_string()));
             } else if let Some(id) = re_geonames.captures(lod) {
-                ext_entry.aux.insert((1566, id[1].to_string()));
+                ext_entry.aux.insert(AuxiliaryRow::new(1566, id[1].to_string()));
             } else if let Some(id) = re_mmlo.captures(lod) {
-                ext_entry.aux.insert((6240, id[2].to_string()));
+                ext_entry.aux.insert(AuxiliaryRow::new(6240, id[2].to_string()));
             } else {
                 self.log(format!("Unknown URL pattern {lod}"));
             }
@@ -284,7 +285,7 @@ mod tests {
         assert_eq!(ee.entry.ext_name, "Caesar");
         assert_eq!(ee.entry.ext_desc, "Roman dictator");
         assert_eq!(ee.entry.type_name, Some("Q5".to_string()));
-        assert!(ee.aux.contains(&(21, "Q6581097".to_string())));
+        assert!(ee.aux.contains(&AuxiliaryRow::new(21, "Q6581097".to_string())));
     }
 
     #[test]
@@ -298,7 +299,7 @@ mod tests {
             ("LOD", ""),
         ]);
         let ee = s.record2ext_entry(record).unwrap();
-        assert!(ee.aux.contains(&(21, "Q6581072".to_string())));
+        assert!(ee.aux.contains(&AuxiliaryRow::new(21, "Q6581072".to_string())));
     }
 
     #[test]
@@ -316,7 +317,7 @@ mod tests {
         ]);
         let ee = s.record2ext_entry(record).unwrap();
         assert_eq!(ee.entry.q, Some(1268));
-        assert!(ee.aux.contains(&(214, "99999".to_string())));
+        assert!(ee.aux.contains(&AuxiliaryRow::new(214, "99999".to_string())));
     }
 
     #[test]
@@ -330,7 +331,7 @@ mod tests {
             ("LOD", "https://d-nb.info/gnd/118522426"),
         ]);
         let ee = s.record2ext_entry(record).unwrap();
-        assert!(ee.aux.contains(&(227, "118522426".to_string())));
+        assert!(ee.aux.contains(&AuxiliaryRow::new(227, "118522426".to_string())));
     }
 
     #[test]
@@ -344,7 +345,7 @@ mod tests {
             ("LOD", "https://nomisma.org/id/caesar"),
         ]);
         let ee = s.record2ext_entry(record).unwrap();
-        assert!(ee.aux.contains(&(2950, "caesar".to_string())));
+        assert!(ee.aux.contains(&AuxiliaryRow::new(2950, "caesar".to_string())));
     }
 
     #[test]
@@ -361,7 +362,7 @@ mod tests {
             ),
         ]);
         let ee = s.record2ext_entry(record).unwrap();
-        assert!(ee.aux.contains(&(1711, "12345".to_string())));
+        assert!(ee.aux.contains(&AuxiliaryRow::new(1711, "12345".to_string())));
     }
 
     #[test]
@@ -375,7 +376,7 @@ mod tests {
             ("LOD", "https://www.geonames.org/2950159"),
         ]);
         let ee = s.record2ext_entry(record).unwrap();
-        assert!(ee.aux.contains(&(1566, "2950159".to_string())));
+        assert!(ee.aux.contains(&AuxiliaryRow::new(1566, "2950159".to_string())));
     }
 
     #[test]
@@ -389,7 +390,7 @@ mod tests {
             ("LOD", "https://www.mmlo.de/4567"),
         ]);
         let ee = s.record2ext_entry(record).unwrap();
-        assert!(ee.aux.contains(&(6240, "4567".to_string())));
+        assert!(ee.aux.contains(&AuxiliaryRow::new(6240, "4567".to_string())));
     }
 
     #[test]
@@ -403,7 +404,7 @@ mod tests {
             ("LOD", "https://term.museum-digital.de/md-de/persinst/7890"),
         ]);
         let ee = s.record2ext_entry(record).unwrap();
-        assert!(ee.aux.contains(&(12597, "7890".to_string())));
+        assert!(ee.aux.contains(&AuxiliaryRow::new(12597, "7890".to_string())));
     }
 
     #[test]
@@ -451,7 +452,7 @@ mod tests {
         ]);
         let ee = s.record2ext_entry(record).unwrap();
         // Trailing slash means no VIAF aux added
-        assert!(!ee.aux.iter().any(|(p, _)| *p == 214));
+        assert!(!ee.aux.iter().any(|a| a.prop_numeric() == 214));
     }
 
     #[test]
@@ -468,8 +469,8 @@ mod tests {
             ),
         ]);
         let ee = s.record2ext_entry(record).unwrap();
-        assert!(ee.aux.contains(&(227, "118522426".to_string())));
-        assert!(ee.aux.contains(&(214, "54321".to_string())));
-        assert!(ee.aux.contains(&(2950, "example".to_string())));
+        assert!(ee.aux.contains(&AuxiliaryRow::new(227, "118522426".to_string())));
+        assert!(ee.aux.contains(&AuxiliaryRow::new(214, "54321".to_string())));
+        assert!(ee.aux.contains(&AuxiliaryRow::new(2950, "example".to_string())));
     }
 }
