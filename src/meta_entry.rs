@@ -8,6 +8,7 @@ use crate::{DbId, ItemId, PropertyId};
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use wikimisc::wikibase::LocaleString;
 
 // ── Serializable sub-structures (only for tables without existing structs) ──
 
@@ -50,12 +51,6 @@ pub struct MetaLogEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MetaAlias {
-    pub language: String,
-    pub value: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetaStatementText {
     pub id: Option<DbId>,
     pub property: PropertyId,
@@ -77,7 +72,7 @@ pub struct MetaEntry {
     pub person_dates: Option<MetaPersonDates>,
     pub mnm_relations: Vec<MetaMnmRelation>,
     pub descriptions: HashMap<String, String>,
-    pub aliases: Vec<MetaAlias>,
+    pub aliases: Vec<LocaleString>,
     pub issues: Vec<MetaIssue>,
     pub kv_entries: Vec<MetaKvEntry>,
     pub log_entries: Vec<MetaLogEntry>,
@@ -118,13 +113,7 @@ impl MetaEntry {
             None
         };
 
-        let aliases: Vec<MetaAlias> = aliases_result?
-            .into_iter()
-            .map(|ls| MetaAlias {
-                language: ls.language().to_string(),
-                value: ls.value().to_string(),
-            })
-            .collect();
+        let aliases = aliases_result?;
 
         let descriptions = descriptions_result?;
 
@@ -325,7 +314,7 @@ impl MetaEntry {
         // Aliases
         for alias in &self.aliases {
             storage
-                .entry_add_alias(entry_id, &alias.language, &alias.value)
+                .entry_add_alias(entry_id, alias.language(), alias.value())
                 .await?;
         }
 
@@ -418,10 +407,7 @@ mod tests {
                 m.insert("en".to_string(), "English description".to_string());
                 m
             },
-            aliases: vec![MetaAlias {
-                language: "en".to_string(),
-                value: "Alias One".to_string(),
-            }],
+            aliases: vec![LocaleString::new("en", "Alias One")],
             issues: vec![],
             kv_entries: vec![MetaKvEntry {
                 key: "source".to_string(),
