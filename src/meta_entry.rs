@@ -81,13 +81,13 @@ pub struct MetaEntry {
     pub issues: Vec<MetaIssue>,
     pub kv_entries: Vec<MetaKvEntry>,
     pub log_entries: Vec<MetaLogEntry>,
-    pub multi_match: Vec<usize>,
+    pub multi_match: Vec<DbId>,
     pub statement_text: Vec<MetaStatementText>,
 }
 
 impl MetaEntry {
     /// Load a complete MetaEntry from storage for a given entry ID.
-    pub async fn from_entry_id(entry_id: usize, app: &AppState) -> Result<Self> {
+    pub async fn from_entry_id(entry_id: DbId, app: &AppState) -> Result<Self> {
         let entry = Entry::from_id(entry_id, app).await?;
         Self::from_entry(&entry, app).await
     }
@@ -138,12 +138,12 @@ impl MetaEntry {
             Self::load_statement_text(entry_id, app),
         );
 
-        // Parse multi_match candidates string ("1,23456,7") into Vec<usize>
-        let multi_match: Vec<usize> = multi_match_result?
+        // Parse multi_match candidates string ("1,23456,7") into Vec<DbId>
+        let multi_match: Vec<DbId> = multi_match_result?
             .first()
             .map(|s| {
                 s.split(',')
-                    .filter_map(|q| q.parse::<usize>().ok())
+                    .filter_map(|q| q.parse::<DbId>().ok())
                     .collect()
             })
             .unwrap_or_default();
@@ -164,26 +164,23 @@ impl MetaEntry {
         })
     }
 
-    async fn load_mnm_relations(entry_id: usize, app: &AppState) -> Result<Vec<MetaMnmRelation>> {
+    async fn load_mnm_relations(entry_id: DbId, app: &AppState) -> Result<Vec<MetaMnmRelation>> {
         app.storage().meta_entry_get_mnm_relations(entry_id).await
     }
 
-    async fn load_issues(entry_id: usize, app: &AppState) -> Result<Vec<MetaIssue>> {
+    async fn load_issues(entry_id: DbId, app: &AppState) -> Result<Vec<MetaIssue>> {
         app.storage().meta_entry_get_issues(entry_id).await
     }
 
-    async fn load_kv_entries(entry_id: usize, app: &AppState) -> Result<Vec<MetaKvEntry>> {
+    async fn load_kv_entries(entry_id: DbId, app: &AppState) -> Result<Vec<MetaKvEntry>> {
         app.storage().meta_entry_get_kv_entries(entry_id).await
     }
 
-    async fn load_log_entries(entry_id: usize, app: &AppState) -> Result<Vec<MetaLogEntry>> {
+    async fn load_log_entries(entry_id: DbId, app: &AppState) -> Result<Vec<MetaLogEntry>> {
         app.storage().meta_entry_get_log_entries(entry_id).await
     }
 
-    async fn load_statement_text(
-        entry_id: usize,
-        app: &AppState,
-    ) -> Result<Vec<MetaStatementText>> {
+    async fn load_statement_text(entry_id: DbId, app: &AppState) -> Result<Vec<MetaStatementText>> {
         app.storage().meta_entry_get_statement_text(entry_id).await
     }
 
@@ -204,7 +201,7 @@ impl MetaEntry {
 
     /// Create a new entry (and all associated data) from this MetaEntry.
     /// Returns the new entry ID.
-    pub async fn create_in_storage(&self, app: &AppState) -> Result<usize> {
+    pub async fn create_in_storage(&self, app: &AppState) -> Result<DbId> {
         let mut entry = Entry::new_from_catalog_and_ext_id(self.entry.catalog, &self.entry.ext_id);
         entry.set_app(app);
         entry.ext_url = self.entry.ext_url.clone();
@@ -287,7 +284,7 @@ impl MetaEntry {
     }
 
     /// Write all associated data for an entry (used by both create and update).
-    async fn write_associated_data(&self, entry_id: usize, app: &AppState) -> Result<()> {
+    async fn write_associated_data(&self, entry_id: DbId, app: &AppState) -> Result<()> {
         let storage = app.storage();
 
         // Auxiliary

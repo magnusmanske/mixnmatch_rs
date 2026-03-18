@@ -1,4 +1,4 @@
-use crate::app_state::AppState;
+use crate::{DbId, ItemId, app_state::AppState};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
@@ -10,11 +10,11 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "type", content = "value")]
 pub enum MnmLink {
     /// Link to another MnM entry by its numeric ID.
-    EntryId(usize),
+    EntryId(DbId),
     /// Link to an entry identified by catalog ID and external ID.
-    CatalogExtId { catalog: usize, ext_id: String },
+    CatalogExtId { catalog: DbId, ext_id: String },
     /// Link to a Wikidata item by its numeric ID (e.g. 42 for "Q42").
-    WikidataQid(isize),
+    WikidataQid(ItemId),
 }
 
 impl MnmLink {
@@ -32,7 +32,7 @@ impl MnmLink {
     }
 
     /// Try to resolve this link to an entry ID using the given AppState.
-    pub async fn resolve_entry_id(&self, app: &AppState) -> Result<Option<usize>> {
+    pub async fn resolve_entry_id(&self, app: &AppState) -> Result<Option<DbId>> {
         match self {
             Self::EntryId(id) => Ok(Some(*id)),
             Self::CatalogExtId { catalog, ext_id } => {

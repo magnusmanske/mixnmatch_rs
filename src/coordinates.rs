@@ -1,4 +1,4 @@
-use crate::DbId;
+use crate::{DbId, ItemId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -46,7 +46,7 @@ pub struct LocationRow {
     pub catalog_id: DbId,
     pub ext_name: String,
     pub entry_type: String,
-    pub q: Option<usize>,
+    pub q: Option<ItemId>,
 }
 
 #[cfg(test)]
