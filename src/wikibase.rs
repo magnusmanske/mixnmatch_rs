@@ -355,18 +355,18 @@ impl WikiBase {
         }
 
         // born
-        if let Some((value, precision)) = Self::date2claim(&ext_entry.born) {
+        if let Some(pd) = &ext_entry.born {
             item.claims_mut().push(Statement::new_normal(
-                Snak::new_time(format!("P{PROP_BORN}"), value, precision),
+                Snak::new_time(format!("P{PROP_BORN}"), pd.to_wikidata_time(), pd.wikidata_precision()),
                 vec![],
                 vec![],
             ));
         }
 
         // died
-        if let Some((value, precision)) = Self::date2claim(&ext_entry.died) {
+        if let Some(pd) = &ext_entry.died {
             item.claims_mut().push(Statement::new_normal(
-                Snak::new_time(format!("P{PROP_DIED}"), value, precision),
+                Snak::new_time(format!("P{PROP_DIED}"), pd.to_wikidata_time(), pd.wikidata_precision()),
                 vec![],
                 vec![],
             ));
@@ -397,33 +397,6 @@ impl WikiBase {
         // }
 
         todo!()
-    }
-
-    fn date2claim(date: &Option<String>) -> Option<(String, u64)> {
-        let date = date.to_owned()?;
-        if date.trim().is_empty() {
-            return None;
-        }
-        const ALLOWED_CHARS: &str = "0123456789-";
-        if !date.chars().all(|c| ALLOWED_CHARS.contains(c)) {
-            return None;
-        }
-        let parts = date.split('-').collect::<Vec<&str>>();
-        if parts.len() == 1 && !parts[0].trim().is_empty() {
-            let value = format!("+{}-01-01T00:00:00Z", parts[0]);
-            let precision = 9; // Year precision
-            Some((value, precision))
-        } else if parts.len() == 2 {
-            let value = format!("+{}-{}-01T00:00:00Z", parts[0], parts[1]);
-            let precision = 10; // Month precision
-            Some((value, precision))
-        } else if parts.len() == 3 {
-            let value = format!("+{}-{}-{}T00:00:00Z", parts[0], parts[1], parts[2]);
-            let precision = 11; // Day precision
-            Some((value, precision))
-        } else {
-            None
-        }
     }
 
     // Returns the equivalent Wikibase item for the catalog, or tries to create one.
@@ -578,43 +551,8 @@ impl WikiBase {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    #[test]
-    fn test_date2claim_day() {
-        let date = "234-10-24";
-        let (value, precision) = WikiBase::date2claim(&Some(date.to_string())).unwrap();
-        assert_eq!(value, "+234-10-24T00:00:00Z");
-        assert_eq!(precision, 11);
-    }
-
-    #[test]
-    fn test_date2claim_month() {
-        let date = "1234-10";
-        let (value, precision) = WikiBase::date2claim(&Some(date.to_string())).unwrap();
-        assert_eq!(value, "+1234-10-01T00:00:00Z");
-        assert_eq!(precision, 10);
-    }
-
-    #[test]
-    fn test_date2claim_year() {
-        let date = "234";
-        let (value, precision) = WikiBase::date2claim(&Some(date.to_string())).unwrap();
-        assert_eq!(value, "+234-01-01T00:00:00Z");
-        assert_eq!(precision, 9);
-    }
-
-    #[test]
-    fn test_date2claim_none() {
-        assert_eq!(WikiBase::date2claim(&None), None);
-    }
-
-    #[test]
-    fn test_date2claim_bad_date() {
-        assert_eq!(WikiBase::date2claim(&Some("foobar".to_string())), None);
-    }
 }
-// date2claim
+
 
 /*
 TEST CATALOGS:

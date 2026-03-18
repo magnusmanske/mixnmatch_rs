@@ -2,6 +2,7 @@ use crate::{
     app_state::{AppState, USER_AUX_MATCH},
     entry::Entry,
     extended_entry::ExtendedEntry,
+    person_date::PersonDate,
 };
 use anyhow::Result;
 use async_trait::async_trait;
@@ -111,7 +112,7 @@ impl BespokeScraper121 {
         Some(ext_entry)
     }
 
-    pub(crate) fn parse_date(d: &str) -> Option<String> {
+    pub(crate) fn parse_date(d: &str) -> Option<PersonDate> {
         lazy_static! {
             static ref re_dmy: Regex = Regex::new(r"^(\d{1,2})\.(\d{1,2})\.(\d{3,})").unwrap();
             static ref re_dm: Regex = Regex::new(r"^(\d{1,2})\.(\d{1,2})").unwrap();
@@ -135,29 +136,29 @@ mod tests {
         // Standard DMY format
         assert_eq!(
             BespokeScraper121::parse_date("16.06.1805"),
-            Some("1805-06-16".to_string())
+            Some(PersonDate::year_month_day(1805, 6, 16))
         );
         // Single digit day and month
         assert_eq!(
             BespokeScraper121::parse_date("1.2.1900"),
-            Some("1900-02-01".to_string())
+            Some(PersonDate::year_month_day(1900, 2, 1))
         );
         // Empty string
         assert_eq!(BespokeScraper121::parse_date(""), None);
         // Just a year (no dots) — passed through to ExtendedEntry::parse_date
         assert_eq!(
             BespokeScraper121::parse_date("1805"),
-            Some("1805".to_string())
+            Some(PersonDate::year_only(1805))
         );
     }
 
     #[test]
     fn test_121_parse_date_day_month_no_year() {
         // Day.Month with no year: re_dm matches and produces "0006-16".
-        // ExtendedEntry::parse_date accepts ISO-like strings so this returns Some.
+        // PersonDate parses this as year 6, month 16 which is invalid.
         assert_eq!(
             BespokeScraper121::parse_date("16.06"),
-            Some("0006-16".to_string())
+            None
         );
     }
 

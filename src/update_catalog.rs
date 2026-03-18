@@ -366,13 +366,13 @@ mod tests {
 
         assert_eq!(
             ExtendedEntry::parse_date("2022-11-03"),
-            Some("2022-11-03".to_string())
+            Some(crate::person_date::PersonDate::year_month_day(2022, 11, 3))
         );
         assert_eq!(
             ExtendedEntry::parse_date("2022-11"),
-            Some("2022-11".to_string())
+            Some(crate::person_date::PersonDate::year_month(2022, 11))
         );
-        assert_eq!(ExtendedEntry::parse_date("2022"), Some("2022".to_string()));
+        assert_eq!(ExtendedEntry::parse_date("2022"), Some(crate::person_date::PersonDate::year_only(2022)));
         assert_eq!(ExtendedEntry::parse_date("2"), None);
         assert_eq!(ExtendedEntry::parse_date("foobar"), None);
         assert_eq!(ExtendedEntry::parse_date(""), None);
@@ -461,8 +461,8 @@ mod tests {
 
         // Check person dates
         let (born, died) = entry.get_person_dates().await.unwrap();
-        assert_eq!(born.unwrap(), "1869");
-        assert_eq!(died.unwrap(), "1961");
+        assert_eq!(born.unwrap().to_db_string(), "1869");
+        assert_eq!(died.unwrap().to_db_string(), "1961");
 
         // Cleanup
         entry.delete().await.unwrap();

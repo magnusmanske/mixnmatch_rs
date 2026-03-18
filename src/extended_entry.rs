@@ -2,6 +2,7 @@ use crate::app_state::AppState;
 use crate::coordinates::CoordinateLocation;
 use crate::datasource::DataSource;
 use crate::entry::Entry;
+use crate::person_date::PersonDate;
 use crate::update_catalog::UpdateCatalogError;
 use anyhow::{Result, anyhow};
 use lazy_static::lazy_static;
@@ -26,8 +27,8 @@ lazy_static! {
 pub struct ExtendedEntry {
     pub entry: Entry,
     pub aux: HashSet<(usize, String)>,
-    pub born: Option<String>,
-    pub died: Option<String>,
+    pub born: Option<PersonDate>,
+    pub died: Option<PersonDate>,
     pub aliases: Vec<LocaleString>,
     pub descriptions: HashMap<String, String>,
     pub location: Option<CoordinateLocation>,
@@ -275,8 +276,9 @@ impl ExtendedEntry {
     }
 
     //TODO test
-    pub fn parse_date(date: &str) -> Option<String> {
-        Self::get_capture(&RE_DATE, date)
+    pub fn parse_date(date: &str) -> Option<PersonDate> {
+        let captured = Self::get_capture(&RE_DATE, date)?;
+        PersonDate::from_db_string(&captured)
     }
 
     //TODO test
@@ -375,14 +377,14 @@ mod tests {
     fn test_parse_date_valid() {
         assert_eq!(
             ExtendedEntry::parse_date("2022-11-03"),
-            Some("2022-11-03".to_string())
+            Some(PersonDate::year_month_day(2022, 11, 3))
         );
         assert_eq!(
             ExtendedEntry::parse_date("2022-11"),
-            Some("2022-11".to_string())
+            Some(PersonDate::year_month(2022, 11))
         );
-        assert_eq!(ExtendedEntry::parse_date("2022"), Some("2022".to_string()));
-        assert_eq!(ExtendedEntry::parse_date("800"), Some("800".to_string()));
+        assert_eq!(ExtendedEntry::parse_date("2022"), Some(PersonDate::year_only(2022)));
+        assert_eq!(ExtendedEntry::parse_date("800"), Some(PersonDate::year_only(800)));
     }
 
     #[test]
@@ -495,14 +497,14 @@ mod tests {
     fn test_process_cell_born() {
         let mut ee = ExtendedEntry::default();
         ee.process_cell("born", "1900").unwrap();
-        assert_eq!(ee.born, Some("1900".to_string()));
+        assert_eq!(ee.born, Some(PersonDate::year_only(1900)));
     }
 
     #[test]
     fn test_process_cell_died() {
         let mut ee = ExtendedEntry::default();
         ee.process_cell("died", "2000-01-15").unwrap();
-        assert_eq!(ee.died, Some("2000-01-15".to_string()));
+        assert_eq!(ee.died, Some(PersonDate::year_month_day(2000, 1, 15)));
     }
 
     #[test]
