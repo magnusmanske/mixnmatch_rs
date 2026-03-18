@@ -15,9 +15,7 @@ use crate::wikidata_commands::WikidataCommandValue;
 use crate::wikidata_commands::WikidataCommandWhat;
 use anyhow::Result;
 use futures::future::join_all;
-use lazy_static::lazy_static;
 use mediawiki::Api;
-use regex::Regex;
 use serde_json::json;
 use std::collections::HashMap;
 use std::error::Error;
@@ -35,10 +33,6 @@ pub const AUX_BLACKLISTED_PROPERTIES: &[usize] = &[
 pub const AUX_DO_NOT_SYNC_CATALOG_TO_WIKIDATA: &[usize] = &[655];
 pub const AUX_PROPERTIES_ALSO_USING_LOWERCASE: &[usize] = &[2002];
 
-lazy_static! {
-    static ref RE_COORDINATE_PATTERN: Regex =
-        Regex::new(r"^\@{0,1}([0-9\.\-]+)[,/]([0-9\.\-]+)$").expect("Regex error");
-}
 
 #[derive(Debug, Clone)]
 pub struct AuxiliaryResults {
@@ -72,15 +66,7 @@ impl AuxiliaryResults {
 
     //TODO test
     fn value_as_item_location(&self) -> Option<WikidataCommandValue> {
-        let captures = RE_COORDINATE_PATTERN.captures(&self.value)?;
-        if captures.len() == 3 {
-            let lat = captures.get(1)?.as_str().parse::<f64>().ok()?;
-            let lon = captures.get(2)?.as_str().parse::<f64>().ok()?;
-            return Some(WikidataCommandValue::Location(CoordinateLocation::new(
-                lat, lon,
-            )));
-        }
-        None
+        CoordinateLocation::parse(&self.value).map(WikidataCommandValue::Location)
     }
 
     //TODO test
