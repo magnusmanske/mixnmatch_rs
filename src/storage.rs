@@ -473,6 +473,56 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     async fn meta_entry_delete_mnm_relations(&self, entry_id: usize) -> Result<()>;
     async fn meta_entry_delete_kv_entries(&self, entry_id: usize) -> Result<()>;
     async fn meta_entry_set_kv_entry(&self, entry_id: usize, key: &str, value: &str) -> Result<()>;
+
+    // API support methods
+
+    async fn get_user_by_name(&self, name: &str) -> Result<Option<(usize, String, bool)>>; // returns (id, name, is_catalog_admin)
+    async fn get_or_create_user_id(&self, name: &str) -> Result<usize>;
+    async fn get_users_by_ids(&self, user_ids: &[usize]) -> Result<HashMap<usize, serde_json::Value>>;
+
+    // Bulk extended entry data (for add_extended_entry_data equivalent)
+    async fn api_get_person_dates_for_entries(&self, entry_ids: &[usize]) -> Result<HashMap<usize, (String, String)>>; // entry_id -> (born, died)
+    async fn api_get_locations_for_entries(&self, entry_ids: &[usize]) -> Result<HashMap<usize, (f64, f64)>>; // entry_id -> (lat, lon)
+    async fn api_get_multi_match_for_entries(&self, entry_ids: &[usize]) -> Result<HashMap<usize, String>>; // entry_id -> candidates string
+    async fn api_get_auxiliary_for_entries(&self, entry_ids: &[usize]) -> Result<HashMap<usize, Vec<serde_json::Value>>>; // entry_id -> aux rows
+    async fn api_get_aliases_for_entries(&self, entry_ids: &[usize]) -> Result<HashMap<usize, Vec<serde_json::Value>>>; // entry_id -> alias rows
+    async fn api_get_descriptions_for_entries(&self, entry_ids: &[usize]) -> Result<HashMap<usize, Vec<serde_json::Value>>>; // entry_id -> desc rows
+    async fn api_get_kv_for_entries(&self, entry_ids: &[usize]) -> Result<HashMap<usize, Vec<(String, String, u8)>>>; // entry_id -> (key, value, done)
+    async fn api_get_mnm_relations_for_entries(&self, entry_ids: &[usize]) -> Result<HashMap<usize, Vec<serde_json::Value>>>; // entry_id -> relation rows
+
+    // Catalog overview
+    async fn api_get_catalog_overview(&self) -> Result<Vec<serde_json::Value>>; // Full overview with catalog+overview+user+autoscrape data
+    async fn api_get_single_catalog_overview(&self, catalog_id: usize) -> Result<serde_json::Value>;
+
+    // Catalog details (3 aggregate queries)
+    async fn api_get_catalog_type_counts(&self, catalog_id: usize) -> Result<Vec<serde_json::Value>>;
+    async fn api_get_catalog_match_by_month(&self, catalog_id: usize) -> Result<Vec<serde_json::Value>>;
+    async fn api_get_catalog_matcher_by_user(&self, catalog_id: usize) -> Result<Vec<serde_json::Value>>;
+
+    // Jobs
+    async fn api_get_jobs(&self, catalog_id: usize, start: usize, max: usize) -> Result<(Vec<serde_json::Value>, Vec<serde_json::Value>)>; // (stats, jobs)
+
+    // Issues
+    async fn api_get_issues_count(&self, issue_type: &str, catalogs: &str) -> Result<usize>;
+    async fn api_get_issues(&self, issue_type: &str, catalogs: &str, limit: usize, offset: usize, random_threshold: f64) -> Result<Vec<serde_json::Value>>;
+    async fn api_get_all_issues(&self, mode: &str) -> Result<Vec<serde_json::Value>>;
+
+    // Search
+    async fn api_search_entries(&self, words: &[String], description_search: bool, no_label_search: bool, exclude: &[usize], include: &[usize], max_results: usize) -> Result<Vec<Entry>>;
+    async fn api_search_by_q(&self, q: isize) -> Result<Vec<Entry>>;
+
+    // Recent changes
+    async fn api_get_recent_changes(&self, ts: &str, catalog_id: usize, limit: usize) -> Result<(Vec<serde_json::Value>, Vec<serde_json::Value>)>; // (events from entry, events from log)
+
+    // Catalog entry listing (query=catalog)
+    async fn api_get_catalog_entries_raw(&self, sql: &str) -> Result<Vec<Entry>>;
+
+    // Existing job actions
+    async fn api_get_existing_job_actions(&self) -> Result<Vec<String>>;
+
+    // Random entry
+    async fn api_get_random_entry(&self, catalog_id: usize, submode: &str, entry_type: &str, random: f64, active_catalogs: &[usize]) -> Result<Option<Entry>>;
+    async fn api_get_active_catalog_ids(&self) -> Result<Vec<usize>>;
 }
 
 #[cfg(test)]
