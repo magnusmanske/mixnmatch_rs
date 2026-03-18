@@ -30,7 +30,7 @@ use itertools::Itertools;
 use mysql_async::Params::Empty;
 use mysql_async::{Params, Row, from_row, futures::GetConn, prelude::*};
 use rand::prelude::*;
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use wikimisc::{timestamp::TimeStamp, wikibase::LocaleString};
 
@@ -2681,6 +2681,767 @@ impl Storage for StorageMySQL {
             .exec_drop(sql, params! { entry_id, key, value })
             .await?;
         Ok(())
+    }
+
+    // ===== API support methods =====
+
+    async fn get_user_by_name(&self, name: &str) -> Result<Option<(usize, String, bool)>> {
+        let sql = "SELECT `id`,`name`,`is_catalog_admin` FROM `user` WHERE `name`=:name LIMIT 1";
+        let mut conn = self.get_conn_ro().await?;
+        let rows = conn
+            .exec_iter(sql, params! { name })
+            .await?
+            .map_and_drop(|row: Row| {
+                let id: usize = row.get("id").unwrap_or(0);
+                let uname: String = row.get("name").unwrap_or_default();
+                let is_admin: u8 = row.get("is_catalog_admin").unwrap_or(0);
+                (id, uname, is_admin != 0)
+            })
+            .await?;
+        Ok(rows.into_iter().next())
+    }
+
+    async fn get_or_create_user_id(&self, name: &str) -> Result<usize> {
+        let sql = "SELECT `id` FROM `user` WHERE `name`=:name LIMIT 1";
+        let mut conn = self.get_conn().await?;
+        let rows = conn
+            .exec_iter(sql, params! { name })
+            .await?
+            .map_and_drop(from_row::<usize>)
+            .await?;
+        if let Some(id) = rows.first() {
+            return Ok(*id);
+        }
+        // Insert new user
+        conn.exec_drop(
+            "INSERT INTO `user` (`name`) VALUES (:name)",
+            params! { name },
+        )
+        .await?;
+        Ok(conn.last_insert_id().unwrap_or(0) as usize)
+    }
+
+    async fn get_users_by_ids(&self, user_ids: &[usize]) -> Result<HashMap<usize, serde_json::Value>> {
+        if user_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let ids_str = user_ids.iter().map(|id| format!("{id}")).collect::<Vec<String>>().join(",");
+        let sql = format!("SELECT * FROM `user` WHERE `id` IN ({ids_str})");
+        let mut conn = self.get_conn_ro().await?;
+        let rows = conn
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(|row: Row| {
+                let id: usize = row.get("id").unwrap_or(0);
+                let name: String = row.get("name").unwrap_or_default();
+                let is_catalog_admin: u8 = row.get("is_catalog_admin").unwrap_or(0);
+                (id, json!({
+                    "id": id,
+                    "name": name,
+                    "is_catalog_admin": is_catalog_admin
+                }))
+            })
+            .await?;
+        Ok(rows.into_iter().collect())
+    }
+
+    async fn api_get_person_dates_for_entries(&self, entry_ids: &[usize]) -> Result<HashMap<usize, (String, String)>> {
+        if entry_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let ids_str = entry_ids.iter().map(|id| format!("{id}")).collect::<Vec<String>>().join(",");
+        let sql = format!("SELECT * FROM `person_dates` WHERE `entry_id` IN ({ids_str})");
+        let mut conn = self.get_conn_ro().await?;
+        let rows = conn
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(|row: Row| {
+                let entry_id: usize = row.get("entry_id").unwrap_or(0);
+                let born: String = row.get("year_born").unwrap_or_default();
+                let died: String = row.get("year_died").unwrap_or_default();
+                (entry_id, born, died)
+            })
+            .await?;
+        let mut ret = HashMap::new();
+        for (entry_id, born, died) in rows {
+            if !born.is_empty() || !died.is_empty() {
+                ret.insert(entry_id, (born, died));
+            }
+        }
+        Ok(ret)
+    }
+
+    async fn api_get_locations_for_entries(&self, entry_ids: &[usize]) -> Result<HashMap<usize, (f64, f64)>> {
+        if entry_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let ids_str = entry_ids.iter().map(|id| format!("{id}")).collect::<Vec<String>>().join(",");
+        let sql = format!("SELECT * FROM `location` WHERE `entry_id` IN ({ids_str})");
+        let mut conn = self.get_conn_ro().await?;
+        let rows = conn
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(|row: Row| {
+                let entry_id: usize = row.get("entry_id").unwrap_or(0);
+                let lat: f64 = row.get("lat").unwrap_or(0.0);
+                let lon: f64 = row.get("lon").unwrap_or(0.0);
+                (entry_id, lat, lon)
+            })
+            .await?;
+        Ok(rows.into_iter().map(|(eid, lat, lon)| (eid, (lat, lon))).collect())
+    }
+
+    async fn api_get_multi_match_for_entries(&self, entry_ids: &[usize]) -> Result<HashMap<usize, String>> {
+        if entry_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let ids_str = entry_ids.iter().map(|id| format!("{id}")).collect::<Vec<String>>().join(",");
+        let sql = format!("SELECT * FROM `multi_match` WHERE `entry_id` IN ({ids_str})");
+        let mut conn = self.get_conn_ro().await?;
+        let rows = conn
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(|row: Row| {
+                let entry_id: usize = row.get("entry_id").unwrap_or(0);
+                let candidates: String = row.get("candidates").unwrap_or_default();
+                (entry_id, candidates)
+            })
+            .await?;
+        Ok(rows.into_iter().collect())
+    }
+
+    async fn api_get_auxiliary_for_entries(&self, entry_ids: &[usize]) -> Result<HashMap<usize, Vec<serde_json::Value>>> {
+        if entry_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let ids_str = entry_ids.iter().map(|id| format!("{id}")).collect::<Vec<String>>().join(",");
+        let sql = format!("SELECT * FROM `auxiliary` WHERE `entry_id` IN ({ids_str})");
+        let mut conn = self.get_conn_ro().await?;
+        let rows = conn
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(|row: Row| {
+                let entry_id: usize = row.get("entry_id").unwrap_or(0);
+                let id: usize = row.get("id").unwrap_or(0);
+                let aux_p: usize = row.get("aux_p").unwrap_or(0);
+                let aux_name: String = row.get("aux_name").unwrap_or_default();
+                let in_wikidata: u8 = row.get("in_wikidata").unwrap_or(0);
+                (entry_id, json!({
+                    "id": id,
+                    "entry_id": entry_id,
+                    "aux_p": aux_p,
+                    "aux_name": aux_name,
+                    "in_wikidata": in_wikidata
+                }))
+            })
+            .await?;
+        let mut ret: HashMap<usize, Vec<serde_json::Value>> = HashMap::new();
+        for (entry_id, val) in rows {
+            ret.entry(entry_id).or_default().push(val);
+        }
+        Ok(ret)
+    }
+
+    async fn api_get_aliases_for_entries(&self, entry_ids: &[usize]) -> Result<HashMap<usize, Vec<serde_json::Value>>> {
+        if entry_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let ids_str = entry_ids.iter().map(|id| format!("{id}")).collect::<Vec<String>>().join(",");
+        let sql = format!("SELECT * FROM `aliases` WHERE `entry_id` IN ({ids_str}) ORDER BY `entry_id`,`language`,`label`");
+        let mut conn = self.get_conn_ro().await?;
+        let rows = conn
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(|row: Row| {
+                let entry_id: usize = row.get("entry_id").unwrap_or(0);
+                let id: usize = row.get("id").unwrap_or(0);
+                let language: String = row.get("language").unwrap_or_default();
+                let label: String = row.get("label").unwrap_or_default();
+                (entry_id, json!({
+                    "id": id,
+                    "entry_id": entry_id,
+                    "language": language,
+                    "label": label
+                }))
+            })
+            .await?;
+        let mut ret: HashMap<usize, Vec<serde_json::Value>> = HashMap::new();
+        for (entry_id, val) in rows {
+            ret.entry(entry_id).or_default().push(val);
+        }
+        Ok(ret)
+    }
+
+    async fn api_get_descriptions_for_entries(&self, entry_ids: &[usize]) -> Result<HashMap<usize, Vec<serde_json::Value>>> {
+        if entry_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let ids_str = entry_ids.iter().map(|id| format!("{id}")).collect::<Vec<String>>().join(",");
+        let sql = format!("SELECT * FROM `descriptions` WHERE `entry_id` IN ({ids_str}) ORDER BY `entry_id`,`language`,`label`");
+        let mut conn = self.get_conn_ro().await?;
+        let rows = conn
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(|row: Row| {
+                let entry_id: usize = row.get("entry_id").unwrap_or(0);
+                let id: usize = row.get("id").unwrap_or(0);
+                let language: String = row.get("language").unwrap_or_default();
+                let label: String = row.get("label").unwrap_or_default();
+                (entry_id, json!({
+                    "id": id,
+                    "entry_id": entry_id,
+                    "language": language,
+                    "label": label
+                }))
+            })
+            .await?;
+        let mut ret: HashMap<usize, Vec<serde_json::Value>> = HashMap::new();
+        for (entry_id, val) in rows {
+            ret.entry(entry_id).or_default().push(val);
+        }
+        Ok(ret)
+    }
+
+    async fn api_get_kv_for_entries(&self, entry_ids: &[usize]) -> Result<HashMap<usize, Vec<(String, String, u8)>>> {
+        if entry_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let ids_str = entry_ids.iter().map(|id| format!("{id}")).collect::<Vec<String>>().join(",");
+        let sql = format!("SELECT * FROM `kv_entry` WHERE `entry_id` IN ({ids_str})");
+        let mut conn = self.get_conn_ro().await?;
+        let rows = conn
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(|row: Row| {
+                let entry_id: usize = row.get("entry_id").unwrap_or(0);
+                let key: String = row.get("kv_key").unwrap_or_default();
+                let value: String = row.get("kv_value").unwrap_or_default();
+                let done: u8 = row.get("done").unwrap_or(0);
+                (entry_id, key, value, done)
+            })
+            .await?;
+        let mut ret: HashMap<usize, Vec<(String, String, u8)>> = HashMap::new();
+        for (entry_id, key, value, done) in rows {
+            ret.entry(entry_id).or_default().push((key, value, done));
+        }
+        Ok(ret)
+    }
+
+    async fn api_get_mnm_relations_for_entries(&self, entry_ids: &[usize]) -> Result<HashMap<usize, Vec<serde_json::Value>>> {
+        if entry_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let ids_str = entry_ids.iter().map(|id| format!("{id}")).collect::<Vec<String>>().join(",");
+        let sql = format!(
+            "SELECT `property`,`mnm_relation`.`entry_id` AS `source_entry_id`,`entry`.* FROM `mnm_relation`,`entry` WHERE `entry`.`id`=`mnm_relation`.`target_entry_id` AND `mnm_relation`.`entry_id` IN ({ids_str})"
+        );
+        let mut conn = self.get_conn_ro().await?;
+        let rows = conn
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(|row: Row| {
+                let property: usize = row.get("property").unwrap_or(0);
+                let source_entry_id: usize = row.get("source_entry_id").unwrap_or(0);
+                let target_entry = Self::entry_from_row(&row);
+                (source_entry_id, property, target_entry)
+            })
+            .await?;
+        let mut ret: HashMap<usize, Vec<serde_json::Value>> = HashMap::new();
+        for (source_entry_id, property, target_entry) in rows {
+            if let Some(entry) = target_entry {
+                let val = json!({
+                    "property": property,
+                    "source_entry_id": source_entry_id,
+                    "target_entry_id": entry.id,
+                    "target_catalog": entry.catalog,
+                    "target_ext_id": entry.ext_id,
+                    "target_ext_url": entry.ext_url,
+                    "target_ext_name": entry.ext_name,
+                    "target_ext_desc": entry.ext_desc,
+                    "target_q": entry.q,
+                    "target_user": entry.user,
+                    "target_type": entry.type_name,
+                });
+                ret.entry(source_entry_id).or_default().push(val);
+            }
+        }
+        Ok(ret)
+    }
+
+    async fn api_get_catalog_overview(&self) -> Result<Vec<serde_json::Value>> {
+        let mut conn = self.get_conn_ro().await?;
+
+        // Query 1: overview data
+        let overview_rows = conn
+            .exec_iter("SELECT `overview`.* FROM `overview`,`catalog` WHERE `catalog`.`id`=`overview`.`catalog` AND `catalog`.`active`>=1", ())
+            .await?
+            .map_and_drop(|row: Row| {
+                let catalog_id: usize = row.get("catalog").unwrap_or(0);
+                let total: isize = row.get("total").unwrap_or(0);
+                let noq: isize = row.get("noq").unwrap_or(0);
+                let autoq: isize = row.get("autoq").unwrap_or(0);
+                let na: isize = row.get("na").unwrap_or(0);
+                let manual: isize = row.get("manual").unwrap_or(0);
+                let nowd: isize = row.get("nowd").unwrap_or(0);
+                let multi_match: isize = row.get("multi_match").unwrap_or(0);
+                let types: String = row.get("types").unwrap_or_default();
+                (catalog_id, json!({
+                    "total": total, "noq": noq, "autoq": autoq, "na": na,
+                    "manual": manual, "nowd": nowd, "multi_match": multi_match, "types": types
+                }))
+            })
+            .await?;
+        let mut overview_map: HashMap<usize, serde_json::Value> = overview_rows.into_iter().collect();
+
+        // Query 2: catalog data
+        let catalog_rows = conn
+            .exec_iter("SELECT * FROM `catalog` WHERE `active`>=1", ())
+            .await?
+            .map_and_drop(|row: Row| {
+                let id: usize = row.get("id").unwrap_or(0);
+                let name: String = row.get("name").unwrap_or_default();
+                let url: String = row.get("url").unwrap_or_default();
+                let desc: String = row.get("desc").unwrap_or_default();
+                let type_name: String = row.get("type").unwrap_or_default();
+                let wd_prop: usize = row.get("wd_prop").unwrap_or(0);
+                let wd_qual: Option<usize> = row.get("wd_qual");
+                let search_wp: String = row.get("search_wp").unwrap_or_default();
+                let active: u8 = row.get("active").unwrap_or(0);
+                let owner: usize = row.get("owner").unwrap_or(0);
+                let note: String = row.get("note").unwrap_or_default();
+                let source_item: usize = row.get("source_item").unwrap_or(0);
+                let has_person_date: String = row.get("has_person_date").unwrap_or_default();
+                let taxon_run: u8 = row.get("taxon_run").unwrap_or(0);
+                (id, json!({
+                    "id": id, "name": name, "url": url, "desc": desc, "type": type_name,
+                    "wd_prop": wd_prop, "wd_qual": wd_qual, "search_wp": search_wp,
+                    "active": active, "owner": owner, "note": note,
+                    "source_item": source_item, "has_person_date": has_person_date,
+                    "taxon_run": taxon_run
+                }))
+            })
+            .await?;
+        let catalog_map: HashMap<usize, serde_json::Value> = catalog_rows.into_iter().collect();
+
+        // Query 3: usernames
+        let user_rows = conn
+            .exec_iter("SELECT `user`.`name` AS `username`,`catalog`.`id` FROM `catalog`,`user` WHERE `owner`=`user`.`id` AND `active`>=1", ())
+            .await?
+            .map_and_drop(|row: Row| {
+                let id: usize = row.get("id").unwrap_or(0);
+                let username: String = row.get("username").unwrap_or_default();
+                (id, username)
+            })
+            .await?;
+        let user_map: HashMap<usize, String> = user_rows.into_iter().collect();
+
+        // Query 4: autoscrape data
+        let autoscrape_rows = conn
+            .exec_iter("SELECT `catalog`.`id` AS `id`,`last_update`,`do_auto_update`,`autoscrape`.`json` AS `json` FROM `catalog`,`autoscrape` WHERE `active`>=1 AND `catalog`.`id`=`autoscrape`.`catalog`", ())
+            .await?
+            .map_and_drop(|row: Row| {
+                let id: usize = row.get("id").unwrap_or(0);
+                let last_update: String = row.get("last_update").unwrap_or_default();
+                let do_auto_update: u8 = row.get("do_auto_update").unwrap_or(0);
+                let json_str: String = row.get("json").unwrap_or_default();
+                (id, json!({
+                    "last_update": last_update,
+                    "do_auto_update": do_auto_update,
+                    "autoscrape_json": json_str
+                }))
+            })
+            .await?;
+        let autoscrape_map: HashMap<usize, serde_json::Value> = autoscrape_rows.into_iter().collect();
+
+        // Merge all data by catalog_id
+        let mut results = Vec::new();
+        for (catalog_id, catalog_val) in &catalog_map {
+            let mut merged = catalog_val.clone();
+            if let Some(ov) = overview_map.remove(catalog_id) {
+                if let Some(obj) = ov.as_object() {
+                    for (k, v) in obj {
+                        merged[k] = v.clone();
+                    }
+                }
+            }
+            if let Some(username) = user_map.get(catalog_id) {
+                merged["username"] = json!(username);
+            }
+            if let Some(auto) = autoscrape_map.get(catalog_id) {
+                if let Some(obj) = auto.as_object() {
+                    for (k, v) in obj {
+                        merged[k] = v.clone();
+                    }
+                }
+            }
+            results.push(merged);
+        }
+        Ok(results)
+    }
+
+    async fn api_get_single_catalog_overview(&self, catalog_id: usize) -> Result<serde_json::Value> {
+        let all = self.api_get_catalog_overview().await?;
+        for item in all {
+            if let Some(id) = item.get("id").and_then(|v| v.as_u64()) {
+                if id as usize == catalog_id {
+                    return Ok(item);
+                }
+            }
+        }
+        Err(anyhow!("Catalog {catalog_id} not found in overview"))
+    }
+
+    async fn api_get_catalog_type_counts(&self, catalog_id: usize) -> Result<Vec<serde_json::Value>> {
+        let sql = "SELECT `type`,count(*) AS `cnt` FROM `entry` WHERE `catalog`=:catalog_id GROUP BY `type` ORDER BY `cnt` DESC";
+        let mut conn = self.get_conn_ro().await?;
+        let rows = conn
+            .exec_iter(sql, params! { catalog_id })
+            .await?
+            .map_and_drop(|row: Row| {
+                let type_name: String = row.get("type").unwrap_or_default();
+                let cnt: usize = row.get("cnt").unwrap_or(0);
+                json!({"type": type_name, "cnt": cnt})
+            })
+            .await?;
+        Ok(rows)
+    }
+
+    async fn api_get_catalog_match_by_month(&self, catalog_id: usize) -> Result<Vec<serde_json::Value>> {
+        let sql = "SELECT substring(`timestamp`,1,6) AS `ym`,count(*) AS `cnt` FROM `entry` WHERE `catalog`=:catalog_id AND `timestamp` IS NOT NULL AND `user`!=0 GROUP BY `ym` ORDER BY `ym`";
+        let mut conn = self.get_conn_ro().await?;
+        let rows = conn
+            .exec_iter(sql, params! { catalog_id })
+            .await?
+            .map_and_drop(|row: Row| {
+                let ym: String = row.get("ym").unwrap_or_default();
+                let cnt: usize = row.get("cnt").unwrap_or(0);
+                json!({"ym": ym, "cnt": cnt})
+            })
+            .await?;
+        Ok(rows)
+    }
+
+    async fn api_get_catalog_matcher_by_user(&self, catalog_id: usize) -> Result<Vec<serde_json::Value>> {
+        let sql = "SELECT `name` AS `username`,`entry`.`user` AS `uid`,count(*) AS `cnt` FROM `entry`,`user` WHERE `catalog`=:catalog_id AND `entry`.`user`=`user`.`id` AND `user`!=0 AND `entry`.`user` IS NOT NULL GROUP BY `uid` ORDER BY `cnt` DESC";
+        let mut conn = self.get_conn_ro().await?;
+        let rows = conn
+            .exec_iter(sql, params! { catalog_id })
+            .await?
+            .map_and_drop(|row: Row| {
+                let username: String = row.get("username").unwrap_or_default();
+                let uid: usize = row.get("uid").unwrap_or(0);
+                let cnt: usize = row.get("cnt").unwrap_or(0);
+                json!({"username": username, "uid": uid, "cnt": cnt})
+            })
+            .await?;
+        Ok(rows)
+    }
+
+    async fn api_get_jobs(&self, catalog_id: usize, start: usize, max: usize) -> Result<(Vec<serde_json::Value>, Vec<serde_json::Value>)> {
+        let mut conn = self.get_conn_ro().await?;
+
+        // Stats (only when catalog_id==0)
+        let stats = if catalog_id == 0 {
+            conn.exec_iter(
+                "SELECT `status`,count(*) AS `cnt` FROM `jobs` WHERE `status`!='BLOCKED' GROUP BY `status` ORDER BY `status`",
+                (),
+            )
+            .await?
+            .map_and_drop(|row: Row| {
+                let status: String = row.get("status").unwrap_or_default();
+                let cnt: usize = row.get("cnt").unwrap_or(0);
+                json!({"status": status, "cnt": cnt})
+            })
+            .await?
+        } else {
+            vec![]
+        };
+
+        // Jobs
+        let catalog_filter = if catalog_id > 0 {
+            format!(" AND `catalog`={catalog_id}")
+        } else {
+            String::new()
+        };
+        let jobs_sql = format!(
+            "SELECT `jobs`.*,(SELECT `user`.`name` FROM `user` WHERE `user`.`id`=`jobs`.`user_id`) AS `user_name` FROM `jobs` WHERE `status`!='BLOCKED'{catalog_filter} ORDER BY FIELD(`status`,'RUNNING','FAILED','TODO','LOW_PRIORITY','PAUSED','DONE'), `last_ts` DESC,`next_ts` DESC LIMIT {max} OFFSET {start}"
+        );
+        let jobs = conn
+            .exec_iter(jobs_sql, ())
+            .await?
+            .map_and_drop(|row: Row| {
+                let id: usize = row.get("id").unwrap_or(0);
+                let catalog: usize = row.get("catalog").unwrap_or(0);
+                let action: String = row.get("action").unwrap_or_default();
+                let status: String = row.get("status").unwrap_or_default();
+                let last_ts: String = row.get("last_ts").unwrap_or_default();
+                let next_ts: String = row.get("next_ts").unwrap_or_default();
+                let depends_on: Option<usize> = row.get("depends_on");
+                let user_id: Option<usize> = row.get("user_id");
+                let user_name: Option<String> = row.get("user_name");
+                let note: Option<String> = row.get("note");
+                let json_str: Option<String> = row.get("json");
+                json!({
+                    "id": id, "catalog": catalog, "action": action, "status": status,
+                    "last_ts": last_ts, "next_ts": next_ts, "depends_on": depends_on,
+                    "user_id": user_id, "user_name": user_name, "note": note, "json": json_str
+                })
+            })
+            .await?;
+
+        Ok((stats, jobs))
+    }
+
+    async fn api_get_issues_count(&self, issue_type: &str, catalogs: &str) -> Result<usize> {
+        let mut sql = "SELECT count(*) AS `cnt` FROM `issues` WHERE `status`='OPEN'".to_string();
+        if !issue_type.is_empty() {
+            sql += &format!(" AND `type`='{}'", issue_type.replace('\'', "''"));
+        }
+        if !catalogs.is_empty() {
+            sql += &format!(" AND `catalog` IN ({catalogs})");
+        }
+        let mut conn = self.get_conn_ro().await?;
+        let rows = conn
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(from_row::<usize>)
+            .await?;
+        Ok(*rows.first().unwrap_or(&0))
+    }
+
+    async fn api_get_issues(&self, issue_type: &str, catalogs: &str, limit: usize, offset: usize, random_threshold: f64) -> Result<Vec<serde_json::Value>> {
+        let mut sql = format!("SELECT * FROM `issues` WHERE `status`='OPEN' AND `random`>={random_threshold}");
+        if !issue_type.is_empty() {
+            sql += &format!(" AND `type`='{}'", issue_type.replace('\'', "''"));
+        }
+        if !catalogs.is_empty() {
+            sql += &format!(" AND `catalog` IN ({catalogs})");
+        }
+        sql += &format!(" ORDER BY `random` LIMIT {limit} OFFSET {offset}");
+        let mut conn = self.get_conn_ro().await?;
+        let rows = conn
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(|row: Row| {
+                let id: usize = row.get("id").unwrap_or(0);
+                let entry_id: usize = row.get("entry_id").unwrap_or(0);
+                let issue_type: String = row.get("type").unwrap_or_default();
+                let json_str: String = row.get("json").unwrap_or_default();
+                let status: String = row.get("status").unwrap_or_default();
+                let catalog: usize = row.get("catalog").unwrap_or(0);
+                let random: f64 = row.get("random").unwrap_or(0.0);
+                json!({
+                    "id": id, "entry_id": entry_id, "type": issue_type,
+                    "json": json_str, "status": status, "catalog": catalog, "random": random
+                })
+            })
+            .await?;
+        Ok(rows)
+    }
+
+    async fn api_get_all_issues(&self, mode: &str) -> Result<Vec<serde_json::Value>> {
+        // Only allow known safe view names to prevent SQL injection
+        let view_name = match mode {
+            "duplicate_items" => "vw_issues_duplicate_items",
+            "mismatched_items" => "vw_issues_mismatched_items",
+            "time_mismatch" => "vw_issues_time_mismatch",
+            _ => return Err(anyhow!("Invalid issues mode: {mode}")),
+        };
+        let sql = format!("SELECT * FROM `{view_name}`");
+        let mut conn = self.get_conn_ro().await?;
+        let rows = conn
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(|row: Row| {
+                let mut obj = serde_json::Map::new();
+                for col in row.columns_ref() {
+                    let col_name = col.name_str().to_string();
+                    let val: Option<String> = row.get(&col_name as &str);
+                    obj.insert(col_name, json!(val));
+                }
+                serde_json::Value::Object(obj)
+            })
+            .await?;
+        Ok(rows)
+    }
+
+    async fn api_search_entries(&self, words: &[String], description_search: bool, no_label_search: bool, exclude: &[usize], include: &[usize], max_results: usize) -> Result<Vec<Entry>> {
+        if words.is_empty() {
+            return Ok(vec![]);
+        }
+        let ft_words = words.iter().map(|w| format!("+{w}")).collect::<Vec<String>>().join(",");
+        let mut conditions = Vec::new();
+        if !no_label_search {
+            conditions.push(format!("MATCH(`ext_name`) AGAINST('{ft_words}' IN BOOLEAN MODE)"));
+        }
+        if description_search {
+            conditions.push(format!("MATCH(`ext_desc`) AGAINST('{ft_words}' IN BOOLEAN MODE)"));
+        }
+        if conditions.is_empty() {
+            return Ok(vec![]);
+        }
+        let match_clause = conditions.join(" OR ");
+        let mut sql = format!("{} WHERE ({match_clause})", Self::entry_sql_select());
+        if !exclude.is_empty() {
+            let excl = exclude.iter().map(|id| format!("{id}")).collect::<Vec<String>>().join(",");
+            sql += &format!(" AND `catalog` NOT IN ({excl})");
+        }
+        if !include.is_empty() {
+            let incl = include.iter().map(|id| format!("{id}")).collect::<Vec<String>>().join(",");
+            sql += &format!(" AND `catalog` IN ({incl})");
+        }
+        sql += &format!(" LIMIT {max_results}");
+        let mut conn = self.get_conn_ro().await?;
+        let rows = conn
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(|row| Self::entry_from_row(&row))
+            .await?
+            .into_iter()
+            .flatten()
+            .collect();
+        Ok(rows)
+    }
+
+    async fn api_search_by_q(&self, q: isize) -> Result<Vec<Entry>> {
+        let sql = format!("{} WHERE `q`={q}", Self::entry_sql_select());
+        let mut conn = self.get_conn_ro().await?;
+        let rows = conn
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(|row| Self::entry_from_row(&row))
+            .await?
+            .into_iter()
+            .flatten()
+            .collect();
+        Ok(rows)
+    }
+
+    async fn api_get_recent_changes(&self, ts: &str, catalog_id: usize, limit: usize) -> Result<(Vec<serde_json::Value>, Vec<serde_json::Value>)> {
+        let mut conn = self.get_conn_ro().await?;
+
+        // Events from entry table (entries matched/changed after timestamp)
+        let catalog_filter = if catalog_id > 0 {
+            format!(" AND `catalog`={catalog_id}")
+        } else {
+            String::new()
+        };
+        let entry_sql = format!(
+            "SELECT `id`,`catalog`,`ext_id`,`ext_name`,`q`,`user`,`timestamp` FROM `entry` WHERE `timestamp`>='{ts}' AND `user`>0{catalog_filter} ORDER BY `timestamp` DESC LIMIT {limit}"
+        );
+        let entry_events = conn
+            .exec_iter(entry_sql, ())
+            .await?
+            .map_and_drop(|row: Row| {
+                let id: usize = row.get("id").unwrap_or(0);
+                let catalog: usize = row.get("catalog").unwrap_or(0);
+                let ext_id: String = row.get("ext_id").unwrap_or_default();
+                let ext_name: String = row.get("ext_name").unwrap_or_default();
+                let q: Option<isize> = row.get("q");
+                let user: Option<usize> = row.get("user");
+                let timestamp: String = row.get("timestamp").unwrap_or_default();
+                json!({
+                    "id": id, "catalog": catalog, "ext_id": ext_id, "ext_name": ext_name,
+                    "q": q, "user": user, "timestamp": timestamp
+                })
+            })
+            .await?;
+
+        // Events from log table
+        let log_catalog_filter = if catalog_id > 0 {
+            format!(" AND `entry`.`catalog`={catalog_id}")
+        } else {
+            String::new()
+        };
+        let log_sql = format!(
+            "SELECT `log`.*,`entry`.`catalog` FROM `log`,`entry` WHERE `entry`.`id`=`log`.`entry_id` AND `log`.`timestamp`>='{ts}'{log_catalog_filter} ORDER BY `log`.`timestamp` DESC LIMIT {limit}"
+        );
+        let log_events = conn
+            .exec_iter(log_sql, ())
+            .await?
+            .map_and_drop(|row: Row| {
+                let id: usize = row.get("id").unwrap_or(0);
+                let entry_id: usize = row.get("entry_id").unwrap_or(0);
+                let user_id: usize = row.get("user_id").unwrap_or(0);
+                let action: String = row.get("action").unwrap_or_default();
+                let timestamp: String = row.get("timestamp").unwrap_or_default();
+                let catalog: usize = row.get("catalog").unwrap_or(0);
+                let json_str: Option<String> = row.get("json");
+                json!({
+                    "id": id, "entry_id": entry_id, "user_id": user_id, "action": action,
+                    "timestamp": timestamp, "catalog": catalog, "json": json_str
+                })
+            })
+            .await?;
+
+        Ok((entry_events, log_events))
+    }
+
+    async fn api_get_catalog_entries_raw(&self, sql: &str) -> Result<Vec<Entry>> {
+        let mut conn = self.get_conn_ro().await?;
+        let rows = conn
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(|row| Self::entry_from_row(&row))
+            .await?
+            .into_iter()
+            .flatten()
+            .collect();
+        Ok(rows)
+    }
+
+    async fn api_get_existing_job_actions(&self) -> Result<Vec<String>> {
+        let sql = "SELECT DISTINCT `action` FROM `jobs` UNION SELECT DISTINCT `action` FROM `job_sizes`";
+        let mut conn = self.get_conn_ro().await?;
+        let rows = conn
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(from_row::<String>)
+            .await?;
+        Ok(rows)
+    }
+
+    async fn api_get_random_entry(&self, catalog_id: usize, submode: &str, entry_type: &str, random: f64, active_catalogs: &[usize]) -> Result<Option<Entry>> {
+        let mut sql = format!("{} FORCE INDEX (`random_2`) WHERE `random`>={random}", Self::entry_sql_select());
+        if submode == "no_q" || submode.is_empty() {
+            sql += " AND `q` IS NULL";
+        }
+        if catalog_id > 0 {
+            sql += &format!(" AND `catalog`={catalog_id}");
+        }
+        if !entry_type.is_empty() {
+            sql += &format!(" AND `type`='{}'", entry_type.replace('\'', "''"));
+        }
+        sql += " ORDER BY `random` LIMIT 1";
+
+        let mut conn = self.get_conn_ro().await?;
+        let rows = conn
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(|row| Self::entry_from_row(&row))
+            .await?
+            .into_iter()
+            .flatten()
+            .collect::<Vec<Entry>>();
+
+        // Only return if the entry's catalog is in active_catalogs
+        if let Some(entry) = rows.into_iter().next() {
+            if active_catalogs.contains(&entry.catalog) {
+                return Ok(Some(entry));
+            }
+        }
+        Ok(None)
+    }
+
+    async fn api_get_active_catalog_ids(&self) -> Result<Vec<usize>> {
+        let sql = "SELECT `id` FROM `catalog` WHERE `active`=1";
+        let mut conn = self.get_conn_ro().await?;
+        let rows = conn
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(from_row::<usize>)
+            .await?;
+        Ok(rows)
     }
 }
 
