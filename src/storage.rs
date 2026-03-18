@@ -1,10 +1,11 @@
 use crate::{
     automatch::{ResultInOriginalCatalog, ResultInOtherCatalog},
+    auxiliary_data::AuxiliaryRow,
     auxiliary_matcher::AuxiliaryResults,
     catalog::Catalog,
     cersei::CurrentScraper,
     coordinates::{CoordinateLocation, LocationRow},
-    entry::{AuxiliaryRow, Entry},
+    entry::Entry,
     entry_query::EntryQuery,
     issue::{Issue, IssueStatus},
     job_row::JobRow,

@@ -1,6 +1,7 @@
 use crate::app_state::AppState;
+use crate::auxiliary_data::AuxiliaryRow;
 use crate::coordinates::CoordinateLocation;
-use crate::entry::{AuxiliaryRow, Entry};
+use crate::entry::Entry;
 use crate::mnm_link::MnmLink;
 use crate::person_date::PersonDate;
 use crate::{DbId, ItemId, PropertyId};
