@@ -1,5 +1,6 @@
 use crate::{
     app_state::{AppState, USER_AUX_MATCH},
+    auxiliary_data::AuxiliaryRow,
     entry::Entry,
     extended_entry::ExtendedEntry,
 };
@@ -105,7 +106,7 @@ impl BespokeScraper7697 {
             entry,
             ..Default::default()
         };
-        ee.aux.insert((12589, fb_id.to_string()));
+        ee.aux.insert(AuxiliaryRow::new(12589, fb_id.to_string()));
         Some(ee)
     }
 
@@ -284,7 +285,7 @@ mod tests {
         assert_eq!(ee.entry.user, Some(USER_AUX_MATCH));
         assert!(ee.entry.timestamp.is_some());
         assert_eq!(ee.entry.type_name, Some("Q16521".to_string()));
-        assert!(ee.aux.contains(&(12589, "species/buteo/buteo".to_string())));
+        assert!(ee.aux.contains(&AuxiliaryRow::new(12589, "species/buteo/buteo".to_string())));
     }
 
     #[test]
@@ -296,7 +297,7 @@ mod tests {
         let ee = BespokeScraper7697::binding_to_entry(7697, &binding).unwrap();
         assert_eq!(ee.entry.ext_name, "Amazilis");
         assert_eq!(ee.entry.ext_desc, "Genus");
-        assert!(ee.aux.contains(&(12589, "genus/amazilis".to_string())));
+        assert!(ee.aux.contains(&AuxiliaryRow::new(12589, "genus/amazilis".to_string())));
     }
 
     #[test]
@@ -360,7 +361,7 @@ mod tests {
         });
         let ee = BespokeScraper7697::binding_to_entry(7697, &binding).unwrap();
         assert!(
-            ee.aux.contains(&(12589, "order/passeriformes".to_string())),
+            ee.aux.contains(&AuxiliaryRow::new(12589, "order/passeriformes".to_string())),
             "Expected P12589 aux to be present"
         );
     }

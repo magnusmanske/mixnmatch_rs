@@ -1,4 +1,5 @@
 use crate::autoscrape::{AutoscrapeError, AutoscrapeRegex, JsonStuff};
+use crate::auxiliary_data::AuxiliaryRow;
 use anyhow::Result;
 use lazy_static::lazy_static;
 use regex::{Regex, RegexBuilder};
@@ -124,13 +125,13 @@ impl AutoscrapeResolveAux {
     }
 
     //TODO test
-    pub fn replace_vars(&self, map: &HashMap<String, String>) -> (usize, String) {
+    pub fn replace_vars(&self, map: &HashMap<String, String>) -> AuxiliaryRow {
         let mut ret = self.id.to_owned();
         for (key, value) in map {
             ret = ret.replace(key, value);
         }
         let ret = AutoscrapeResolve::fix_html(&ret);
-        (self.property, ret)
+        AuxiliaryRow::new(self.property, ret)
     }
 }
 
@@ -214,7 +215,7 @@ mod tests {
         let mut map = HashMap::new();
         map.insert("id".to_string(), "replace".to_string());
         let ret = resolve.replace_vars(&map);
-        assert_eq!(ret, (123, "replace".to_string()));
+        assert_eq!(ret, AuxiliaryRow::new(123, "replace".to_string()));
     }
 
     #[test]
@@ -223,7 +224,7 @@ mod tests {
         let resolve = AutoscrapeResolveAux::from_json(&json).unwrap();
         let map = HashMap::new();
         let ret = resolve.replace_vars(&map);
-        assert_eq!(ret, (123, "id".to_string()));
+        assert_eq!(ret, AuxiliaryRow::new(123, "id".to_string()));
     }
 
     #[test]
@@ -338,7 +339,7 @@ mod tests {
         let mut map = HashMap::new();
         map.insert("$X".to_string(), "val".to_string());
         let ret = resolve.replace_vars(&map);
-        assert_eq!(ret, (1, "val".to_string()));
+        assert_eq!(ret, AuxiliaryRow::new(1, "val".to_string()));
     }
 
     #[test]

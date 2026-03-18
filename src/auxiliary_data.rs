@@ -3,7 +3,7 @@ use mysql_async::Row;
 use serde::{Deserialize, Serialize};
 use wikimisc::wikibase::{Entity, EntityTrait, Reference, Snak, SnakDataType, Statement};
 
-#[derive(Debug, Clone, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct AuxiliaryRow {
     row_id: Option<DbId>,
     prop_numeric: PropertyId,
