@@ -1,5 +1,5 @@
 use crate::{
-    automatch::{ResultInOriginalCatalog, ResultInOtherCatalog},
+    automatch::{AutomatchSearchRow, CandidateDatesRow, PersonDateMatchRow, ResultInOriginalCatalog, ResultInOtherCatalog},
     auxiliary_data::AuxiliaryRow,
     auxiliary_matcher::AuxiliaryResults,
     catalog::Catalog,
@@ -304,7 +304,7 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
         catalog_id: usize,
         offset: usize,
         batch_size: usize,
-    ) -> Result<Vec<(usize, String, String, String)>>;
+    ) -> Result<Vec<AutomatchSearchRow>>;
     async fn automatch_creations_get_results(
         &self,
         catalog_id: usize,
@@ -314,7 +314,7 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
         catalog_id: usize,
         offset: usize,
         batch_size: usize,
-    ) -> Result<Vec<(usize, String, String, String)>>;
+    ) -> Result<Vec<AutomatchSearchRow>>;
     async fn automatch_from_other_catalogs_get_results(
         &self,
         catalog_id: usize,
@@ -332,7 +332,7 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
         catalog_id: usize,
         batch_size: usize,
         offset: usize,
-    ) -> Result<Vec<(usize, String, String, String)>>;
+    ) -> Result<Vec<PersonDateMatchRow>>;
     async fn match_person_by_single_date_get_results(
         &self,
         match_field: &str,
@@ -340,7 +340,7 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
         precision: i32,
         batch_size: usize,
         offset: usize,
-    ) -> Result<Vec<(usize, String, String, String)>>;
+    ) -> Result<Vec<CandidateDatesRow>>;
     async fn automatch_complex_get_el_chunk(
         &self,
         catalog_id: usize,

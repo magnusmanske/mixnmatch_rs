@@ -44,15 +44,8 @@ pub struct AuxiliaryResults {
 }
 
 impl AuxiliaryResults {
-    //TODO test
-    pub fn from_result(result: &(usize, usize, usize, usize, String)) -> Self {
-        Self {
-            aux_id: result.0,
-            entry_id: result.1,
-            q_numeric: result.2,
-            property: result.3,
-            value: result.4.to_owned(),
-        }
+    pub fn new(aux_id: usize, entry_id: usize, q_numeric: usize, property: usize, value: String) -> Self {
+        Self { aux_id, entry_id, q_numeric, property, value }
     }
 
     //TODO test

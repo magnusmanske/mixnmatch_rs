@@ -2,7 +2,7 @@ pub use crate::storage::Storage;
 use crate::{
     ItemId,
     app_state::USER_AUTO,
-    automatch::{ResultInOriginalCatalog, ResultInOtherCatalog},
+    automatch::{AutomatchSearchRow, CandidateDatesRow, PersonDateMatchRow, ResultInOriginalCatalog, ResultInOtherCatalog},
     auxiliary_data::AuxiliaryRow,
     auxiliary_matcher::AuxiliaryResults,
     catalog::Catalog,
@@ -1027,10 +1027,11 @@ impl Storage for StorageMySQL {
             .await?
             .exec_iter(sql, params! {catalog_id,offset,batch_size})
             .await?
-            .map_and_drop(from_row::<(usize, usize, usize, usize, String)>)
+            .map_and_drop(|row| {
+                let (aux_id, entry_id, q_numeric, property, value) = from_row::<(usize, usize, usize, usize, String)>(row);
+                AuxiliaryResults::new(aux_id, entry_id, q_numeric, property, value)
+            })
             .await?;
-        let results: Vec<AuxiliaryResults> =
-            results.iter().map(AuxiliaryResults::from_result).collect();
         Ok(results)
     }
 
@@ -1057,10 +1058,11 @@ impl Storage for StorageMySQL {
             .await?
             .exec_iter(sql.clone(), params! {catalog_id,offset,batch_size})
             .await?
-            .map_and_drop(from_row::<(usize, usize, usize, usize, String)>)
+            .map_and_drop(|row| {
+                let (aux_id, entry_id, q_numeric, property, value) = from_row::<(usize, usize, usize, usize, String)>(row);
+                AuxiliaryResults::new(aux_id, entry_id, q_numeric, property, value)
+            })
             .await?;
-        let results: Vec<AuxiliaryResults> =
-            results.iter().map(AuxiliaryResults::from_result).collect();
         Ok(results)
     }
 
@@ -1770,7 +1772,7 @@ impl Storage for StorageMySQL {
         catalog_id: usize,
         offset: usize,
         batch_size: usize,
-    ) -> Result<Vec<(usize, String, String, String)>> {
+    ) -> Result<Vec<AutomatchSearchRow>> {
         let sql = format!("SELECT `id`,`ext_name`,`type`,
 	            IFNULL((SELECT group_concat(DISTINCT `label` SEPARATOR '|') FROM aliases WHERE entry_id=entry.id),'') AS `aliases`
 	            FROM `entry` WHERE `catalog`=:catalog_id {}
@@ -1780,7 +1782,10 @@ impl Storage for StorageMySQL {
         let results = conn
             .exec_iter(sql.clone(), params! {catalog_id,offset,batch_size})
             .await?
-            .map_and_drop(from_row::<(usize, String, String, String)>)
+            .map_and_drop(|row| {
+                let (id, name, type_name, aliases) = from_row::<(usize, String, String, String)>(row);
+                AutomatchSearchRow::new(id, name, type_name, aliases)
+            })
             .await?;
         Ok(results)
     }
@@ -1806,7 +1811,7 @@ impl Storage for StorageMySQL {
         catalog_id: usize,
         offset: usize,
         batch_size: usize,
-    ) -> Result<Vec<(usize, String, String, String)>> {
+    ) -> Result<Vec<AutomatchSearchRow>> {
         let sql = format!("SELECT `id`,`ext_name`,`type`,
                 IFNULL((SELECT group_concat(DISTINCT `label` SEPARATOR '|') FROM aliases WHERE entry_id=entry.id),'') AS `aliases`
                 FROM `entry` WHERE `catalog`=:catalog_id {}
@@ -1816,7 +1821,10 @@ impl Storage for StorageMySQL {
         let results = conn
             .exec_iter(sql.clone(), params! {catalog_id,offset,batch_size})
             .await?
-            .map_and_drop(from_row::<(usize, String, String, String)>)
+            .map_and_drop(|row| {
+                let (id, name, type_name, aliases) = from_row::<(usize, String, String, String)>(row);
+                AutomatchSearchRow::new(id, name, type_name, aliases)
+            })
             .await?;
         Ok(results)
     }
@@ -1892,7 +1900,7 @@ impl Storage for StorageMySQL {
         catalog_id: usize,
         batch_size: usize,
         offset: usize,
-    ) -> Result<Vec<(usize, String, String, String)>> {
+    ) -> Result<Vec<PersonDateMatchRow>> {
         let sql = "SELECT entry_id,ext_name,born,died
             FROM (`entry` join `person_dates`)
             WHERE `person_dates`.`entry_id` = `entry`.`id`
@@ -1902,7 +1910,10 @@ impl Storage for StorageMySQL {
         let results = conn
             .exec_iter(sql, params! {catalog_id,batch_size,offset})
             .await?
-            .map_and_drop(from_row::<(usize, String, String, String)>)
+            .map_and_drop(|row| {
+                let (entry_id, ext_name, born, died) = from_row::<(usize, String, String, String)>(row);
+                PersonDateMatchRow::new(entry_id, ext_name, born, died)
+            })
             .await?;
         Ok(results)
     }
@@ -1914,7 +1925,7 @@ impl Storage for StorageMySQL {
         precision: i32,
         batch_size: usize,
         offset: usize,
-    ) -> Result<Vec<(usize, String, String, String)>> {
+    ) -> Result<Vec<CandidateDatesRow>> {
         let sql = format!("(
 	                SELECT multi_match.entry_id AS entry_id,born,died,candidates AS qs FROM person_dates,multi_match,entry
 	                WHERE (q IS NULL OR user=0) AND person_dates.entry_id=multi_match.entry_id AND multi_match.catalog=:catalog_id AND length({match_field})=:precision
@@ -1931,7 +1942,10 @@ impl Storage for StorageMySQL {
                 params! {catalog_id,precision,batch_size,offset},
             )
             .await?
-            .map_and_drop(from_row::<(usize, String, String, String)>)
+            .map_and_drop(|row| {
+                let (entry_id, born, died, candidates) = from_row::<(usize, String, String, String)>(row);
+                CandidateDatesRow::new(entry_id, born, died, candidates)
+            })
             .await?;
         Ok(results)
     }

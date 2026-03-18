@@ -78,6 +78,52 @@ pub struct ResultInOtherCatalog {
     pub q: Option<isize>,
 }
 
+/// A row from automatch search/simple queries: entry_id, ext_name, type, aliases.
+#[derive(Debug, Clone)]
+pub struct AutomatchSearchRow {
+    pub entry_id: usize,
+    pub ext_name: String,
+    pub type_name: String,
+    pub aliases: String,
+}
+
+impl AutomatchSearchRow {
+    pub fn new(entry_id: usize, ext_name: String, type_name: String, aliases: String) -> Self {
+        Self { entry_id, ext_name, type_name, aliases }
+    }
+}
+
+/// A row from person-date matching queries with both dates.
+/// Fields: entry_id, ext_name, born, died.
+#[derive(Debug, Clone)]
+pub struct PersonDateMatchRow {
+    pub entry_id: usize,
+    pub ext_name: String,
+    pub born: String,
+    pub died: String,
+}
+
+impl PersonDateMatchRow {
+    pub fn new(entry_id: usize, ext_name: String, born: String, died: String) -> Self {
+        Self { entry_id, ext_name, born, died }
+    }
+}
+
+/// A row from single-date matching queries: entry_id, born, died, comma-separated candidates.
+#[derive(Debug, Clone)]
+pub struct CandidateDatesRow {
+    pub entry_id: usize,
+    pub born: String,
+    pub died: String,
+    pub candidates_csv: String,
+}
+
+impl CandidateDatesRow {
+    pub fn new(entry_id: usize, born: String, died: String, candidates_csv: String) -> Self {
+        Self { entry_id, born, died, candidates_csv }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct CandidateDates {
     pub entry_id: usize,
@@ -87,14 +133,13 @@ struct CandidateDates {
 }
 
 impl CandidateDates {
-    //TODO test
-    fn from_row(r: &(usize, String, String, String)) -> Self {
+    fn from_row(r: &CandidateDatesRow) -> Self {
         Self {
-            entry_id: r.0,
-            born: r.1.clone(),
-            died: r.2.clone(),
+            entry_id: r.entry_id,
+            born: r.born.clone(),
+            died: r.died.clone(),
             matches: r
-                .3
+                .candidates_csv
                 .split(',')
                 .filter(|q| !q.is_empty())
                 .map(|q| format!("Q{q}"))
@@ -390,7 +435,7 @@ impl AutoMatch {
 
     async fn automatch_by_search_process_results_batch(
         &mut self,
-        result_batch: &[(usize, String, String, String)],
+        result_batch: &[AutomatchSearchRow],
     ) {
         let mut search_results = self
             .automatch_by_search_process_results_batch_process_futures(result_batch)
@@ -499,12 +544,12 @@ impl AutoMatch {
 
     async fn automatch_simple_items_from_result(
         &mut self,
-        result: &(usize, String, String, String),
+        result: &AutomatchSearchRow,
     ) -> Option<(usize, Vec<String>)> {
-        let entry_id = result.0;
-        let label = &result.1;
-        let type_q = &result.2;
-        let aliases: Vec<&str> = result.3.split('|').collect();
+        let entry_id = result.entry_id;
+        let label = &result.ext_name;
+        let type_q = &result.type_name;
+        let aliases: Vec<&str> = result.aliases.split('|').collect();
         let mut items = match self.app.wikidata().search_db_with_type(label, type_q).await {
             Ok(items) => items,
             _ => return None, // Ignore error
@@ -595,10 +640,10 @@ impl AutoMatch {
 
     async fn match_person_by_dates_process_result(
         &self,
-        result: &(usize, String, String, String),
+        result: &PersonDateMatchRow,
         mw_api: &Api,
     ) -> Result<()> {
-        let entry_id = result.0;
+        let entry_id = result.entry_id;
         let candidate_items = match self
             .match_person_by_dates_process_result_get_candidate_items(result, mw_api)
             .await
@@ -612,15 +657,15 @@ impl AutoMatch {
 
     async fn match_person_by_dates_process_result_get_candidate_items(
         &self,
-        result: &(usize, String, String, String),
+        result: &PersonDateMatchRow,
         mw_api: &Api,
     ) -> Result<Vec<String>, ()> {
-        let ext_name = &result.1;
-        let birth_year = match Self::extract_sane_year_from_date(&result.2) {
+        let ext_name = &result.ext_name;
+        let birth_year = match Self::extract_sane_year_from_date(&result.born) {
             Some(year) => year,
             None => return Err(()),
         };
-        let death_year = match Self::extract_sane_year_from_date(&result.3) {
+        let death_year = match Self::extract_sane_year_from_date(&result.died) {
             Some(year) => year,
             None => return Err(()),
         };
@@ -996,15 +1041,15 @@ impl AutoMatch {
 
     async fn automatch_by_search_process_results_batch_process_futures(
         &self,
-        result_batch: &[(usize, String, String, String)],
+        result_batch: &[AutomatchSearchRow],
     ) -> Vec<(usize, String)> {
         let mut futures = vec![];
         for result in result_batch {
-            let entry_id = result.0;
-            let label = &result.1;
-            let type_q = &result.2;
+            let entry_id = result.entry_id;
+            let label = &result.ext_name;
+            let type_q = &result.type_name;
             let aliases: Vec<&str> = result
-                .3
+                .aliases
                 .split('|')
                 .filter(|alias| !alias.is_empty())
                 .collect();
@@ -1341,12 +1386,7 @@ mod tests {
 
     #[test]
     fn test_candidate_dates_from_row() {
-        let row = (
-            42_usize,
-            "1900".to_string(),
-            "1980".to_string(),
-            "1,2,3".to_string(),
-        );
+        let row = CandidateDatesRow::new(42, "1900".to_string(), "1980".to_string(), "1,2,3".to_string());
         let cd = CandidateDates::from_row(&row);
         assert_eq!(cd.entry_id, 42);
         assert_eq!(cd.born, "1900");
@@ -1356,7 +1396,7 @@ mod tests {
 
     #[test]
     fn test_candidate_dates_from_row_empty_matches() {
-        let row = (1_usize, "1900".to_string(), "".to_string(), "".to_string());
+        let row = CandidateDatesRow::new(1, "1900".to_string(), "".to_string(), "".to_string());
         let cd = CandidateDates::from_row(&row);
         assert_eq!(cd.entry_id, 1);
         assert!(cd.matches.is_empty());
