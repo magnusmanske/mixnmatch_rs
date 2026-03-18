@@ -3,8 +3,8 @@ use crate::{
     auxiliary_matcher::AuxiliaryResults,
     catalog::Catalog,
     cersei::CurrentScraper,
-    coordinate_matcher::LocationRow,
-    entry::{AuxiliaryRow, CoordinateLocation, Entry},
+    coordinates::{CoordinateLocation, LocationRow},
+    entry::{AuxiliaryRow, Entry},
     entry_query::EntryQuery,
     issue::{Issue, IssueStatus},
     job_row::JobRow,
@@ -471,12 +471,7 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     async fn meta_entry_delete_descriptions(&self, entry_id: usize) -> Result<()>;
     async fn meta_entry_delete_mnm_relations(&self, entry_id: usize) -> Result<()>;
     async fn meta_entry_delete_kv_entries(&self, entry_id: usize) -> Result<()>;
-    async fn meta_entry_set_kv_entry(
-        &self,
-        entry_id: usize,
-        key: &str,
-        value: &str,
-    ) -> Result<()>;
+    async fn meta_entry_set_kv_entry(&self, entry_id: usize, key: &str, value: &str) -> Result<()>;
 }
 
 #[cfg(test)]

@@ -1,12 +1,13 @@
 pub use crate::storage::Storage;
 use crate::{
+    ItemId,
     app_state::USER_AUTO,
     automatch::{ResultInOriginalCatalog, ResultInOtherCatalog},
     auxiliary_matcher::AuxiliaryResults,
     catalog::Catalog,
     cersei::CurrentScraper,
-    coordinate_matcher::LocationRow,
-    entry::{AuxiliaryRow, CoordinateLocation, Entry, EntryError},
+    coordinates::{CoordinateLocation, LocationRow},
+    entry::{AuxiliaryRow, Entry, EntryError},
     entry_query::EntryQuery,
     issue::{Issue, IssueStatus},
     job_row::JobRow,
@@ -2589,7 +2590,7 @@ impl Storage for StorageMySQL {
                 let text: String = row.get(2).unwrap_or_default();
                 let in_wikidata: bool = row.get(3).unwrap_or_default();
                 let entry_is_matched: bool = row.get(4).unwrap_or_default();
-                let q: Option<usize> = row.get(5);
+                let q: Option<ItemId> = row.get(5);
                 MetaStatementText {
                     id,
                     property,

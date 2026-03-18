@@ -39,6 +39,10 @@
     clippy::wildcard_imports
 )]
 
+pub type DbId = usize;
+pub type PropertyId = usize;
+pub type ItemId = isize;
+
 // pub mod api;
 pub mod app_state;
 pub mod automatch;
@@ -52,6 +56,7 @@ pub mod catalog;
 pub mod cersei;
 pub mod cli;
 pub mod coordinate_matcher;
+pub mod coordinates;
 pub mod datasource;
 pub mod entry;
 pub mod entry_query;

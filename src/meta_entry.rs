@@ -1,7 +1,9 @@
 use crate::app_state::AppState;
-use crate::entry::{AuxiliaryRow, CoordinateLocation, Entry};
+use crate::coordinates::CoordinateLocation;
+use crate::entry::{AuxiliaryRow, Entry};
 use crate::mnm_link::MnmLink;
 use crate::person_date::PersonDate;
+use crate::{DbId, ItemId, PropertyId};
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -16,19 +18,19 @@ pub struct MetaPersonDates {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetaMnmRelation {
-    pub property: usize,
+    pub property: PropertyId,
     pub target: MnmLink,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetaIssue {
-    pub id: Option<usize>,
+    pub id: Option<DbId>,
     pub issue_type: String,
     pub json: serde_json::Value,
     pub status: String,
-    pub user_id: Option<usize>,
+    pub user_id: Option<DbId>,
     pub resolved_ts: Option<String>,
-    pub catalog_id: usize,
+    pub catalog_id: DbId,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,11 +41,11 @@ pub struct MetaKvEntry {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetaLogEntry {
-    pub id: Option<usize>,
+    pub id: Option<DbId>,
     pub action: String,
-    pub user: Option<usize>,
+    pub user: Option<DbId>,
     pub timestamp: Option<String>,
-    pub q: Option<isize>,
+    pub q: Option<ItemId>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,12 +56,12 @@ pub struct MetaAlias {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetaStatementText {
-    pub id: Option<usize>,
-    pub property: usize,
+    pub id: Option<DbId>,
+    pub property: PropertyId,
     pub text: String,
     pub in_wikidata: bool,
     pub entry_is_matched: bool,
-    pub q: Option<usize>,
+    pub q: Option<ItemId>,
 }
 
 // ── MetaEntry ──────────────────────────────────────────────────────────────
