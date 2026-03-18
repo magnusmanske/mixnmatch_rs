@@ -12,8 +12,9 @@ use crate::{
     job_row::JobRow,
     job_status::JobStatus,
     match_state::MatchState,
-    meta_entry::{MnmLink, MetaIssue, MetaKvEntry, MetaLogEntry, MetaMnmRelation, MetaStatementText},
+    meta_entry::{MetaIssue, MetaKvEntry, MetaLogEntry, MetaMnmRelation, MetaStatementText},
     microsync::EXT_URL_UNIQUE_SEPARATOR,
+    mnm_link::MnmLink,
     mysql_misc::MySQLMisc,
     prop_todo::PropTodo,
     storage::OverviewTableRow,
@@ -2267,7 +2268,8 @@ impl Storage for StorageMySQL {
     ) -> Result<()> {
         let sql = "REPLACE /* rust:storage:entry_set_coordinate_location */ INTO `location` (`entry_id`,`lat`,`lon`,`precision`) VALUES (:entry_id,:lat,:lon,:precision)";
         let mut conn = self.get_conn().await?;
-        conn.exec_drop(sql, params! {entry_id,lat,lon,precision}).await?;
+        conn.exec_drop(sql, params! {entry_id,lat,lon,precision})
+            .await?;
         Ok(())
     }
 
@@ -2481,11 +2483,9 @@ impl Storage for StorageMySQL {
 
     // MetaEntry support
 
-    async fn meta_entry_get_mnm_relations(
-        &self,
-        entry_id: usize,
-    ) -> Result<Vec<MetaMnmRelation>> {
-        let sql = "SELECT `property`, `target_entry_id` FROM `mnm_relation` WHERE `entry_id`=:entry_id";
+    async fn meta_entry_get_mnm_relations(&self, entry_id: usize) -> Result<Vec<MetaMnmRelation>> {
+        let sql =
+            "SELECT `property`, `target_entry_id` FROM `mnm_relation` WHERE `entry_id`=:entry_id";
         let ret = self
             .get_conn_ro()
             .await?
@@ -2658,12 +2658,7 @@ impl Storage for StorageMySQL {
         Ok(())
     }
 
-    async fn meta_entry_set_kv_entry(
-        &self,
-        entry_id: usize,
-        key: &str,
-        value: &str,
-    ) -> Result<()> {
+    async fn meta_entry_set_kv_entry(&self, entry_id: usize, key: &str, value: &str) -> Result<()> {
         let sql = "REPLACE INTO `kv_entry` (`entry_id`, `kv_key`, `kv_value`) VALUES (:entry_id, :key, :value)";
         self.get_conn()
             .await?
