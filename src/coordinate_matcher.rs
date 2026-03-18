@@ -1,3 +1,4 @@
+use crate::DbId;
 use crate::app_state::AppState;
 use crate::app_state::USER_LOCATION_MATCH;
 use crate::coordinates::LocationRow;
@@ -29,9 +30,9 @@ pub struct CoordinateMatcher {
     app: AppState,
     mw_api: Api,
     job: Option<Job>,
-    catalog_id: Option<usize>,
+    catalog_id: Option<DbId>,
     permissions: HashMap<String, HashMap<usize, String>>,
-    bad_catalogs: Vec<usize>,
+    bad_catalogs: Vec<DbId>,
 }
 
 impl Jobbable for CoordinateMatcher {
@@ -49,7 +50,7 @@ impl Jobbable for CoordinateMatcher {
 }
 
 impl CoordinateMatcher {
-    pub async fn new(app: &AppState, catalog_id: Option<usize>) -> Result<Self> {
+    pub async fn new(app: &AppState, catalog_id: Option<DbId>) -> Result<Self> {
         let mw_api = app.wikidata().get_mw_api().await?;
         let mut ret = Self {
             app: app.clone(),
@@ -271,11 +272,11 @@ impl CoordinateMatcher {
         None
     }
 
-    fn get_permission_value(&self, key: &str, catalog_id: usize) -> Option<&String> {
+    fn get_permission_value(&self, key: &str, catalog_id: DbId) -> Option<&String> {
         self.permissions.get(key)?.get(&catalog_id) //.map(|v|v.to_owned())
     }
 
-    fn is_permission(&self, key: &str, catalog_id: usize, value: &str) -> bool {
+    fn is_permission(&self, key: &str, catalog_id: DbId, value: &str) -> bool {
         self.get_permission_value(key, catalog_id) == Some(&value.to_string())
     }
 
@@ -309,8 +310,8 @@ mod tests {
     use super::*;
     use crate::app_state::*;
 
-    const TEST_CATALOG_ID: usize = 5526;
-    const TEST_ENTRY_ID: usize = 157175552;
+    const TEST_CATALOG_ID: DbId = 5526;
+    const TEST_ENTRY_ID: DbId = 157175552;
 
     #[tokio::test]
     async fn test_match_by_coordinates() {
