@@ -1,9 +1,11 @@
 use crate::app_state::{AppState, USER_AUTO};
+use crate::auxiliary_data::AuxiliaryRow;
 use crate::catalog::Catalog;
 use crate::coordinates::CoordinateLocation;
 use crate::person::Person;
+use crate::{DbId, ItemId, PropertyId};
 use anyhow::{Result, anyhow};
-use mysql_async::{Row, Value};
+use mysql_async::Value;
 use rand::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -12,103 +14,9 @@ use std::fmt;
 use wikimisc::timestamp::TimeStamp;
 use wikimisc::wikibase::entity_container::EntityContainer;
 use wikimisc::wikibase::locale_string::LocaleString;
-use wikimisc::wikibase::{
-    Entity, EntityTrait, ItemEntity, Reference, Snak, SnakDataType, Statement,
-};
+use wikimisc::wikibase::{EntityTrait, ItemEntity, Reference, Snak, Statement};
 
 pub const WESTERN_LANGUAGES: &[&str] = &["en", "de", "fr", "es", "nl", "it", "pt"];
-
-#[derive(Debug, Clone, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub struct AuxiliaryRow {
-    row_id: Option<usize>,
-    prop_numeric: usize,
-    value: String,
-    in_wikidata: bool,
-    entry_is_matched: bool,
-}
-
-impl AuxiliaryRow {
-    pub fn new(prop_numeric: usize, value: String) -> Self {
-        Self {
-            row_id: None,
-            prop_numeric,
-            value,
-            in_wikidata: false,
-            entry_is_matched: false,
-        }
-    }
-
-    //TODO test
-    pub fn from_row(row: &Row) -> Option<Self> {
-        Some(Self {
-            row_id: row.get(0),
-            prop_numeric: row.get(1)?,
-            value: row.get(2)?,
-            in_wikidata: row.get(3)?,
-            entry_is_matched: row.get(4)?,
-        })
-    }
-
-    pub fn row_id(&self) -> Option<usize> {
-        self.row_id
-    }
-
-    pub fn prop_numeric(&self) -> usize {
-        self.prop_numeric
-    }
-
-    pub fn value(&self) -> &str {
-        &self.value
-    }
-
-    pub fn in_wikidata(&self) -> bool {
-        self.in_wikidata
-    }
-
-    pub fn entry_is_matched(&self) -> bool {
-        self.entry_is_matched
-    }
-
-    pub fn fix_external_id(prop: &str, value: &str) -> String {
-        match prop {
-            "P213" => value.replace(' ', ""), // ISNI
-            _ => value.to_string(),
-        }
-    }
-
-    fn get_claim_for_aux(&self, prop: Entity, references: &[Reference]) -> Option<Statement> {
-        let prop = match prop {
-            Entity::Property(prop) => prop,
-            _ => return None, // Ignore
-        };
-        let snak = match prop.datatype().to_owned()? {
-            SnakDataType::Time => todo!(),
-            SnakDataType::WikibaseItem => Snak::new_item(prop.id(), &self.value),
-            SnakDataType::WikibaseProperty => todo!(),
-            SnakDataType::WikibaseLexeme => todo!(),
-            SnakDataType::WikibaseSense => todo!(),
-            SnakDataType::WikibaseForm => todo!(),
-            SnakDataType::String => Snak::new_string(prop.id(), &self.value),
-            SnakDataType::ExternalId => {
-                Snak::new_external_id(prop.id(), &Self::fix_external_id(prop.id(), &self.value))
-            }
-            SnakDataType::GlobeCoordinate => todo!(),
-            SnakDataType::MonolingualText => todo!(),
-            SnakDataType::Quantity => todo!(),
-            SnakDataType::Url => todo!(),
-            SnakDataType::CommonsMedia => Snak::new_string(prop.id(), &self.value),
-            SnakDataType::Math => todo!(),
-            SnakDataType::TabularData => todo!(),
-            SnakDataType::MusicalNotation => todo!(),
-            SnakDataType::GeoShape => todo!(),
-            SnakDataType::NotSet => todo!(),
-            SnakDataType::NoValue => todo!(),
-            SnakDataType::SomeValue => todo!(),
-            SnakDataType::EntitySchema => todo!(),
-        };
-        Some(Statement::new_normal(snak, vec![], references.to_owned()))
-    }
-}
 
 #[derive(Debug, Clone, Copy)]
 pub enum EntryError {
@@ -132,18 +40,18 @@ impl fmt::Display for EntryError {
     }
 }
 
-pub type EntryId = Option<usize>;
+pub type EntryId = Option<DbId>;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Entry {
     pub id: EntryId,
-    pub catalog: usize,
+    pub catalog: DbId,
     pub ext_id: String,
     pub ext_url: String,
     pub ext_name: String,
     pub ext_desc: String,
-    pub q: Option<isize>,
-    pub user: Option<usize>,
+    pub q: Option<ItemId>,
+    pub user: Option<DbId>,
     pub timestamp: Option<String>,
     pub random: f64,
     pub type_name: Option<String>,
@@ -154,13 +62,13 @@ pub struct Entry {
 impl Entry {
     /// Returns an Entry object for a given entry ID.
     //TODO test
-    pub async fn from_id(entry_id: usize, app: &AppState) -> Result<Self> {
+    pub async fn from_id(entry_id: DbId, app: &AppState) -> Result<Self> {
         let mut ret = app.storage().entry_from_id(entry_id).await?;
         ret.set_app(app);
         Ok(ret)
     }
 
-    pub fn new_from_catalog_and_ext_id(catalog_id: usize, ext_id: &str) -> Self {
+    pub fn new_from_catalog_and_ext_id(catalog_id: DbId, ext_id: &str) -> Self {
         Self {
             catalog: catalog_id,
             ext_id: ext_id.to_string(),
@@ -171,16 +79,16 @@ impl Entry {
 
     /// Returns an Entry object for a given external ID in a catalog.
     //TODO test
-    pub async fn from_ext_id(catalog_id: usize, ext_id: &str, app: &AppState) -> Result<Entry> {
+    pub async fn from_ext_id(catalog_id: DbId, ext_id: &str, app: &AppState) -> Result<Entry> {
         let mut ret = app.storage().entry_from_ext_id(catalog_id, ext_id).await?;
         ret.set_app(app);
         Ok(ret)
     }
 
     pub async fn multiple_from_ids(
-        entry_ids: &[usize],
+        entry_ids: &[DbId],
         app: &AppState,
-    ) -> Result<HashMap<usize, Self>> {
+    ) -> Result<HashMap<DbId, Self>> {
         let mut ret = app.storage().multiple_from_ids(entry_ids).await?;
         ret.iter_mut().for_each(|(_id, entry)| {
             entry.set_app(app);
@@ -288,7 +196,7 @@ impl Entry {
     }
 
     //TODO test
-    pub async fn set_auxiliary_in_wikidata(&self, aux_id: usize, in_wikidata: bool) -> Result<()> {
+    pub async fn set_auxiliary_in_wikidata(&self, aux_id: DbId, in_wikidata: bool) -> Result<()> {
         self.app()?
             .storage()
             .entry_set_auxiliary_in_wikidata(in_wikidata, aux_id)
@@ -297,8 +205,8 @@ impl Entry {
 
     pub async fn add_mnm_relation(
         &self,
-        prop_numeric: usize,
-        target_entry_id: usize,
+        prop_numeric: PropertyId,
+        target_entry_id: DbId,
     ) -> Result<()> {
         self.app()?
             .storage()
@@ -343,13 +251,10 @@ impl Entry {
         if !auxiliary.is_empty() {
             let api = self.app()?.wikidata().get_mw_api().await?;
             let ec = EntityContainer::new();
-            let props2load: Vec<String> = auxiliary
-                .iter()
-                .map(|a| format!("P{}", a.prop_numeric))
-                .collect();
+            let props2load: Vec<String> = auxiliary.iter().map(|a| a.prop_as_string()).collect();
             let _ = ec.load_entities(&api, &props2load).await; // Try to pre-load all properties in one query
             for aux in auxiliary {
-                if let Ok(prop) = ec.load_entity(&api, format!("P{}", aux.prop_numeric)).await {
+                if let Ok(prop) = ec.load_entity(&api, aux.prop_as_string()).await {
                     if let Some(claim) = aux.get_claim_for_aux(prop, &references) {
                         Self::add_claim_or_references(item, claim);
                     }
@@ -386,7 +291,7 @@ impl Entry {
         item: &mut ItemEntity,
     ) -> Result<()> {
         if let Some(coord) = self.get_coordinate_location().await? {
-            let snak = Snak::new_coordinate("P625", coord.lat, coord.lon);
+            let snak = Snak::new_coordinate("P625", coord.lat(), coord.lon());
             let claim = Statement::new_normal(snak, vec![], references.to_owned());
             Self::add_claim_or_references(item, claim);
         }
@@ -649,7 +554,11 @@ impl Entry {
     }
 
     //TODO test
-    pub async fn set_auxiliary(&self, prop_numeric: usize, value: Option<String>) -> Result<()> {
+    pub async fn set_auxiliary(
+        &self,
+        prop_numeric: PropertyId,
+        value: Option<String>,
+    ) -> Result<()> {
         let entry_id = self.get_valid_id()?;
         match value {
             Some(value) => {
@@ -679,7 +588,7 @@ impl Entry {
                 Some(cl) => {
                     self.app()?
                         .storage()
-                        .entry_set_coordinate_location(entry_id, cl.lat, cl.lon, cl.precision)
+                        .entry_set_coordinate_location(entry_id, cl.lat(), cl.lon(), cl.precision())
                         .await?;
                 }
                 None => {
@@ -711,7 +620,7 @@ impl Entry {
     }
 
     /// Before q query or an update to the entry in the database, checks if this is a valid entry ID (eg not a new entry)
-    pub fn get_valid_id(&self) -> Result<usize> {
+    pub fn get_valid_id(&self) -> Result<DbId> {
         match self.id {
             Some(id) => Ok(id),
             None => Err(anyhow!("No entry ID set")),
@@ -719,7 +628,7 @@ impl Entry {
     }
 
     /// Sets a match for the entry, and marks the entry as matched in other tables.
-    pub async fn set_match(&mut self, q: &str, user_id: usize) -> Result<bool> {
+    pub async fn set_match(&mut self, q: &str, user_id: DbId) -> Result<bool> {
         self.get_valid_id()?;
         let q_numeric = AppState::item2numeric(q).ok_or(anyhow!("'{}' is not a valid item", &q))?;
 
@@ -783,7 +692,7 @@ impl Entry {
 
     /// Sets auto-match and multi-match for an entry
     pub async fn set_auto_and_multi_match(&mut self, items: &[String]) -> Result<()> {
-        let mut qs_numeric: Vec<isize> = items
+        let mut qs_numeric: Vec<ItemId> = items
             .iter()
             .filter_map(|q| AppState::item2numeric(q))
             .collect();
@@ -856,8 +765,8 @@ mod tests {
     use super::*;
     use crate::app_state::{TEST_MUTEX, get_test_app};
 
-    const _TEST_CATALOG_ID: usize = 5526;
-    const TEST_ENTRY_ID: usize = 143962196;
+    const _TEST_CATALOG_ID: DbId = 5526;
+    const TEST_ENTRY_ID: DbId = 143962196;
 
     #[tokio::test]
     async fn test_person_dates() {
@@ -906,22 +815,14 @@ mod tests {
         // Save whatever is currently in the DB so we can restore it at the end
         let original = entry.get_coordinate_location().await.unwrap();
 
-        let cl = CoordinateLocation {
-            lat: 1.234,
-            lon: -5.678,
-            precision: None,
-        };
+        let cl = CoordinateLocation::new(1.234, -5.678);
 
         // Set a known value
         entry.set_coordinate_location(&Some(cl)).await.unwrap();
         assert_eq!(entry.get_coordinate_location().await.unwrap(), Some(cl));
 
         // Switch lat/lon
-        let cl2 = CoordinateLocation {
-            lat: cl.lon,
-            lon: cl.lat,
-            precision: None,
-        };
+        let cl2 = CoordinateLocation::new(cl.lon(), cl.lat());
         entry.set_coordinate_location(&Some(cl2)).await.unwrap();
         assert_eq!(entry.get_coordinate_location().await.unwrap(), Some(cl2));
 
@@ -1310,30 +1211,6 @@ mod tests {
         assert!(entry.get_aliases().await.unwrap().contains(&s));
     }
 
-    #[tokio::test]
-    async fn test_get_claim_for_aux() {
-        let aux = AuxiliaryRow {
-            row_id: Some(1),
-            prop_numeric: 12345,
-            value: "Q5678".to_string(),
-            in_wikidata: true,
-            entry_is_matched: true,
-        };
-        let property = wikimisc::wikibase::PropertyEntity::new(
-            "P12345".to_string(),
-            vec![],
-            vec![],
-            vec![],
-            vec![],
-            Some(SnakDataType::WikibaseItem),
-            false,
-        );
-        let prop = Entity::Property(property);
-        let claim = aux.get_claim_for_aux(prop, &[]);
-        let expected = Snak::new_item("P12345", "Q5678");
-        assert_eq!(*claim.unwrap().main_snak(), expected);
-    }
-
     #[test]
     fn test_new_from_catalog_and_ext_id_defaults() {
         let entry = Entry::new_from_catalog_and_ext_id(42, "ext123");
@@ -1350,46 +1227,6 @@ mod tests {
         assert!(entry.app.is_none());
         // random should be in [0, 1)
         assert!(entry.random >= 0.0 && entry.random < 1.0);
-    }
-
-    #[test]
-    fn test_coordinate_location_equality() {
-        let a = CoordinateLocation::new(51.5, -0.1);
-        let b = CoordinateLocation::new(51.5, -0.1);
-        let c = CoordinateLocation::new(48.8, 2.3);
-        assert_eq!(a, b);
-        assert_ne!(a, c);
-    }
-
-    #[test]
-    fn test_coordinate_location_clone() {
-        let original = CoordinateLocation::new(12.34, 56.78);
-        let cloned = original;
-        assert_eq!(original, cloned);
-        assert!((cloned.lat() - 12.34).abs() < f64::EPSILON);
-        assert!((cloned.lon() - 56.78).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn test_coordinate_location_negative_coords() {
-        let cl = CoordinateLocation::new(-33.8688, 151.2093);
-        assert!((cl.lat() - (-33.8688)).abs() < f64::EPSILON);
-        assert!((cl.lon() - 151.2093).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn test_auxiliary_row_accessors() {
-        let row = AuxiliaryRow {
-            row_id: Some(10),
-            prop_numeric: 214,
-            value: "12345678".to_string(),
-            in_wikidata: true,
-            entry_is_matched: false,
-        };
-        assert_eq!(row.prop_numeric(), 214);
-        assert_eq!(row.value(), "12345678");
-        assert!(row.in_wikidata());
-        assert!(!row.entry_is_matched());
     }
 
     #[test]

@@ -1,5 +1,5 @@
 use crate::app_state::AppState;
-use crate::entry::AuxiliaryRow;
+use crate::auxiliary_data::AuxiliaryRow;
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
 use wikimisc::wikibase::Reference;

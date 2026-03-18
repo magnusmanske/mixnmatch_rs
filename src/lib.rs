@@ -50,6 +50,7 @@ pub mod autoscrape;
 pub mod autoscrape_levels;
 pub mod autoscrape_resolve;
 pub mod autoscrape_scraper;
+pub mod auxiliary_data;
 pub mod auxiliary_matcher;
 pub mod bespoke_scrapers;
 pub mod catalog;
