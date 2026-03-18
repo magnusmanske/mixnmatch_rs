@@ -18,9 +18,6 @@ lazy_static! {
     static ref RE_PROPERTY: Regex = Regex::new(r"^P(\d+)$").expect("Regexp construction");
     static ref RE_ALIAS: Regex = Regex::new(r"^A([a-z]+)$").expect("Regexp construction");
     static ref RE_DESCRIPTION: Regex = Regex::new(r"^D([a-z]+)$").expect("Regexp construction");
-    static ref RE_POINT: Regex =
-        Regex::new(r"^\s*POINT\s*\(\s*(\S+?)[, ](\S+?)\s*\)\s*$").expect("Regexp construction");
-    static ref RE_LAT_LON: Regex = Regex::new(r"^(\S+)/(\S+)$").expect("Regexp construction");
 }
 
 #[derive(Debug, Clone, Default)]
@@ -308,31 +305,15 @@ impl ExtendedEntry {
             None => return Ok(false),
         };
 
-        // Convert from POINT
-        let value = RE_POINT.captures(cell).map_or_else(
-            || cell.to_string(),
-            |captures| {
-                if let (Some(lat), Some(lon)) = (captures.get(1), captures.get(2)) {
-                    format!("{}/{}", lat.as_str(), lon.as_str())
-                } else {
-                    cell.to_string()
-                }
-            },
-        );
-
         // Do location if necessary
         // TODO for all location properties, not only P625 hardcoded
         // also dates (P569/P570)?
         if property_num == 625 {
-            if let Some(captures) = RE_LAT_LON.captures(&value) {
-                if let (Some(lat), Some(lon)) = (captures.get(1), captures.get(2)) {
-                    let lat = lat.as_str().to_string().parse::<f64>()?;
-                    let lon = lon.as_str().to_string().parse::<f64>()?;
-                    self.location = Some(CoordinateLocation::new(lat, lon));
-                }
+            if let Some(coord) = CoordinateLocation::parse(cell) {
+                self.location = Some(coord);
             }
         } else {
-            for part in value.split('|') {
+            for part in cell.split('|') {
                 let part = part.trim();
                 if !part.is_empty() {
                     self.aux.insert((property_num, part.to_string()));
