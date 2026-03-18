@@ -1,4 +1,4 @@
-use crate::{app_state::AppState, entry::Entry, extended_entry::ExtendedEntry};
+use crate::{app_state::AppState, entry::Entry, extended_entry::ExtendedEntry, person_date::PersonDate};
 use anyhow::Result;
 use async_trait::async_trait;
 use rand::Rng;
@@ -60,8 +60,8 @@ impl BespokeScraper for BespokeScraper7433 {
                 if title.is_empty() {
                     continue;
                 }
-                let birth_date = result["birth_date"].as_str().map(|s| s.to_string());
-                let death_date = result["death_date"].as_str().map(|s| s.to_string());
+                let birth_date = result["birth_date"].as_str().and_then(PersonDate::from_db_string);
+                let death_date = result["death_date"].as_str().and_then(PersonDate::from_db_string);
                 let desc = result["summary"].as_str().unwrap_or_default();
                 let ext_url = result["url"].as_str().unwrap_or_default();
                 let entry = Entry {
@@ -158,15 +158,15 @@ mod tests {
 
         let id = result["uuid"].as_str().unwrap();
         let title = result["title"].as_str().unwrap_or_default();
-        let birth_date = result["birth_date"].as_str().map(|s| s.to_string());
-        let death_date = result["death_date"].as_str().map(|s| s.to_string());
+        let birth_date = result["birth_date"].as_str().and_then(PersonDate::from_db_string);
+        let death_date = result["death_date"].as_str().and_then(PersonDate::from_db_string);
         let desc = result["summary"].as_str().unwrap_or_default();
         let ext_url = result["url"].as_str().unwrap_or_default();
 
         assert_eq!(id, "abc-123");
         assert_eq!(title, "Anne Frank");
-        assert_eq!(birth_date, Some("1929-06-12".to_string()));
-        assert_eq!(death_date, Some("1945-02-28".to_string()));
+        assert_eq!(birth_date, Some(PersonDate::year_month_day(1929, 6, 12)));
+        assert_eq!(death_date, Some(PersonDate::year_month_day(1945, 2, 28)));
         assert_eq!(desc, "Jewish diarist");
         assert_eq!(ext_url, "https://research.annefrank.org/en/people/abc-123/");
     }
@@ -187,11 +187,11 @@ mod tests {
         let birth_date = result
             .get("birth_date")
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+            .and_then(PersonDate::from_db_string);
         let death_date = result
             .get("death_date")
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+            .and_then(PersonDate::from_db_string);
         let desc = result
             .get("summary")
             .and_then(|v| v.as_str())

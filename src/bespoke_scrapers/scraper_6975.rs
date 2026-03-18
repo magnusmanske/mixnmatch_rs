@@ -1,4 +1,4 @@
-use crate::{app_state::AppState, entry::Entry, extended_entry::ExtendedEntry};
+use crate::{app_state::AppState, entry::Entry, extended_entry::ExtendedEntry, person_date::PersonDate};
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use lazy_static::lazy_static;
@@ -90,7 +90,7 @@ impl BespokeScraper6975 {
         Some(ext_entry)
     }
 
-    pub(crate) fn fix_date(s: &str) -> Option<String> {
+    pub(crate) fn fix_date(s: &str) -> Option<PersonDate> {
         lazy_static! {
             static ref re_zero: Regex = Regex::new(r"^(\d{3,4})\.00\.00$").unwrap();
             static ref re_dmy: Regex = Regex::new(r"^(\d{1,2})\.(\d{1,2})\.(\d{3,4})$").unwrap();
@@ -105,7 +105,7 @@ impl BespokeScraper6975 {
             format!("{:0>4}-{:0>2}-{:0>2}", &caps[1], &caps[2], &caps[3])
         });
         if re_iso.is_match(&d) {
-            Some(d.to_string())
+            PersonDate::from_db_string(&d)
         } else {
             None
         }
@@ -120,39 +120,37 @@ mod tests {
     #[test]
     fn test_6975_fix_date() {
         assert_eq!(
-            BespokeScraper6975::fix_date("16.06.1805").unwrap(),
-            "1805-06-16"
+            BespokeScraper6975::fix_date("16.06.1805"),
+            Some(PersonDate::year_month_day(1805, 6, 16))
         );
         assert_eq!(
-            BespokeScraper6975::fix_date("1805.06.16").unwrap(),
-            "1805-06-16"
+            BespokeScraper6975::fix_date("1805.06.16"),
+            Some(PersonDate::year_month_day(1805, 6, 16))
         );
         assert_eq!(
-            BespokeScraper6975::fix_date("1805-06-16").unwrap(),
-            "1805-06-16"
+            BespokeScraper6975::fix_date("1805-06-16"),
+            Some(PersonDate::year_month_day(1805, 6, 16))
         );
-        assert_eq!(BespokeScraper6975::fix_date("1805.00.00").unwrap(), "1805");
-        assert_eq!(BespokeScraper6975::fix_date("1805").unwrap(), "1805");
+        assert_eq!(BespokeScraper6975::fix_date("1805.00.00"), Some(PersonDate::year_only(1805)));
+        assert_eq!(BespokeScraper6975::fix_date("1805"), Some(PersonDate::year_only(1805)));
     }
 
     #[test]
     fn test_6975_fix_date_edge_cases() {
         // Day-month-year with single digit day/month
         assert_eq!(
-            BespokeScraper6975::fix_date("1.2.1900").unwrap(),
-            "1900-02-01"
+            BespokeScraper6975::fix_date("1.2.1900"),
+            Some(PersonDate::year_month_day(1900, 2, 1))
         );
         // Year.00.00 collapses to year only (dot-separated zeros)
-        assert_eq!(BespokeScraper6975::fix_date("1900.00.00").unwrap(), "1900");
+        assert_eq!(BespokeScraper6975::fix_date("1900.00.00"), Some(PersonDate::year_only(1900)));
         // ISO with dashes and zeroes is kept as-is (re_zero only matches dot format)
-        assert_eq!(
-            BespokeScraper6975::fix_date("1900-00-00").unwrap(),
-            "1900-00-00"
-        );
+        // "1900-00-00" has invalid month 0, so PersonDate rejects it
+        assert!(BespokeScraper6975::fix_date("1900-00-00").is_none());
         // Year-month-day dot format
         assert_eq!(
-            BespokeScraper6975::fix_date("1900.6.16").unwrap(),
-            "1900-06-16"
+            BespokeScraper6975::fix_date("1900.6.16"),
+            Some(PersonDate::year_month_day(1900, 6, 16))
         );
         // Invalid input returns None
         assert!(BespokeScraper6975::fix_date("not-a-date").is_none());
@@ -162,15 +160,15 @@ mod tests {
     #[test]
     fn test_6975_fix_date_year_month_only() {
         // ISO year-month (no day) should be valid
-        assert_eq!(BespokeScraper6975::fix_date("1900-06").unwrap(), "1900-06");
+        assert_eq!(BespokeScraper6975::fix_date("1900-06"), Some(PersonDate::year_month(1900, 6)));
     }
 
     #[test]
     fn test_6975_fix_date_three_digit_year() {
         // 3-digit years are accepted by the regexes
-        assert_eq!(BespokeScraper6975::fix_date("800").unwrap(), "800");
+        assert_eq!(BespokeScraper6975::fix_date("800"), Some(PersonDate::year_only(800)));
         // re_zero uses {:0>4} which zero-pads to 4 digits
-        assert_eq!(BespokeScraper6975::fix_date("800.00.00").unwrap(), "0800");
+        assert_eq!(BespokeScraper6975::fix_date("800.00.00"), Some(PersonDate::year_only(800)));
     }
 
     #[test]
@@ -193,7 +191,7 @@ mod tests {
             "https://www.wahlen.zh.ch/krdaten_staatsarchiv/abfrage.php?id=12345"
         );
         assert_eq!(ee.entry.type_name, Some("Q5".to_string()));
-        assert_eq!(ee.born, Some("1970-06-16".to_string()));
+        assert_eq!(ee.born, Some(PersonDate::year_month_day(1970, 6, 16)));
         assert_eq!(ee.entry.catalog, 6975);
     }
 

@@ -1,8 +1,6 @@
 // DO NOT USE, NOT READY!
 use anyhow::{Result, anyhow};
 use chrono::Utc;
-use lazy_static::lazy_static;
-use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::thread;
@@ -12,14 +10,7 @@ use crate::app_state::AppState;
 use crate::catalog::Catalog;
 use crate::entry::Entry;
 use crate::extended_entry::ExtendedEntry;
-
-lazy_static! {
-    static ref RE_PARSE_TIME_YEAR: Regex = Regex::new(r"^\+(\d+).*$").expect("Regex failure");
-    static ref RE_PARSE_TIME_MONTH: Regex =
-        Regex::new(r"^\+(\d+-\d{1,2}).*$").expect("Regex failure");
-    static ref RE_PARSE_TIME_DAY: Regex =
-        Regex::new(r"^\+(\d+-\d{1,2}-\d{1,2}).*$").expect("Regex failure");
-}
+use crate::person_date::PersonDate;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CerseiScraper {
@@ -165,35 +156,27 @@ impl CerseiSync {
         Ok(())
     }
 
-    /// Parse time precision from CERSEI format
-    fn parse_time(time_precision: Option<&String>) -> Option<String> {
-        if let Some(time_str) = time_precision {
-            let parts: Vec<&str> = time_str.split('/').collect();
-            if parts.len() == 2 {
-                match parts[1] {
-                    "9" => {
-                        // Year precision
-                        if let Some(caps) = RE_PARSE_TIME_YEAR.captures(parts[0]) {
-                            return Some(caps[1].to_string());
-                        }
-                    }
-                    "10" => {
-                        // Month precision
-                        if let Some(caps) = RE_PARSE_TIME_MONTH.captures(parts[0]) {
-                            return Some(caps[1].to_string());
-                        }
-                    }
-                    "11" => {
-                        // Day precision
-                        if let Some(caps) = RE_PARSE_TIME_DAY.captures(parts[0]) {
-                            return Some(caps[1].to_string());
-                        }
-                    }
-                    _ => return None,
-                }
-            }
+    /// Parse time precision from CERSEI format (e.g. "+1990-05-24T00:00:00Z/11")
+    fn parse_time(time_precision: Option<&String>) -> Option<PersonDate> {
+        let time_str = time_precision?;
+        let parts: Vec<&str> = time_str.split('/').collect();
+        if parts.len() != 2 {
+            return None;
         }
-        None
+        // Strip leading '+' and trailing 'T00:00:00Z' to get the date portion
+        let date_part = parts[0].strip_prefix('+')?;
+        let date_part = date_part.split('T').next()?;
+        // Use the precision to determine how much of the date to keep
+        let db_string = match parts[1] {
+            "9" => date_part.split('-').next()?.to_string(),
+            "10" => {
+                let segs: Vec<&str> = date_part.split('-').collect();
+                if segs.len() >= 2 { format!("{}-{}", segs[0], segs[1]) } else { return None }
+            }
+            "11" => date_part.to_string(),
+            _ => return None,
+        };
+        PersonDate::from_db_string(&db_string)
     }
 
     /// Set human dates flag for catalog
@@ -578,7 +561,7 @@ mod tests {
         let input = "+1990-01-01T00:00:00Z/9".to_string();
         assert_eq!(
             CerseiSync::parse_time(Some(&input)),
-            Some("1990".to_string())
+            Some(PersonDate::year_only(1990))
         );
     }
 
@@ -587,7 +570,7 @@ mod tests {
         let input = "+1990-05-01T00:00:00Z/10".to_string();
         assert_eq!(
             CerseiSync::parse_time(Some(&input)),
-            Some("1990-05".to_string())
+            Some(PersonDate::year_month(1990, 5))
         );
     }
 
@@ -596,7 +579,7 @@ mod tests {
         let input = "+1990-05-24T00:00:00Z/11".to_string();
         assert_eq!(
             CerseiSync::parse_time(Some(&input)),
-            Some("1990-05-24".to_string())
+            Some(PersonDate::year_month_day(1990, 5, 24))
         );
     }
 

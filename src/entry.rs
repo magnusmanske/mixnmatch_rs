@@ -3,6 +3,7 @@ use crate::auxiliary_data::AuxiliaryRow;
 use crate::catalog::Catalog;
 use crate::coordinates::CoordinateLocation;
 use crate::person::Person;
+use crate::person_date::PersonDate;
 use crate::{DbId, ItemId, PropertyId};
 use anyhow::{Result, anyhow};
 use mysql_async::Value;
@@ -270,15 +271,13 @@ impl Entry {
         item: &mut ItemEntity,
     ) -> Result<()> {
         let (born, died) = self.get_person_dates().await?;
-        if let Some(time) = born {
-            let (value, precision) = Self::time_precision_from_ymd(&time);
-            let snak = Snak::new_time("P569", &value, precision);
+        if let Some(pd) = born {
+            let snak = Snak::new_time("P569", &pd.to_wikidata_time(), pd.wikidata_precision());
             let claim = Statement::new_normal(snak, vec![], references.to_owned());
             Self::add_claim_or_references(item, claim);
         }
-        if let Some(time) = died {
-            let (value, precision) = Self::time_precision_from_ymd(&time);
-            let snak = Snak::new_time("P570", &value, precision);
+        if let Some(pd) = died {
+            let snak = Snak::new_time("P570", &pd.to_wikidata_time(), pd.wikidata_precision());
             let claim = Statement::new_normal(snak, vec![], references.to_owned());
             Self::add_claim_or_references(item, claim);
         }
@@ -403,30 +402,6 @@ impl Entry {
         item.add_claim(claim);
     }
 
-    fn time_precision_from_ymd(ymd: &str) -> (String, u64) {
-        let (prefix, normalized) = if let Some(rest) = ymd.strip_prefix('-') {
-            ("-", rest)
-        } else {
-            ("+", ymd)
-        };
-        let parts: Vec<&str> = normalized.split('-').collect();
-        match parts.len() {
-            1 => (format!("{prefix}{}-01-01T00:00:00Z", parts[0]), 9),
-            2 => (
-                format!("{prefix}{}-{:0<2}-01T00:00:00Z", parts[0], parts[1]),
-                10,
-            ),
-            3 => (
-                format!(
-                    "{prefix}{}-{:0<2}-{:0<2}T00:00:00Z",
-                    parts[0], parts[1], parts[2]
-                ),
-                11,
-            ),
-            _ => panic!("Entry::time_precision_from_ymd trying to parse {ymd}"),
-        }
-    }
-
     /// Updates `ext_id` locally and in the database
     //TODO test
     pub async fn set_ext_id(&mut self, ext_id: &str) -> Result<()> {
@@ -470,8 +445,8 @@ impl Entry {
     /// Update person dates in the database, where necessary
     pub async fn set_person_dates(
         &self,
-        born: &Option<String>,
-        died: &Option<String>,
+        born: &Option<PersonDate>,
+        died: &Option<PersonDate>,
     ) -> Result<()> {
         let (already_born, already_died) = self.get_person_dates().await?;
         if already_born != *born || already_died != *died {
@@ -482,8 +457,8 @@ impl Entry {
                     .entry_delete_person_dates(entry_id)
                     .await?;
             } else {
-                let born = born.clone().unwrap_or_default();
-                let died = died.clone().unwrap_or_default();
+                let born = born.map(|d| d.to_db_string()).unwrap_or_default();
+                let died = died.map(|d| d.to_db_string()).unwrap_or_default();
                 self.app()?
                     .storage()
                     .entry_set_person_dates(entry_id, born, died)
@@ -494,11 +469,12 @@ impl Entry {
     }
 
     /// Returns the birth and death date of a person as a tuple (born,died)
-    /// Born/died are Option<String>
-    pub async fn get_person_dates(&self) -> Result<(Option<String>, Option<String>)> {
+    pub async fn get_person_dates(&self) -> Result<(Option<PersonDate>, Option<PersonDate>)> {
         let entry_id = self.get_valid_id()?;
-
-        self.app()?.storage().entry_get_person_dates(entry_id).await
+        let (born_str, died_str) = self.app()?.storage().entry_get_person_dates(entry_id).await?;
+        let born = born_str.as_deref().and_then(PersonDate::from_db_string);
+        let died = died_str.as_deref().and_then(PersonDate::from_db_string);
+        Ok((born, died))
     }
 
     //TODO test
@@ -773,25 +749,25 @@ mod tests {
         let _test_lock = TEST_MUTEX.lock();
         let app = get_test_app();
         let entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
-        let born = Some("1974-05-24".to_string());
-        let died = Some("2000-01-01".to_string());
+        let born = Some(PersonDate::year_month_day(1974, 5, 24));
+        let died = Some(PersonDate::year_month_day(2000, 1, 1));
         assert_eq!(
             entry.get_person_dates().await.unwrap(),
-            (born.to_owned(), died.to_owned())
+            (born, died)
         );
 
         // Remove died
         entry.set_person_dates(&born, &None).await.unwrap();
         assert_eq!(
             entry.get_person_dates().await.unwrap(),
-            (born.to_owned(), None)
+            (born, None)
         );
 
         // Remove born
         entry.set_person_dates(&None, &died).await.unwrap();
         assert_eq!(
             entry.get_person_dates().await.unwrap(),
-            (None, died.to_owned())
+            (None, died)
         );
 
         // Remove entire row
@@ -802,7 +778,7 @@ mod tests {
         entry.set_person_dates(&born, &died).await.unwrap();
         assert_eq!(
             entry.get_person_dates().await.unwrap(),
-            (born.to_owned(), died.to_owned())
+            (born, died)
         );
     }
 
@@ -940,35 +916,6 @@ mod tests {
         );
         let entry2 = Entry::new_from_catalog_and_ext_id(1, "234");
         assert_eq!(entry2.get_entry_url(), None);
-    }
-
-    #[test]
-    fn test_time_precision_from_ymd() {
-        assert_eq!(
-            Entry::time_precision_from_ymd("2021-01-01"),
-            ("+2021-01-01T00:00:00Z".to_string(), 11)
-        );
-        assert_eq!(
-            Entry::time_precision_from_ymd("2021-01"),
-            ("+2021-01-01T00:00:00Z".to_string(), 10)
-        );
-        assert_eq!(
-            Entry::time_precision_from_ymd("2021"),
-            ("+2021-01-01T00:00:00Z".to_string(), 9)
-        );
-        // BCE (negative) years
-        assert_eq!(
-            Entry::time_precision_from_ymd("-500"),
-            ("-500-01-01T00:00:00Z".to_string(), 9)
-        );
-        assert_eq!(
-            Entry::time_precision_from_ymd("-500-06"),
-            ("-500-06-01T00:00:00Z".to_string(), 10)
-        );
-        assert_eq!(
-            Entry::time_precision_from_ymd("-500-06-15"),
-            ("-500-06-15T00:00:00Z".to_string(), 11)
-        );
     }
 
     #[tokio::test]
