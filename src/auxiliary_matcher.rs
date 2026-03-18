@@ -1,7 +1,7 @@
 use crate::app_state::AppState;
 use crate::app_state::USER_AUX_MATCH;
 use crate::catalog::Catalog;
-use crate::entry::CoordinateLocation;
+use crate::coordinates::CoordinateLocation;
 use crate::entry::Entry;
 use crate::issue::Issue;
 use crate::issue::IssueType;

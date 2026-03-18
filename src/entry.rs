@@ -1,5 +1,6 @@
 use crate::app_state::{AppState, USER_AUTO};
 use crate::catalog::Catalog;
+use crate::coordinates::CoordinateLocation;
 use crate::person::Person;
 use anyhow::{Result, anyhow};
 use mysql_async::{Row, Value};
@@ -16,43 +17,6 @@ use wikimisc::wikibase::{
 };
 
 pub const WESTERN_LANGUAGES: &[&str] = &["en", "de", "fr", "es", "nl", "it", "pt"];
-
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub struct CoordinateLocation {
-    lat: f64,
-    lon: f64,
-    precision: Option<f64>,
-}
-
-impl CoordinateLocation {
-    pub fn new(lat: f64, lon: f64) -> Self {
-        Self {
-            lat,
-            lon,
-            precision: None,
-        }
-    }
-
-    pub fn new_with_precision(lat: f64, lon: f64, precision: Option<f64>) -> Self {
-        Self {
-            lat,
-            lon,
-            precision,
-        }
-    }
-
-    pub fn lat(&self) -> f64 {
-        self.lat
-    }
-
-    pub fn lon(&self) -> f64 {
-        self.lon
-    }
-
-    pub fn precision(&self) -> Option<f64> {
-        self.precision
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct AuxiliaryRow {

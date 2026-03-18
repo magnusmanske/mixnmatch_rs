@@ -1,7 +1,6 @@
+use crate::coordinates::CoordinateLocation;
 use serde_json::{Value, json};
 use std::collections::HashMap;
-
-use crate::entry::CoordinateLocation;
 
 pub type WikidataCommandPropertyValueGroup = Vec<WikidataCommandPropertyValue>;
 pub type WikidataCommandPropertyValueGroups = Vec<WikidataCommandPropertyValueGroup>;
@@ -159,7 +158,6 @@ impl WikidataCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entry::CoordinateLocation;
 
     #[test]
     fn test_as_datavalue1() {

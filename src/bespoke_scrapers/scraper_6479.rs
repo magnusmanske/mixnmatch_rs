@@ -1,6 +1,7 @@
 use crate::{
     app_state::{AppState, USER_AUX_MATCH},
-    entry::{CoordinateLocation, Entry},
+    coordinates::CoordinateLocation,
+    entry::Entry,
     extended_entry::ExtendedEntry,
 };
 use anyhow::Result;

@@ -1,5 +1,6 @@
 use crate::app_state::AppState;
 use crate::app_state::USER_LOCATION_MATCH;
+use crate::coordinates::LocationRow;
 use crate::entry::Entry;
 use crate::job::{Job, Jobbable};
 use anyhow::{Result, anyhow};
@@ -21,17 +22,6 @@ lazy_static! {
     static ref RE_KILOMETERS: Regex = RegexBuilder::new(r"^([0-9.]+)km$")
         .build()
         .expect("Regex error");
-}
-
-#[derive(Debug, Clone)]
-pub struct LocationRow {
-    pub lat: f64,
-    pub lon: f64,
-    pub entry_id: usize,
-    pub catalog_id: usize,
-    pub ext_name: String,
-    pub entry_type: String,
-    pub q: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
