@@ -105,6 +105,29 @@ async fn dispatch(query: &str, app: &AppState, params: &Params) -> Result<Respon
         "set_top_group" => query_set_top_group(app, params).await,
         "remove_empty_top_group" => query_remove_empty_top_group(app, params).await,
         "quick_compare_list" => query_quick_compare_list(app).await,
+        "rc_atom" => query_rc_atom(app, params).await,
+        "get_flickr_key" => query_get_flickr_key().await,
+
+        // Stubs for endpoints requiring external services
+        "get_sync" => query_get_sync(app, params).await,
+        "sitestats" => query_sitestats(app, params).await,
+        "disambig" => query_disambig(app, params).await,
+        "missingpages" => query_missingpages(app, params).await,
+        "sparql_list" => query_sparql_list(app, params).await,
+        "quick_compare" => query_quick_compare(app, params).await,
+        "prep_new_item" => query_prep_new_item(app, params).await,
+        "get_entry_reader_view" => query_get_entry_reader_view(app, params).await,
+
+        // Stubs for code fragment / scraper / import endpoints
+        "get_code_fragments" => query_get_code_fragments(app, params).await,
+        "save_code_fragment" => query_save_code_fragment(app, params).await,
+        "test_code_fragment" => query_test_code_fragment(app, params).await,
+        "autoscrape_test" => query_autoscrape_test(app, params).await,
+        "save_scraper" => query_save_scraper(app, params).await,
+        "upload_import_file" => query_upload_import_file(app, params).await,
+        "import_source" => query_import_source(app, params).await,
+        "get_source_headers" => query_get_source_headers(app, params).await,
+        "test_import_source" => query_test_import_source(app, params).await,
 
         _ => Err(ApiError(format!("Unknown query '{query}'"))),
     }
@@ -588,7 +611,7 @@ async fn query_mnm_unmatched_relations(app: &AppState, params: &Params) -> Resul
     Ok(ok(data))
 }
 
-async fn query_creation_candidates(app: &AppState, _params: &Params) -> Result<Response, ApiError> {
+async fn query_creation_candidates(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
     // Complex multi-strategy endpoint — stub for now
     Ok(ok(serde_json::json!({"entries": [], "users": {}})))
 }
@@ -787,6 +810,126 @@ async fn query_remove_empty_top_group(app: &AppState, params: &Params) -> Result
 async fn query_quick_compare_list(app: &AppState) -> Result<Response, ApiError> {
     let data = app.storage().api_get_quick_compare_list().await?;
     Ok(ok(serde_json::json!(data)))
+}
+
+// ─── RC Atom ────────────────────────────────────────────────────────────────
+
+async fn query_rc_atom(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let ts = common::get_param(params, "ts", "");
+    let catalog = common::get_param_int(params, "catalog", 0) as usize;
+    let (entry_evts, log_evts) = app.storage().api_get_recent_changes(&ts, catalog, 100).await?;
+    let mut events: Vec<serde_json::Value> = entry_evts.into_iter().chain(log_evts).collect();
+    events.sort_by(|a, b| {
+        let ta = a.get("timestamp").and_then(|v| v.as_str()).unwrap_or("");
+        let tb = b.get("timestamp").and_then(|v| v.as_str()).unwrap_or("");
+        tb.cmp(ta)
+    });
+    events.truncate(100);
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut xml = format!(
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<feed xmlns=\"http://www.w3.org/2005/Atom\">\n\
+         <title>Mix'n'match</title>\n\
+         <subtitle>Recent updates by humans (auto-matching not shown)</subtitle>\n\
+         <link href=\"https://mix-n-match.toolforge.org/api.php?query=rc_atom\" rel=\"self\" />\n\
+         <link href=\"https://mix-n-match.toolforge.org/\" />\n\
+         <id>urn:uuid:{}</id>\n\
+         <updated>{now}</updated>\n", uuid::Uuid::new_v4()
+    );
+    for e in &events {
+        let id = e.get("id").and_then(|v| v.as_u64()).unwrap_or(0);
+        let name = e.get("ext_name").and_then(|v| v.as_str()).unwrap_or("");
+        let event_type = e.get("event_type").and_then(|v| v.as_str()).unwrap_or("match");
+        let timestamp = e.get("timestamp").and_then(|v| v.as_str()).unwrap_or("");
+        let title_prefix = if event_type == "remove_q" { "Match was removed for " } else { "New match for " };
+        xml.push_str(&format!(
+            "<entry>\n<title>{title_prefix}\"{name}\"</title>\n\
+             <link rel=\"alternate\" href=\"https://mix-n-match.toolforge.org/#/entry/{id}\" />\n\
+             <id>urn:uuid:{}</id>\n\
+             <updated>{timestamp}</updated>\n\
+             </entry>\n", uuid::Uuid::new_v4()
+        ));
+    }
+    xml.push_str("</feed>");
+    Ok(([(axum::http::header::CONTENT_TYPE, "application/atom+xml; charset=UTF-8")], xml).into_response())
+}
+
+async fn query_get_flickr_key() -> Result<Response, ApiError> {
+    let key = std::fs::read_to_string("/data/project/mix-n-match/flickr.key").unwrap_or_default();
+    Ok(ok(serde_json::json!(key)))
+}
+
+// ─── Stubs for endpoints requiring external services ────────────────────────
+
+async fn query_get_sync(_app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let _catalog = common::get_catalog(params)?;
+    // This requires SPARQL queries and temporary table operations
+    // which need the full Wikidata integration
+    Err(ApiError("get_sync requires Wikidata SPARQL access (not yet ported to Rust)".into()))
+}
+
+async fn query_sitestats(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
+    Err(ApiError("sitestats requires Wikidata DB replica access (not yet ported to Rust)".into()))
+}
+
+async fn query_disambig(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
+    Err(ApiError("disambig requires Wikidata DB replica access (not yet ported to Rust)".into()))
+}
+
+async fn query_missingpages(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
+    Err(ApiError("missingpages requires Wikidata DB replica access (not yet ported to Rust)".into()))
+}
+
+async fn query_sparql_list(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
+    Err(ApiError("sparql_list requires SPARQL endpoint access (not yet ported to Rust)".into()))
+}
+
+async fn query_quick_compare(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
+    Err(ApiError("quick_compare requires Wikidata item loading (not yet ported to Rust)".into()))
+}
+
+async fn query_prep_new_item(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
+    Err(ApiError("prep_new_item requires QuickStatements integration (not yet ported to Rust)".into()))
+}
+
+async fn query_get_entry_reader_view(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
+    Err(ApiError("get_entry_reader_view requires Readability library (not yet ported to Rust)".into()))
+}
+
+async fn query_get_code_fragments(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
+    Err(ApiError("get_code_fragments not yet ported to Rust".into()))
+}
+
+async fn query_save_code_fragment(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
+    Err(ApiError("save_code_fragment not yet ported to Rust".into()))
+}
+
+async fn query_test_code_fragment(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
+    Err(ApiError("test_code_fragment not yet ported to Rust".into()))
+}
+
+async fn query_autoscrape_test(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
+    Err(ApiError("autoscrape_test not yet ported to Rust".into()))
+}
+
+async fn query_save_scraper(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
+    Err(ApiError("save_scraper not yet ported to Rust".into()))
+}
+
+async fn query_upload_import_file(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
+    Err(ApiError("upload_import_file not yet ported to Rust".into()))
+}
+
+async fn query_import_source(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
+    Err(ApiError("import_source not yet ported to Rust".into()))
+}
+
+async fn query_get_source_headers(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
+    Err(ApiError("get_source_headers not yet ported to Rust".into()))
+}
+
+async fn query_test_import_source(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
+    Err(ApiError("test_import_source not yet ported to Rust".into()))
 }
 
 #[cfg(test)]
