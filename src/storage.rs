@@ -523,6 +523,36 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     // Random entry
     async fn api_get_random_entry(&self, catalog_id: usize, submode: &str, entry_type: &str, random: f64, active_catalogs: &[usize]) -> Result<Option<Entry>>;
     async fn api_get_active_catalog_ids(&self) -> Result<Vec<usize>>;
+
+    // Additional API support methods
+    async fn api_get_wd_props(&self) -> Result<Vec<usize>>;
+    async fn api_get_top_missing(&self, catalogs: &str) -> Result<Vec<serde_json::Value>>;
+    async fn api_get_common_names(&self, catalog_id: usize, type_q: &str, other_cats_desc: bool, min: usize, max: usize, limit: usize, offset: usize) -> Result<Vec<serde_json::Value>>;
+    async fn api_get_locations_bbox(&self, lon_min: f64, lat_min: f64, lon_max: f64, lat_max: f64) -> Result<Vec<serde_json::Value>>;
+    async fn api_get_locations_in_catalog(&self, catalog_id: usize) -> Result<Vec<serde_json::Value>>;
+    async fn api_get_download_entries(&self, catalog_id: usize) -> Result<Vec<(isize, String, String, String, Option<usize>)>>; // (q, ext_id, ext_url, ext_name, user_id)
+    async fn api_get_download2(&self, sql: &str) -> Result<Vec<HashMap<String, String>>>;
+    async fn api_edit_catalog(&self, catalog_id: usize, name: &str, url: &str, desc: &str, type_name: &str, search_wp: &str, wd_prop: Option<usize>, wd_qual: Option<usize>, active: bool) -> Result<()>;
+    async fn api_get_catalog_overview_for_ids(&self, catalog_ids: &[usize]) -> Result<Vec<serde_json::Value>>;
+    async fn api_match_q_multi(&self, catalog_id: usize, ext_id: &str, q: isize, user_id: usize) -> Result<bool>;
+    async fn api_remove_all_q(&self, catalog_id: usize, q: isize) -> Result<()>;
+    async fn api_remove_all_multimatches(&self, entry_id: usize) -> Result<()>;
+    async fn api_suggest(&self, catalog_id: usize, ext_id: &str, q: isize, overwrite: bool) -> Result<bool>;
+    async fn api_add_alias(&self, catalog_id: usize, ext_id: &str, language: &str, label: &str, user_id: usize) -> Result<()>;
+    async fn api_get_cersei_catalog(&self, scraper_id: usize) -> Result<Option<usize>>;
+    async fn api_get_same_names(&self) -> Result<(String, Vec<Entry>)>;
+    async fn api_get_random_person_batch(&self, gender: &str, has_desc: bool) -> Result<Vec<serde_json::Value>>;
+    async fn api_get_property_cache(&self) -> Result<(HashMap<String, Vec<(usize, usize)>>, HashMap<String, String>)>;
+    async fn api_get_quick_compare_list(&self) -> Result<Vec<serde_json::Value>>;
+    async fn api_get_mnm_unmatched_relations(&self, property: usize, offset: usize, limit: usize) -> Result<(Vec<(usize, usize)>, Vec<Entry>)>; // (id, cnt) pairs + entries
+    async fn api_get_top_groups(&self) -> Result<Vec<serde_json::Value>>;
+    async fn api_set_top_group(&self, name: &str, catalogs: &str, user_id: usize, based_on: usize) -> Result<()>;
+    async fn api_remove_empty_top_group(&self, group_id: usize) -> Result<()>;
+    async fn api_set_missing_properties_status(&self, row_id: usize, status: &str, note: &str, user_id: usize) -> Result<()>;
+    async fn api_get_entries_by_q_or_value(&self, q: isize, prop_catalog_map: &HashMap<usize, Vec<usize>>, prop_values: &HashMap<usize, Vec<String>>) -> Result<Vec<Entry>>;
+    async fn api_get_prop2catalog(&self, props: &[usize]) -> Result<HashMap<usize, Vec<usize>>>;
+    async fn api_get_missing_properties_raw(&self) -> Result<Vec<serde_json::Value>>;
+    async fn api_get_rc_log_events(&self, min_ts: &str, max_ts: &str, catalog_id: usize) -> Result<Vec<serde_json::Value>>;
 }
 
 #[cfg(test)]
