@@ -1,10 +1,10 @@
 pub mod common;
 
 use crate::app_state::AppState;
+use axum::Router;
 use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use axum::Router;
 use common::{ApiError, Params};
 use std::sync::Arc;
 
@@ -17,10 +17,7 @@ pub fn router(app: AppState) -> Router {
         .with_state(state)
 }
 
-async fn api_dispatcher(
-    State(app): State<SharedState>,
-    Query(params): Query<Params>,
-) -> Response {
+async fn api_dispatcher(State(app): State<SharedState>, Query(params): Query<Params>) -> Response {
     let query = params.get("query").cloned().unwrap_or_default();
     let result = dispatch(&query, &app, &params).await;
     match result {
@@ -29,6 +26,7 @@ async fn api_dispatcher(
     }
 }
 
+#[allow(cognitive_complexity)]
 async fn dispatch(query: &str, app: &AppState, params: &Params) -> Result<Response, ApiError> {
     match query {
         // Catalog
@@ -135,8 +133,12 @@ async fn dispatch(query: &str, app: &AppState, params: &Params) -> Result<Respon
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
-fn json_resp(v: serde_json::Value) -> Response { axum::Json(v).into_response() }
-fn ok(data: serde_json::Value) -> Response { common::success_with_data(data).into_response() }
+fn json_resp(v: serde_json::Value) -> Response {
+    axum::Json(v).into_response()
+}
+fn ok(data: serde_json::Value) -> Response {
+    common::success_with_data(data).into_response()
+}
 
 // ─── Catalog handlers ───────────────────────────────────────────────────────
 
@@ -144,7 +146,11 @@ async fn query_catalogs(app: &AppState) -> Result<Response, ApiError> {
     let data = app.storage().api_get_catalog_overview().await?;
     let mut map = serde_json::Map::new();
     for item in data {
-        if let Some(id) = item.get("catalog").and_then(|v| v.as_u64()).or_else(|| item.get("id").and_then(|v| v.as_u64())) {
+        if let Some(id) = item
+            .get("catalog")
+            .and_then(|v| v.as_u64())
+            .or_else(|| item.get("id").and_then(|v| v.as_u64()))
+        {
             map.insert(id.to_string(), item);
         }
     }
@@ -185,7 +191,10 @@ async fn query_catalog(app: &AppState, params: &Params) -> Result<Response, ApiE
     let show_userq = meta.get("show_userq").and_then(|v| v.as_i64()).unwrap_or(0);
     let show_na = meta.get("show_na").and_then(|v| v.as_i64()).unwrap_or(0);
     let show_nowd = meta.get("show_nowd").and_then(|v| v.as_i64()).unwrap_or(0);
-    let show_multiple = meta.get("show_multiple").and_then(|v| v.as_i64()).unwrap_or(0);
+    let show_multiple = meta
+        .get("show_multiple")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
     let per_page = meta.get("per_page").and_then(|v| v.as_u64()).unwrap_or(50);
     let offset = meta.get("offset").and_then(|v| v.as_u64()).unwrap_or(0);
     let entry_type = common::get_param(params, "type", "");
@@ -199,15 +208,35 @@ async fn query_catalog(app: &AppState, params: &Params) -> Result<Response, ApiE
     } else if show_noq + show_autoq + show_userq + show_na == 0 && show_nowd == 1 {
         conds.push("q=-1".into());
     } else {
-        if show_noq != 1 { conds.push("q IS NOT NULL".into()); }
-        if show_autoq != 1 { conds.push("(q is null OR user!=0)".into()); }
-        if show_userq != 1 { conds.push("(user<=0 OR user is null)".into()); }
-        if show_na != 1 { conds.push("(q!=0 or q is null)".into()); }
+        if show_noq != 1 {
+            conds.push("q IS NOT NULL".into());
+        }
+        if show_autoq != 1 {
+            conds.push("(q is null OR user!=0)".into());
+        }
+        if show_userq != 1 {
+            conds.push("(user<=0 OR user is null)".into());
+        }
+        if show_na != 1 {
+            conds.push("(q!=0 or q is null)".into());
+        }
     }
-    if !entry_type.is_empty() { conds.push(format!("`type`='{}'", entry_type.replace('\'', "''"))); }
-    if !title_match.is_empty() { conds.push(format!("`ext_name` LIKE '%{}%'", title_match.replace('\'', "''"))); }
+    if !entry_type.is_empty() {
+        conds.push(format!("`type`='{}'", entry_type.replace('\'', "''")));
+    }
+    if !title_match.is_empty() {
+        conds.push(format!(
+            "`ext_name` LIKE '%{}%'",
+            title_match.replace('\'', "''")
+        ));
+    }
 
-    let sql = format!("SELECT * FROM entry WHERE {} LIMIT {} OFFSET {}", conds.join(" AND "), per_page, offset);
+    let sql = format!(
+        "SELECT * FROM entry WHERE {} LIMIT {} OFFSET {}",
+        conds.join(" AND "),
+        per_page,
+        offset
+    );
     let entries = app.storage().api_get_catalog_entries_raw(&sql).await?;
     let mut data = common::entries_to_json_data(&entries, app).await?;
     common::add_extended_entry_data(app, &mut data).await?;
@@ -217,7 +246,8 @@ async fn query_catalog(app: &AppState, params: &Params) -> Result<Response, ApiE
 async fn query_edit_catalog(app: &AppState, params: &Params) -> Result<Response, ApiError> {
     let cid = common::get_catalog(params)?;
     let data_str = common::get_param(params, "data", "");
-    let data: serde_json::Value = serde_json::from_str(&data_str).map_err(|_| ApiError("Bad data".into()))?;
+    let data: serde_json::Value =
+        serde_json::from_str(&data_str).map_err(|_| ApiError("Bad data".into()))?;
     let username = common::get_param(params, "username", "").replace('_', " ");
     let user = app.storage().get_user_by_name(&username).await?;
     match user {
@@ -225,25 +255,39 @@ async fn query_edit_catalog(app: &AppState, params: &Params) -> Result<Response,
         Some((_, _, _)) => return Err(ApiError(format!("'{username}' is not a catalog admin"))),
         None => return Err(ApiError(format!("No such user '{username}'"))),
     }
-    let name = data.get("name").and_then(|v| v.as_str()).ok_or(ApiError("Bad data".into()))?;
-    app.storage().api_edit_catalog(
-        cid,
-        name,
-        data.get("url").and_then(|v| v.as_str()).unwrap_or(""),
-        data.get("desc").and_then(|v| v.as_str()).unwrap_or(""),
-        data.get("type").and_then(|v| v.as_str()).unwrap_or(""),
-        data.get("search_wp").and_then(|v| v.as_str()).unwrap_or(""),
-        data.get("wd_prop").and_then(|v| v.as_u64()).map(|v| v as usize),
-        data.get("wd_qual").and_then(|v| v.as_u64()).map(|v| v as usize),
-        data.get("active").and_then(|v| v.as_bool()).unwrap_or(false),
-    ).await?;
+    let name = data
+        .get("name")
+        .and_then(|v| v.as_str())
+        .ok_or(ApiError("Bad data".into()))?;
+    app.storage()
+        .api_edit_catalog(
+            cid,
+            name,
+            data.get("url").and_then(|v| v.as_str()).unwrap_or(""),
+            data.get("desc").and_then(|v| v.as_str()).unwrap_or(""),
+            data.get("type").and_then(|v| v.as_str()).unwrap_or(""),
+            data.get("search_wp").and_then(|v| v.as_str()).unwrap_or(""),
+            data.get("wd_prop")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as usize),
+            data.get("wd_qual")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as usize),
+            data.get("active")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+        )
+        .await?;
     let _ = app.storage().catalog_refresh_overview_table(cid).await;
     Ok(ok(serde_json::json!({})))
 }
 
 async fn query_catalog_overview(app: &AppState, params: &Params) -> Result<Response, ApiError> {
     let catalogs_str = common::get_param(params, "catalogs", "");
-    let ids: Vec<usize> = catalogs_str.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+    let ids: Vec<usize> = catalogs_str
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
     let data = app.storage().api_get_catalog_overview_for_ids(&ids).await?;
     Ok(ok(serde_json::json!(data)))
 }
@@ -255,15 +299,29 @@ async fn query_get_entry(app: &AppState, params: &Params) -> Result<Response, Ap
     let entry_ids_str = common::get_param(params, "entry", "");
     let ext_ids_str = common::get_param(params, "ext_ids", "");
     let entries = if !ext_ids_str.is_empty() {
-        if catalog == 0 { return Err(ApiError("catalog is required when using ext_ids".into())); }
+        if catalog == 0 {
+            return Err(ApiError("catalog is required when using ext_ids".into()));
+        }
         let ext_ids: Vec<String> = serde_json::from_str(&ext_ids_str).unwrap_or_default();
         let mut r = vec![];
-        for eid in ext_ids { if let Ok(e) = crate::entry::Entry::from_ext_id(catalog, &eid, app).await { r.push(e); } }
+        for eid in ext_ids {
+            if let Ok(e) = crate::entry::Entry::from_ext_id(catalog, &eid, app).await {
+                r.push(e);
+            }
+        }
         r
     } else {
-        let ids: Vec<usize> = entry_ids_str.split(',').filter_map(|s| s.trim().parse().ok()).collect();
-        if ids.is_empty() { return Err(ApiError("entry is required".into())); }
-        crate::entry::Entry::multiple_from_ids(&ids, app).await?.into_values().collect()
+        let ids: Vec<usize> = entry_ids_str
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        if ids.is_empty() {
+            return Err(ApiError("entry is required".into()));
+        }
+        crate::entry::Entry::multiple_from_ids(&ids, app)
+            .await?
+            .into_values()
+            .collect()
     };
     let mut data = common::entries_to_json_data(&entries, app).await?;
     common::add_extended_entry_data(app, &mut data).await?;
@@ -284,19 +342,46 @@ async fn query_search(app: &AppState, params: &Params) -> Result<Response, ApiEr
     let max_results = common::get_param_int(params, "max", 100) as usize;
     let desc_search = common::get_param_int(params, "description_search", 0) != 0;
     let no_label = common::get_param_int(params, "no_label_search", 0) != 0;
-    let exclude: Vec<usize> = common::get_param(params, "exclude", "").split(',').filter_map(|s| s.trim().parse().ok()).collect();
-    let include: Vec<usize> = common::get_param(params, "include", "").split(',').filter_map(|s| s.trim().parse().ok()).collect();
+    let exclude: Vec<usize> = common::get_param(params, "exclude", "")
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
+    let include: Vec<usize> = common::get_param(params, "include", "")
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
 
     let what_clean = what.replace('-', " ");
-    let q_match = regex::Regex::new(r"^\s*[Qq]?(\d+)\s*$").ok().and_then(|re| re.captures(&what_clean).map(|c| c[1].parse::<isize>().unwrap_or(0)));
+    let q_match = regex::Regex::new(r"^\s*[Qq]?(\d+)\s*$")
+        .ok()
+        .and_then(|re| {
+            re.captures(&what_clean)
+                .map(|c| c[1].parse::<isize>().unwrap_or(0))
+        });
     let entries = if let Some(q) = q_match.filter(|q| *q > 0) {
         app.storage().api_search_by_q(q).await?
     } else {
-        let words: Vec<String> = what_clean.split_whitespace()
-            .filter(|w| w.len() >= 3 && w.len() <= 84 && !["the", "a"].contains(&w.to_lowercase().as_str()))
-            .map(|s| s.to_string()).collect();
-        if words.is_empty() { vec![] }
-        else { app.storage().api_search_entries(&words, desc_search, no_label, &exclude, &include, max_results).await? }
+        let words: Vec<String> = what_clean
+            .split_whitespace()
+            .filter(|w| {
+                w.len() >= 3 && w.len() <= 84 && !["the", "a"].contains(&w.to_lowercase().as_str())
+            })
+            .map(|s| s.to_string())
+            .collect();
+        if words.is_empty() {
+            vec![]
+        } else {
+            app.storage()
+                .api_search_entries(
+                    &words,
+                    desc_search,
+                    no_label,
+                    &exclude,
+                    &include,
+                    max_results,
+                )
+                .await?
+        }
     };
     let data = common::entries_to_json_data(&entries, app).await?;
     Ok(ok(data))
@@ -315,13 +400,24 @@ async fn query_random(app: &AppState, params: &Params) -> Result<Response, ApiEr
     }
     for attempt in 0..=10 {
         let r: f64 = if attempt > 10 { 0.0 } else { rand::random() };
-        if let Some(entry) = app.storage().api_get_random_entry(catalog, &submode, &entry_type, r, &active).await? {
+        if let Some(entry) = app
+            .storage()
+            .api_get_random_entry(catalog, &submode, &entry_type, r, &active)
+            .await?
+        {
             let eid = entry.id.unwrap_or(0);
             let mut data = serde_json::json!(entry);
-            let pd = app.storage().api_get_person_dates_for_entries(&[eid]).await?;
+            let pd = app
+                .storage()
+                .api_get_person_dates_for_entries(&[eid])
+                .await?;
             if let Some((born, died)) = pd.get(&eid) {
-                if !born.is_empty() { data["born"] = serde_json::json!(born); }
-                if !died.is_empty() { data["died"] = serde_json::json!(died); }
+                if !born.is_empty() {
+                    data["born"] = serde_json::json!(born);
+                }
+                if !died.is_empty() {
+                    data["died"] = serde_json::json!(died);
+                }
             }
             return Ok(ok(data));
         }
@@ -337,43 +433,87 @@ async fn query_entries_query(app: &AppState, params: &Params) -> Result<Response
         partially_matched: common::get_param_int(params, "prelim_matched", 0) != 0,
         fully_matched: common::get_param_int(params, "fully_matched", 0) != 0,
     };
-    let eq = crate::entry_query::EntryQuery::default().with_match_state(ms).with_limit(50).with_offset(offset);
+    let eq = crate::entry_query::EntryQuery::default()
+        .with_match_state(ms)
+        .with_limit(50)
+        .with_offset(offset);
     let entries = app.storage().entry_query(&eq).await?;
     let mut data = common::entries_to_json_data(&entries, app).await?;
     common::add_extended_entry_data(app, &mut data).await?;
     Ok(ok(data))
 }
 
-async fn query_entries_via_property_value(app: &AppState, params: &Params) -> Result<Response, ApiError> {
-    let property: usize = common::get_param(params, "property", "").replace(|c: char| !c.is_ascii_digit(), "").parse().unwrap_or(0);
+async fn query_entries_via_property_value(
+    app: &AppState,
+    params: &Params,
+) -> Result<Response, ApiError> {
+    let property: usize = common::get_param(params, "property", "")
+        .replace(|c: char| !c.is_ascii_digit(), "")
+        .parse()
+        .unwrap_or(0);
     let value = common::get_param(params, "value", "").trim().to_string();
-    if property == 0 || value.is_empty() { return Err(ApiError("property and value required".into())); }
+    if property == 0 || value.is_empty() {
+        return Err(ApiError("property and value required".into()));
+    }
     let ids = app.storage().get_entry_ids_by_aux(property, &value).await?;
-    let entries: Vec<_> = if ids.is_empty() { vec![] } else { crate::entry::Entry::multiple_from_ids(&ids, app).await?.into_values().collect() };
+    let entries: Vec<_> = if ids.is_empty() {
+        vec![]
+    } else {
+        crate::entry::Entry::multiple_from_ids(&ids, app)
+            .await?
+            .into_values()
+            .collect()
+    };
     let mut data = common::entries_to_json_data(&entries, app).await?;
     common::add_extended_entry_data(app, &mut data).await?;
     Ok(ok(data))
 }
 
-async fn query_get_entries_by_q_or_value(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+async fn query_get_entries_by_q_or_value(
+    app: &AppState,
+    params: &Params,
+) -> Result<Response, ApiError> {
     let q_str = common::get_param(params, "q", "");
-    let q: isize = q_str.replace(|c: char| !c.is_ascii_digit() && c != '-', "").parse().unwrap_or(0);
+    let q: isize = q_str
+        .replace(|c: char| !c.is_ascii_digit() && c != '-', "")
+        .parse()
+        .unwrap_or(0);
     let json_str = common::get_param(params, "json", "{}");
-    let json_val: serde_json::Value = serde_json::from_str(&json_str).unwrap_or(serde_json::json!({}));
+    let json_val: serde_json::Value =
+        serde_json::from_str(&json_str).unwrap_or(serde_json::json!({}));
 
-    let mut prop_values: std::collections::HashMap<usize, Vec<String>> = std::collections::HashMap::new();
+    let mut prop_values: std::collections::HashMap<usize, Vec<String>> =
+        std::collections::HashMap::new();
     let mut props: Vec<usize> = vec![];
     if let Some(obj) = json_val.as_object() {
         for (k, v) in obj {
             let p: usize = k.replace('P', "").parse().unwrap_or(0);
-            if p == 0 { continue; }
+            if p == 0 {
+                continue;
+            }
             props.push(p);
-            let vals: Vec<String> = v.as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect()).unwrap_or_default();
-            if !vals.is_empty() { prop_values.insert(p, vals); }
+            let vals: Vec<String> = v
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            if !vals.is_empty() {
+                prop_values.insert(p, vals);
+            }
         }
     }
-    let prop_catalog_map = if props.is_empty() { std::collections::HashMap::new() } else { app.storage().api_get_prop2catalog(&props).await? };
-    let entries = app.storage().api_get_entries_by_q_or_value(q, &prop_catalog_map, &prop_values).await?;
+    let prop_catalog_map = if props.is_empty() {
+        std::collections::HashMap::new()
+    } else {
+        app.storage().api_get_prop2catalog(&props).await?
+    };
+    let entries = app
+        .storage()
+        .api_get_entries_by_q_or_value(q, &prop_catalog_map, &prop_values)
+        .await?;
     let mut data = common::entries_to_json_data(&entries, app).await?;
     common::add_extended_entry_data(app, &mut data).await?;
 
@@ -381,7 +521,9 @@ async fn query_get_entries_by_q_or_value(app: &AppState, params: &Params) -> Res
     let cat_ids: std::collections::HashSet<usize> = entries.iter().map(|e| e.catalog).collect();
     let mut catalogs = serde_json::Map::new();
     for cid in cat_ids {
-        if let Ok(c) = app.storage().api_get_single_catalog_overview(cid).await { catalogs.insert(cid.to_string(), c); }
+        if let Ok(c) = app.storage().api_get_single_catalog_overview(cid).await {
+            catalogs.insert(cid.to_string(), c);
+        }
     }
     data["catalogs"] = serde_json::Value::Object(catalogs);
     Ok(ok(data))
@@ -411,14 +553,28 @@ async fn query_match_q_multi(app: &AppState, params: &Params) -> Result<Response
     let mut not_found_list: Vec<String> = vec![];
     for d in &data {
         let arr = d.as_array();
-        let q = arr.and_then(|a| a.first()).and_then(|v| v.as_i64()).unwrap_or(0) as isize;
-        let ext_id = arr.and_then(|a| a.get(1)).and_then(|v| v.as_str()).unwrap_or("");
-        if !app.storage().api_match_q_multi(catalog, ext_id, q, uid).await? {
+        let q = arr
+            .and_then(|a| a.first())
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0) as isize;
+        let ext_id = arr
+            .and_then(|a| a.get(1))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if !app
+            .storage()
+            .api_match_q_multi(catalog, ext_id, q, uid)
+            .await?
+        {
             not_found += 1;
-            if not_found_list.len() < 100 { not_found_list.push(ext_id.to_string()); }
+            if not_found_list.len() < 100 {
+                not_found_list.push(ext_id.to_string());
+            }
         }
     }
-    Ok(json_resp(serde_json::json!({"status": "OK", "not_found": not_found, "not_found_list": not_found_list})))
+    Ok(json_resp(
+        serde_json::json!({"status": "OK", "not_found": not_found, "not_found_list": not_found_list}),
+    ))
 }
 
 async fn query_remove_q(app: &AppState, params: &Params) -> Result<Response, ApiError> {
@@ -439,7 +595,10 @@ async fn query_remove_all_q(app: &AppState, params: &Params) -> Result<Response,
     Ok(ok(serde_json::json!({})))
 }
 
-async fn query_remove_all_multimatches(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+async fn query_remove_all_multimatches(
+    app: &AppState,
+    params: &Params,
+) -> Result<Response, ApiError> {
     common::check_user(app, params).await?;
     let eid = common::get_param_int(params, "entry", -1) as usize;
     app.storage().api_remove_all_multimatches(eid).await?;
@@ -454,15 +613,36 @@ async fn query_suggest(app: &AppState, params: &Params) -> Result<Response, ApiE
     let mut out = String::new();
     for line in suggestions.lines() {
         let line = line.trim();
-        if line.is_empty() { continue; }
+        if line.is_empty() {
+            continue;
+        }
         let parts: Vec<&str> = line.split('|').collect();
-        if parts.len() != 2 { out.push_str(&format!("Bad row : {line}\n")); continue; }
+        if parts.len() != 2 {
+            out.push_str(&format!("Bad row : {line}\n"));
+            continue;
+        }
         let ext_id = parts[0].trim();
-        let q: isize = parts[1].replace(|c: char| !c.is_ascii_digit(), "").parse().unwrap_or(0);
-        if app.storage().api_suggest(catalog, ext_id, q, overwrite).await? { cnt += 1; }
+        let q: isize = parts[1]
+            .replace(|c: char| !c.is_ascii_digit(), "")
+            .parse()
+            .unwrap_or(0);
+        if app
+            .storage()
+            .api_suggest(catalog, ext_id, q, overwrite)
+            .await?
+        {
+            cnt += 1;
+        }
     }
     out.push_str(&format!("{cnt} entries changed"));
-    Ok(([(axum::http::header::CONTENT_TYPE, "text/plain; charset=UTF-8")], out).into_response())
+    Ok((
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; charset=UTF-8",
+        )],
+        out,
+    )
+        .into_response())
 }
 
 // ─── Job handlers ───────────────────────────────────────────────────────────
@@ -473,17 +653,25 @@ async fn query_get_jobs(app: &AppState, params: &Params) -> Result<Response, Api
     let max = common::get_param_int(params, "max", 50) as usize;
     let (stats, jobs) = app.storage().api_get_jobs(cid, start, max).await?;
     let mut out = serde_json::json!({"status": "OK", "data": jobs});
-    if cid == 0 { out["stats"] = serde_json::json!(stats); }
+    if cid == 0 {
+        out["stats"] = serde_json::json!(stats);
+    }
     Ok(json_resp(out))
 }
 
 async fn query_start_new_job(app: &AppState, params: &Params) -> Result<Response, ApiError> {
     let cid = common::get_catalog(params)?;
-    let action = common::get_param(params, "action", "").trim().to_lowercase();
+    let action = common::get_param(params, "action", "")
+        .trim()
+        .to_lowercase();
     common::check_user(app, params).await?;
-    if !regex::Regex::new(r"^[a-z_]+$").unwrap().is_match(&action) { return Err(ApiError(format!("Bad action: '{action}'"))); }
+    if !regex::Regex::new(r"^[a-z_]+$").unwrap().is_match(&action) {
+        return Err(ApiError(format!("Bad action: '{action}'")));
+    }
     let valid = app.storage().api_get_existing_job_actions().await?;
-    if !valid.contains(&action) { return Err(ApiError(format!("Unknown action: '{action}'"))); }
+    if !valid.contains(&action) {
+        return Err(ApiError(format!("Unknown action: '{action}'")));
+    }
     crate::job::Job::queue_simple_job(app, cid, &action, None).await?;
     Ok(ok(serde_json::json!({})))
 }
@@ -495,29 +683,60 @@ async fn query_get_issues(app: &AppState, params: &Params) -> Result<Response, A
     let limit = common::get_param_int(params, "limit", 50) as usize;
     let offset = common::get_param_int(params, "offset", 0) as usize;
     let catalogs = common::get_param(params, "catalogs", "");
-    let count = app.storage().api_get_issues_count(&itype, &catalogs).await?;
-    if count == 0 { return Ok(ok(serde_json::json!({}))); }
-    let r: f64 = if count < limit * 2 { 0.0 } else { rand::random() };
-    let issues = app.storage().api_get_issues(&itype, &catalogs, limit, offset, r).await?;
-    let eids: Vec<usize> = issues.iter().filter_map(|i| i.get("entry_id").and_then(|v| v.as_u64()).map(|v| v as usize)).collect();
-    let entries = if eids.is_empty() { serde_json::json!({"entries":{}, "users":{}}) } else {
+    let count = app
+        .storage()
+        .api_get_issues_count(&itype, &catalogs)
+        .await?;
+    if count == 0 {
+        return Ok(ok(serde_json::json!({})));
+    }
+    let r: f64 = if count < limit * 2 {
+        0.0
+    } else {
+        rand::random()
+    };
+    let issues = app
+        .storage()
+        .api_get_issues(&itype, &catalogs, limit, offset, r)
+        .await?;
+    let eids: Vec<usize> = issues
+        .iter()
+        .filter_map(|i| {
+            i.get("entry_id")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as usize)
+        })
+        .collect();
+    let entries = if eids.is_empty() {
+        serde_json::json!({"entries":{}, "users":{}})
+    } else {
         let map = crate::entry::Entry::multiple_from_ids(&eids, app).await?;
         common::entries_to_json_data(&map.into_values().collect::<Vec<_>>(), app).await?
     };
-    Ok(ok(serde_json::json!({"open_issues": count, "issues": issues, "entries": entries.get("entries"), "users": entries.get("users")})))
+    Ok(ok(
+        serde_json::json!({"open_issues": count, "issues": issues, "entries": entries.get("entries"), "users": entries.get("users")}),
+    ))
 }
 
 async fn query_all_issues(app: &AppState, params: &Params) -> Result<Response, ApiError> {
     let mode = common::get_param(params, "mode", "");
-    if !["duplicate_items", "mismatched_items", "time_mismatch"].contains(&mode.as_str()) { return Err(ApiError("Unsupported mode".into())); }
-    Ok(ok(serde_json::json!(app.storage().api_get_all_issues(&mode).await?)))
+    if !["duplicate_items", "mismatched_items", "time_mismatch"].contains(&mode.as_str()) {
+        return Err(ApiError("Unsupported mode".into()));
+    }
+    Ok(ok(serde_json::json!(
+        app.storage().api_get_all_issues(&mode).await?
+    )))
 }
 
 async fn query_resolve_issue(app: &AppState, params: &Params) -> Result<Response, ApiError> {
     let iid = common::get_param_int(params, "issue_id", 0) as usize;
-    if iid == 0 { return Err(ApiError("Bad issue ID".into())); }
+    if iid == 0 {
+        return Err(ApiError("Bad issue ID".into()));
+    }
     common::check_user(app, params).await?;
-    app.storage().set_issue_status(iid, crate::issue::IssueStatus::Done).await?;
+    app.storage()
+        .set_issue_status(iid, crate::issue::IssueStatus::Done)
+        .await?;
     Ok(ok(serde_json::json!({})))
 }
 
@@ -526,7 +745,9 @@ async fn query_resolve_issue(app: &AppState, params: &Params) -> Result<Response
 async fn query_get_user_info(app: &AppState, params: &Params) -> Result<Response, ApiError> {
     let name = common::get_param(params, "username", "").replace('_', " ");
     match app.storage().get_user_by_name(&name).await? {
-        Some((id, n, admin)) => Ok(ok(serde_json::json!({"id": id, "name": n, "is_catalog_admin": if admin {1} else {0}}))),
+        Some((id, n, admin)) => Ok(ok(
+            serde_json::json!({"id": id, "name": n, "is_catalog_admin": if admin {1} else {0}}),
+        )),
         None => Err(ApiError(format!("No user '{name}' found"))),
     }
 }
@@ -537,7 +758,10 @@ async fn query_rc(app: &AppState, params: &Params) -> Result<Response, ApiError>
     let ts = common::get_param(params, "ts", "");
     let catalog = common::get_param_int(params, "catalog", 0) as usize;
     let limit = 100;
-    let (entry_evts, log_evts) = app.storage().api_get_recent_changes(&ts, catalog, limit).await?;
+    let (entry_evts, log_evts) = app
+        .storage()
+        .api_get_recent_changes(&ts, catalog, limit)
+        .await?;
     let mut events: Vec<serde_json::Value> = entry_evts.into_iter().chain(log_evts).collect();
     events.sort_by(|a, b| {
         let ta = a.get("timestamp").and_then(|v| v.as_str()).unwrap_or("");
@@ -545,7 +769,10 @@ async fn query_rc(app: &AppState, params: &Params) -> Result<Response, ApiError>
         tb.cmp(ta)
     });
     events.truncate(limit);
-    let uids: std::collections::HashSet<usize> = events.iter().filter_map(|e| e.get("user").and_then(|v| v.as_u64()).map(|v| v as usize)).collect();
+    let uids: std::collections::HashSet<usize> = events
+        .iter()
+        .filter_map(|e| e.get("user").and_then(|v| v.as_u64()).map(|v| v as usize))
+        .collect();
     let users = common::get_users(app, &uids).await?;
     Ok(ok(serde_json::json!({"events": events, "users": users})))
 }
@@ -558,8 +785,13 @@ async fn query_get_wd_props(app: &AppState) -> Result<Response, ApiError> {
 }
 
 async fn query_top_missing(app: &AppState, params: &Params) -> Result<Response, ApiError> {
-    let catalogs: String = common::get_param(params, "catalogs", "").chars().filter(|c| c.is_ascii_digit() || *c == ',').collect();
-    if catalogs.is_empty() { return Err(ApiError("No catalogs given".into())); }
+    let catalogs: String = common::get_param(params, "catalogs", "")
+        .chars()
+        .filter(|c| c.is_ascii_digit() || *c == ',')
+        .collect();
+    if catalogs.is_empty() {
+        return Err(ApiError("No catalogs given".into()));
+    }
     let data = app.storage().api_get_top_missing(&catalogs).await?;
     Ok(ok(serde_json::json!(data)))
 }
@@ -571,9 +803,16 @@ async fn query_get_common_names(app: &AppState, params: &Params) -> Result<Respo
     let min = common::get_param_int(params, "min", 3) as usize;
     let max = common::get_param_int(params, "max", 15) as usize + 1;
     let type_q = common::get_param(params, "type", "");
-    let type_q = if regex::Regex::new(r"^Q\d+$").unwrap().is_match(&type_q) { type_q } else { String::new() };
+    let type_q = if regex::Regex::new(r"^Q\d+$").unwrap().is_match(&type_q) {
+        type_q
+    } else {
+        String::new()
+    };
     let other_cats_desc = common::get_param_int(params, "other_cats_desc", 0) != 0;
-    let data = app.storage().api_get_common_names(cid, &type_q, other_cats_desc, min, max, limit, offset).await?;
+    let data = app
+        .storage()
+        .api_get_common_names(cid, &type_q, other_cats_desc, min, max, limit, offset)
+        .await?;
     Ok(ok(serde_json::json!({"entries": data})))
 }
 
@@ -588,30 +827,47 @@ async fn query_same_names(app: &AppState) -> Result<Response, ApiError> {
 async fn query_random_person_batch(app: &AppState, params: &Params) -> Result<Response, ApiError> {
     let gender = common::get_param(params, "gender", "");
     let has_desc = common::get_param_int(params, "has_desc", 0) != 0;
-    let data = app.storage().api_get_random_person_batch(&gender, has_desc).await?;
+    let data = app
+        .storage()
+        .api_get_random_person_batch(&gender, has_desc)
+        .await?;
     Ok(ok(serde_json::json!(data)))
 }
 
 async fn query_get_property_cache(app: &AppState) -> Result<Response, ApiError> {
     let (prop2item, item_label) = app.storage().api_get_property_cache().await?;
-    Ok(ok(serde_json::json!({"prop2item": prop2item, "item_label": item_label})))
+    Ok(ok(
+        serde_json::json!({"prop2item": prop2item, "item_label": item_label}),
+    ))
 }
 
-async fn query_mnm_unmatched_relations(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+async fn query_mnm_unmatched_relations(
+    app: &AppState,
+    params: &Params,
+) -> Result<Response, ApiError> {
     let property = common::get_param_int(params, "property", 0) as usize;
     let offset = common::get_param_int(params, "offset", 0) as usize;
     let limit = 25;
-    let (id_cnts, entries) = app.storage().api_get_mnm_unmatched_relations(property, offset, limit).await?;
+    let (id_cnts, entries) = app
+        .storage()
+        .api_get_mnm_unmatched_relations(property, offset, limit)
+        .await?;
     let mut data = common::entries_to_json_data(&entries, app).await?;
     common::add_extended_entry_data(app, &mut data).await?;
-    let entry2cnt: serde_json::Map<String, serde_json::Value> = id_cnts.iter().map(|(id, cnt)| (id.to_string(), serde_json::json!(cnt))).collect();
+    let entry2cnt: serde_json::Map<String, serde_json::Value> = id_cnts
+        .iter()
+        .map(|(id, cnt)| (id.to_string(), serde_json::json!(cnt)))
+        .collect();
     let entry_order: Vec<usize> = id_cnts.iter().map(|(id, _)| *id).collect();
     data["entry2cnt"] = serde_json::Value::Object(entry2cnt);
     data["entry_order"] = serde_json::json!(entry_order);
     Ok(ok(data))
 }
 
-async fn query_creation_candidates(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
+async fn query_creation_candidates(
+    _app: &AppState,
+    _params: &Params,
+) -> Result<Response, ApiError> {
     // Complex multi-strategy endpoint — stub for now
     Ok(ok(serde_json::json!({"entries": [], "users": {}})))
 }
@@ -619,14 +875,29 @@ async fn query_creation_candidates(_app: &AppState, _params: &Params) -> Result<
 // ─── Locations ──────────────────────────────────────────────────────────────
 
 async fn query_locations(app: &AppState, params: &Params) -> Result<Response, ApiError> {
-    let bbox: String = common::get_param(params, "bbox", "").chars().filter(|c| c.is_ascii_digit() || *c == ',' || *c == '.' || *c == '-').collect();
+    let bbox: String = common::get_param(params, "bbox", "")
+        .chars()
+        .filter(|c| c.is_ascii_digit() || *c == ',' || *c == '.' || *c == '-')
+        .collect();
     let parts: Vec<f64> = bbox.split(',').filter_map(|s| s.parse().ok()).collect();
-    if parts.len() != 4 { return Err(ApiError("Required parameter bbox does not have 4 comma-separated numbers".into())); }
-    let data = app.storage().api_get_locations_bbox(parts[0], parts[1], parts[2], parts[3]).await?;
-    Ok(json_resp(serde_json::json!({"status": "OK", "data": data, "bbox": parts})))
+    if parts.len() != 4 {
+        return Err(ApiError(
+            "Required parameter bbox does not have 4 comma-separated numbers".into(),
+        ));
+    }
+    let data = app
+        .storage()
+        .api_get_locations_bbox(parts[0], parts[1], parts[2], parts[3])
+        .await?;
+    Ok(json_resp(
+        serde_json::json!({"status": "OK", "data": data, "bbox": parts}),
+    ))
 }
 
-async fn query_get_locations_in_catalog(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+async fn query_get_locations_in_catalog(
+    app: &AppState,
+    params: &Params,
+) -> Result<Response, ApiError> {
     let cid = common::get_catalog(params)?;
     let data = app.storage().api_get_locations_in_catalog(cid).await?;
     Ok(ok(serde_json::json!(data)))
@@ -637,66 +908,205 @@ async fn query_get_locations_in_catalog(app: &AppState, params: &Params) -> Resu
 async fn query_download(app: &AppState, params: &Params) -> Result<Response, ApiError> {
     let cid = common::get_catalog(params)?;
     let cat = crate::catalog::Catalog::from_id(cid, app).await?;
-    let filename = cat.name().unwrap_or(&"download".to_string()).replace(' ', "_") + ".tsv";
+    let filename = cat
+        .name()
+        .unwrap_or(&"download".to_string())
+        .replace(' ', "_")
+        + ".tsv";
     let rows = app.storage().api_get_download_entries(cid).await?;
     // Build user map
-    let uids: std::collections::HashSet<usize> = rows.iter().filter_map(|(_, _, _, _, u)| *u).collect();
+    let uids: std::collections::HashSet<usize> =
+        rows.iter().filter_map(|(_, _, _, _, u)| *u).collect();
     let users = common::get_users(app, &uids).await?;
     let mut out = String::from("Q\tID\tURL\tName\tUser\n");
     for (q, ext_id, ext_url, ext_name, user_id) in &rows {
-        let uname = user_id.and_then(|u| users.get(&u.to_string())).and_then(|v| v.get("name")).and_then(|v| v.as_str()).unwrap_or("");
+        let uname = user_id
+            .and_then(|u| users.get(&u.to_string()))
+            .and_then(|v| v.get("name"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         out.push_str(&format!("{q}\t{ext_id}\t{ext_url}\t{ext_name}\t{uname}\n"));
     }
-    Ok(([(axum::http::header::CONTENT_TYPE, "text/plain; charset=UTF-8"), (axum::http::header::CONTENT_DISPOSITION, &format!("attachment;filename=\"{filename}\""))], out).into_response())
+    Ok((
+        [
+            (
+                axum::http::header::CONTENT_TYPE,
+                "text/plain; charset=UTF-8",
+            ),
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                &format!("attachment;filename=\"{filename}\""),
+            ),
+        ],
+        out,
+    )
+        .into_response())
 }
 
 async fn query_download2(app: &AppState, params: &Params) -> Result<Response, ApiError> {
-    let catalogs: String = common::get_param(params, "catalogs", "").chars().filter(|c| c.is_ascii_digit() || *c == ',').collect();
+    let catalogs: String = common::get_param(params, "catalogs", "")
+        .chars()
+        .filter(|c| c.is_ascii_digit() || *c == ',')
+        .collect();
     let format = common::get_param(params, "format", "tab");
-    let columns: serde_json::Value = serde_json::from_str(&common::get_param(params, "columns", "{}")).unwrap_or(serde_json::json!({}));
-    let hidden: serde_json::Value = serde_json::from_str(&common::get_param(params, "hidden", "{}")).unwrap_or(serde_json::json!({}));
+    let columns: serde_json::Value =
+        serde_json::from_str(&common::get_param(params, "columns", "{}"))
+            .unwrap_or(serde_json::json!({}));
+    let hidden: serde_json::Value =
+        serde_json::from_str(&common::get_param(params, "hidden", "{}"))
+            .unwrap_or(serde_json::json!({}));
 
     let mut sql = "SELECT entry.id AS entry_id,entry.catalog,ext_id AS external_id".to_string();
-    if columns.get("exturl").and_then(|v| v.as_bool()).unwrap_or(false) || columns.get("exturl").and_then(|v| v.as_i64()).map(|v| v != 0).unwrap_or(false) {
+    if columns
+        .get("exturl")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+        || columns
+            .get("exturl")
+            .and_then(|v| v.as_i64())
+            .map(|v| v != 0)
+            .unwrap_or(false)
+    {
         sql.push_str(",ext_url AS external_url,ext_name AS `name`,ext_desc AS description,`type` AS entry_type,entry.user AS mnm_user_id");
     }
-    sql.push_str(",(CASE WHEN q IS NULL THEN NULL else concat('Q',q) END) AS q,`timestamp` AS matched_on");
-    if columns.get("username").and_then(|v| v.as_bool()).or(columns.get("username").and_then(|v| v.as_i64()).map(|v| v != 0)).unwrap_or(false) { sql.push_str(",user.name AS matched_by_username"); }
-    if columns.get("dates").and_then(|v| v.as_bool()).or(columns.get("dates").and_then(|v| v.as_i64()).map(|v| v != 0)).unwrap_or(false) { sql.push_str(",person_dates.born,person_dates.died"); }
-    if columns.get("location").and_then(|v| v.as_bool()).or(columns.get("location").and_then(|v| v.as_i64()).map(|v| v != 0)).unwrap_or(false) { sql.push_str(",location.lat,location.lon"); }
+    sql.push_str(
+        ",(CASE WHEN q IS NULL THEN NULL else concat('Q',q) END) AS q,`timestamp` AS matched_on",
+    );
+    if columns
+        .get("username")
+        .and_then(|v| v.as_bool())
+        .or(columns
+            .get("username")
+            .and_then(|v| v.as_i64())
+            .map(|v| v != 0))
+        .unwrap_or(false)
+    {
+        sql.push_str(",user.name AS matched_by_username");
+    }
+    if columns
+        .get("dates")
+        .and_then(|v| v.as_bool())
+        .or(columns
+            .get("dates")
+            .and_then(|v| v.as_i64())
+            .map(|v| v != 0))
+        .unwrap_or(false)
+    {
+        sql.push_str(",person_dates.born,person_dates.died");
+    }
+    if columns
+        .get("location")
+        .and_then(|v| v.as_bool())
+        .or(columns
+            .get("location")
+            .and_then(|v| v.as_i64())
+            .map(|v| v != 0))
+        .unwrap_or(false)
+    {
+        sql.push_str(",location.lat,location.lon");
+    }
 
     sql.push_str(" FROM entry");
-    if columns.get("dates").and_then(|v| v.as_bool()).or(columns.get("dates").and_then(|v| v.as_i64()).map(|v| v != 0)).unwrap_or(false) { sql.push_str(" LEFT JOIN person_dates ON (entry.id=person_dates.entry_id)"); }
-    if columns.get("location").and_then(|v| v.as_bool()).or(columns.get("location").and_then(|v| v.as_i64()).map(|v| v != 0)).unwrap_or(false) { sql.push_str(" LEFT JOIN location ON (entry.id=location.entry_id)"); }
-    if columns.get("username").and_then(|v| v.as_bool()).or(columns.get("username").and_then(|v| v.as_i64()).map(|v| v != 0)).unwrap_or(false) { sql.push_str(" LEFT JOIN user ON (entry.user=user.id)"); }
+    if columns
+        .get("dates")
+        .and_then(|v| v.as_bool())
+        .or(columns
+            .get("dates")
+            .and_then(|v| v.as_i64())
+            .map(|v| v != 0))
+        .unwrap_or(false)
+    {
+        sql.push_str(" LEFT JOIN person_dates ON (entry.id=person_dates.entry_id)");
+    }
+    if columns
+        .get("location")
+        .and_then(|v| v.as_bool())
+        .or(columns
+            .get("location")
+            .and_then(|v| v.as_i64())
+            .map(|v| v != 0))
+        .unwrap_or(false)
+    {
+        sql.push_str(" LEFT JOIN location ON (entry.id=location.entry_id)");
+    }
+    if columns
+        .get("username")
+        .and_then(|v| v.as_bool())
+        .or(columns
+            .get("username")
+            .and_then(|v| v.as_i64())
+            .map(|v| v != 0))
+        .unwrap_or(false)
+    {
+        sql.push_str(" LEFT JOIN user ON (entry.user=user.id)");
+    }
 
     sql.push_str(&format!(" WHERE entry.catalog IN ({catalogs})"));
-    let hb = |k: &str| hidden.get(k).and_then(|v| v.as_bool()).or(hidden.get(k).and_then(|v| v.as_i64()).map(|v| v != 0)).unwrap_or(false);
-    if hb("any_matched") { sql.push_str(" AND entry.q IS NULL"); }
-    if hb("firmly_matched") { sql.push_str(" AND (entry.q IS NULL OR entry.user=0)"); }
-    if hb("user_matched") { sql.push_str(" AND (entry.user IS NULL OR entry.user IN (0,3,4))"); }
-    if hb("unmatched") { sql.push_str(" AND entry.q IS NOT NULL"); }
-    if hb("automatched") { sql.push_str(" AND entry.user!=0"); }
-    if hb("aux_matched") { sql.push_str(" AND entry.user!=4"); }
+    let hb = |k: &str| {
+        hidden
+            .get(k)
+            .and_then(|v| v.as_bool())
+            .or(hidden.get(k).and_then(|v| v.as_i64()).map(|v| v != 0))
+            .unwrap_or(false)
+    };
+    if hb("any_matched") {
+        sql.push_str(" AND entry.q IS NULL");
+    }
+    if hb("firmly_matched") {
+        sql.push_str(" AND (entry.q IS NULL OR entry.user=0)");
+    }
+    if hb("user_matched") {
+        sql.push_str(" AND (entry.user IS NULL OR entry.user IN (0,3,4))");
+    }
+    if hb("unmatched") {
+        sql.push_str(" AND entry.q IS NOT NULL");
+    }
+    if hb("automatched") {
+        sql.push_str(" AND entry.user!=0");
+    }
+    if hb("aux_matched") {
+        sql.push_str(" AND entry.user!=4");
+    }
 
     let rows = app.storage().api_get_download2(&sql).await?;
-    let ct = if format == "json" { "application/json; charset=UTF-8" } else { "text/plain; charset=UTF-8" };
+    let ct = if format == "json" {
+        "application/json; charset=UTF-8"
+    } else {
+        "text/plain; charset=UTF-8"
+    };
     let mut out = String::new();
     for (i, row) in rows.iter().enumerate() {
         if i == 0 {
-            if format == "tab" { out.push('#'); out.push_str(&row.keys().cloned().collect::<Vec<_>>().join("\t")); out.push('\n'); }
-            if format == "json" { out.push_str("[\n"); }
+            if format == "tab" {
+                out.push('#');
+                out.push_str(&row.keys().cloned().collect::<Vec<_>>().join("\t"));
+                out.push('\n');
+            }
+            if format == "json" {
+                out.push_str("[\n");
+            }
         }
         if format == "json" {
-            if i > 0 { out.push_str(",\n"); }
+            if i > 0 {
+                out.push_str(",\n");
+            }
             out.push_str(&serde_json::to_string(row).unwrap_or_default());
         } else {
-            out.push_str(&row.values().map(|v| v.replace(['\t', '\n', '\r'], " ")).collect::<Vec<_>>().join("\t"));
+            out.push_str(
+                &row.values()
+                    .map(|v| v.replace(['\t', '\n', '\r'], " "))
+                    .collect::<Vec<_>>()
+                    .join("\t"),
+            );
             out.push('\n');
         }
     }
-    if rows.is_empty() && format == "json" { out.push_str("[\n"); }
-    if format == "json" { out.push_str("\n]"); }
+    if rows.is_empty() && format == "json" {
+        out.push_str("[\n");
+    }
+    if format == "json" {
+        out.push_str("\n]");
+    }
     Ok(([(axum::http::header::CONTENT_TYPE, ct)], out).into_response())
 }
 
@@ -706,16 +1116,34 @@ async fn query_redirect(app: &AppState, params: &Params) -> Result<Response, Api
     let catalog = common::get_catalog(params)?;
     let ext_id = common::get_param(params, "ext_id", "");
     let entry = crate::entry::Entry::from_ext_id(catalog, &ext_id, app).await?;
-    let html = format!("<html><head><META http-equiv=\"refresh\" content=\"0;URL={}\"></head><body></body></html>", entry.ext_url);
-    Ok(([(axum::http::header::CONTENT_TYPE, "text/html; charset=UTF-8")], html).into_response())
+    let html = format!(
+        "<html><head><META http-equiv=\"refresh\" content=\"0;URL={}\"></head><body></body></html>",
+        entry.ext_url
+    );
+    Ok((
+        [(axum::http::header::CONTENT_TYPE, "text/html; charset=UTF-8")],
+        html,
+    )
+        .into_response())
 }
 
 async fn query_proxy_entry_url(app: &AppState, params: &Params) -> Result<Response, ApiError> {
     let eid = common::get_param_int(params, "entry_id", 0) as usize;
     let entry = crate::entry::Entry::from_id(eid, app).await?;
     let client = reqwest::Client::new();
-    let body = client.get(&entry.ext_url).send().await.map_err(|e| ApiError(e.to_string()))?.text().await.map_err(|e| ApiError(e.to_string()))?;
-    Ok(([(axum::http::header::CONTENT_TYPE, "text/html; charset=UTF-8")], body).into_response())
+    let body = client
+        .get(&entry.ext_url)
+        .send()
+        .await
+        .map_err(|e| ApiError(e.to_string()))?
+        .text()
+        .await
+        .map_err(|e| ApiError(e.to_string()))?;
+    Ok((
+        [(axum::http::header::CONTENT_TYPE, "text/html; charset=UTF-8")],
+        body,
+    )
+        .into_response())
 }
 
 async fn query_cersei_forward(app: &AppState, params: &Params) -> Result<Response, ApiError> {
@@ -723,9 +1151,15 @@ async fn query_cersei_forward(app: &AppState, params: &Params) -> Result<Respons
     match app.storage().api_get_cersei_catalog(sid).await? {
         Some(cid) => {
             let url = format!("https://mix-n-match.toolforge.org/#/catalog/{cid}");
-            Ok((axum::http::StatusCode::FOUND, [(axum::http::header::LOCATION, url.as_str())]).into_response())
+            Ok((
+                axum::http::StatusCode::FOUND,
+                [(axum::http::header::LOCATION, url.as_str())],
+            )
+                .into_response())
         }
-        None => Err(ApiError(format!("No catalog associated with CERSEI scraper {sid}"))),
+        None => Err(ApiError(format!(
+            "No catalog associated with CERSEI scraper {sid}"
+        ))),
     }
 }
 
@@ -733,8 +1167,16 @@ async fn query_cersei_forward(app: &AppState, params: &Params) -> Result<Respons
 
 async fn query_update_overview(app: &AppState, params: &Params) -> Result<Response, ApiError> {
     let cs = common::get_param(params, "catalog", "");
-    let ids: Vec<usize> = if cs.is_empty() { app.storage().api_get_active_catalog_ids().await? } else { cs.split(',').filter_map(|s| s.trim().parse().ok()).collect() };
-    for id in ids { let _ = app.storage().catalog_refresh_overview_table(id).await; }
+    let ids: Vec<usize> = if cs.is_empty() {
+        app.storage().api_get_active_catalog_ids().await?
+    } else {
+        cs.split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect()
+    };
+    for id in ids {
+        let _ = app.storage().catalog_refresh_overview_table(id).await;
+    }
     Ok(ok(serde_json::json!({})))
 }
 
@@ -747,8 +1189,14 @@ async fn query_update_ext_urls(app: &AppState, params: &Params) -> Result<Respon
     let cid = common::get_catalog(params)?;
     let url = common::get_param(params, "url", "");
     let parts: Vec<&str> = url.split("$1").collect();
-    if parts.len() != 2 { return Err(ApiError(format!("Bad $1 replacement for '{url}'"))); }
-    let sql = format!("UPDATE entry SET ext_url=concat('{}',ext_id,'{}') WHERE catalog={cid}", parts[0].replace('\'', "''"), parts[1].replace('\'', "''"));
+    if parts.len() != 2 {
+        return Err(ApiError(format!("Bad $1 replacement for '{url}'")));
+    }
+    let sql = format!(
+        "UPDATE entry SET ext_url=concat('{}',ext_id,'{}') WHERE catalog={cid}",
+        parts[0].replace('\'', "''"),
+        parts[1].replace('\'', "''")
+    );
     app.storage().api_get_catalog_entries_raw(&sql).await.ok(); // execute the update
     Ok(ok(serde_json::json!({"sql": sql})))
 }
@@ -757,16 +1205,34 @@ async fn query_add_aliases(app: &AppState, params: &Params) -> Result<Response, 
     let uid = common::check_user(app, params).await?;
     let text = common::get_param(params, "text", "").trim().to_string();
     let cid = common::get_param_int(params, "catalog", 0) as usize;
-    if cid == 0 || text.is_empty() { return Err(ApiError("Catalog ID or text missing".into())); }
+    if cid == 0 || text.is_empty() {
+        return Err(ApiError("Catalog ID or text missing".into()));
+    }
     let cat = crate::catalog::Catalog::from_id(cid, app).await?;
-    let default_lang = { let wp = cat.search_wp(); if wp.is_empty() { "en".to_string() } else { wp.to_string() } };
+    let default_lang = {
+        let wp = cat.search_wp();
+        if wp.is_empty() {
+            "en".to_string()
+        } else {
+            wp.to_string()
+        }
+    };
     for row in text.lines() {
         let parts: Vec<&str> = row.trim().split('\t').collect();
-        if parts.len() < 2 || parts.len() > 3 { continue; }
+        if parts.len() < 2 || parts.len() > 3 {
+            continue;
+        }
         let ext_id = parts[0].trim();
         let label = parts[1].trim().replace('|', "");
-        let lang = if parts.len() == 3 && !parts[2].trim().is_empty() { parts[2].trim().to_lowercase() } else { default_lang.clone() };
-        let _ = app.storage().api_add_alias(cid, ext_id, &lang, &label, uid).await;
+        let lang = if parts.len() == 3 && !parts[2].trim().is_empty() {
+            parts[2].trim().to_lowercase()
+        } else {
+            default_lang.clone()
+        };
+        let _ = app
+            .storage()
+            .api_add_alias(cid, ext_id, &lang, &label, uid)
+            .await;
     }
     Ok(ok(serde_json::json!({})))
 }
@@ -776,14 +1242,23 @@ async fn query_get_missing_properties(app: &AppState) -> Result<Response, ApiErr
     Ok(ok(serde_json::json!(data)))
 }
 
-async fn query_set_missing_properties_status(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+async fn query_set_missing_properties_status(
+    app: &AppState,
+    params: &Params,
+) -> Result<Response, ApiError> {
     let uid = common::check_user(app, params).await?;
     let row_id = common::get_param_int(params, "row_id", 0) as usize;
-    if row_id == 0 { return Err(ApiError("Bad/missing row ID".into())); }
+    if row_id == 0 {
+        return Err(ApiError("Bad/missing row ID".into()));
+    }
     let status = common::get_param(params, "status", "");
-    if status.is_empty() { return Err(ApiError("Invalid status".into())); }
+    if status.is_empty() {
+        return Err(ApiError("Invalid status".into()));
+    }
     let note = common::get_param(params, "note", "");
-    app.storage().api_set_missing_properties_status(row_id, &status, &note, uid).await?;
+    app.storage()
+        .api_set_missing_properties_status(row_id, &status, &note, uid)
+        .await?;
     Ok(ok(serde_json::json!({})))
 }
 
@@ -797,11 +1272,16 @@ async fn query_set_top_group(app: &AppState, params: &Params) -> Result<Response
     let name = common::get_param(params, "group_name", "");
     let catalogs = common::get_param(params, "catalogs", "");
     let based_on = common::get_param_int(params, "group_id", 0) as usize;
-    app.storage().api_set_top_group(&name, &catalogs, uid, based_on).await?;
+    app.storage()
+        .api_set_top_group(&name, &catalogs, uid, based_on)
+        .await?;
     Ok(ok(serde_json::json!({})))
 }
 
-async fn query_remove_empty_top_group(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+async fn query_remove_empty_top_group(
+    app: &AppState,
+    params: &Params,
+) -> Result<Response, ApiError> {
     let gid = common::get_param_int(params, "group_id", 0) as usize;
     app.storage().api_remove_empty_top_group(gid).await?;
     Ok(ok(serde_json::json!({})))
@@ -817,7 +1297,10 @@ async fn query_quick_compare_list(app: &AppState) -> Result<Response, ApiError> 
 async fn query_rc_atom(app: &AppState, params: &Params) -> Result<Response, ApiError> {
     let ts = common::get_param(params, "ts", "");
     let catalog = common::get_param_int(params, "catalog", 0) as usize;
-    let (entry_evts, log_evts) = app.storage().api_get_recent_changes(&ts, catalog, 100).await?;
+    let (entry_evts, log_evts) = app
+        .storage()
+        .api_get_recent_changes(&ts, catalog, 100)
+        .await?;
     let mut events: Vec<serde_json::Value> = entry_evts.into_iter().chain(log_evts).collect();
     events.sort_by(|a, b| {
         let ta = a.get("timestamp").and_then(|v| v.as_str()).unwrap_or("");
@@ -834,24 +1317,40 @@ async fn query_rc_atom(app: &AppState, params: &Params) -> Result<Response, ApiE
          <link href=\"https://mix-n-match.toolforge.org/api.php?query=rc_atom\" rel=\"self\" />\n\
          <link href=\"https://mix-n-match.toolforge.org/\" />\n\
          <id>urn:uuid:{}</id>\n\
-         <updated>{now}</updated>\n", uuid::Uuid::new_v4()
+         <updated>{now}</updated>\n",
+        uuid::Uuid::new_v4()
     );
     for e in &events {
         let id = e.get("id").and_then(|v| v.as_u64()).unwrap_or(0);
         let name = e.get("ext_name").and_then(|v| v.as_str()).unwrap_or("");
-        let event_type = e.get("event_type").and_then(|v| v.as_str()).unwrap_or("match");
+        let event_type = e
+            .get("event_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("match");
         let timestamp = e.get("timestamp").and_then(|v| v.as_str()).unwrap_or("");
-        let title_prefix = if event_type == "remove_q" { "Match was removed for " } else { "New match for " };
+        let title_prefix = if event_type == "remove_q" {
+            "Match was removed for "
+        } else {
+            "New match for "
+        };
         xml.push_str(&format!(
             "<entry>\n<title>{title_prefix}\"{name}\"</title>\n\
              <link rel=\"alternate\" href=\"https://mix-n-match.toolforge.org/#/entry/{id}\" />\n\
              <id>urn:uuid:{}</id>\n\
              <updated>{timestamp}</updated>\n\
-             </entry>\n", uuid::Uuid::new_v4()
+             </entry>\n",
+            uuid::Uuid::new_v4()
         ));
     }
     xml.push_str("</feed>");
-    Ok(([(axum::http::header::CONTENT_TYPE, "application/atom+xml; charset=UTF-8")], xml).into_response())
+    Ok((
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "application/atom+xml; charset=UTF-8",
+        )],
+        xml,
+    )
+        .into_response())
 }
 
 async fn query_get_flickr_key() -> Result<Response, ApiError> {
@@ -865,35 +1364,54 @@ async fn query_get_sync(_app: &AppState, params: &Params) -> Result<Response, Ap
     let _catalog = common::get_catalog(params)?;
     // This requires SPARQL queries and temporary table operations
     // which need the full Wikidata integration
-    Err(ApiError("get_sync requires Wikidata SPARQL access (not yet ported to Rust)".into()))
+    Err(ApiError(
+        "get_sync requires Wikidata SPARQL access (not yet ported to Rust)".into(),
+    ))
 }
 
 async fn query_sitestats(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
-    Err(ApiError("sitestats requires Wikidata DB replica access (not yet ported to Rust)".into()))
+    Err(ApiError(
+        "sitestats requires Wikidata DB replica access (not yet ported to Rust)".into(),
+    ))
 }
 
 async fn query_disambig(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
-    Err(ApiError("disambig requires Wikidata DB replica access (not yet ported to Rust)".into()))
+    Err(ApiError(
+        "disambig requires Wikidata DB replica access (not yet ported to Rust)".into(),
+    ))
 }
 
 async fn query_missingpages(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
-    Err(ApiError("missingpages requires Wikidata DB replica access (not yet ported to Rust)".into()))
+    Err(ApiError(
+        "missingpages requires Wikidata DB replica access (not yet ported to Rust)".into(),
+    ))
 }
 
 async fn query_sparql_list(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
-    Err(ApiError("sparql_list requires SPARQL endpoint access (not yet ported to Rust)".into()))
+    Err(ApiError(
+        "sparql_list requires SPARQL endpoint access (not yet ported to Rust)".into(),
+    ))
 }
 
 async fn query_quick_compare(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
-    Err(ApiError("quick_compare requires Wikidata item loading (not yet ported to Rust)".into()))
+    Err(ApiError(
+        "quick_compare requires Wikidata item loading (not yet ported to Rust)".into(),
+    ))
 }
 
 async fn query_prep_new_item(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
-    Err(ApiError("prep_new_item requires QuickStatements integration (not yet ported to Rust)".into()))
+    Err(ApiError(
+        "prep_new_item requires QuickStatements integration (not yet ported to Rust)".into(),
+    ))
 }
 
-async fn query_get_entry_reader_view(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
-    Err(ApiError("get_entry_reader_view requires Readability library (not yet ported to Rust)".into()))
+async fn query_get_entry_reader_view(
+    _app: &AppState,
+    _params: &Params,
+) -> Result<Response, ApiError> {
+    Err(ApiError(
+        "get_entry_reader_view requires Readability library (not yet ported to Rust)".into(),
+    ))
 }
 
 async fn query_get_code_fragments(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {

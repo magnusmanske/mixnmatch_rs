@@ -1,10 +1,10 @@
 use crate::app_state::AppState;
 use crate::entry::Entry;
-use axum::response::IntoResponse;
 use axum::Json;
-use serde_json::{json, Value};
-use std::collections::HashSet;
+use axum::response::IntoResponse;
+use serde_json::{Value, json};
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 /// Query parameter map used by API handlers.
 pub type Params = HashMap<String, String>;
@@ -93,7 +93,10 @@ pub async fn entries_to_json_data(entries: &[Entry], app: &AppState) -> Result<V
     let mut user_ids = HashSet::new();
     for entry in entries {
         if let Some(id) = entry.id {
-            entries_map.insert(id.to_string(), serde_json::to_value(entry).unwrap_or(json!(null)));
+            entries_map.insert(
+                id.to_string(),
+                serde_json::to_value(entry).unwrap_or(json!(null)),
+            );
             if let Some(user) = entry.user {
                 user_ids.insert(user);
             }
@@ -110,6 +113,51 @@ pub async fn entries_to_json_data(entries: &[Entry], app: &AppState) -> Result<V
 // Extended entry data (mirrors PHP add_extended_entry_data)
 // ---------------------------------------------------------------------------
 
+/// Apply a per-entry enrichment from a storage result map.
+/// Skips the whole block if the storage call failed.
+fn apply_field<T, F>(entries: &mut Value, rows: anyhow::Result<HashMap<usize, T>>, mut f: F)
+where
+    F: FnMut(&mut Value, T),
+{
+    if let Ok(map) = rows {
+        for (entry_id, value) in map {
+            if let Some(entry) = entries.get_mut(&entry_id.to_string()) {
+                f(entry, value);
+            }
+        }
+    }
+}
+
+fn apply_person_dates(entries: &mut Value, rows: anyhow::Result<HashMap<usize, (String, String)>>) {
+    apply_field(entries, rows, |entry, (born, died)| {
+        if !born.is_empty() {
+            entry["born"] = json!(born);
+        }
+        if !died.is_empty() {
+            entry["died"] = json!(died);
+        }
+    });
+}
+
+fn apply_multi_match(entries: &mut Value, rows: anyhow::Result<HashMap<usize, String>>) {
+    apply_field(entries, rows, |entry, candidates| {
+        let qs: Vec<Value> = candidates
+            .split(',')
+            .filter(|s| !s.is_empty())
+            .map(|c| json!(format!("Q{c}")))
+            .collect();
+        entry["multimatch"] = json!(qs);
+    });
+}
+
+fn apply_kv(entries: &mut Value, rows: anyhow::Result<HashMap<usize, Vec<(String, String, u8)>>>) {
+    apply_field(entries, rows, |entry, kv_rows| {
+        for (kv_key, kv_value, done) in &kv_rows {
+            entry[kv_key] = json!([kv_value, done]);
+        }
+    });
+}
+
 pub async fn add_extended_entry_data(app: &AppState, data: &mut Value) -> Result<(), ApiError> {
     let entries = match data.get_mut("entries") {
         Some(e) if e.is_object() => e,
@@ -125,94 +173,37 @@ pub async fn add_extended_entry_data(app: &AppState, data: &mut Value) -> Result
         return Ok(());
     }
 
-    // person_dates
-    if let Ok(rows) = app.storage().api_get_person_dates_for_entries(&entry_ids).await {
-        for (entry_id, (born, died)) in rows {
-            let key = entry_id.to_string();
-            if let Some(entry) = entries.get_mut(&key) {
-                if !born.is_empty() { entry["born"] = json!(born); }
-                if !died.is_empty() { entry["died"] = json!(died); }
-            }
-        }
-    }
+    let s = app.storage();
+    let (person_dates, locations, multi_match, auxiliary, aliases, descriptions, kv, mnm_relations) = tokio::join!(
+        s.api_get_person_dates_for_entries(&entry_ids),
+        s.api_get_locations_for_entries(&entry_ids),
+        s.api_get_multi_match_for_entries(&entry_ids),
+        s.api_get_auxiliary_for_entries(&entry_ids),
+        s.api_get_aliases_for_entries(&entry_ids),
+        s.api_get_descriptions_for_entries(&entry_ids),
+        s.api_get_kv_for_entries(&entry_ids),
+        s.api_get_mnm_relations_for_entries(&entry_ids),
+    );
 
-    // location
-    if let Ok(rows) = app.storage().api_get_locations_for_entries(&entry_ids).await {
-        for (entry_id, (lat, lon)) in rows {
-            let key = entry_id.to_string();
-            if let Some(entry) = entries.get_mut(&key) {
-                entry["lat"] = json!(lat);
-                entry["lon"] = json!(lon);
-            }
-        }
-    }
-
-    // multi_match
-    if let Ok(rows) = app.storage().api_get_multi_match_for_entries(&entry_ids).await {
-        for (entry_id, candidates) in rows {
-            let key = entry_id.to_string();
-            if let Some(entry) = entries.get_mut(&key) {
-                let qs: Vec<Value> = candidates
-                    .split(',')
-                    .filter(|s| !s.is_empty())
-                    .map(|c| json!(format!("Q{c}")))
-                    .collect();
-                entry["multimatch"] = json!(qs);
-            }
-        }
-    }
-
-    // auxiliary
-    if let Ok(rows) = app.storage().api_get_auxiliary_for_entries(&entry_ids).await {
-        for (entry_id, aux_rows) in rows {
-            let key = entry_id.to_string();
-            if let Some(entry) = entries.get_mut(&key) {
-                entry["aux"] = json!(aux_rows);
-            }
-        }
-    }
-
-    // aliases
-    if let Ok(rows) = app.storage().api_get_aliases_for_entries(&entry_ids).await {
-        for (entry_id, alias_rows) in rows {
-            let key = entry_id.to_string();
-            if let Some(entry) = entries.get_mut(&key) {
-                entry["aliases"] = json!(alias_rows);
-            }
-        }
-    }
-
-    // descriptions
-    if let Ok(rows) = app.storage().api_get_descriptions_for_entries(&entry_ids).await {
-        for (entry_id, desc_rows) in rows {
-            let key = entry_id.to_string();
-            if let Some(entry) = entries.get_mut(&key) {
-                entry["descriptions"] = json!(desc_rows);
-            }
-        }
-    }
-
-    // kv_entry
-    if let Ok(rows) = app.storage().api_get_kv_for_entries(&entry_ids).await {
-        for (entry_id, kv_rows) in rows {
-            let key = entry_id.to_string();
-            if let Some(entry) = entries.get_mut(&key) {
-                for (kv_key, kv_value, done) in &kv_rows {
-                    entry[kv_key] = json!([kv_value, done]);
-                }
-            }
-        }
-    }
-
-    // mnm_relation
-    if let Ok(rows) = app.storage().api_get_mnm_relations_for_entries(&entry_ids).await {
-        for (entry_id, rel_rows) in rows {
-            let key = entry_id.to_string();
-            if let Some(entry) = entries.get_mut(&key) {
-                entry["relation"] = json!(rel_rows);
-            }
-        }
-    }
+    apply_person_dates(entries, person_dates);
+    apply_field(entries, locations, |e, (lat, lon)| {
+        e["lat"] = json!(lat);
+        e["lon"] = json!(lon);
+    });
+    apply_multi_match(entries, multi_match);
+    apply_field(entries, auxiliary, |e, v| {
+        e["aux"] = json!(v);
+    });
+    apply_field(entries, aliases, |e, v| {
+        e["aliases"] = json!(v);
+    });
+    apply_field(entries, descriptions, |e, v| {
+        e["descriptions"] = json!(v);
+    });
+    apply_kv(entries, kv);
+    apply_field(entries, mnm_relations, |e, v| {
+        e["relation"] = json!(v);
+    });
 
     Ok(())
 }
@@ -241,7 +232,11 @@ pub async fn get_users(app: &AppState, user_ids: &HashSet<usize>) -> Result<Valu
 pub async fn check_user(app: &AppState, params: &Params) -> Result<usize, ApiError> {
     let username = get_param(params, "username", "");
     let tusc_user = get_param(params, "tusc_user", "");
-    let name = if !username.is_empty() { username } else { tusc_user };
+    let name = if !username.is_empty() {
+        username
+    } else {
+        tusc_user
+    };
     if name.is_empty() || name == "-1" {
         return Err(ApiError("OAuth login required".into()));
     }
