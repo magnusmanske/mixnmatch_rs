@@ -1,3 +1,4 @@
+use crate::import_catalog::ImportMode;
 use crate::{app_state::AppState, extended_entry::ExtendedEntry, process::Process};
 use anyhow::{Result, anyhow};
 use clap::{Parser, Subcommand};
@@ -82,6 +83,26 @@ enum Commands {
     WB {
         #[arg(short, long, value_name = "FILE")]
         config: Option<PathBuf>,
+    },
+
+    /// Import or update a catalog from a MetaEntry JSON file
+    ImportCatalog {
+        #[arg(short, long, value_name = "FILE")]
+        config: Option<PathBuf>,
+
+        /// Catalog ID to import into
+        #[arg(long)]
+        catalog_id: usize,
+
+        /// Path to JSON file (array of MetaEntry) or JSONL file (one MetaEntry per line)
+        #[arg(long)]
+        file: PathBuf,
+
+        /// Import mode: "add_replace" (default) only adds/updates entries;
+        /// "add_replace_delete" also deletes catalog entries absent from the file
+        /// (fully-matched entries are never deleted).
+        #[arg(long, default_value = "add_replace")]
+        mode: ImportMode,
     },
 
     /// test
@@ -188,6 +209,31 @@ impl ShellCommands {
                         break;
                     }
                     offset += limit;
+                }
+            }
+            Some(Commands::ImportCatalog {
+                config,
+                catalog_id,
+                file,
+                mode,
+            }) => {
+                let app = Self::path2app(config)?;
+                let result = crate::import_catalog::import_from_file(
+                    &app,
+                    *catalog_id,
+                    file,
+                    *mode,
+                )
+                .await?;
+                println!(
+                    "Import complete: {} created, {} updated, {} skipped (fully matched), {} deleted",
+                    result.created, result.updated, result.skipped_fully_matched, result.deleted
+                );
+                if !result.errors.is_empty() {
+                    eprintln!("{} errors:", result.errors.len());
+                    for e in &result.errors {
+                        eprintln!("  {e}");
+                    }
                 }
             }
             Some(Commands::Test { config }) => {
