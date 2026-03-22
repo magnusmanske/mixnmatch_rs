@@ -1,10 +1,11 @@
 pub mod common;
 
 use crate::app_state::AppState;
+use crate::import_catalog::ImportMode;
 use axum::Router;
 use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use common::{ApiError, Params};
 use std::sync::Arc;
 
@@ -14,6 +15,7 @@ pub fn router(app: AppState) -> Router {
     let state: SharedState = Arc::new(app);
     Router::new()
         .route("/api.php", get(api_dispatcher).post(api_dispatcher))
+        .route("/api/v1/import_catalog", post(api_import_catalog))
         .with_state(state)
 }
 
@@ -128,6 +130,48 @@ async fn dispatch(query: &str, app: &AppState, params: &Params) -> Result<Respon
         "test_import_source" => query_test_import_source(app, params).await,
 
         _ => Err(ApiError(format!("Unknown query '{query}'"))),
+    }
+}
+
+// ─── Import catalog endpoint ────────────────────────────────────────────────
+
+/// POST body for `/api/v1/import_catalog`.
+#[derive(serde::Deserialize)]
+struct ImportCatalogRequest {
+    catalog_id: usize,
+    /// "add_replace" (default) or "add_replace_delete"
+    #[serde(default = "default_import_mode")]
+    mode: ImportMode,
+    entries: Vec<crate::meta_entry::MetaEntry>,
+}
+
+fn default_import_mode() -> ImportMode {
+    ImportMode::AddReplace
+}
+
+async fn api_import_catalog(
+    State(app): State<SharedState>,
+    axum::Json(body): axum::Json<ImportCatalogRequest>,
+) -> Response {
+    match crate::import_catalog::import_meta_entries(
+        &app,
+        body.catalog_id,
+        body.entries,
+        body.mode,
+    )
+    .await
+    {
+        Ok(result) => {
+            let data = serde_json::json!({
+                "created": result.created,
+                "updated": result.updated,
+                "skipped_fully_matched": result.skipped_fully_matched,
+                "deleted": result.deleted,
+                "errors": result.errors,
+            });
+            ok(data)
+        }
+        Err(e) => ApiError(e.to_string()).into_response(),
     }
 }
 
