@@ -28,7 +28,7 @@ async fn api_dispatcher(State(app): State<SharedState>, Query(params): Query<Par
     }
 }
 
-#[allow(cognitive_complexity)]
+#[allow(clippy::cognitive_complexity)]
 async fn dispatch(query: &str, app: &AppState, params: &Params) -> Result<Response, ApiError> {
     match query {
         // Catalog
@@ -153,13 +153,8 @@ async fn api_import_catalog(
     State(app): State<SharedState>,
     axum::Json(body): axum::Json<ImportCatalogRequest>,
 ) -> Response {
-    match crate::import_catalog::import_meta_entries(
-        &app,
-        body.catalog_id,
-        body.entries,
-        body.mode,
-    )
-    .await
+    match crate::import_catalog::import_meta_entries(&app, body.catalog_id, body.entries, body.mode)
+        .await
     {
         Ok(result) => {
             let data = serde_json::json!({
