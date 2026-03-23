@@ -482,6 +482,17 @@ impl Storage for StorageMySQL {
         Ok(results)
     }
 
+    async fn get_import_file_info(&self, uuid: &str) -> Result<Option<(String, usize)>> {
+        let results: Vec<(String, usize)> =
+            "SELECT `type`, `user` FROM `import_file` WHERE `uuid`=:uuid"
+                .with(params! {uuid})
+                .map(self.get_conn().await?, |(file_type, user): (String, usize)| {
+                    (file_type, user)
+                })
+                .await?;
+        Ok(results.into_iter().next())
+    }
+
     async fn get_existing_ext_ids(
         &self,
         catalog_id: usize,

@@ -99,6 +99,8 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     // Data source
 
     async fn get_data_source_type_for_uuid(&self, uuid: &str) -> Result<Vec<String>>;
+    /// Returns `(type, user)` for the given import_file UUID, or `None` if not found.
+    async fn get_import_file_info(&self, uuid: &str) -> Result<Option<(String, usize)>>;
     async fn get_existing_ext_ids(
         &self,
         catalog_id: usize,

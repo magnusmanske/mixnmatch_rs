@@ -136,13 +136,21 @@ async fn dispatch(query: &str, app: &AppState, params: &Params) -> Result<Respon
 // ─── Import catalog endpoint ────────────────────────────────────────────────
 
 /// POST body for `/api/v1/import_catalog`.
+///
+/// Either `entries` (inline array) or `uuid` (reference to an uploaded
+/// import_file) must be provided.
 #[derive(serde::Deserialize)]
 struct ImportCatalogRequest {
     catalog_id: usize,
     /// "add_replace" (default) or "add_replace_delete"
     #[serde(default = "default_import_mode")]
     mode: ImportMode,
-    entries: Vec<crate::meta_entry::MetaEntry>,
+    /// Inline MetaEntry objects. Mutually exclusive with `uuid`.
+    #[serde(default)]
+    entries: Option<Vec<crate::meta_entry::MetaEntry>>,
+    /// UUID of a previously-uploaded import_file (type must be "json" or "jsonl").
+    #[serde(default)]
+    uuid: Option<String>,
 }
 
 fn default_import_mode() -> ImportMode {
@@ -153,9 +161,33 @@ async fn api_import_catalog(
     State(app): State<SharedState>,
     axum::Json(body): axum::Json<ImportCatalogRequest>,
 ) -> Response {
-    match crate::import_catalog::import_meta_entries(&app, body.catalog_id, body.entries, body.mode)
+    let result = if let Some(uuid) = &body.uuid {
+        crate::import_catalog::import_from_import_file(
+            &app,
+            body.catalog_id,
+            uuid,
+            body.mode,
+        )
         .await
-    {
+    } else if let Some(entries) = body.entries {
+        // Inline entries: require a user via the import_file.user equivalent.
+        // For inline POST there is no import_file row, so we don't validate
+        // the user field (same as CLI).
+        crate::import_catalog::import_meta_entries(
+            &app,
+            body.catalog_id,
+            entries,
+            body.mode,
+            None,
+        )
+        .await
+    } else {
+        Err(anyhow::anyhow!(
+            "Either 'entries' or 'uuid' must be provided"
+        ))
+    };
+
+    match result {
         Ok(result) => {
             let data = serde_json::json!({
                 "created": result.created,

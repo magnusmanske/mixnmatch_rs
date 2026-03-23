@@ -45,16 +45,24 @@ pub type EntryId = Option<DbId>;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Entry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: EntryId,
     pub catalog: DbId,
     pub ext_id: String,
+    #[serde(default)]
     pub ext_url: String,
     pub ext_name: String,
+    #[serde(default)]
     pub ext_desc: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub q: Option<ItemId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user: Option<DbId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timestamp: Option<String>,
+    #[serde(default)]
     pub random: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub type_name: Option<String>,
     #[serde(skip)]
     pub app: Option<AppState>,
