@@ -5,10 +5,13 @@ use wikimisc::wikibase::{Entity, EntityTrait, Reference, Snak, SnakDataType, Sta
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct AuxiliaryRow {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     row_id: Option<DbId>,
     prop_numeric: PropertyId,
     value: String,
+    #[serde(default)]
     in_wikidata: bool,
+    #[serde(default)]
     entry_is_matched: bool,
 }
 
@@ -36,6 +39,10 @@ impl AuxiliaryRow {
 
     pub fn row_id(&self) -> Option<DbId> {
         self.row_id
+    }
+
+    pub fn clear_row_id(&mut self) {
+        self.row_id = None;
     }
 
     pub fn prop_numeric(&self) -> PropertyId {

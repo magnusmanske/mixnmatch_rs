@@ -14,7 +14,9 @@ use wikimisc::wikibase::LocaleString;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct MetaPersonDates {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub born: Option<PersonDate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub died: Option<PersonDate>,
 }
 
@@ -67,16 +69,27 @@ pub struct MetaStatementText {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetaEntry {
     pub entry: Entry,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub auxiliary: Vec<AuxiliaryRow>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub coordinate: Option<CoordinateLocation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub person_dates: Option<MetaPersonDates>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mnm_relations: Vec<MetaMnmRelation>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub descriptions: HashMap<String, String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<LocaleString>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub issues: Vec<MetaIssue>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub kv_entries: Vec<MetaKvEntry>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub log_entries: Vec<MetaLogEntry>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub multi_match: Vec<DbId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub statement_text: Vec<MetaStatementText>,
 }
 
