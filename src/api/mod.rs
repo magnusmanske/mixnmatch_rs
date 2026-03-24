@@ -162,25 +162,13 @@ async fn api_import_catalog(
     axum::Json(body): axum::Json<ImportCatalogRequest>,
 ) -> Response {
     let result = if let Some(uuid) = &body.uuid {
-        crate::import_catalog::import_from_import_file(
-            &app,
-            body.catalog_id,
-            uuid,
-            body.mode,
-        )
-        .await
+        crate::import_catalog::import_from_import_file(&app, body.catalog_id, uuid, body.mode).await
     } else if let Some(entries) = body.entries {
         // Inline entries: require a user via the import_file.user equivalent.
         // For inline POST there is no import_file row, so we don't validate
         // the user field (same as CLI).
-        crate::import_catalog::import_meta_entries(
-            &app,
-            body.catalog_id,
-            entries,
-            body.mode,
-            None,
-        )
-        .await
+        crate::import_catalog::import_meta_entries(&app, body.catalog_id, entries, body.mode, None)
+            .await
     } else {
         Err(anyhow::anyhow!(
             "Either 'entries' or 'uuid' must be provided"
@@ -620,7 +608,7 @@ async fn query_match_q_multi(app: &AppState, params: &Params) -> Result<Response
     let uid = common::check_user(app, params).await?;
     let data_str = common::get_param(params, "data", "[]");
     let data: Vec<serde_json::Value> = serde_json::from_str(&data_str).unwrap_or_default();
-    let mut not_found = 0usize;
+    let mut not_found = 0_usize;
     let mut not_found_list: Vec<String> = vec![];
     for d in &data {
         let arr = d.as_array();
@@ -680,7 +668,7 @@ async fn query_suggest(app: &AppState, params: &Params) -> Result<Response, ApiE
     let catalog = common::get_param_int(params, "catalog", 0) as usize;
     let overwrite = common::get_param_int(params, "overwrite", 0) != 0;
     let suggestions = common::get_param(params, "suggestions", "");
-    let mut cnt = 0usize;
+    let mut cnt = 0_usize;
     let mut out = String::new();
     for line in suggestions.lines() {
         let line = line.trim();
