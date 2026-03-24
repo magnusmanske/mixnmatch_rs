@@ -121,7 +121,7 @@ where
 {
     if let Ok(map) = rows {
         for (entry_id, value) in map {
-            if let Some(entry) = entries.get_mut(&entry_id.to_string()) {
+            if let Some(entry) = entries.get_mut(entry_id.to_string()) {
                 f(entry, value);
             }
         }
