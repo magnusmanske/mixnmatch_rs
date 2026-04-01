@@ -4,7 +4,7 @@ use crate::{
     entry::Entry,
     mysql_misc::MySQLMisc,
 };
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use futures::future::join_all;
 use itertools::Itertools;
 use mysql_async::{from_row, prelude::*};
@@ -37,7 +37,9 @@ impl WDRC {
     ) -> Result<Vec<(usize, usize, String)>> {
         let properties = prop2catalog_ids.keys().cloned().collect_vec();
         let props_str = properties.iter().map(|p| format!("{p}")).join(",");
-        let sql = format!("SELECT DISTINCT `item`,`property`,`timestamp` FROM `statements` WHERE `property` IN ({props_str}) AND `timestamp`>='{last_ts}'") ;
+        let sql = format!(
+            "SELECT DISTINCT `item`,`property`,`timestamp` FROM `statements` WHERE `property` IN ({props_str}) AND `timestamp`>='{last_ts}'"
+        );
         let results = self
             .get_conn()
             .await?
@@ -97,18 +99,20 @@ impl WDRC {
     }
 
     async fn apply_deletions(&self, app: &AppState) -> Result<()> {
-        let (last_ts, mut new_ts) = self.get_deletion_timestamps(app).await?;
-        let deletions = self.get_deletions(&last_ts, &mut new_ts).await?;
-        if !deletions.is_empty() {
-            let catalog_ids = app.storage().maintenance_apply_deletions(deletions).await?;
-            for catalog_id in catalog_ids {
-                let catalog = Catalog::from_id(catalog_id, app).await?;
-                let _ = catalog.refresh_overview_table().await;
-            }
-        }
-        app.storage()
-            .set_kv_value("wdrc_apply_deletions", &new_ts)
-            .await?;
+        // DEACTIVATED, AS IT SEEMS TO DELETE TOO MANY ITEMS
+        // SEE https://codeberg.org/magnusmanske/mixnmatch/issues/124
+        // let (last_ts, mut new_ts) = self.get_deletion_timestamps(app).await?;
+        // let deletions = self.get_deletions(&last_ts, &mut new_ts).await?;
+        // if !deletions.is_empty() {
+        //     let catalog_ids = app.storage().maintenance_apply_deletions(deletions).await?;
+        //     for catalog_id in catalog_ids {
+        //         let catalog = Catalog::from_id(catalog_id, app).await?;
+        //         let _ = catalog.refresh_overview_table().await;
+        //     }
+        // }
+        // app.storage()
+        //     .set_kv_value("wdrc_apply_deletions", &new_ts)
+        //     .await?;
         Ok(())
     }
 
