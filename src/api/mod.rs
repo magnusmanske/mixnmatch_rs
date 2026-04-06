@@ -1127,6 +1127,10 @@ async fn query_download2(app: &AppState, params: &Params) -> Result<Response, Ap
         sql.push_str(" AND entry.user!=4");
     }
 
+    let limit = common::get_param_int(params, "limit", 100_000).max(1).min(1_000_000);
+    let offset = common::get_param_int(params, "offset", 0).max(0);
+    sql.push_str(&format!(" LIMIT {limit} OFFSET {offset}"));
+
     let rows = app.storage().api_get_download2(&sql).await?;
     let ct = if format == "json" {
         "application/json; charset=UTF-8"

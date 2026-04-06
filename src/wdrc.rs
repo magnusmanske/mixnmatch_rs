@@ -99,20 +99,33 @@ impl WDRC {
     }
 
     async fn apply_deletions(&self, app: &AppState) -> Result<()> {
-        // DEACTIVATED, AS IT SEEMS TO DELETE TOO MANY ITEMS
-        // SEE https://codeberg.org/magnusmanske/mixnmatch/issues/124
-        // let (last_ts, mut new_ts) = self.get_deletion_timestamps(app).await?;
-        // let deletions = self.get_deletions(&last_ts, &mut new_ts).await?;
-        // if !deletions.is_empty() {
-        //     let catalog_ids = app.storage().maintenance_apply_deletions(deletions).await?;
-        //     for catalog_id in catalog_ids {
-        //         let catalog = Catalog::from_id(catalog_id, app).await?;
-        //         let _ = catalog.refresh_overview_table().await;
-        //     }
-        // }
-        // app.storage()
-        //     .set_kv_value("wdrc_apply_deletions", &new_ts)
-        //     .await?;
+        let (last_ts, mut new_ts) = self.get_deletion_timestamps(app).await?;
+        let deletions = self.get_deletions(&last_ts, &mut new_ts).await?;
+        if !deletions.is_empty() {
+            // Convert numeric Q-IDs to "Q{n}" strings for the Wikidata replica page table lookup.
+            // This cross-reference ensures we only unmatch items that are confirmed still deleted,
+            // preventing false positives from temporary deletions that were subsequently restored.
+            // See https://codeberg.org/magnusmanske/mixnmatch/issues/124
+            let qs: Vec<String> = deletions.iter().map(|n| format!("Q{n}")).collect();
+            let confirmed_deleted = app.wikidata().get_deleted_items(&qs).await?;
+            let confirmed_numeric: Vec<isize> = confirmed_deleted
+                .iter()
+                .filter_map(|q| AppState::item2numeric(q))
+                .collect();
+            if !confirmed_numeric.is_empty() {
+                let catalog_ids = app
+                    .storage()
+                    .maintenance_apply_deletions(confirmed_numeric)
+                    .await?;
+                for catalog_id in catalog_ids {
+                    let catalog = Catalog::from_id(catalog_id, app).await?;
+                    let _ = catalog.refresh_overview_table().await;
+                }
+            }
+        }
+        app.storage()
+            .set_kv_value("wdrc_apply_deletions", &new_ts)
+            .await?;
         Ok(())
     }
 
