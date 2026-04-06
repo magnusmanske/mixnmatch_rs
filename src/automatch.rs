@@ -677,7 +677,13 @@ impl AutoMatch {
             return Err(()); // No candidate items
         }
         let candidate_items = match self
-            .subset_items_by_birth_death_year(&candidate_items, birth_year, death_year, mw_api)
+            .subset_items_by_birth_death_year(
+                &candidate_items,
+                birth_year,
+                death_year,
+                mw_api,
+                ext_name,
+            )
             .await
         {
             Ok(ci) => ci,
@@ -825,17 +831,50 @@ impl AutoMatch {
         birth_year: i32,
         death_year: i32,
         mw_api: &mediawiki::api::Api,
+        name: &str,
     ) -> Result<Vec<String>> {
+        // Extract the family name (last word of the simplified name) for candidate filtering.
+        // This prevents false positives where birth/death years coincidentally match but the
+        // names are clearly different (e.g. "A. G. Thomas" matching "Thomas Douglas Forsyth").
+        let simplified = Person::sanitize_simplify_name(name);
+        let family_name = simplified
+            .split_whitespace()
+            .last()
+            .unwrap_or("")
+            .to_lowercase();
+
         let mut ret = vec![];
         for items in all_items.chunks(100) {
             let item_str = items.join(" wd:");
             let sparql = format!(
-                "SELECT DISTINCT ?q {{ VALUES ?q {{ wd:{} }} . ?q wdt:P569 ?born ; wdt:P570 ?died. FILTER ( year(?born)={}).FILTER ( year(?died)={} ) }}",
+                "SELECT DISTINCT ?q ?qLabel {{ VALUES ?q {{ wd:{} }} . ?q wdt:P569 ?born ; wdt:P570 ?died. FILTER ( year(?born)={}).FILTER ( year(?died)={} ) SERVICE wikibase:label {{ bd:serviceParam wikibase:language \"en\" }} }}",
                 &item_str, birth_year, death_year
             );
             if let Ok(results) = mw_api.sparql_query(&sparql).await {
-                let mut candidates = mw_api.entities_from_sparql_result(&results, "q");
-                ret.append(&mut candidates);
+                if let Some(bindings) = results["results"]["bindings"].as_array() {
+                    for b in bindings {
+                        let entity_url = match b["q"]["value"].as_str() {
+                            Some(u) => u,
+                            None => continue,
+                        };
+                        let q = match mw_api.extract_entity_from_uri(entity_url) {
+                            Ok(q) => q,
+                            Err(_) => continue,
+                        };
+                        // If we have a family name, require the candidate's English label to
+                        // contain it (case-insensitive). Skip candidates with no label.
+                        if !family_name.is_empty() {
+                            let label = b["qLabel"]["value"]
+                                .as_str()
+                                .unwrap_or("")
+                                .to_lowercase();
+                            if label.is_empty() || !label.contains(&family_name) {
+                                continue;
+                            }
+                        }
+                        ret.push(q);
+                    }
+                }
             }
         }
         Ok(ret)
