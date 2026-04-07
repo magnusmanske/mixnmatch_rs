@@ -1,0 +1,9 @@
+# https://github.com/heroku/buildpacks-deb-packages/tree/v0.3.0
+[_]
+schema-version = "0.2"
+
+[com.heroku.buildpacks.deb-packages]
+install = [
+    "imagemagick",
+    "php",
+]
