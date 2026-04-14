@@ -6,4 +6,8 @@ schema-version = "0.2"
 install = [
     "imagemagick",
     "php",
+    "php-mysql",
+    "php-mysqli",
+    "php-mysqlnd",
+    "mysql-client"
 ]
