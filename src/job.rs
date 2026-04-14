@@ -466,15 +466,17 @@ impl Job {
 
             "wdrc_sync" => self.app.wdrc().sync(&self.app).await,
             // Maintenance::new(&self.app).wdrc_sync().await,
-            "update_person_dates" => PhpWrapper::update_person_dates(catalog_id),
+            "update_person_dates" => PhpWrapper::update_person_dates(catalog_id, &self.app),
             "generate_aux_from_description" => {
-                PhpWrapper::generate_aux_from_description(catalog_id)
+                PhpWrapper::generate_aux_from_description(catalog_id, &self.app)
             }
             "bespoke_scraper" => {
                 crate::bespoke_scrapers::run_bespoke_scraper(catalog_id, &self.app).await
             }
-            "import_aux_from_url" => PhpWrapper::import_aux_from_url(catalog_id),
-            "update_descriptions_from_url" => PhpWrapper::update_descriptions_from_url(catalog_id),
+            "import_aux_from_url" => PhpWrapper::import_aux_from_url(catalog_id, &self.app),
+            "update_descriptions_from_url" => {
+                PhpWrapper::update_descriptions_from_url(catalog_id, &self.app)
+            }
             "match_by_coordinates" => {
                 let cm = CoordinateMatcher::new(&self.app, Some(catalog_id)).await?;
                 cm.run().await

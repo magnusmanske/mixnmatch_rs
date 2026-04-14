@@ -7,7 +7,7 @@ use crate::{
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use lazy_static::lazy_static;
-use rand::Rng;
+use rand::RngExt;
 use regex::Regex;
 use wikimisc::timestamp::TimeStamp;
 

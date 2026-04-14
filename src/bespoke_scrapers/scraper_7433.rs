@@ -1,7 +1,7 @@
 use crate::{app_state::AppState, entry::Entry, extended_entry::ExtendedEntry, person_date::PersonDate};
 use anyhow::Result;
 use async_trait::async_trait;
-use rand::Rng;
+use rand::RngExt;
 
 use super::BespokeScraper;
 

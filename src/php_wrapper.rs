@@ -8,10 +8,10 @@ use std::process::Command;
 pub struct PhpWrapper;
 
 impl PhpWrapper {
-    fn new_command(script: &str) -> Command {
+    fn new_command(script: &str, app: &AppState) -> Command {
         let root_dir = AppState::tool_root_dir();
         let mut ret = if AppState::is_on_toolforge() {
-            let mut ret = Command::new("php8.3");
+            let mut ret = Command::new(app.toolforge_php_command());
             let _ = ret.arg("-c");
             let _ = ret.arg(format!("{root_dir}/mixnmatch_rs/php.ini"));
             ret
@@ -22,9 +22,9 @@ impl PhpWrapper {
         ret
     }
 
-    fn run_command_with_catalog_id(catalog_id: usize, command: &str) -> Result<()> {
+    fn run_command_with_catalog_id(catalog_id: usize, command: &str, app: &AppState) -> Result<()> {
         info!("PHP: {command} {catalog_id} START [{}]", Utc::now());
-        let output = Self::new_command(command)
+        let output = Self::new_command(command, app)
             .arg(format!("{catalog_id}"))
             .output()?;
         info!("PHP: {command} {catalog_id} END [{}]", Utc::now());
@@ -32,23 +32,23 @@ impl PhpWrapper {
         Ok(())
     }
 
-    pub fn update_person_dates(catalog_id: usize) -> Result<()> {
-        Self::run_command_with_catalog_id(catalog_id, "person_dates/update_person_dates.php")
+    pub fn update_person_dates(catalog_id: usize, app: &AppState) -> Result<()> {
+        Self::run_command_with_catalog_id(catalog_id, "person_dates/update_person_dates.php", app)
     }
 
-    pub fn generate_aux_from_description(catalog_id: usize) -> Result<()> {
-        Self::run_command_with_catalog_id(catalog_id, "generate_aux_from_description.php")
+    pub fn generate_aux_from_description(catalog_id: usize, app: &AppState) -> Result<()> {
+        Self::run_command_with_catalog_id(catalog_id, "generate_aux_from_description.php", app)
     }
 
-    pub async fn bespoke_scraper(catalog_id: usize) -> Result<()> {
-        Self::run_command_with_catalog_id(catalog_id, "bespoke_scraper.php")
+    pub async fn bespoke_scraper(catalog_id: usize, app: &AppState) -> Result<()> {
+        Self::run_command_with_catalog_id(catalog_id, "bespoke_scraper.php", app)
     }
 
-    pub fn update_descriptions_from_url(catalog_id: usize) -> Result<()> {
-        Self::run_command_with_catalog_id(catalog_id, "update_descriptions_from_url.php")
+    pub fn update_descriptions_from_url(catalog_id: usize, app: &AppState) -> Result<()> {
+        Self::run_command_with_catalog_id(catalog_id, "update_descriptions_from_url.php", app)
     }
 
-    pub fn import_aux_from_url(catalog_id: usize) -> Result<()> {
-        Self::run_command_with_catalog_id(catalog_id, "import_aux_from_url.php")
+    pub fn import_aux_from_url(catalog_id: usize, app: &AppState) -> Result<()> {
+        Self::run_command_with_catalog_id(catalog_id, "import_aux_from_url.php", app)
     }
 }
