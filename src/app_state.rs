@@ -54,6 +54,7 @@ pub struct AppState {
     import_file_path: Arc<String>,
     task_specific_usize: Arc<HashMap<String, usize>>,
     max_concurrent_jobs: usize,
+    toolforge_php_command: String,
 }
 
 impl AppState {
@@ -94,6 +95,10 @@ impl AppState {
             .ok_or_else(|| anyhow!("config.import_file_path not found, or not an object"))?
             .to_string();
         let import_file_path = Arc::new(import_file_path);
+        let toolforge_php_command = config["toolforge_php_command"]
+            .as_str()
+            .unwrap_or("php8.3")
+            .to_string();
         Ok(Self {
             wikidata: Wikidata::new(&config["wikidata"], bot_name.clone(), bot_password.clone()),
             wdt: Wikidata::new(&config["wdt"], bot_name, bot_password),
@@ -105,6 +110,7 @@ impl AppState {
             import_file_path,
             task_specific_usize,
             max_concurrent_jobs,
+            toolforge_php_command,
         })
     }
 
@@ -112,6 +118,10 @@ impl AppState {
         WikiBase::new(&config["wikibase"])
             .await
             .ok_or(anyhow!("Could not create wikibase"))
+    }
+
+    pub fn toolforge_php_command(&self) -> &str {
+        &self.toolforge_php_command
     }
 
     pub fn storage(&self) -> &Arc<Box<dyn Storage>> {

@@ -2,7 +2,7 @@ use crate::{app_state::AppState, entry::Entry, extended_entry::ExtendedEntry, pe
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use lazy_static::lazy_static;
-use rand::Rng;
+use rand::RngExt;
 use regex::{Captures, Regex};
 
 use super::BespokeScraper;
