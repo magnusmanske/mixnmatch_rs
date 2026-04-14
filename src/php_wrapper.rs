@@ -11,7 +11,7 @@ impl PhpWrapper {
     fn new_command(script: &str) -> Command {
         let root_dir = AppState::tool_root_dir();
         let mut ret = if AppState::is_on_toolforge() {
-            let mut ret = Command::new("php");
+            let mut ret = Command::new("php8.3");
             let _ = ret.arg("-c");
             let _ = ret.arg(format!("{root_dir}/mixnmatch_rs/php.ini"));
             ret
