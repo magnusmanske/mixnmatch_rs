@@ -433,6 +433,7 @@ CREATE TABLE `entry` (
   KEY `catalog_2` (`catalog`,`type`),
   KEY `type_2` (`type`,`q`,`catalog`),
   KEY `catalog_only` (`catalog`),
+  KEY `catalog_q_random` (`catalog`,`q`,`random`),
   FULLTEXT KEY `ft_ext_name` (`ext_name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci;
 
