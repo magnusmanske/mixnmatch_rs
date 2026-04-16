@@ -560,6 +560,12 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     async fn get_code_fragment_lua(&self, function: &str, catalog_id: usize) -> Result<Option<String>>;
     async fn touch_code_fragment(&self, function: &str, catalog_id: usize) -> Result<()>;
     async fn clear_person_dates_for_catalog(&self, catalog_id: usize) -> Result<()>;
+    async fn get_code_fragments_for_catalog(&self, catalog_id: usize) -> Result<Vec<serde_json::Value>>;
+    async fn get_all_code_fragment_functions(&self) -> Result<Vec<String>>;
+    async fn save_code_fragment(&self, fragment: &serde_json::Value) -> Result<usize>;
+
+    // Jobs
+    async fn queue_job(&self, catalog_id: usize, action: &str, depends_on: Option<usize>) -> Result<usize>;
 }
 
 #[cfg(test)]
