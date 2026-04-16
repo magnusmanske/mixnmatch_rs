@@ -70,36 +70,36 @@ async fn api_dispatch(
 #[derive(Debug, Clone)]
 struct ApiError {
     message: String,
-    status: axum::http::StatusCode,
+    kind: &'static str,
 }
 
 impl ApiError {
     fn new(msg: &str) -> Self {
         Self {
             message: msg.to_string(),
-            status: axum::http::StatusCode::BAD_REQUEST,
+            kind: "bad_request",
         }
     }
 
     fn not_found(msg: &str) -> Self {
         Self {
             message: msg.to_string(),
-            status: axum::http::StatusCode::NOT_FOUND,
+            kind: "not_found",
         }
     }
 
     fn internal(msg: &str) -> Self {
         Self {
             message: msg.to_string(),
-            status: axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            kind: "internal_error",
         }
     }
 }
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let body = json!({ "error": self.message });
-        (self.status, Json(body)).into_response()
+        let body = json!({ "status": self.kind, "error": self.message });
+        Json(body).into_response()
     }
 }
 
@@ -300,7 +300,8 @@ mod tests {
         let app = router(test_app());
         let resp = app.oneshot(build_request("/api")).await.unwrap();
         let (status, body) = response_json(resp).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["status"], "bad_request");
         assert!(body["error"].as_str().unwrap().contains("missing"));
     }
 
@@ -312,7 +313,8 @@ mod tests {
             .await
             .unwrap();
         let (status, body) = response_json(resp).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["status"], "bad_request");
         assert!(body["error"].as_str().unwrap().contains("unknown action"));
     }
 
@@ -326,7 +328,8 @@ mod tests {
             .await
             .unwrap();
         let (status, body) = response_json(resp).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["status"], "bad_request");
         assert!(body["error"].as_str().unwrap().contains("function"));
     }
 
@@ -338,7 +341,8 @@ mod tests {
             .await
             .unwrap();
         let (status, body) = response_json(resp).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["status"], "bad_request");
         assert!(body["error"].as_str().unwrap().contains("entry_id"));
     }
 
@@ -352,7 +356,8 @@ mod tests {
             .await
             .unwrap();
         let (status, body) = response_json(resp).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["status"], "bad_request");
         assert!(body["error"].as_str().unwrap().contains("unsupported"));
     }
 
@@ -366,7 +371,8 @@ mod tests {
             .await
             .unwrap();
         let (status, body) = response_json(resp).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["status"], "bad_request");
         assert!(body["error"].as_str().unwrap().contains("positive integer"));
     }
 
@@ -630,7 +636,8 @@ if m then d[#d+1] = m end
         let (status, body) = tokio::runtime::Runtime::new()
             .unwrap()
             .block_on(response_json(resp));
-        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["status"], "bad_request");
         assert_eq!(body["error"], "oops");
     }
 
@@ -638,19 +645,23 @@ if m then d[#d+1] = m end
     fn test_not_found_status() {
         let err = ApiError::not_found("gone");
         let resp = err.into_response();
-        let (status, _) = tokio::runtime::Runtime::new()
+        let (status, body) = tokio::runtime::Runtime::new()
             .unwrap()
             .block_on(response_json(resp));
-        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["status"], "not_found");
+        assert_eq!(body["error"], "gone");
     }
 
     #[test]
     fn test_internal_error_status() {
         let err = ApiError::internal("boom");
         let resp = err.into_response();
-        let (status, _) = tokio::runtime::Runtime::new()
+        let (status, body) = tokio::runtime::Runtime::new()
             .unwrap()
             .block_on(response_json(resp));
-        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["status"], "internal_error");
+        assert_eq!(body["error"], "boom");
     }
 }
