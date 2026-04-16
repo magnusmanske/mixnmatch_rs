@@ -23,6 +23,8 @@ use sysinfo::System;
 use tokio::time::sleep;
 use wikimisc::timestamp::TimeStamp;
 
+pub const MICRO_API_PORT: u16 = 8000;
+
 /// Global function for tests.
 /// # Panics
 /// Used for testing only, panics if the config file is not found.
@@ -217,15 +219,11 @@ impl AppState {
     }
 
     pub async fn forever_loop(&self) -> Result<()> {
-        // Optionally start the micro-API server if PORT is set
-        if let Ok(port_str) = std::env::var("PORT") {
-            if let Ok(port) = port_str.parse::<u16>() {
-                let app_clone = self.clone();
-                tokio::spawn(async move {
-                    crate::micro_api::serve(app_clone, port).await;
-                });
-            }
-        }
+        // Start the micro-API server
+        let app_clone = self.clone();
+        tokio::spawn(async move {
+            crate::micro_api::serve(app_clone, MICRO_API_PORT).await;
+        });
 
         let current_jobs = self.forever_loop_initalize().await?;
         let threshold_job_size = TaskSize::Medium;
