@@ -7,7 +7,7 @@
 #
 # Host: tools-db (MySQL 5.5.5-10.6.22-MariaDB-log)
 # Database: s51434__mixnmatch_p
-# Generation Time: 2026-03-17 13:01:41 +0000
+# Generation Time: 2026-04-16 14:10:57 +0000
 # ************************************************************
 
 
@@ -254,6 +254,7 @@ CREATE TABLE `code_fragments` (
   `is_active` tinyint(4) NOT NULL DEFAULT 1,
   `note` mediumtext DEFAULT NULL,
   `last_run` timestamp NULL DEFAULT NULL,
+  `lua` mediumtext DEFAULT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `function` (`function`,`catalog`,`is_active`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci;
@@ -787,7 +788,7 @@ CREATE TABLE `mnm_relation` (
 
 CREATE TABLE `multi_match` (
   `id` int(11) unsigned NOT NULL AUTO_INCREMENT,
-  `entry_id` int(11) NOT NULL,
+  `entry_id` int(11) unsigned NOT NULL,
   `catalog` int(11) NOT NULL,
   `candidates` tinytext NOT NULL,
   `candidate_count` int(11) NOT NULL,
@@ -927,8 +928,10 @@ CREATE TABLE `statement_text` (
   `in_wikidata` tinyint(1) unsigned NOT NULL,
   `entry_is_matched` tinyint(1) unsigned NOT NULL,
   `q` int(11) unsigned DEFAULT NULL,
+  `user_id` int(10) unsigned DEFAULT NULL,
   PRIMARY KEY (`id`),
-  UNIQUE KEY `entry_id` (`entry_id`,`property`,`text`)
+  UNIQUE KEY `entry_id` (`entry_id`,`property`,`text`),
+  KEY `idx_q` (`q`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci;
 
 
@@ -1370,6 +1373,7 @@ AS SELECT
    `statement_text`.`in_wikidata` AS `in_wikidata`,
    `statement_text`.`entry_is_matched` AS `entry_is_matched`,
    `statement_text`.`q` AS `st_q`,
+   `statement_text`.`user_id` AS `st_user_id`,
    `entry`.`id` AS `id`,
    `entry`.`catalog` AS `catalog`,
    `entry`.`ext_id` AS `ext_id`,
