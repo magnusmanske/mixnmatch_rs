@@ -10,6 +10,7 @@ use crate::job_status::JobStatus;
 use crate::maintenance::Maintenance;
 use crate::match_state::MatchState;
 use crate::microsync::Microsync;
+use crate::code_fragment;
 use crate::php_wrapper::PhpWrapper;
 use crate::taxon_matcher::TaxonMatcher;
 use crate::update_catalog::UpdateCatalog;
@@ -466,9 +467,17 @@ impl Job {
 
             "wdrc_sync" => self.app.wdrc().sync(&self.app).await,
             // Maintenance::new(&self.app).wdrc_sync().await,
-            "update_person_dates" => PhpWrapper::update_person_dates(catalog_id, &self.app),
+            "update_person_dates" => {
+                match code_fragment::run_person_dates_job(catalog_id, &self.app).await {
+                    Ok(()) => Ok(()),
+                    Err(_) => PhpWrapper::update_person_dates(catalog_id, &self.app),
+                }
+            }
             "generate_aux_from_description" => {
-                PhpWrapper::generate_aux_from_description(catalog_id, &self.app)
+                match code_fragment::run_aux_from_desc_job(catalog_id, &self.app).await {
+                    Ok(()) => Ok(()),
+                    Err(_) => PhpWrapper::generate_aux_from_description(catalog_id, &self.app),
+                }
             }
             "bespoke_scraper" => {
                 crate::bespoke_scrapers::run_bespoke_scraper(catalog_id, &self.app).await
