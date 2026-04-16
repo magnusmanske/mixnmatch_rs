@@ -4026,6 +4026,37 @@ impl Storage for StorageMySQL {
             .await?;
         Ok(rows)
     }
+
+    async fn get_code_fragment_lua(&self, function: &str, catalog_id: usize) -> Result<Option<String>> {
+        let sql = "SELECT `lua` FROM `code_fragments` WHERE `function`=:function AND `catalog`=:catalog_id AND `is_active`=1 LIMIT 1";
+        let result: Option<Option<String>> = self
+            .get_conn()
+            .await?
+            .exec_first(sql, params! { function, catalog_id })
+            .await?;
+        match result {
+            Some(lua) => Ok(lua),
+            None => Ok(None),
+        }
+    }
+
+    async fn touch_code_fragment(&self, function: &str, catalog_id: usize) -> Result<()> {
+        let sql = "UPDATE `code_fragments` SET `last_run`=NOW() WHERE `function`=:function AND `catalog`=:catalog_id";
+        self.get_conn()
+            .await?
+            .exec_drop(sql, params! { function, catalog_id })
+            .await?;
+        Ok(())
+    }
+
+    async fn clear_person_dates_for_catalog(&self, catalog_id: usize) -> Result<()> {
+        let sql = "DELETE person_dates FROM person_dates INNER JOIN entry ON entry.id=person_dates.entry_id WHERE entry.catalog=:catalog_id";
+        self.get_conn()
+            .await?
+            .exec_drop(sql, params! { catalog_id })
+            .await?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
