@@ -32,6 +32,7 @@ log = "*"
 axum = "*"
 wikibase = "*"
 mlua = { version = "0.10", features = ["lua54", "vendored", "serialize"] }
+tower = "*"
 
 [profile.release]
 lto = 'thin'

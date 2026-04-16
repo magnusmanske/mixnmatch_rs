@@ -72,6 +72,7 @@ pub mod job_status;
 pub mod maintenance;
 pub mod match_state;
 pub mod meta_entry;
+pub mod micro_api;
 pub mod microsync;
 pub mod mnm_link;
 pub mod mysql_misc;
