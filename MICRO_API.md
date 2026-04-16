@@ -14,15 +14,9 @@ cargo run -- api --config /path/to/config.json --port 9000
 
 ### Via the main server loop
 
-Set the `PORT` environment variable before starting the server command.
-The micro-API will be spawned automatically alongside the job loop:
-
-```bash
-PORT=8080 cargo run -- server
-```
-
-If `PORT` is not set, no micro-API server is started and the job loop
-runs as before.
+The micro-API is automatically spawned on port 8000 alongside the job
+loop when `cargo run -- server` is used. The port is defined by the
+`MICRO_API_PORT` constant in `app_state.rs`.
 
 ## Endpoints
 
