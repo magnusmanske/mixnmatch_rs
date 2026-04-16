@@ -111,7 +111,7 @@ enum Commands {
         config: Option<PathBuf>,
 
         /// Port to listen on
-        #[arg(short, long, default_value = "8080")]
+        #[arg(short, long, default_value = "8089")]
         port: u16,
     },
 

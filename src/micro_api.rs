@@ -32,7 +32,7 @@ pub async fn serve(app: AppState, port: u16) {
     let addr = format!("0.0.0.0:{port}");
     match TcpListener::bind(&addr).await {
         Ok(listener) => {
-            eprintln!("micro_api: listening on http://0.0.0.0:{port}");
+            eprintln!("micro_api: listening on http://127.0.0.1:{port}");
             if let Err(e) = axum::serve(listener, router).await {
                 eprintln!("micro_api server error: {e}");
             }
