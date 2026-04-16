@@ -555,6 +555,11 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     async fn api_get_prop2catalog(&self, props: &[usize]) -> Result<HashMap<usize, Vec<usize>>>;
     async fn api_get_missing_properties_raw(&self) -> Result<Vec<serde_json::Value>>;
     async fn api_get_rc_log_events(&self, min_ts: &str, max_ts: &str, catalog_id: usize) -> Result<Vec<serde_json::Value>>;
+
+    // Code fragments
+    async fn get_code_fragment_lua(&self, function: &str, catalog_id: usize) -> Result<Option<String>>;
+    async fn touch_code_fragment(&self, function: &str, catalog_id: usize) -> Result<()>;
+    async fn clear_person_dates_for_catalog(&self, catalog_id: usize) -> Result<()>;
 }
 
 #[cfg(test)]

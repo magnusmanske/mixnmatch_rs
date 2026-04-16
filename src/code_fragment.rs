@@ -1,4 +1,8 @@
+use crate::app_state::AppState;
+use crate::entry::Entry;
+use crate::person_date::PersonDate;
 use anyhow::{Result, anyhow};
+use log::warn;
 use mlua::{Lua, LuaOptions, StdLib, Value, VmState};
 use serde::{Deserialize, Serialize};
 
@@ -692,6 +696,257 @@ fn regex_match<'a>(pattern: &str, text: &'a str) -> Option<regex::Captures<'a>> 
     regex::Regex::new(pattern).ok()?.captures(text)
 }
 
+// ================================
+// Async job runners
+// ================================
+
+/// Convert an Entry into a LuaEntry for use in Lua code.
+fn entry_to_lua_entry(entry: &Entry) -> LuaEntry {
+    LuaEntry {
+        id: entry.id.unwrap_or(0),
+        catalog: entry.catalog,
+        ext_id: entry.ext_id.clone(),
+        ext_url: entry.ext_url.clone(),
+        ext_name: entry.ext_name.clone(),
+        ext_desc: entry.ext_desc.clone(),
+        q: entry.q,
+        user: entry.user,
+        type_name: entry.type_name.clone(),
+    }
+}
+
+/// Validates and cleans a date string produced by a PERSON_DATE code fragment.
+/// Mirrors the PHP PersonDates::fix_date_format and processEntry validation.
+fn validate_person_date(d: &str) -> Option<String> {
+    let d = d.trim().to_string();
+    if d.is_empty() {
+        return None;
+    }
+    // Must match: pure year, year-month, or year-month-day
+    if let Some(pd) = PersonDate::from_db_string(&d) {
+        Some(pd.to_db_string())
+    } else {
+        None
+    }
+}
+
+/// Validates a born/died pair. Returns None if the pair should be rejected.
+/// Mirrors PHP PersonDates::processEntry validation logic.
+fn validate_born_died(born_raw: &str, died_raw: &str) -> Option<(String, String)> {
+    let born = validate_person_date(born_raw).unwrap_or_default();
+    let died = validate_person_date(died_raw).unwrap_or_default();
+
+    if born.is_empty() && died.is_empty() {
+        return None;
+    }
+
+    // Year paranoia
+    let born_year = born.split('-').next().and_then(|s| s.parse::<i64>().ok());
+    let died_year = died.split('-').next().and_then(|s| s.parse::<i64>().ok());
+
+    if let (Some(by), Some(dy)) = (born_year, died_year) {
+        if by == dy {
+            return None; // Same year for born and died
+        }
+        if by > dy {
+            return None; // Born after death
+        }
+        if dy - by > 120 {
+            return None; // Older than 120
+        }
+    }
+
+    if let Some(by) = born_year {
+        if by > 2050 {
+            return None;
+        }
+    }
+    if let Some(dy) = died_year {
+        if dy > 2050 {
+            return None;
+        }
+    }
+
+    if born == died {
+        return None;
+    }
+
+    Some((born, died))
+}
+
+const ENTRY_BATCH_SIZE: usize = 5000;
+
+/// Run the update_person_dates job for a catalog using Lua.
+/// Returns Ok(()) on success, or an error if no Lua code fragment exists.
+pub async fn run_person_dates_job(catalog_id: usize, app: &AppState) -> Result<()> {
+    let lua_code = app
+        .storage()
+        .get_code_fragment_lua("PERSON_DATE", catalog_id)
+        .await?
+        .ok_or_else(|| anyhow!("No Lua code fragment for PERSON_DATE catalog {catalog_id}"))?;
+
+    // Clear existing person dates for this catalog
+    app.storage()
+        .clear_person_dates_for_catalog(catalog_id)
+        .await?;
+
+    let mut offset = 0;
+    let mut any_dates_set = false;
+    loop {
+        let entries = app
+            .storage()
+            .get_entry_batch(catalog_id, ENTRY_BATCH_SIZE, offset)
+            .await?;
+        if entries.is_empty() {
+            break;
+        }
+        let batch_len = entries.len();
+
+        for entry in &entries {
+            let lua_entry = entry_to_lua_entry(entry);
+            if lua_entry.type_name.as_deref() != Some("Q5") {
+                continue;
+            }
+            if lua_entry.ext_desc.is_empty() {
+                continue;
+            }
+
+            let result = match run_person_date(&lua_code, &lua_entry) {
+                Ok(r) => r,
+                Err(e) => {
+                    warn!(
+                        "Lua error for PERSON_DATE entry {}: {e}",
+                        lua_entry.id
+                    );
+                    continue;
+                }
+            };
+
+            if let Some((born, died)) = validate_born_died(&result.born, &result.died) {
+                let entry_id = lua_entry.id;
+                app.storage()
+                    .entry_set_person_dates(entry_id, born, died)
+                    .await?;
+                any_dates_set = true;
+            }
+        }
+
+        offset += batch_len;
+    }
+
+    if any_dates_set {
+        app.storage()
+            .set_has_person_date(catalog_id, "yes")
+            .await?;
+    }
+
+    app.storage()
+        .touch_code_fragment("PERSON_DATE", catalog_id)
+        .await?;
+
+    Ok(())
+}
+
+/// Run the generate_aux_from_description job for a catalog using Lua.
+/// Returns Ok(()) on success, or an error if no Lua code fragment exists.
+pub async fn run_aux_from_desc_job(catalog_id: usize, app: &AppState) -> Result<()> {
+    let lua_code = app
+        .storage()
+        .get_code_fragment_lua("AUX_FROM_DESC", catalog_id)
+        .await?
+        .ok_or_else(|| anyhow!("No Lua code fragment for AUX_FROM_DESC catalog {catalog_id}"))?;
+
+    let mut offset = 0;
+    loop {
+        let entries = app
+            .storage()
+            .get_entry_batch(catalog_id, ENTRY_BATCH_SIZE, offset)
+            .await?;
+        if entries.is_empty() {
+            break;
+        }
+        let batch_len = entries.len();
+
+        for entry in &entries {
+            let lua_entry = entry_to_lua_entry(entry);
+            let result = match run_aux_from_desc(&lua_code, &lua_entry) {
+                Ok(r) => r,
+                Err(e) => {
+                    warn!(
+                        "Lua error for AUX_FROM_DESC entry {}: {e}",
+                        lua_entry.id
+                    );
+                    continue;
+                }
+            };
+
+            let mut entry_clone = entry.clone();
+            entry_clone.set_app(app);
+            for cmd in &result.commands {
+                if let Err(e) = apply_command(cmd, &mut entry_clone).await {
+                    warn!(
+                        "Error applying command for entry {}: {e}",
+                        lua_entry.id
+                    );
+                }
+            }
+        }
+
+        offset += batch_len;
+    }
+
+    app.storage()
+        .touch_code_fragment("AUX_FROM_DESC", catalog_id)
+        .await?;
+
+    Ok(())
+}
+
+/// Apply a LuaCommand to an entry in the database.
+async fn apply_command(cmd: &LuaCommand, entry: &mut Entry) -> Result<()> {
+    match cmd {
+        LuaCommand::SetAux {
+            property, value, ..
+        } => {
+            let prop_str = property.trim_start_matches('P');
+            let prop_numeric: usize = prop_str.parse().map_err(|_| {
+                anyhow!("Invalid property '{property}'")
+            })?;
+            entry.set_auxiliary(prop_numeric, Some(value.clone())).await
+        }
+        LuaCommand::SetMatch { q, .. } => {
+            entry.set_match(q, 0).await?;
+            Ok(())
+        }
+        LuaCommand::SetLocation { lat, lon, .. } => {
+            let cl = crate::coordinates::CoordinateLocation::new(*lat, *lon);
+            entry.set_coordinate_location(&Some(cl)).await
+        }
+        LuaCommand::SetPersonDates {
+            born, died, ..
+        } => {
+            let born_pd = PersonDate::from_db_string(born);
+            let died_pd = PersonDate::from_db_string(died);
+            entry.set_person_dates(&born_pd, &died_pd).await
+        }
+        LuaCommand::SetDescription { value, .. } => entry.set_ext_desc(value).await,
+        LuaCommand::SetEntryName { value, .. } => entry.set_ext_name(value).await,
+        LuaCommand::SetEntryType { value, .. } => {
+            entry.set_type_name(Some(value.clone())).await
+        }
+        LuaCommand::AddAlias {
+            label, language, ..
+        } => {
+            let ls = wikimisc::wikibase::locale_string::LocaleString::new(language, label);
+            entry.add_alias(&ls).await
+        }
+        LuaCommand::AddLocationText { .. } => {
+            // Location text is not yet implemented in the Rust storage layer
+            Ok(())
+        }
+    }
+}
+
 // ==========
 // Tests
 // ==========
@@ -1129,5 +1384,105 @@ end
         entry.ext_desc = "born in 1850".into();
         let result = run_person_date(lua, &entry).unwrap();
         assert_eq!(result.born, "1850");
+    }
+
+    // ---- validate_person_date tests ----
+
+    #[test]
+    fn test_validate_person_date_year() {
+        assert_eq!(validate_person_date("1920"), Some("1920".into()));
+        assert_eq!(validate_person_date("800"), Some("800".into()));
+        assert_eq!(validate_person_date(""), None);
+        assert_eq!(validate_person_date("  "), None);
+    }
+
+    #[test]
+    fn test_validate_person_date_full() {
+        assert_eq!(
+            validate_person_date("1920-03-15"),
+            Some("1920-03-15".into())
+        );
+        assert_eq!(validate_person_date("1920-03"), Some("1920-03".into()));
+    }
+
+    #[test]
+    fn test_validate_person_date_invalid() {
+        assert_eq!(validate_person_date("1920-13-01"), None); // month 13
+        assert_eq!(validate_person_date("1920-00-01"), None); // month 0
+        assert_eq!(validate_person_date("abc"), None);
+    }
+
+    // ---- validate_born_died tests ----
+
+    #[test]
+    fn test_validate_born_died_normal() {
+        let result = validate_born_died("1920", "2000");
+        assert_eq!(result, Some(("1920".into(), "2000".into())));
+    }
+
+    #[test]
+    fn test_validate_born_died_empty() {
+        assert_eq!(validate_born_died("", ""), None);
+    }
+
+    #[test]
+    fn test_validate_born_died_same_year() {
+        assert_eq!(validate_born_died("1920", "1920"), None);
+    }
+
+    #[test]
+    fn test_validate_born_died_born_after_death() {
+        assert_eq!(validate_born_died("2000", "1920"), None);
+    }
+
+    #[test]
+    fn test_validate_born_died_too_old() {
+        assert_eq!(validate_born_died("1800", "1925"), None); // 125 years
+    }
+
+    #[test]
+    fn test_validate_born_died_future() {
+        assert_eq!(validate_born_died("2060", ""), None);
+        assert_eq!(validate_born_died("", "2060"), None);
+    }
+
+    #[test]
+    fn test_validate_born_died_one_date_only() {
+        let result = validate_born_died("1920", "");
+        assert_eq!(result, Some(("1920".into(), "".into())));
+
+        let result = validate_born_died("", "2000");
+        assert_eq!(result, Some(("".into(), "2000".into())));
+    }
+
+    #[test]
+    fn test_validate_born_died_identical() {
+        assert_eq!(validate_born_died("1920-03-15", "1920-03-15"), None);
+    }
+
+    // ---- entry_to_lua_entry tests ----
+
+    #[test]
+    fn test_entry_to_lua_entry() {
+        let entry = Entry {
+            id: Some(42),
+            catalog: 100,
+            ext_id: "test_123".into(),
+            ext_url: "https://example.com".into(),
+            ext_name: "Test".into(),
+            ext_desc: "A test entry".into(),
+            q: Some(42),
+            user: Some(1),
+            timestamp: None,
+            random: 0.5,
+            type_name: Some("Q5".into()),
+            app: None,
+        };
+        let le = entry_to_lua_entry(&entry);
+        assert_eq!(le.id, 42);
+        assert_eq!(le.catalog, 100);
+        assert_eq!(le.ext_id, "test_123");
+        assert_eq!(le.q, Some(42));
+        assert_eq!(le.type_name, Some("Q5".into()));
     }
 }
