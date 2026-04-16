@@ -217,6 +217,16 @@ impl AppState {
     }
 
     pub async fn forever_loop(&self) -> Result<()> {
+        // Optionally start the micro-API server if PORT is set
+        if let Ok(port_str) = std::env::var("PORT") {
+            if let Ok(port) = port_str.parse::<u16>() {
+                let app_clone = self.clone();
+                tokio::spawn(async move {
+                    crate::micro_api::serve(app_clone, port).await;
+                });
+            }
+        }
+
         let current_jobs = self.forever_loop_initalize().await?;
         let threshold_job_size = TaskSize::Medium;
         let threshold_percent = 50;
