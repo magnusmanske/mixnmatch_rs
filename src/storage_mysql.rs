@@ -4140,6 +4140,88 @@ impl Storage for StorageMySQL {
         }
         Ok(conn.last_insert_id().unwrap_or(0) as usize)
     }
+
+    // Micro-API: sparql_list
+    async fn get_entries_by_ext_names_unmatched(&self, names: &[String]) -> Result<Vec<Entry>> {
+        if names.is_empty() {
+            return Ok(vec![]);
+        }
+        let placeholders = names.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "{} WHERE (user=0 OR q IS NULL) AND ext_name IN ({placeholders})",
+            Self::entry_sql_select()
+        );
+        let params: Vec<mysql_async::Value> = names
+            .iter()
+            .map(|n| mysql_async::Value::from(n.as_str()))
+            .collect();
+        let mut conn = self.get_conn_ro().await?;
+        let rows = conn
+            .exec_iter(sql, params)
+            .await?
+            .map_and_drop(|row| Self::entry_from_row(&row))
+            .await?
+            .into_iter()
+            .flatten()
+            .collect();
+        Ok(rows)
+    }
+
+    // Micro-API: get_sync
+    async fn get_catalog_wd_prop(&self, catalog_id: usize) -> Result<(Option<usize>, Option<usize>)> {
+        let sql = "SELECT COALESCE(wd_prop, 0) AS wd_prop, COALESCE(wd_qual, 0) AS wd_qual FROM catalog WHERE id=:catalog_id";
+        let mut conn = self.get_conn_ro().await?;
+        let rows = conn
+            .exec_iter(sql, params! { catalog_id })
+            .await?
+            .map_and_drop(|row: Row| {
+                let wd_prop: usize = row.get("wd_prop").unwrap_or(0);
+                let wd_qual: usize = row.get("wd_qual").unwrap_or(0);
+                let wd_prop = if wd_prop == 0 { None } else { Some(wd_prop) };
+                let wd_qual = if wd_qual == 0 { None } else { Some(wd_qual) };
+                (wd_prop, wd_qual)
+            })
+            .await?;
+        rows.into_iter()
+            .next()
+            .ok_or_else(|| anyhow!("Catalog {} not found", catalog_id))
+    }
+
+    async fn get_mnm_matched_entries_for_sync(&self, catalog_id: usize) -> Result<Vec<(isize, String)>> {
+        let sql = "SELECT q, ext_id FROM entry WHERE q IS NOT NULL AND q > 0 AND user != 0 AND user IS NOT NULL AND catalog=:catalog_id AND ext_id NOT LIKE 'fake_id_%'";
+        let mut conn = self.get_conn_ro().await?;
+        let results = conn
+            .exec_iter(sql, params! { catalog_id })
+            .await?
+            .map_and_drop(|row: Row| {
+                let q: isize = row.get("q").unwrap_or(0);
+                let ext_id: String = row.get("ext_id").unwrap_or_default();
+                (q, ext_id)
+            })
+            .await?;
+        Ok(results)
+    }
+
+    async fn get_mnm_double_matches(&self, catalog_id: usize) -> Result<HashMap<String, Vec<String>>> {
+        let sql = "SELECT q, ext_id FROM entry WHERE q IS NOT NULL AND q > 0 AND catalog=:catalog_id AND ext_id NOT LIKE 'fake_id_%'";
+        let mut conn = self.get_conn_ro().await?;
+        let results = conn
+            .exec_iter(sql, params! { catalog_id })
+            .await?
+            .map_and_drop(|row: Row| {
+                let q: isize = row.get("q").unwrap_or(0);
+                let ext_id: String = row.get("ext_id").unwrap_or_default();
+                (q, ext_id)
+            })
+            .await?;
+        let mut q2ext_ids: HashMap<String, Vec<String>> = HashMap::new();
+        for (q, ext_id) in results {
+            q2ext_ids.entry(q.to_string()).or_default().push(ext_id);
+        }
+        // Only keep entries where the same Q maps to multiple ext_ids
+        q2ext_ids.retain(|_, v| v.len() > 1);
+        Ok(q2ext_ids)
+    }
 }
 
 #[cfg(test)]

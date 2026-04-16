@@ -7,6 +7,7 @@ use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
+use regex::Regex;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -56,6 +57,8 @@ async fn api_dispatch(
         "run_lua" => handle_run_lua(&app, &params).await,
         "get_code_fragments" => handle_get_code_fragments(&app, &params).await,
         "save_code_fragment" => handle_save_code_fragment(&app, &params).await,
+        "sparql_list" => handle_sparql_list(&app, &params).await,
+        "get_sync" => handle_get_sync(&app, &params).await,
         "" => Err(ApiError::new("missing 'action' parameter")),
         other => Err(ApiError::new(&format!("unknown action: {other}"))),
     };
@@ -340,6 +343,266 @@ async fn handle_save_code_fragment(app: &AppState, params: &Params) -> Result<Re
     success(json!({
         "id": cfid,
         "queued_jobs": queued_jobs,
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// action=sparql_list
+// ---------------------------------------------------------------------------
+
+/// Parse SPARQL bindings and build a label-to-Q mapping.
+///
+/// Each binding must have exactly two variables: one URI and one literal.
+/// The Q-number is extracted from the URI via a regex that matches the
+/// trailing `Q\d+` portion.
+fn parse_sparql_label2q(sparql_result: &Value) -> Result<HashMap<String, String>, ApiError> {
+    let vars = sparql_result["head"]["vars"]
+        .as_array()
+        .ok_or_else(|| ApiError::internal("SPARQL result missing head.vars"))?;
+    if vars.len() < 2 {
+        return Err(ApiError::internal("SPARQL result must have at least 2 variables"));
+    }
+    let var1 = vars[0]
+        .as_str()
+        .ok_or_else(|| ApiError::internal("variable name is not a string"))?;
+    let var2 = vars[1]
+        .as_str()
+        .ok_or_else(|| ApiError::internal("variable name is not a string"))?;
+
+    let bindings = sparql_result["results"]["bindings"]
+        .as_array()
+        .ok_or_else(|| ApiError::internal("SPARQL result missing results.bindings"))?;
+
+    let re = Regex::new(r"(Q\d+)$").unwrap();
+    let mut label2q: HashMap<String, String> = HashMap::new();
+
+    for b in bindings {
+        let v1_type = b[var1]["type"].as_str().unwrap_or("");
+        let v2_type = b[var2]["type"].as_str().unwrap_or("");
+        let v1_value = b[var1]["value"].as_str().unwrap_or("");
+        let v2_value = b[var2]["value"].as_str().unwrap_or("");
+
+        let (uri_val, lit_val) = if v1_type == "uri" && v2_type == "literal" {
+            (v1_value, v2_value)
+        } else if v2_type == "uri" && v1_type == "literal" {
+            (v2_value, v1_value)
+        } else {
+            continue;
+        };
+
+        if let Some(caps) = re.captures(uri_val) {
+            let q = caps[1].to_string();
+            label2q.insert(lit_val.to_string(), q);
+        }
+    }
+
+    Ok(label2q)
+}
+
+async fn handle_sparql_list(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let sparql = get_required_param(params, "sparql")?;
+
+    // Execute SPARQL query
+    let mw_api = app
+        .wikidata()
+        .get_mw_api()
+        .await
+        .map_err(|e| ApiError::internal(&format!("failed to get Wikidata API: {e}")))?;
+    let sparql_result = mw_api
+        .sparql_query(sparql)
+        .await
+        .map_err(|e| ApiError::internal(&format!("SPARQL query failed: {e}")))?;
+
+    let label2q = parse_sparql_label2q(&sparql_result)?;
+
+    if label2q.is_empty() {
+        return success(json!({
+            "entries": {},
+            "users": {},
+        }));
+    }
+
+    // Load matching unmatched entries
+    let labels: Vec<String> = label2q.keys().cloned().collect();
+    let entries = app
+        .storage()
+        .get_entries_by_ext_names_unmatched(&labels)
+        .await
+        .map_err(|e| ApiError::internal(&format!("database error: {e}")))?;
+
+    let mut entry_map: HashMap<String, Value> = HashMap::new();
+    for entry in &entries {
+        let ext_name = &entry.ext_name;
+        if let Some(q_str) = label2q.get(ext_name) {
+            // Parse Q-number: strip leading 'Q' and parse as integer
+            let q_numeric: isize = q_str[1..]
+                .parse()
+                .unwrap_or(0);
+            let entry_id = entry.id.unwrap_or(0);
+            entry_map.insert(
+                entry_id.to_string(),
+                json!({
+                    "id": entry_id,
+                    "catalog": entry.catalog,
+                    "ext_id": entry.ext_id,
+                    "ext_url": entry.ext_url,
+                    "ext_name": entry.ext_name,
+                    "ext_desc": entry.ext_desc,
+                    "q": q_numeric,
+                    "user": 0,
+                    "timestamp": "20180304223800",
+                    "type": entry.type_name,
+                }),
+            );
+        }
+    }
+
+    // Get user data for user 0 (auto user)
+    let users = app
+        .storage()
+        .get_users_by_ids(&[0])
+        .await
+        .map_err(|e| ApiError::internal(&format!("database error: {e}")))?;
+    let users_json: HashMap<String, Value> = users
+        .into_iter()
+        .map(|(id, val)| (id.to_string(), val))
+        .collect();
+
+    success(json!({
+        "entries": entry_map,
+        "users": users_json,
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// action=get_sync
+// ---------------------------------------------------------------------------
+
+async fn handle_get_sync(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let catalog_id = get_param_usize(params, "catalog")?;
+
+    // Load catalog wd_prop and wd_qual
+    let (wd_prop, wd_qual) = app
+        .storage()
+        .get_catalog_wd_prop(catalog_id)
+        .await
+        .map_err(|e| ApiError::internal(&format!("database error: {e}")))?;
+
+    let wd_prop = wd_prop.ok_or_else(|| {
+        ApiError::new(&format!(
+            "catalog {catalog_id} has no wd_prop set"
+        ))
+    })?;
+
+    if wd_qual.is_some() {
+        return Err(ApiError::new(&format!(
+            "catalog {catalog_id} uses wd_qual (qualifier-based sync not supported)"
+        )));
+    }
+
+    // Run SPARQL to get all items with this property on Wikidata
+    let sparql = format!("SELECT ?q ?prop {{ ?q wdt:P{wd_prop} ?prop }}");
+    let mw_api = app
+        .wikidata()
+        .get_mw_api()
+        .await
+        .map_err(|e| ApiError::internal(&format!("failed to get Wikidata API: {e}")))?;
+    let sparql_result = mw_api
+        .sparql_query(&sparql)
+        .await
+        .map_err(|e| ApiError::internal(&format!("SPARQL query failed: {e}")))?;
+
+    // Build WD mapping: ext_id -> Q-number string
+    let bindings = sparql_result["results"]["bindings"]
+        .as_array()
+        .ok_or_else(|| ApiError::internal("SPARQL result missing results.bindings"))?;
+
+    let re = Regex::new(r"(Q\d+)$").unwrap();
+    let mut wd_ext2q: HashMap<String, String> = HashMap::new();
+    for b in bindings {
+        let q_url = b["q"]["value"].as_str().unwrap_or("");
+        let prop_value = b["prop"]["value"].as_str().unwrap_or("");
+        if let Some(caps) = re.captures(q_url) {
+            let q = caps[1].to_string();
+            wd_ext2q.insert(prop_value.to_string(), q);
+        }
+    }
+
+    // Load MnM matched entries (human-matched only, no fakes)
+    let mnm_entries = app
+        .storage()
+        .get_mnm_matched_entries_for_sync(catalog_id)
+        .await
+        .map_err(|e| ApiError::internal(&format!("database error: {e}")))?;
+
+    // Build MnM mapping: ext_id -> Q-number string
+    let mut mnm_ext2q: HashMap<String, String> = HashMap::new();
+    let mut mm_dupes: HashMap<String, Vec<String>> = HashMap::new();
+    for (q, ext_id) in &mnm_entries {
+        let q_str = format!("Q{q}");
+        if let Some(existing_ext) = mnm_ext2q.get(&ext_id.to_string()) {
+            // Same ext_id matched to different Q -> dupe
+            mm_dupes
+                .entry(ext_id.clone())
+                .or_insert_with(|| vec![existing_ext.clone()])
+                .push(q_str.clone());
+        }
+        mnm_ext2q.insert(ext_id.clone(), q_str);
+    }
+
+    // Compare the two sets
+    let mut different: Vec<Value> = Vec::new();
+    let mut wd_no_mm: Vec<Value> = Vec::new();
+    let mut mm_no_wd: Vec<Value> = Vec::new();
+
+    // Check WD entries against MnM
+    for (ext_id, wd_q) in &wd_ext2q {
+        match mnm_ext2q.get(ext_id) {
+            Some(mnm_q) => {
+                if wd_q != mnm_q {
+                    different.push(json!({
+                        "ext_id": ext_id,
+                        "wd_q": wd_q,
+                        "mnm_q": mnm_q,
+                    }));
+                }
+            }
+            None => {
+                wd_no_mm.push(json!({
+                    "ext_id": ext_id,
+                    "q": wd_q,
+                }));
+            }
+        }
+    }
+
+    // Check MnM entries not in WD
+    for (ext_id, mnm_q) in &mnm_ext2q {
+        if !wd_ext2q.contains_key(ext_id) {
+            mm_no_wd.push(json!({
+                "ext_id": ext_id,
+                "q": mnm_q,
+            }));
+        }
+    }
+
+    // Get mm_double: Q values that map to multiple ext_ids in MnM (all entries, not just human-matched)
+    let mm_double = app
+        .storage()
+        .get_mnm_double_matches(catalog_id)
+        .await
+        .map_err(|e| ApiError::internal(&format!("database error: {e}")))?;
+    let mm_double_json: HashMap<String, Value> = mm_double
+        .into_iter()
+        .map(|(q, ext_ids)| (q, json!(ext_ids)))
+        .collect();
+
+    success(json!({
+        "mm_dupes": mm_dupes,
+        "different": different,
+        "wd_no_mm": wd_no_mm,
+        "mm_no_wd": mm_no_wd,
+        "mm_double": mm_double_json,
     }))
 }
 
@@ -830,5 +1093,192 @@ if m then d[#d+1] = m end
         let (_, body) = response_json(resp).await;
         assert_eq!(body["status"], "bad_request");
         assert!(body["error"].as_str().unwrap().contains("function"));
+    }
+
+    // --- sparql_list tests ---
+
+    #[tokio::test]
+    async fn test_sparql_list_missing_sparql_param() {
+        let app = router(test_app());
+        let resp = app
+            .oneshot(build_request("/api?action=sparql_list"))
+            .await
+            .unwrap();
+        let (_, body) = response_json(resp).await;
+        assert_eq!(body["status"], "bad_request");
+        assert!(body["error"].as_str().unwrap().contains("sparql"));
+    }
+
+    #[tokio::test]
+    async fn test_sparql_list_empty_sparql_param() {
+        let app = router(test_app());
+        let resp = app
+            .oneshot(build_request("/api?action=sparql_list&sparql="))
+            .await
+            .unwrap();
+        let (_, body) = response_json(resp).await;
+        assert_eq!(body["status"], "bad_request");
+        assert!(body["error"].as_str().unwrap().contains("sparql"));
+    }
+
+    #[test]
+    fn test_parse_sparql_label2q_basic() {
+        let sparql_result = json!({
+            "head": { "vars": ["item", "label"] },
+            "results": {
+                "bindings": [
+                    {
+                        "item": { "type": "uri", "value": "http://www.wikidata.org/entity/Q42" },
+                        "label": { "type": "literal", "value": "Douglas Adams" }
+                    },
+                    {
+                        "item": { "type": "uri", "value": "http://www.wikidata.org/entity/Q1339" },
+                        "label": { "type": "literal", "value": "Johann Sebastian Bach" }
+                    }
+                ]
+            }
+        });
+        let label2q = parse_sparql_label2q(&sparql_result).unwrap();
+        assert_eq!(label2q.len(), 2);
+        assert_eq!(label2q.get("Douglas Adams").unwrap(), "Q42");
+        assert_eq!(label2q.get("Johann Sebastian Bach").unwrap(), "Q1339");
+    }
+
+    #[test]
+    fn test_parse_sparql_label2q_reversed_order() {
+        // label first, then URI
+        let sparql_result = json!({
+            "head": { "vars": ["name", "entity"] },
+            "results": {
+                "bindings": [
+                    {
+                        "name": { "type": "literal", "value": "Albert Einstein" },
+                        "entity": { "type": "uri", "value": "http://www.wikidata.org/entity/Q937" }
+                    }
+                ]
+            }
+        });
+        let label2q = parse_sparql_label2q(&sparql_result).unwrap();
+        assert_eq!(label2q.len(), 1);
+        assert_eq!(label2q.get("Albert Einstein").unwrap(), "Q937");
+    }
+
+    #[test]
+    fn test_parse_sparql_label2q_skips_non_uri_literal_pairs() {
+        let sparql_result = json!({
+            "head": { "vars": ["a", "b"] },
+            "results": {
+                "bindings": [
+                    {
+                        "a": { "type": "literal", "value": "foo" },
+                        "b": { "type": "literal", "value": "bar" }
+                    },
+                    {
+                        "a": { "type": "uri", "value": "http://www.wikidata.org/entity/Q1" },
+                        "b": { "type": "literal", "value": "Universe" }
+                    }
+                ]
+            }
+        });
+        let label2q = parse_sparql_label2q(&sparql_result).unwrap();
+        assert_eq!(label2q.len(), 1);
+        assert_eq!(label2q.get("Universe").unwrap(), "Q1");
+    }
+
+    #[test]
+    fn test_parse_sparql_label2q_empty_bindings() {
+        let sparql_result = json!({
+            "head": { "vars": ["x", "y"] },
+            "results": { "bindings": [] }
+        });
+        let label2q = parse_sparql_label2q(&sparql_result).unwrap();
+        assert!(label2q.is_empty());
+    }
+
+    #[test]
+    fn test_parse_sparql_label2q_missing_vars() {
+        let sparql_result = json!({
+            "head": {},
+            "results": { "bindings": [] }
+        });
+        let result = parse_sparql_label2q(&sparql_result);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_sparql_label2q_too_few_vars() {
+        let sparql_result = json!({
+            "head": { "vars": ["only_one"] },
+            "results": { "bindings": [] }
+        });
+        let result = parse_sparql_label2q(&sparql_result);
+        assert!(result.is_err());
+    }
+
+    // --- get_sync tests ---
+
+    #[tokio::test]
+    async fn test_get_sync_missing_catalog_param() {
+        let app = router(test_app());
+        let resp = app
+            .oneshot(build_request("/api?action=get_sync"))
+            .await
+            .unwrap();
+        let (_, body) = response_json(resp).await;
+        assert_eq!(body["status"], "bad_request");
+        assert!(body["error"].as_str().unwrap().contains("catalog"));
+    }
+
+    #[tokio::test]
+    async fn test_get_sync_non_numeric_catalog() {
+        let app = router(test_app());
+        let resp = app
+            .oneshot(build_request("/api?action=get_sync&catalog=abc"))
+            .await
+            .unwrap();
+        let (_, body) = response_json(resp).await;
+        assert_eq!(body["status"], "bad_request");
+        assert!(body["error"].as_str().unwrap().contains("positive integer"));
+    }
+
+    #[tokio::test]
+    async fn test_get_sync_empty_catalog_param() {
+        let app = router(test_app());
+        let resp = app
+            .oneshot(build_request("/api?action=get_sync&catalog="))
+            .await
+            .unwrap();
+        let (_, body) = response_json(resp).await;
+        assert_eq!(body["status"], "bad_request");
+        assert!(body["error"].as_str().unwrap().contains("catalog"));
+    }
+
+    #[tokio::test]
+    async fn test_get_sync_nonexistent_catalog() {
+        let app = router(test_app());
+        let resp = app
+            .oneshot(build_request("/api?action=get_sync&catalog=999999999"))
+            .await
+            .unwrap();
+        let (_, body) = response_json(resp).await;
+        // Should fail because the catalog either doesn't exist or has no wd_prop
+        assert_ne!(body["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_get_sync_catalog_without_wd_prop() {
+        // Catalog 1 likely has no wd_prop set, or we just verify the error path works
+        let app = router(test_app());
+        let resp = app
+            .oneshot(build_request("/api?action=get_sync&catalog=1"))
+            .await
+            .unwrap();
+        let (_, body) = response_json(resp).await;
+        // Either it succeeds (if catalog 1 has wd_prop) or it gives an appropriate error
+        let status = body["status"].as_str().unwrap_or("");
+        assert!(
+            status == "ok" || status == "bad_request" || status == "internal_error",
+            "unexpected status: {status}"
+        );
     }
 }

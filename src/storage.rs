@@ -566,6 +566,14 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
 
     // Jobs
     async fn queue_job(&self, catalog_id: usize, action: &str, depends_on: Option<usize>) -> Result<usize>;
+
+    // Micro-API: sparql_list
+    async fn get_entries_by_ext_names_unmatched(&self, names: &[String]) -> Result<Vec<Entry>>;
+
+    // Micro-API: get_sync
+    async fn get_catalog_wd_prop(&self, catalog_id: usize) -> Result<(Option<usize>, Option<usize>)>;
+    async fn get_mnm_matched_entries_for_sync(&self, catalog_id: usize) -> Result<Vec<(isize, String)>>;
+    async fn get_mnm_double_matches(&self, catalog_id: usize) -> Result<HashMap<String, Vec<String>>>;
 }
 
 #[cfg(test)]

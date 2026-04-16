@@ -902,6 +902,156 @@ pub async fn run_aux_from_desc_job(catalog_id: usize, app: &AppState) -> Result<
     Ok(())
 }
 
+/// Run the update_descriptions_from_url job for a catalog using Lua.
+/// Fetches HTML from each entry's ext_url, runs DESC_FROM_HTML Lua code, applies results.
+/// Returns Ok(()) on success, or an error if no Lua code fragment exists.
+pub async fn run_desc_from_html_job(catalog_id: usize, app: &AppState) -> Result<()> {
+    let lua_code = app
+        .storage()
+        .get_code_fragment_lua("DESC_FROM_HTML", catalog_id)
+        .await?
+        .ok_or_else(|| anyhow!("No Lua code fragment for DESC_FROM_HTML catalog {catalog_id}"))?;
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()?;
+
+    let mut offset = 0;
+    loop {
+        let entries = app
+            .storage()
+            .get_entry_batch(catalog_id, ENTRY_BATCH_SIZE, offset)
+            .await?;
+        if entries.is_empty() {
+            break;
+        }
+        let batch_len = entries.len();
+
+        for entry in &entries {
+            let lua_entry = entry_to_lua_entry(entry);
+            if lua_entry.ext_url.is_empty() {
+                continue;
+            }
+
+            // Fetch HTML from the entry's URL
+            let html = match client.get(&lua_entry.ext_url).send().await {
+                Ok(resp) => match resp.text().await {
+                    Ok(text) => text,
+                    Err(_) => continue,
+                },
+                Err(_) => continue,
+            };
+
+            // Collapse whitespace (matches PHP behavior)
+            let html = regex::Regex::new(r"\s+")
+                .unwrap()
+                .replace_all(&html, " ")
+                .to_string();
+
+            let result = match run_desc_from_html(&lua_code, &lua_entry, &html) {
+                Ok(r) => r,
+                Err(e) => {
+                    warn!(
+                        "Lua error for DESC_FROM_HTML entry {}: {e}",
+                        lua_entry.id
+                    );
+                    continue;
+                }
+            };
+
+            let mut entry_clone = entry.clone();
+            entry_clone.set_app(app);
+
+            // Apply person dates
+            if !result.born.is_empty() || !result.died.is_empty() {
+                if let Some((born, died)) = validate_born_died(&result.born, &result.died) {
+                    let born_pd = PersonDate::from_db_string(&born);
+                    let died_pd = PersonDate::from_db_string(&died);
+                    let _ = entry_clone.set_person_dates(&born_pd, &died_pd).await;
+                }
+            }
+
+            // Apply location
+            if let Some((lat, lon)) = result.location {
+                let cl = crate::coordinates::CoordinateLocation::new(lat, lon);
+                let _ = entry_clone.set_coordinate_location(&Some(cl)).await;
+            }
+
+            // Apply aux
+            for (prop_str, value) in &result.aux {
+                let prop_str = prop_str.trim_start_matches('P');
+                if let Ok(prop_numeric) = prop_str.parse::<usize>() {
+                    let _ = entry_clone
+                        .set_auxiliary(prop_numeric, Some(value.clone()))
+                        .await;
+                }
+            }
+
+            // Apply change_name
+            if let Some((from, to)) = &result.change_name {
+                if from != to {
+                    let _ = entry_clone.set_ext_name(to).await;
+                }
+            }
+
+            // Apply change_type
+            if let Some((_from, to)) = &result.change_type {
+                let _ = entry_clone.set_type_name(Some(to.clone())).await;
+            }
+
+            // Apply descriptions
+            if !result.descriptions.is_empty() {
+                let new_desc = get_new_description(&entry_clone.ext_desc, &result.descriptions);
+                if new_desc != entry_clone.ext_desc {
+                    let _ = entry_clone.set_ext_desc(&new_desc).await;
+                }
+            }
+
+            // Apply commands from callback functions
+            for cmd in &result.commands {
+                let _ = apply_command(cmd, &mut entry_clone).await;
+            }
+        }
+
+        offset += batch_len;
+    }
+
+    app.storage()
+        .touch_code_fragment("DESC_FROM_HTML", catalog_id)
+        .await?;
+
+    // Queue follow-up jobs (mirrors PHP behavior)
+    let _ = app.storage().queue_job(catalog_id, "update_person_dates", None).await;
+    let _ = app.storage().queue_job(catalog_id, "generate_aux_from_description", None).await;
+
+    Ok(())
+}
+
+/// Generates a new description from old description and new fragments.
+/// Mirrors PHP HTMLtoDescription::get_new_description.
+fn get_new_description(old_desc: &str, new_parts: &[String]) -> String {
+    if new_parts.is_empty() {
+        return old_desc.to_string();
+    }
+
+    let mut parts: Vec<String> = new_parts.to_vec();
+    let combined = parts.join("; ");
+    if combined == old_desc {
+        return old_desc.to_string();
+    }
+
+    if !old_desc.is_empty() {
+        parts.push(old_desc.to_string());
+    }
+
+    let d = parts.join("; ");
+    // Remove HTML tags
+    let d = regex::Regex::new(r"<.+?>").unwrap().replace_all(&d, " ");
+    // Collapse whitespace
+    let d = regex::Regex::new(r"\s+").unwrap().replace_all(&d, " ");
+    d.trim().to_string()
+}
+
 /// Apply a LuaCommand to an entry in the database.
 async fn apply_command(cmd: &LuaCommand, entry: &mut Entry) -> Result<()> {
     match cmd {
@@ -1484,5 +1634,51 @@ end
         assert_eq!(le.ext_id, "test_123");
         assert_eq!(le.q, Some(42));
         assert_eq!(le.type_name, Some("Q5".into()));
+    }
+
+    // ---- get_new_description tests ----
+
+    #[test]
+    fn test_get_new_description_empty_parts() {
+        assert_eq!(get_new_description("old desc", &[]), "old desc");
+    }
+
+    #[test]
+    fn test_get_new_description_same_as_old() {
+        let parts = vec!["old desc".to_string()];
+        assert_eq!(get_new_description("old desc", &parts), "old desc");
+    }
+
+    #[test]
+    fn test_get_new_description_new_parts() {
+        let parts = vec!["new info".to_string()];
+        assert_eq!(
+            get_new_description("old desc", &parts),
+            "new info; old desc"
+        );
+    }
+
+    #[test]
+    fn test_get_new_description_strips_html() {
+        let parts = vec!["<b>bold</b> text".to_string()];
+        assert_eq!(
+            get_new_description("", &parts),
+            "bold text"
+        );
+    }
+
+    #[test]
+    fn test_get_new_description_collapses_whitespace() {
+        let parts = vec!["lots   of    spaces".to_string()];
+        assert_eq!(get_new_description("", &parts), "lots of spaces");
+    }
+
+    #[test]
+    fn test_get_new_description_multiple_parts() {
+        let parts = vec!["part1".to_string(), "part2".to_string()];
+        assert_eq!(
+            get_new_description("old", &parts),
+            "part1; part2; old"
+        );
     }
 }
