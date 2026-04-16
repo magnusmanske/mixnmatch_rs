@@ -1,5 +1,5 @@
 use crate::{
-    app_state::AppState, entry::Entry, extended_entry::ExtendedEntry, php_wrapper::PhpWrapper,
+    app_state::AppState, entry::Entry, extended_entry::ExtendedEntry,
 };
 use anyhow::Result;
 use async_trait::async_trait;
@@ -81,7 +81,7 @@ pub async fn run_bespoke_scraper(catalog_id: usize, app: &AppState) -> Result<()
         7696 => BespokeScraper7696::new(app).run().await,
         7697 => BespokeScraper7697::new(app).run().await,
         7700 => BespokeScraper7700::new(app).run().await,
-        other => PhpWrapper::bespoke_scraper(other, app).await, // PHP fallback
+        other => Err(anyhow::anyhow!("No bespoke scraper for catalog {other}")),
     }
 }
 

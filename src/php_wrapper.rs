@@ -40,10 +40,6 @@ impl PhpWrapper {
         Self::run_command_with_catalog_id(catalog_id, "generate_aux_from_description.php", app)
     }
 
-    pub async fn bespoke_scraper(catalog_id: usize, app: &AppState) -> Result<()> {
-        Self::run_command_with_catalog_id(catalog_id, "bespoke_scraper.php", app)
-    }
-
     pub fn update_descriptions_from_url(catalog_id: usize, app: &AppState) -> Result<()> {
         Self::run_command_with_catalog_id(catalog_id, "update_descriptions_from_url.php", app)
     }
