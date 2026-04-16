@@ -4057,6 +4057,89 @@ impl Storage for StorageMySQL {
             .await?;
         Ok(())
     }
+
+    async fn get_code_fragments_for_catalog(&self, catalog_id: usize) -> Result<Vec<serde_json::Value>> {
+        let sql = "SELECT `id`,`function`,`catalog`,`php`,`json`,`is_active`,`note`,CAST(`last_run` AS CHAR) AS `last_run`,`lua` FROM `code_fragments` WHERE `catalog`=:catalog_id ORDER BY `function`";
+        let mut conn = self.get_conn_ro().await?;
+        let rows: Vec<serde_json::Value> = conn
+            .exec_iter(sql, params! { catalog_id })
+            .await?
+            .map_and_drop(|row| {
+                let (id, function, catalog, php, json, is_active, note, last_run, lua): (
+                    usize, String, usize, String, String, i8, String, Option<String>, Option<String>,
+                ) = from_row(row);
+                let note: Option<String> = if note.is_empty() { None } else { Some(note) };
+                serde_json::json!({
+                    "id": id,
+                    "function": function,
+                    "catalog": catalog,
+                    "php": php,
+                    "json": json,
+                    "is_active": is_active,
+                    "note": note,
+                    "last_run": last_run,
+                    "lua": lua,
+                })
+            })
+            .await?;
+        Ok(rows)
+    }
+
+    async fn get_all_code_fragment_functions(&self) -> Result<Vec<String>> {
+        let sql = "SELECT DISTINCT `function` FROM `code_fragments`";
+        let mut conn = self.get_conn_ro().await?;
+        let rows: Vec<String> = conn
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(from_row::<String>)
+            .await?;
+        Ok(rows)
+    }
+
+    async fn save_code_fragment(&self, fragment: &serde_json::Value) -> Result<usize> {
+        let php = fragment["php"].as_str().unwrap_or("");
+        let lua_val = &fragment["lua"];
+        let lua: Option<&str> = if lua_val.is_null() || lua_val.as_str().map_or(false, |s| s.is_empty()) {
+            None
+        } else {
+            lua_val.as_str()
+        };
+        let json_str = fragment["json"].as_str().unwrap_or("{}");
+        let is_active: i8 = if fragment["is_active"].as_bool().unwrap_or(true) { 1 } else { 0 };
+        let note = fragment["note"].as_str().unwrap_or("");
+        let function = fragment["function"].as_str().unwrap_or("");
+        let catalog = fragment["catalog"].as_u64().unwrap_or(0) as usize;
+
+        let mut conn = self.get_conn().await?;
+
+        let id = fragment["id"].as_u64().unwrap_or(0) as usize;
+        if id > 0 {
+            // Update existing
+            let sql = "UPDATE `code_fragments` SET `php`=:php, `lua`=:lua, `json`=:json_str, `is_active`=:is_active, `note`=:note WHERE `id`=:id";
+            conn.exec_drop(sql, params! { php, lua, json_str, is_active, note, id }).await?;
+            Ok(id)
+        } else {
+            // Insert new
+            let sql = "INSERT INTO `code_fragments` (`function`, `catalog`, `php`, `lua`, `json`, `is_active`, `note`) VALUES (:function, :catalog, :php, :lua, :json_str, :is_active, :note)";
+            conn.exec_drop(sql, params! { function, catalog, php, lua, json_str, is_active, note }).await?;
+            Ok(conn.last_insert_id().unwrap_or(0) as usize)
+        }
+    }
+
+    async fn queue_job(&self, catalog_id: usize, action: &str, depends_on: Option<usize>) -> Result<usize> {
+        let mut conn = self.get_conn().await?;
+        match depends_on {
+            Some(dep) => {
+                let sql = "INSERT IGNORE INTO `jobs` (`action`, `catalog`, `status`, `depends_on`) VALUES (:action, :catalog_id, 'TODO', :dep)";
+                conn.exec_drop(sql, params! { action, catalog_id, dep }).await?;
+            }
+            None => {
+                let sql = "INSERT IGNORE INTO `jobs` (`action`, `catalog`, `status`) VALUES (:action, :catalog_id, 'TODO')";
+                conn.exec_drop(sql, params! { action, catalog_id }).await?;
+            }
+        }
+        Ok(conn.last_insert_id().unwrap_or(0) as usize)
+    }
 }
 
 #[cfg(test)]

@@ -41,11 +41,16 @@ Every request requires an `action` parameter. The response is always JSON.
 }
 ```
 
-HTTP status codes:
-- `200` success
-- `400` bad request (missing/invalid parameters)
-- `404` not found (entry or code fragment missing)
-- `500` internal error (Lua execution failure, DB error)
+All responses return HTTP 200. Errors are indicated in the JSON body:
+
+```json
+{
+  "status": "bad_request",
+  "error": "description of what went wrong"
+}
+```
+
+Status values: `ok`, `bad_request`, `not_found`, `internal_error`.
 
 ---
 
@@ -131,8 +136,83 @@ GET /api?action=run_lua&function=PERSON_DATE&entry_id=12345
 
 **Error cases:**
 
-- Missing `function` or `entry_id` -> 400
-- Unknown function name -> 400
-- Entry not found -> 404
-- No Lua code fragment for this function/catalog -> 404
-- Lua execution error -> 500
+- Missing `function` or `entry_id` -> `bad_request`
+- Unknown function name -> `bad_request`
+- Entry not found -> `not_found`
+- No Lua code fragment for this function/catalog -> `not_found`
+- Lua execution error -> `internal_error`
+
+---
+
+### `get_code_fragments` -- List code fragments for a catalog
+
+Returns all code fragments for a catalog, plus the list of all known
+function types.
+
+**Parameters:**
+
+| Name | Required | Description |
+|---|---|---|
+| `action` | yes | `get_code_fragments` |
+| `catalog` | yes | Numeric catalog ID |
+
+**Example:**
+
+```
+GET /api?action=get_code_fragments&catalog=1
+```
+
+**Response:**
+
+```json
+{
+  "status": "ok",
+  "data": {
+    "fragments": [
+      {"id": 1072, "function": "PERSON_DATE", "catalog": 1, "php": "...", "lua": "...", "json": "", "is_active": 1, "note": null, "last_run": "2021-01-06 15:26:21"}
+    ],
+    "all_functions": ["AUX_FROM_DESC", "BESPOKE_SCRAPER", "COORDS_FROM_HTML", "DESC_FROM_HTML", "PERSON_DATE"]
+  }
+}
+```
+
+---
+
+### `save_code_fragment` -- Create or update a code fragment
+
+Saves a code fragment to the database and queues the appropriate
+processing jobs.
+
+**Parameters:**
+
+| Name | Required | Description |
+|---|---|---|
+| `action` | yes | `save_code_fragment` |
+| `fragment` | yes | URL-encoded JSON object with fragment fields |
+
+The fragment JSON must include `catalog` (positive integer) and
+`function`. Optional fields: `id` (to update existing), `php`, `lua`,
+`json`, `is_active`, `note`.
+
+**Example:**
+
+```
+GET /api?action=save_code_fragment&fragment=%7B%22catalog%22%3A1%2C%22function%22%3A%22PERSON_DATE%22%2C%22php%22%3A%22...%22%7D
+```
+
+**Response:**
+
+```json
+{
+  "status": "ok",
+  "data": {
+    "id": 1072,
+    "queued_jobs": ["update_person_dates", "match_person_dates"]
+  }
+}
+```
+
+Jobs queued automatically by function type:
+- `PERSON_DATE` -> `update_person_dates` + `match_person_dates`
+- `AUX_FROM_DESC` -> `generate_aux_from_description`
+- `DESC_FROM_HTML` -> `update_descriptions_from_url`

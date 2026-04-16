@@ -54,6 +54,8 @@ async fn api_dispatch(
     let action = params.get("action").cloned().unwrap_or_default();
     let result = match action.as_str() {
         "run_lua" => handle_run_lua(&app, &params).await,
+        "get_code_fragments" => handle_get_code_fragments(&app, &params).await,
+        "save_code_fragment" => handle_save_code_fragment(&app, &params).await,
         "" => Err(ApiError::new("missing 'action' parameter")),
         other => Err(ApiError::new(&format!("unknown action: {other}"))),
     };
@@ -260,6 +262,85 @@ fn command_to_json(cmd: &LuaCommand) -> Value {
             value,
         } => json!({"type": "add_location_text", "entry_id": entry_id, "property": property, "value": value}),
     }
+}
+
+// ---------------------------------------------------------------------------
+// action=get_code_fragments
+// ---------------------------------------------------------------------------
+
+async fn handle_get_code_fragments(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let catalog_id = get_param_usize(params, "catalog")?;
+
+    let fragments = app
+        .storage()
+        .get_code_fragments_for_catalog(catalog_id)
+        .await
+        .map_err(|e| ApiError::internal(&format!("database error: {e}")))?;
+
+    let all_functions = app
+        .storage()
+        .get_all_code_fragment_functions()
+        .await
+        .map_err(|e| ApiError::internal(&format!("database error: {e}")))?;
+
+    success(json!({
+        "fragments": fragments,
+        "all_functions": all_functions,
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// action=save_code_fragment
+// ---------------------------------------------------------------------------
+
+async fn handle_save_code_fragment(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let fragment_json = get_required_param(params, "fragment")?;
+    let fragment: Value = serde_json::from_str(fragment_json)
+        .map_err(|e| ApiError::new(&format!("invalid fragment JSON: {e}")))?;
+
+    let catalog = fragment["catalog"].as_u64().unwrap_or(0) as usize;
+    if catalog == 0 {
+        return Err(ApiError::new("fragment must have a positive catalog ID"));
+    }
+
+    let function = fragment["function"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+    if function.is_empty() {
+        return Err(ApiError::new("fragment must have a function"));
+    }
+
+    let cfid = app
+        .storage()
+        .save_code_fragment(&fragment)
+        .await
+        .map_err(|e| ApiError::internal(&format!("save failed: {e}")))?;
+
+    // Queue appropriate jobs based on function type
+    let mut queued_jobs = vec![];
+    match function.as_str() {
+        "PERSON_DATE" => {
+            let job_id = app.storage().queue_job(catalog, "update_person_dates", None).await.unwrap_or(0);
+            queued_jobs.push("update_person_dates");
+            let _ = app.storage().queue_job(catalog, "match_person_dates", Some(job_id)).await;
+            queued_jobs.push("match_person_dates");
+        }
+        "AUX_FROM_DESC" => {
+            let _ = app.storage().queue_job(catalog, "generate_aux_from_description", None).await;
+            queued_jobs.push("generate_aux_from_description");
+        }
+        "DESC_FROM_HTML" => {
+            let _ = app.storage().queue_job(catalog, "update_descriptions_from_url", None).await;
+            queued_jobs.push("update_descriptions_from_url");
+        }
+        _ => {}
+    }
+
+    success(json!({
+        "id": cfid,
+        "queued_jobs": queued_jobs,
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -663,5 +744,91 @@ if m then d[#d+1] = m end
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["status"], "internal_error");
         assert_eq!(body["error"], "boom");
+    }
+
+    // --- get_code_fragments tests ---
+
+    #[tokio::test]
+    async fn test_get_code_fragments_missing_catalog() {
+        let app = router(test_app());
+        let resp = app
+            .oneshot(build_request("/api?action=get_code_fragments"))
+            .await
+            .unwrap();
+        let (_, body) = response_json(resp).await;
+        assert_eq!(body["status"], "bad_request");
+        assert!(body["error"].as_str().unwrap().contains("catalog"));
+    }
+
+    #[tokio::test]
+    async fn test_get_code_fragments_valid() {
+        let app = router(test_app());
+        let resp = app
+            .oneshot(build_request("/api?action=get_code_fragments&catalog=1"))
+            .await
+            .unwrap();
+        let (status, body) = response_json(resp).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["status"], "ok");
+        assert!(body["data"]["fragments"].is_array());
+        assert!(body["data"]["all_functions"].is_array());
+    }
+
+    // --- save_code_fragment tests ---
+
+    #[tokio::test]
+    async fn test_save_code_fragment_missing_fragment() {
+        let app = router(test_app());
+        let resp = app
+            .oneshot(build_request("/api?action=save_code_fragment"))
+            .await
+            .unwrap();
+        let (_, body) = response_json(resp).await;
+        assert_eq!(body["status"], "bad_request");
+        assert!(body["error"].as_str().unwrap().contains("fragment"));
+    }
+
+    #[tokio::test]
+    async fn test_save_code_fragment_bad_json() {
+        let app = router(test_app());
+        let resp = app
+            .oneshot(build_request(
+                "/api?action=save_code_fragment&fragment=not_json",
+            ))
+            .await
+            .unwrap();
+        let (_, body) = response_json(resp).await;
+        assert_eq!(body["status"], "bad_request");
+        assert!(body["error"].as_str().unwrap().contains("invalid"));
+    }
+
+    #[tokio::test]
+    async fn test_save_code_fragment_missing_catalog() {
+        let app = router(test_app());
+        let frag = urlencoding::encode(r#"{"function":"PERSON_DATE","php":"","catalog":0}"#);
+        let resp = app
+            .oneshot(build_request(&format!(
+                "/api?action=save_code_fragment&fragment={frag}"
+            )))
+            .await
+            .unwrap();
+        let (_, body) = response_json(resp).await;
+        assert_eq!(body["status"], "bad_request");
+        assert!(body["error"].as_str().unwrap().contains("catalog"));
+    }
+
+    #[tokio::test]
+    async fn test_save_code_fragment_missing_function() {
+        let app = router(test_app());
+        let frag = urlencoding::encode(r#"{"catalog":1,"php":""}"#);
+        let resp = app
+            .oneshot(build_request(&format!(
+                "/api?action=save_code_fragment&fragment={frag}"
+            )))
+            .await
+            .unwrap();
+        let (_, body) = response_json(resp).await;
+        assert_eq!(body["status"], "bad_request");
+        assert!(body["error"].as_str().unwrap().contains("function"));
     }
 }
