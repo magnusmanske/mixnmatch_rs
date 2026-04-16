@@ -23,7 +23,7 @@ use sysinfo::System;
 use tokio::time::sleep;
 use wikimisc::timestamp::TimeStamp;
 
-pub const MICRO_API_PORT: u16 = 8000;
+pub const MICRO_API_PORT: u16 = 8089;
 
 /// Global function for tests.
 /// # Panics

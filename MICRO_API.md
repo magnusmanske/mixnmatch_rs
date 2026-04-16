@@ -14,7 +14,7 @@ cargo run -- micro-api --config /path/to/config.json --port 9000
 
 ### Via the main server loop
 
-The micro-API is automatically spawned on port 8000 alongside the job
+The micro-API is automatically spawned on port 8089 alongside the job
 loop when `cargo run -- server` is used. The port is defined by the
 `MICRO_API_PORT` constant in `app_state.rs`.
 
