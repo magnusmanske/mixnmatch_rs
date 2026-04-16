@@ -243,7 +243,6 @@ impl ShellCommands {
             }
             Some(Commands::MicroApi { config, port }) => {
                 let app = Self::path2app(config)?;
-                println!("Running micro-API server on http://127.0.0.1:{port}");
                 crate::micro_api::serve(app, *port).await;
             }
             Some(Commands::Test { config }) => {
