@@ -31,6 +31,7 @@ sysinfo = "*"
 log = "*"
 axum = "*"
 wikibase = "*"
+mlua = { version = "0.10", features = ["lua54", "vendored", "serialize"] }
 
 [profile.release]
 lto = 'thin'
