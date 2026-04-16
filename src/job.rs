@@ -484,7 +484,10 @@ impl Job {
             }
             "import_aux_from_url" => PhpWrapper::import_aux_from_url(catalog_id, &self.app),
             "update_descriptions_from_url" => {
-                PhpWrapper::update_descriptions_from_url(catalog_id, &self.app)
+                match code_fragment::run_desc_from_html_job(catalog_id, &self.app).await {
+                    Ok(()) => Ok(()),
+                    Err(_) => PhpWrapper::update_descriptions_from_url(catalog_id, &self.app),
+                }
             }
             "match_by_coordinates" => {
                 let cm = CoordinateMatcher::new(&self.app, Some(catalog_id)).await?;
