@@ -7,7 +7,20 @@ use log::info;
 use regex::Regex;
 use std::collections::HashMap;
 
+pub mod scraper_53;
+pub mod scraper_85;
 pub mod scraper_121;
+pub mod scraper_122;
+pub mod scraper_722;
+pub mod scraper_1178;
+pub mod scraper_1223;
+pub mod scraper_1379;
+pub mod scraper_1619;
+pub mod scraper_2670;
+pub mod scraper_4825;
+pub mod scraper_5100;
+pub mod scraper_5103;
+pub mod scraper_5311;
 pub mod scraper_6479;
 pub mod scraper_6794;
 pub mod scraper_6975;
@@ -18,7 +31,20 @@ pub mod scraper_7696;
 pub mod scraper_7697;
 pub mod scraper_7700;
 
+pub use scraper_53::BespokeScraper53;
+pub use scraper_85::BespokeScraper85;
 pub use scraper_121::BespokeScraper121;
+pub use scraper_122::BespokeScraper122;
+pub use scraper_722::BespokeScraper722;
+pub use scraper_1178::BespokeScraper1178;
+pub use scraper_1223::BespokeScraper1223;
+pub use scraper_1379::BespokeScraper1379;
+pub use scraper_1619::BespokeScraper1619;
+pub use scraper_2670::BespokeScraper2670;
+pub use scraper_4825::BespokeScraper4825;
+pub use scraper_5100::BespokeScraper5100;
+pub use scraper_5103::BespokeScraper5103;
+pub use scraper_5311::BespokeScraper5311;
 pub use scraper_6479::BespokeScraper6479;
 pub use scraper_6794::BespokeScraper6794;
 pub use scraper_6975::BespokeScraper6975;
@@ -32,7 +58,20 @@ pub use scraper_7700::BespokeScraper7700;
 /** WHEN YOU CREATE A NEW `BespokeScraper`, ALSO ADD IT HERE TO BE CALLED! **/
 pub async fn run_bespoke_scraper(catalog_id: usize, app: &AppState) -> Result<()> {
     match catalog_id {
+        53 => BespokeScraper53::new(app).run().await,
+        85 => BespokeScraper85::new(app).run().await,
         121 => BespokeScraper121::new(app).run().await,
+        122 => BespokeScraper122::new(app).run().await,
+        722 => BespokeScraper722::new(app).run().await,
+        1178 => BespokeScraper1178::new(app).run().await,
+        1223 => BespokeScraper1223::new(app).run().await,
+        1379 => BespokeScraper1379::new(app).run().await,
+        1619 => BespokeScraper1619::new(app).run().await,
+        2670 => BespokeScraper2670::new(app).run().await,
+        4825 => BespokeScraper4825::new(app).run().await,
+        5100 => BespokeScraper5100::new(app).run().await,
+        5103 => BespokeScraper5103::new(app).run().await,
+        5311 => BespokeScraper5311::new(app).run().await,
         6479 => BespokeScraper6479::new(app).run().await,
         6794 => BespokeScraper6794::new(app).run().await,
         6975 => BespokeScraper6975::new(app).run().await,
