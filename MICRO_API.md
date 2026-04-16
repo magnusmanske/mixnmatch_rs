@@ -7,9 +7,9 @@ A lightweight HTTP API for running Lua code fragments and other operations.
 ### Via CLI
 
 ```bash
-cargo run -- api --port 8080
+cargo run -- micro-api --port 8080
 # or with a custom config:
-cargo run -- api --config /path/to/config.json --port 9000
+cargo run -- micro-api --config /path/to/config.json --port 9000
 ```
 
 ### Via the main server loop

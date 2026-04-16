@@ -106,7 +106,7 @@ enum Commands {
     },
 
     /// Run the micro-API server on a given port
-    Api {
+    MicroApi {
         #[arg(short, long, value_name = "FILE")]
         config: Option<PathBuf>,
 
@@ -228,13 +228,8 @@ impl ShellCommands {
                 mode,
             }) => {
                 let app = Self::path2app(config)?;
-                let result = crate::import_catalog::import_from_file(
-                    &app,
-                    *catalog_id,
-                    file,
-                    *mode,
-                )
-                .await?;
+                let result =
+                    crate::import_catalog::import_from_file(&app, *catalog_id, file, *mode).await?;
                 println!(
                     "Import complete: {} created, {} updated, {} skipped (fully matched), {} deleted",
                     result.created, result.updated, result.skipped_fully_matched, result.deleted
@@ -246,8 +241,9 @@ impl ShellCommands {
                     }
                 }
             }
-            Some(Commands::Api { config, port }) => {
+            Some(Commands::MicroApi { config, port }) => {
                 let app = Self::path2app(config)?;
+                println!("Running micro-API server on http://127.0.0.1:{port}");
                 crate::micro_api::serve(app, *port).await;
             }
             Some(Commands::Test { config }) => {
