@@ -220,9 +220,13 @@ impl AppState {
 
     pub async fn forever_loop(&self) -> Result<()> {
         // Start the micro-API server
+        let port = std::env::var("PORT")
+            .ok()
+            .and_then(|s| s.parse::<u16>().ok())
+            .unwrap_or(MICRO_API_PORT);
         let app_clone = self.clone();
         tokio::spawn(async move {
-            crate::micro_api::serve(app_clone, MICRO_API_PORT).await;
+            crate::micro_api::serve(app_clone, port).await;
         });
 
         let current_jobs = self.forever_loop_initalize().await?;
