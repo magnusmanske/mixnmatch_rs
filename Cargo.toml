@@ -35,6 +35,8 @@ mlua = { version = "0.10", features = ["lua54", "vendored", "serialize"] }
 tower = "*"
 tower-http = { version = "*", features = ["fs", "trace"] }
 tower-sessions = "0.15"
+axum-server = { version = "0.8", features = ["tls-rustls"] }
+rcgen = "0.14"
 rust-ini = "0.21"
 hmac = "0.12"
 sha1 = "0.10"
