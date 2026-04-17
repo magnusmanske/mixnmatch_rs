@@ -16,18 +16,65 @@ pub type SharedState = Arc<AppState>;
 pub fn router(app: AppState) -> Router {
     let state: SharedState = Arc::new(app);
     Router::new()
-        .route("/api.php", get(api_dispatcher).post(api_dispatcher))
+        .route("/api.php", get(api_dispatcher).post(api_dispatcher_form))
         .route("/api/v1/import_catalog", post(api_import_catalog))
         .with_state(state)
 }
 
 async fn api_dispatcher(State(app): State<SharedState>, Query(params): Query<Params>) -> Response {
-    let query = params.get("query").cloned().unwrap_or_default();
-    let result = dispatch(&query, &app, &params).await;
-    match result {
-        Ok(resp) => resp,
+    dispatcher_common(&app, params).await
+}
+
+async fn api_dispatcher_form(
+    State(app): State<SharedState>,
+    axum::extract::Form(params): axum::extract::Form<Params>,
+) -> Response {
+    dispatcher_common(&app, params).await
+}
+
+async fn dispatcher_common(app: &AppState, params: Params) -> Response {
+    // Mirror the PHP behaviour: legacy callers may use "action" instead of "query"
+    // to reach the distributed-game endpoints, which become "dg_<action>".
+    let query = match params.get("query").filter(|s| !s.is_empty()).cloned() {
+        Some(q) => q,
+        None => match params.get("action").filter(|s| !s.is_empty()) {
+            Some(a) => format!("dg_{a}"),
+            None => String::new(),
+        },
+    };
+    let callback = params.get("callback").cloned().unwrap_or_default();
+    let result = dispatch(&query, app, &params).await;
+    let resp = match result {
+        Ok(r) => r,
         Err(e) => e.into_response(),
+    };
+    if callback.is_empty() {
+        return resp;
     }
+    // JSONP wrapping: only apply to JSON responses; pass non-JSON payloads through unchanged.
+    if resp
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|ct| ct.starts_with("application/json"))
+    {
+        let (parts, body) = resp.into_parts();
+        // Body may be arbitrarily large; cap at 100MB for safety.
+        let bytes = match axum::body::to_bytes(body, 100_000_000).await {
+            Ok(b) => b,
+            Err(_) => return axum::http::Response::from_parts(parts, axum::body::Body::empty()),
+        };
+        let wrapped = format!("{callback}({})", String::from_utf8_lossy(&bytes));
+        return (
+            [(
+                axum::http::header::CONTENT_TYPE,
+                "application/javascript; charset=UTF-8",
+            )],
+            wrapped,
+        )
+            .into_response();
+    }
+    resp
 }
 
 #[allow(clippy::cognitive_complexity)]
@@ -110,26 +157,64 @@ async fn dispatch(query: &str, app: &AppState, params: &Params) -> Result<Respon
         "rc_atom" => query_rc_atom(app, params).await,
         "get_flickr_key" => query_get_flickr_key().await,
 
-        // Stubs for endpoints requiring external services
+        // Delegated to micro-API internally (no HTTP round-trip)
         "get_sync" => query_get_sync(app, params).await,
-        "sitestats" => query_sitestats(app, params).await,
-        "disambig" => query_disambig(app, params).await,
-        "missingpages" => query_missingpages(app, params).await,
         "sparql_list" => query_sparql_list(app, params).await,
         "quick_compare" => query_quick_compare(app, params).await,
-        "prep_new_item" => query_prep_new_item(app, params).await,
-        "get_entry_reader_view" => query_get_entry_reader_view(app, params).await,
-
-        // Stubs for code fragment / scraper / import endpoints
         "get_code_fragments" => query_get_code_fragments(app, params).await,
         "save_code_fragment" => query_save_code_fragment(app, params).await,
         "test_code_fragment" => query_test_code_fragment(app, params).await,
-        "autoscrape_test" => query_autoscrape_test(app, params).await,
-        "save_scraper" => query_save_scraper(app, params).await,
-        "upload_import_file" => query_upload_import_file(app, params).await,
-        "import_source" => query_import_source(app, params).await,
-        "get_source_headers" => query_get_source_headers(app, params).await,
-        "test_import_source" => query_test_import_source(app, params).await,
+
+        // Large-catalogs endpoints (backed by the large_catalogs DB)
+        "lc_catalogs" => query_lc_catalogs(app).await,
+        "lc_bbox" => query_lc_bbox(app, params).await,
+        "lc_report" => query_lc_report(app, params).await,
+        "lc_report_list" => query_lc_report_list(app, params).await,
+        "lc_rc" => query_lc_rc(app, params).await,
+        "lc_set_status" => query_lc_set_status(app, params).await,
+
+        // Newly ported lightweight catalog endpoints
+        "batch_catalogs" => query_batch_catalogs(app, params).await,
+        "search_catalogs" => query_search_catalogs(app, params).await,
+        "catalog_type_counts" => query_catalog_type_counts(app).await,
+        "latest_catalogs" => query_latest_catalogs(app, params).await,
+        "catalogs_with_locations" => query_catalogs_with_locations(app).await,
+        "catalog_property_groups" => query_catalog_property_groups(app).await,
+        "check_wd_prop_usage" => query_check_wd_prop_usage(app, params).await,
+        "catalog_by_group" => query_catalog_by_group(app, params).await,
+
+        // Newly ported misc endpoints
+        "create" => query_create(app, params).await,
+        "user_edits" => query_user_edits(app, params).await,
+        "get_statement_text_groups" => query_get_statement_text_groups(app, params).await,
+        "set_statement_text_q" => query_set_statement_text_q(app, params).await,
+        "missingpages" => query_missingpages(app, params).await,
+        "sitestats" => query_sitestats(app, params).await,
+
+        // Distributed-game endpoints (also dispatched via action=… → query=dg_…)
+        "dg_desc" => query_dg_desc(params).await,
+        "dg_tiles" => query_dg_tiles(app, params).await,
+        "dg_log_action" => query_dg_log_action(app, params).await,
+
+        // Stubs: require external services that are not yet ported
+        "disambig" => Err(ApiError(
+            "disambig requires Wikidata DB replica access (not yet ported to Rust)".into(),
+        )),
+        "prep_new_item" => Err(ApiError(
+            "prep_new_item requires QuickStatements integration (not yet ported to Rust)".into(),
+        )),
+        "get_entry_reader_view" => Err(ApiError(
+            "get_entry_reader_view requires Readability library (not yet ported to Rust)".into(),
+        )),
+        "autoscrape_test" => Err(ApiError("autoscrape_test not yet ported to Rust".into())),
+        "save_scraper" => Err(ApiError("save_scraper not yet ported to Rust".into())),
+        "upload_import_file" => Err(ApiError("upload_import_file not yet ported to Rust".into())),
+        "import_source" => Err(ApiError("import_source not yet ported to Rust".into())),
+        "get_source_headers" => Err(ApiError("get_source_headers not yet ported to Rust".into())),
+        "test_import_source" => Err(ApiError("test_import_source not yet ported to Rust".into())),
+        "widar" => Err(ApiError(
+            "widar OAuth endpoint not yet ported to Rust".into(),
+        )),
 
         _ => Err(ApiError(format!("Unknown query '{query}'"))),
     }
@@ -1424,96 +1509,398 @@ async fn query_get_flickr_key() -> Result<Response, ApiError> {
     Ok(ok(serde_json::json!(key)))
 }
 
-// ─── Stubs for endpoints requiring external services ────────────────────────
+// ─── Delegated to micro-API (called directly, no HTTP round-trip) ──────────
 
-async fn query_get_sync(_app: &AppState, params: &Params) -> Result<Response, ApiError> {
+async fn query_get_sync(app: &AppState, params: &Params) -> Result<Response, ApiError> {
     let _catalog = common::get_catalog(params)?;
-    // This requires SPARQL queries and temporary table operations
-    // which need the full Wikidata integration
-    Err(ApiError(
-        "get_sync requires Wikidata SPARQL access (not yet ported to Rust)".into(),
+    let data = crate::micro_api::data_get_sync(app, params)
+        .await
+        .map_err(ApiError)?;
+    Ok(ok(data))
+}
+
+async fn query_sparql_list(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let data = crate::micro_api::data_sparql_list(app, params)
+        .await
+        .map_err(ApiError)?;
+    Ok(ok(data))
+}
+
+async fn query_quick_compare(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let data = crate::micro_api::data_quick_compare(app, params)
+        .await
+        .map_err(ApiError)?;
+    Ok(ok(data))
+}
+
+async fn query_get_code_fragments(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let catalog = common::get_catalog(params)?;
+    let mut data = crate::micro_api::data_get_code_fragments(app, params)
+        .await
+        .map_err(ApiError)?;
+    // PHP behaviour: add user_allowed flag based on the requesting user.
+    let username = common::get_param(params, "username", "");
+    let user_allowed = if username.is_empty() {
+        0
+    } else {
+        let uid = app
+            .storage()
+            .get_or_create_user_id(&username.replace('_', " "))
+            .await
+            .unwrap_or(0);
+        // Matches PHP: code_fragment_allowed_user_ids = [2]
+        i64::from(uid == 2)
+    };
+    if let Some(obj) = data.as_object_mut() {
+        obj.insert("user_allowed".into(), serde_json::json!(user_allowed));
+        obj.entry("catalog")
+            .or_insert_with(|| serde_json::json!(catalog));
+    }
+    Ok(ok(data))
+}
+
+async fn query_save_code_fragment(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    // Verify the calling user is allowed.
+    let uid = common::check_user(app, params).await?;
+    if uid != 2 {
+        return Err(ApiError("Not allowed, ask Magnus".into()));
+    }
+    let data = crate::micro_api::data_save_code_fragment(app, params)
+        .await
+        .map_err(ApiError)?;
+    Ok(ok(data))
+}
+
+async fn query_test_code_fragment(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    // Verify the calling user is allowed.
+    let uid = common::check_user(app, params).await?;
+    if uid != 2 {
+        return Err(ApiError("Not allowed, ask Magnus".into()));
+    }
+    let entry_id = common::get_param_int(params, "entry_id", 0) as usize;
+    if entry_id == 0 {
+        return Err(ApiError("No entry_id".into()));
+    }
+    // Extract the fragment's "function" field and forward it to the Lua runner.
+    let fragment_str = common::get_param(params, "fragment", "{}");
+    let fragment: serde_json::Value = serde_json::from_str(&fragment_str)
+        .map_err(|_| ApiError("Bad fragment".into()))?;
+    let function = fragment
+        .get("function")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if function.is_empty() {
+        return Err(ApiError(format!("Bad fragment function '{function}'")));
+    }
+    let mut run_params: crate::micro_api::Params = std::collections::HashMap::new();
+    run_params.insert("function".into(), function.to_string());
+    run_params.insert("entry_id".into(), entry_id.to_string());
+    if let Some(html) = params.get("html") {
+        run_params.insert("html".into(), html.clone());
+    }
+    let data = crate::micro_api::data_run_lua(app, &run_params)
+        .await
+        .map_err(ApiError)?;
+    Ok(json_resp(
+        serde_json::json!({"status":"OK","data": data,"tested_via":"lua"}),
     ))
 }
 
-async fn query_sitestats(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
-    Err(ApiError(
-        "sitestats requires Wikidata DB replica access (not yet ported to Rust)".into(),
-    ))
+// ─── Large catalogs (delegated to micro_api helpers) ───────────────────────
+
+async fn query_lc_catalogs(app: &AppState) -> Result<Response, ApiError> {
+    // PHP shape: data.catalogs (array of catalog objects), data.open_issues (map)
+    let data = crate::micro_api::data_lc_catalogs(app)
+        .await
+        .map_err(ApiError)?;
+    // The micro_api returns {"catalogs": [...], "open_issues": {...}} — same shape.
+    Ok(ok(data))
 }
 
-async fn query_disambig(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
-    Err(ApiError(
-        "disambig requires Wikidata DB replica access (not yet ported to Rust)".into(),
-    ))
+async fn query_lc_bbox(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let data = crate::micro_api::data_lc_locations(app, params)
+        .await
+        .map_err(ApiError)?;
+    // PHP shape: {bbox, data, catalogs}. Micro-API returns {data, catalogs}; add bbox for parity.
+    let bbox_raw = common::get_param(params, "bbox", "");
+    let bbox: Vec<f64> = bbox_raw
+        .chars()
+        .filter(|c| c.is_ascii_digit() || *c == ',' || *c == '.' || *c == '-')
+        .collect::<String>()
+        .split(',')
+        .filter_map(|s| s.parse().ok())
+        .collect();
+    let mut merged = data.clone();
+    if let Some(obj) = merged.as_object_mut() {
+        obj.insert("bbox".into(), serde_json::json!(bbox));
+    }
+    Ok(ok(merged))
 }
 
-async fn query_missingpages(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
-    Err(ApiError(
-        "missingpages requires Wikidata DB replica access (not yet ported to Rust)".into(),
-    ))
+async fn query_lc_report(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let data = crate::micro_api::data_lc_report(app, params)
+        .await
+        .map_err(ApiError)?;
+    Ok(ok(data))
 }
 
-async fn query_sparql_list(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
-    Err(ApiError(
-        "sparql_list requires SPARQL endpoint access (not yet ported to Rust)".into(),
-    ))
+async fn query_lc_report_list(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let data = crate::micro_api::data_lc_report_list(app, params)
+        .await
+        .map_err(ApiError)?;
+    Ok(ok(data))
 }
 
-async fn query_quick_compare(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
-    Err(ApiError(
-        "quick_compare requires Wikidata item loading (not yet ported to Rust)".into(),
-    ))
+async fn query_lc_rc(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let data = crate::micro_api::data_lc_rc(app, params)
+        .await
+        .map_err(ApiError)?;
+    Ok(ok(data))
 }
 
-async fn query_prep_new_item(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
-    Err(ApiError(
-        "prep_new_item requires QuickStatements integration (not yet ported to Rust)".into(),
-    ))
+async fn query_lc_set_status(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    // PHP uses the `user` request parameter (text, not user_id).
+    let data = crate::micro_api::data_lc_set_status(app, params)
+        .await
+        .map_err(ApiError)?;
+    Ok(ok(data))
 }
 
-async fn query_get_entry_reader_view(
-    _app: &AppState,
-    _params: &Params,
+// ─── Newly ported lightweight catalog endpoints ────────────────────────────
+
+async fn query_batch_catalogs(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let raw = common::get_param(params, "catalog_ids", "");
+    let mut ids: Vec<usize> = raw
+        .split(',')
+        .filter_map(|s| s.trim().parse::<usize>().ok())
+        .filter(|id| *id > 0)
+        .collect();
+    ids.sort();
+    ids.dedup();
+    ids.truncate(200);
+    if ids.is_empty() {
+        return Ok(ok(serde_json::json!({})));
+    }
+    let data = app.storage().api_get_catalog_overview_for_ids(&ids).await?;
+    let mut map = serde_json::Map::new();
+    for item in data {
+        if let Some(id) = item.get("id").and_then(|v| v.as_u64()) {
+            map.insert(id.to_string(), item);
+        }
+    }
+    Ok(ok(serde_json::Value::Object(map)))
+}
+
+async fn query_search_catalogs(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let q = common::get_param(params, "q", "");
+    let limit = (common::get_param_int(params, "limit", 20).clamp(1, 100)) as usize;
+    if q.is_empty() {
+        return Ok(ok(serde_json::json!([])));
+    }
+    let rows = app.storage().api_search_catalogs(&q, limit).await?;
+    Ok(ok(serde_json::json!(rows)))
+}
+
+async fn query_catalog_type_counts(app: &AppState) -> Result<Response, ApiError> {
+    let rows = app.storage().api_catalog_type_counts().await?;
+    Ok(ok(serde_json::json!(rows)))
+}
+
+async fn query_latest_catalogs(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let limit = (common::get_param_int(params, "limit", 9).clamp(1, 50)) as usize;
+    let rows = app.storage().api_latest_catalogs(limit).await?;
+    Ok(ok(serde_json::json!(rows)))
+}
+
+async fn query_catalogs_with_locations(app: &AppState) -> Result<Response, ApiError> {
+    let rows = app.storage().api_catalogs_with_locations().await?;
+    Ok(ok(serde_json::json!(rows)))
+}
+
+async fn query_catalog_property_groups(app: &AppState) -> Result<Response, ApiError> {
+    let data = app.storage().api_catalog_property_groups().await?;
+    Ok(ok(data))
+}
+
+async fn query_check_wd_prop_usage(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let wd_prop = common::get_param_int(params, "wd_prop", 0);
+    let exclude = common::get_param_int(params, "exclude_catalog", 0) as usize;
+    if wd_prop <= 0 {
+        return Ok(ok(serde_json::json!({"used": false})));
+    }
+    let result = app
+        .storage()
+        .api_check_wd_prop_usage(wd_prop as usize, exclude)
+        .await?;
+    Ok(ok(result))
+}
+
+async fn query_catalog_by_group(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let group = common::get_param(params, "group", "");
+    if group.is_empty() {
+        return Ok(ok(serde_json::json!({})));
+    }
+    let data = app.storage().api_catalog_by_group(&group).await?;
+    Ok(ok(data))
+}
+
+// ─── Other newly ported endpoints ──────────────────────────────────────────
+
+async fn query_create(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let catalog = common::get_catalog(params)?;
+    let rows = app.storage().api_create_list(catalog).await?;
+    Ok(ok(serde_json::json!(rows)))
+}
+
+async fn query_user_edits(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let user_id = common::get_param_int(params, "user_id", -1);
+    if user_id < 0 {
+        return Err(ApiError("Invalid user ID".into()));
+    }
+    let user_id = user_id as usize;
+    let catalog = common::get_param_int(params, "catalog", 0) as usize;
+    let limit = common::get_param_int(params, "limit", 50).clamp(1, 200) as usize;
+    let offset = common::get_param_int(params, "offset", 0).max(0) as usize;
+    let (events, users_map, total, user_info) = app
+        .storage()
+        .api_user_edits(user_id, catalog, limit, offset)
+        .await?;
+    Ok(json_resp(serde_json::json!({
+        "status": "OK",
+        "total": total,
+        "data": {
+            "user_info": user_info,
+            "events": events,
+            "users": users_map,
+        }
+    })))
+}
+
+async fn query_get_statement_text_groups(
+    app: &AppState,
+    params: &Params,
 ) -> Result<Response, ApiError> {
-    Err(ApiError(
-        "get_entry_reader_view requires Readability library (not yet ported to Rust)".into(),
+    let catalog = common::get_catalog(params)?;
+    let limit = common::get_param_int(params, "limit", 50).max(1) as usize;
+    let offset = common::get_param_int(params, "offset", 0).max(0) as usize;
+    let property = common::get_param_int(params, "property", 0).max(0) as usize;
+    let (properties, groups) = app
+        .storage()
+        .api_get_statement_text_groups(catalog, property, limit, offset)
+        .await?;
+    Ok(ok(
+        serde_json::json!({"properties": properties, "groups": groups}),
     ))
 }
 
-async fn query_get_code_fragments(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
-    Err(ApiError("get_code_fragments not yet ported to Rust".into()))
+async fn query_set_statement_text_q(
+    app: &AppState,
+    params: &Params,
+) -> Result<Response, ApiError> {
+    let catalog = common::get_catalog(params)?;
+    let text = common::get_param(params, "text", "");
+    let property = common::get_param_int(params, "property", 0);
+    let q = common::get_param_int(params, "q", 0);
+    let user_id = common::check_user(app, params).await?;
+    if text.is_empty() {
+        return Err(ApiError("Missing text parameter".into()));
+    }
+    if property <= 0 {
+        return Err(ApiError("Missing or invalid property parameter".into()));
+    }
+    if q <= 0 {
+        return Err(ApiError("Missing or invalid q parameter".into()));
+    }
+    let (rows_updated, aux_rows_added) = app
+        .storage()
+        .api_set_statement_text_q(catalog, property as usize, &text, q as usize, user_id)
+        .await?;
+    Ok(ok(serde_json::json!({
+        "rows_updated": rows_updated,
+        "aux_rows_added": aux_rows_added,
+    })))
 }
 
-async fn query_save_code_fragment(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
-    Err(ApiError("save_code_fragment not yet ported to Rust".into()))
+async fn query_missingpages(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let catalog = common::get_catalog(params)?;
+    let site = common::get_param(params, "site", "");
+    if site.is_empty() {
+        return Err(ApiError("site parameter required".into()));
+    }
+    let (entries, users) = app.storage().api_missingpages(catalog, &site).await?;
+    Ok(ok(serde_json::json!({"entries": entries, "users": users})))
 }
 
-async fn query_test_code_fragment(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
-    Err(ApiError("test_code_fragment not yet ported to Rust".into()))
+async fn query_sitestats(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let catalog_raw = common::get_param(params, "catalog", "");
+    let catalog = if catalog_raw.is_empty() {
+        None
+    } else {
+        catalog_raw.parse::<usize>().ok()
+    };
+    let data = app.storage().api_sitestats(catalog).await?;
+    Ok(ok(serde_json::json!(data)))
 }
 
-async fn query_autoscrape_test(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
-    Err(ApiError("autoscrape_test not yet ported to Rust".into()))
+// ─── Distributed-game endpoints ────────────────────────────────────────────
+
+async fn query_dg_desc(params: &Params) -> Result<Response, ApiError> {
+    let mode = common::get_param(params, "mode", "");
+    let (title, sub) = if mode == "person" {
+        (
+            "Mix'n'match people game",
+            "of a person in",
+        )
+    } else {
+        ("Mix'n'match game", "in")
+    };
+    let out = serde_json::json!({
+        "label": {"en": title},
+        "description": {"en": format!("Verify that an entry {sub} an external catalog matches a given Wikidata item. Decisions count as mix'n'match actions!")},
+        "icon": "https://upload.wikimedia.org/wikipedia/commons/thumb/2/2d/Bipartite_graph_with_matching.svg/120px-Bipartite_graph_with_matching.svg.png",
+        "options": [
+            {"name": "Entry type", "key": "type", "values": {"any": "Any", "person": "Person", "not_person": "Not a person"}}
+        ],
+    });
+    // PHP returns this payload as the top-level response (no "data" envelope).
+    Ok(json_resp(out))
 }
 
-async fn query_save_scraper(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
-    Err(ApiError("save_scraper not yet ported to Rust".into()))
+async fn query_dg_tiles(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let num = common::get_param_int(params, "num", 5).clamp(1, 20) as usize;
+    let type_filter = common::get_param(params, "type", "");
+    let tiles = app
+        .storage()
+        .api_dg_tiles(num, &type_filter)
+        .await?;
+    Ok(json_resp(serde_json::json!(tiles)))
 }
 
-async fn query_upload_import_file(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
-    Err(ApiError("upload_import_file not yet ported to Rust".into()))
-}
-
-async fn query_import_source(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
-    Err(ApiError("import_source not yet ported to Rust".into()))
-}
-
-async fn query_get_source_headers(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
-    Err(ApiError("get_source_headers not yet ported to Rust".into()))
-}
-
-async fn query_test_import_source(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
-    Err(ApiError("test_import_source not yet ported to Rust".into()))
+async fn query_dg_log_action(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let user = common::get_param(params, "user", "");
+    let entry_id = common::get_param_int(params, "tile", -1);
+    if entry_id < 0 {
+        return Err(ApiError("bad tile".into()));
+    }
+    let entry_id = entry_id as usize;
+    let decision = common::get_param(params, "decision", "");
+    let uid = app.storage().get_or_create_user_id(&user).await?;
+    let mut entry = crate::entry::Entry::from_id(entry_id, app).await?;
+    match decision.as_str() {
+        "yes" => {
+            if let Some(q) = entry.q {
+                entry.set_match(&format!("Q{q}"), uid).await?;
+            }
+        }
+        "no" => {
+            entry.unmatch().await?;
+        }
+        "n_a" => {
+            entry.set_match("Q-1", uid).await?;
+        }
+        _ => {}
+    }
+    Ok(json_resp(serde_json::json!([])))
 }
 
 #[cfg(test)]
