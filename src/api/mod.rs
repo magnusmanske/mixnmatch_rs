@@ -122,10 +122,26 @@ async fn dispatcher_common(app: &AppState, session: &Session, params: Params) ->
     } else {
         String::new()
     };
-    let result = dispatch(&query, app, session, &params).await;
+    // Wrap the dispatcher in catch_unwind so a panic in a single handler
+    // (typically a MySQL type mismatch inside `row.get`) returns a clean
+    // error response instead of killing the connection mid-flight — the
+    // latter would surface in the browser as a NetworkError.
+    use futures::FutureExt;
+    let dispatch_fut =
+        std::panic::AssertUnwindSafe(dispatch(&query, app, session, &params));
+    let result = dispatch_fut.catch_unwind().await;
     let resp = match result {
-        Ok(r) => r,
-        Err(e) => e.into_response(),
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => e.into_response(),
+        Err(panic) => {
+            let msg = panic
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| panic.downcast_ref::<&str>().map(|s| (*s).to_string()))
+                .unwrap_or_else(|| "unknown panic".to_string());
+            log::error!("api.php query={query} panicked: {msg}");
+            ApiError(format!("internal error: {msg}")).into_response()
+        }
     };
     if callback.is_empty() {
         return resp;
