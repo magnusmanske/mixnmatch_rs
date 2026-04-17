@@ -363,6 +363,7 @@ mod tests {
             cookie_name: "c".into(),
             cookie_secure: false,
             session_lifetime_days: 30,
+            session_dir: "./sessions".into(),
         };
         let url = build_authorize_redirect_url(&cfg, "RTK");
         assert!(url.starts_with("https://www.mediawiki.org/wiki/Special:OAuth/authorize?"));

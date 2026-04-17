@@ -23,6 +23,9 @@ pub struct OauthConfig {
     pub cookie_name: String,
     pub cookie_secure: bool,
     pub session_lifetime_days: i64,
+    /// Directory holding one JSON file per active session.
+    /// Sessions are kept across restarts so users stay logged in.
+    pub session_dir: String,
 }
 
 impl std::fmt::Debug for OauthConfig {
@@ -36,6 +39,7 @@ impl std::fmt::Debug for OauthConfig {
             .field("cookie_name", &self.cookie_name)
             .field("cookie_secure", &self.cookie_secure)
             .field("session_lifetime_days", &self.session_lifetime_days)
+            .field("session_dir", &self.session_dir)
             .finish()
     }
 }
@@ -65,6 +69,10 @@ impl OauthConfig {
         let cookie_secure = oauth["cookie_secure"].as_bool().unwrap_or(true);
         let session_lifetime_days =
             oauth["session_lifetime_days"].as_i64().unwrap_or(90);
+        let session_dir = oauth["session_dir"]
+            .as_str()
+            .unwrap_or("./sessions")
+            .to_string();
 
         let (agent, consumer_key, consumer_secret) = load_ini(&ini_path)?;
         Ok(Self {
@@ -75,6 +83,7 @@ impl OauthConfig {
             cookie_name,
             cookie_secure,
             session_lifetime_days,
+            session_dir,
         })
     }
 }
