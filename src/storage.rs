@@ -583,6 +583,48 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
 
     // Micro-API: quick_compare
     async fn qc_get_entries(&self, catalog_id: usize, entry_id: Option<usize>, require_image: bool, require_coordinates: bool, random_threshold: f64, max_results: usize) -> Result<Vec<serde_json::Value>>;
+
+    // Lightweight catalog endpoints (ported from PHP API.php)
+    async fn api_search_catalogs(&self, q: &str, limit: usize) -> Result<Vec<serde_json::Value>>;
+    async fn api_catalog_type_counts(&self) -> Result<Vec<serde_json::Value>>;
+    async fn api_latest_catalogs(&self, limit: usize) -> Result<Vec<serde_json::Value>>;
+    async fn api_catalogs_with_locations(&self) -> Result<Vec<serde_json::Value>>;
+    async fn api_catalog_property_groups(&self) -> Result<serde_json::Value>;
+    async fn api_check_wd_prop_usage(&self, wd_prop: usize, exclude_catalog: usize) -> Result<serde_json::Value>;
+    async fn api_catalog_by_group(&self, group: &str) -> Result<serde_json::Value>;
+
+    // Other ported endpoints
+    async fn api_create_list(&self, catalog_id: usize) -> Result<Vec<serde_json::Value>>;
+    #[allow(clippy::type_complexity)]
+    async fn api_user_edits(
+        &self,
+        user_id: usize,
+        catalog: usize,
+        limit: usize,
+        offset: usize,
+    ) -> Result<(Vec<serde_json::Value>, serde_json::Value, usize, Option<serde_json::Value>)>;
+    async fn api_get_statement_text_groups(
+        &self,
+        catalog_id: usize,
+        property: usize,
+        limit: usize,
+        offset: usize,
+    ) -> Result<(Vec<serde_json::Value>, Vec<serde_json::Value>)>;
+    async fn api_set_statement_text_q(
+        &self,
+        catalog_id: usize,
+        property: usize,
+        text: &str,
+        q: usize,
+        user_id: usize,
+    ) -> Result<(usize, usize)>;
+    async fn api_missingpages(
+        &self,
+        catalog_id: usize,
+        site: &str,
+    ) -> Result<(serde_json::Value, serde_json::Value)>;
+    async fn api_sitestats(&self, catalog: Option<usize>) -> Result<serde_json::Value>;
+    async fn api_dg_tiles(&self, num: usize, type_filter: &str) -> Result<Vec<serde_json::Value>>;
 }
 
 #[cfg(test)]
