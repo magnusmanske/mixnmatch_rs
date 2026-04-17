@@ -3747,13 +3747,20 @@ impl Storage for StorageMySQL {
     }
 
     async fn api_get_catalog_overview_for_ids(&self, catalog_ids: &[usize]) -> Result<Vec<serde_json::Value>> {
-        let mut results = Vec::new();
-        for &catalog_id in catalog_ids {
-            if let Ok(val) = self.api_get_single_catalog_overview(catalog_id).await {
-                results.push(val); // Skip catalogs that are not found
-            }
-        }
-        Ok(results)
+        // Fetch the full overview ONCE, then filter to the requested ids.
+        // The naive per-id loop re-ran four large joins per catalog, making
+        // batch_catalogs with 5 ids take ~50s.
+        let all = self.api_get_catalog_overview().await?;
+        let wanted: std::collections::HashSet<u64> =
+            catalog_ids.iter().map(|id| *id as u64).collect();
+        Ok(all
+            .into_iter()
+            .filter(|item| {
+                item.get("id")
+                    .and_then(|v| v.as_u64())
+                    .is_some_and(|id| wanted.contains(&id))
+            })
+            .collect())
     }
 
     async fn api_match_q_multi(&self, catalog_id: usize, ext_id: &str, q: isize, user_id: usize) -> Result<bool> {

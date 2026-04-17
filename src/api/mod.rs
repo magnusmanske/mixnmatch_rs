@@ -962,19 +962,28 @@ async fn query_get_entries_by_q_or_value(
     let mut data = common::entries_to_json_data(&entries, app).await?;
     common::add_extended_entry_data(app, &mut data).await?;
 
-    // Add catalog info — fetch each catalog's overview concurrently, but
-    // cap at 8 in-flight to match the read-only MySQL pool size.
-    use futures::stream::{self, StreamExt};
-    let cat_ids: std::collections::HashSet<usize> =
-        entries.iter().map(|e| e.catalog).collect();
-    let catalogs: serde_json::Map<String, serde_json::Value> = stream::iter(cat_ids)
-        .map(|cid| async move {
-            (cid, app.storage().api_get_single_catalog_overview(cid).await)
-        })
-        .buffer_unordered(8)
-        .filter_map(|(cid, r)| async move { r.ok().map(|c| (cid.to_string(), c)) })
-        .collect()
-        .await;
+    // Add catalog info — one batched fetch, not N full-overview fetches
+    // in a loop. `api_get_catalog_overview_for_ids` runs the 4 overview
+    // queries once and filters the result.
+    let cat_ids: Vec<usize> = entries
+        .iter()
+        .map(|e| e.catalog)
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    let mut catalogs = serde_json::Map::new();
+    if !cat_ids.is_empty() {
+        let rows = app
+            .storage()
+            .api_get_catalog_overview_for_ids(&cat_ids)
+            .await
+            .unwrap_or_default();
+        for item in rows {
+            if let Some(id) = item.get("id").and_then(|v| v.as_u64()) {
+                catalogs.insert(id.to_string(), item);
+            }
+        }
+    }
     data["catalogs"] = serde_json::Value::Object(catalogs);
     Ok(ok(data))
 }
