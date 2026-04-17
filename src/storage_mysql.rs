@@ -4222,6 +4222,171 @@ impl Storage for StorageMySQL {
         q2ext_ids.retain(|_, v| v.len() > 1);
         Ok(q2ext_ids)
     }
+
+    // Micro-API: creation_candidates
+
+    async fn cc_random_pick(&self, sql: &str) -> Result<Vec<serde_json::Value>> {
+        let mut conn = self.get_conn_ro().await?;
+        let rows = conn
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(|row: Row| {
+                let mut obj = serde_json::Map::new();
+                for (i, col) in row.columns_ref().iter().enumerate() {
+                    let name = col.name_str().to_string();
+                    let val = match &row[i] {
+                        mysql_async::Value::NULL => serde_json::Value::Null,
+                        mysql_async::Value::Int(n) => json!(*n),
+                        mysql_async::Value::UInt(n) => json!(*n),
+                        mysql_async::Value::Float(n) => json!(*n),
+                        mysql_async::Value::Double(n) => json!(*n),
+                        mysql_async::Value::Bytes(b) => {
+                            json!(String::from_utf8_lossy(b).to_string())
+                        }
+                        other => json!(format!("{other:?}")),
+                    };
+                    obj.insert(name, val);
+                }
+                serde_json::Value::Object(obj)
+            })
+            .await?;
+        Ok(rows)
+    }
+
+    async fn cc_get_entries_by_ids_active(&self, entry_ids: &str) -> Result<Vec<Entry>> {
+        let sql = format!(
+            "SELECT entry.* FROM entry INNER JOIN catalog ON catalog.id=entry.catalog AND catalog.active=1 WHERE entry.id IN ({entry_ids})"
+        );
+        let mut conn = self.get_conn_ro().await?;
+        let rows = conn
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(|row| Self::entry_from_row(&row))
+            .await?
+            .into_iter()
+            .flatten()
+            .collect();
+        Ok(rows)
+    }
+
+    async fn cc_get_entries_by_names_active(
+        &self,
+        names: &[String],
+        type_filter: Option<&str>,
+        birth_year: Option<&str>,
+        death_year: Option<&str>,
+    ) -> Result<Vec<Entry>> {
+        if names.is_empty() {
+            return Ok(vec![]);
+        }
+        let placeholders: Vec<String> = names.iter().map(|_| "?".to_string()).collect();
+        let placeholders = placeholders.join(",");
+        let mut sql = format!(
+            "SELECT entry.* FROM entry INNER JOIN catalog ON catalog.id=entry.catalog AND catalog.active=1 WHERE entry.ext_name IN ({placeholders}) AND (entry.q IS NULL OR entry.q!=-1)"
+        );
+        if let Some(t) = type_filter {
+            sql += &format!(" AND entry.`type`='{}'", t.replace('\'', "''"));
+        }
+        if birth_year.is_some() || death_year.is_some() {
+            let mut parts = vec!["entry_id=entry.id".to_string()];
+            if let Some(by) = birth_year {
+                parts.push(format!("year_born='{by}'"));
+            }
+            if let Some(dy) = death_year {
+                parts.push(format!("year_died='{dy}'"));
+            }
+            sql += &format!(
+                " AND EXISTS (SELECT 1 FROM person_dates WHERE {})",
+                parts.join(" AND ")
+            );
+        }
+        let params: Vec<mysql_async::Value> = names
+            .iter()
+            .map(|n| mysql_async::Value::from(n.as_str()))
+            .collect();
+        let mut conn = self.get_conn_ro().await?;
+        let rows = conn
+            .exec_iter(sql, params)
+            .await?
+            .map_and_drop(|row| Self::entry_from_row(&row))
+            .await?
+            .into_iter()
+            .flatten()
+            .collect();
+        Ok(rows)
+    }
+
+    // Micro-API: quick_compare
+
+    async fn qc_get_entries(
+        &self,
+        catalog_id: usize,
+        entry_id: Option<usize>,
+        require_image: bool,
+        require_coordinates: bool,
+        random_threshold: f64,
+        max_results: usize,
+    ) -> Result<Vec<serde_json::Value>> {
+        let mut select = "SELECT entry.*, catalog.search_wp AS language".to_string();
+        let mut from = " FROM entry, catalog".to_string();
+        let mut where_clause;
+
+        if let Some(eid) = entry_id {
+            where_clause = format!(" WHERE entry.id={eid} AND catalog.id=entry.catalog");
+        } else {
+            where_clause = format!(
+                " WHERE catalog.id=entry.catalog AND catalog.active=1 AND user=0 AND entry.catalog={catalog_id} AND entry.catalog NOT IN (819)"
+            );
+            if random_threshold > 0.0 {
+                where_clause += &format!(" AND random>={random_threshold}");
+            }
+        }
+
+        if require_image {
+            select += ", kv1.kv_value AS image_url";
+            from += ", kv_entry kv1";
+            where_clause += " AND kv1.entry_id=entry.id AND kv1.kv_key='image_url' AND kv1.kv_value!=''";
+        }
+        if require_coordinates {
+            select += ", location.lat, location.lon";
+            from += ", location";
+            where_clause += " AND location.entry_id=entry.id";
+        }
+
+        if entry_id.is_none() {
+            if random_threshold > 0.0 {
+                where_clause += " ORDER BY random";
+            }
+            where_clause += &format!(" LIMIT {max_results}");
+        }
+
+        let sql = format!("{select}{from}{where_clause}");
+        let mut conn = self.get_conn_ro().await?;
+        let rows = conn
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(|row: Row| {
+                let mut obj = serde_json::Map::new();
+                for (i, col) in row.columns_ref().iter().enumerate() {
+                    let name = col.name_str().to_string();
+                    let val = match &row[i] {
+                        mysql_async::Value::NULL => serde_json::Value::Null,
+                        mysql_async::Value::Int(n) => json!(*n),
+                        mysql_async::Value::UInt(n) => json!(*n),
+                        mysql_async::Value::Float(n) => json!(*n),
+                        mysql_async::Value::Double(n) => json!(*n),
+                        mysql_async::Value::Bytes(b) => {
+                            json!(String::from_utf8_lossy(b).to_string())
+                        }
+                        other => json!(format!("{other:?}")),
+                    };
+                    obj.insert(name, val);
+                }
+                serde_json::Value::Object(obj)
+            })
+            .await?;
+        Ok(rows)
+    }
 }
 
 #[cfg(test)]

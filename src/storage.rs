@@ -574,6 +574,14 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     async fn get_catalog_wd_prop(&self, catalog_id: usize) -> Result<(Option<usize>, Option<usize>)>;
     async fn get_mnm_matched_entries_for_sync(&self, catalog_id: usize) -> Result<Vec<(isize, String)>>;
     async fn get_mnm_double_matches(&self, catalog_id: usize) -> Result<HashMap<String, Vec<String>>>;
+
+    // Micro-API: creation_candidates
+    async fn cc_random_pick(&self, sql: &str) -> Result<Vec<serde_json::Value>>;
+    async fn cc_get_entries_by_ids_active(&self, entry_ids: &str) -> Result<Vec<Entry>>;
+    async fn cc_get_entries_by_names_active(&self, names: &[String], type_filter: Option<&str>, birth_year: Option<&str>, death_year: Option<&str>) -> Result<Vec<Entry>>;
+
+    // Micro-API: quick_compare
+    async fn qc_get_entries(&self, catalog_id: usize, entry_id: Option<usize>, require_image: bool, require_coordinates: bool, random_threshold: f64, max_results: usize) -> Result<Vec<serde_json::Value>>;
 }
 
 #[cfg(test)]
