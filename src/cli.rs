@@ -115,6 +115,21 @@ enum Commands {
         port: u16,
     },
 
+    /// Run the public web server: serves /api.php (the Rust port of the PHP API)
+    /// and static files from the `html/` directory.
+    Webserver {
+        #[arg(short, long, value_name = "FILE")]
+        config: Option<PathBuf>,
+
+        /// Port to listen on
+        #[arg(short, long, default_value = "8000")]
+        port: u16,
+
+        /// Path to the static HTML directory (defaults to ./html)
+        #[arg(long, default_value = "html")]
+        html_dir: PathBuf,
+    },
+
     /// test
     Test {
         #[arg(short, long, value_name = "FILE")]
@@ -136,6 +151,35 @@ impl ShellCommands {
         let config_file = Self::path2str(path);
         let app = AppState::from_config_file(&config_file)?;
         Ok(app)
+    }
+
+    /// Start the public web server.
+    /// Routes:
+    ///   GET/POST /api.php       -> Rust replacement for the PHP API
+    ///   POST     /api/v1/import_catalog
+    ///   GET      everything else -> static files from `html_dir`
+    async fn run_webserver(app: AppState, port: u16, html_dir: &PathBuf) -> Result<()> {
+        use axum::Router;
+        use tower_http::services::ServeDir;
+
+        if !html_dir.exists() {
+            return Err(anyhow!(
+                "html directory not found: {}",
+                html_dir.display()
+            ));
+        }
+
+        let api_router = crate::api::router(app);
+        let static_service = ServeDir::new(html_dir)
+            .append_index_html_on_directories(true);
+
+        let router: Router = api_router.fallback_service(static_service);
+
+        let addr = format!("0.0.0.0:{port}");
+        let listener = tokio::net::TcpListener::bind(&addr).await?;
+        log::info!("webserver: listening on http://127.0.0.1:{port}");
+        axum::serve(listener, router).await?;
+        Ok(())
     }
 
     #[allow(clippy::print_stdout, clippy::print_stderr)]
@@ -245,6 +289,14 @@ impl ShellCommands {
             Some(Commands::MicroApi { config, port }) => {
                 let app = Self::path2app(config)?;
                 crate::micro_api::serve(app, *port).await;
+            }
+            Some(Commands::Webserver {
+                config,
+                port,
+                html_dir,
+            }) => {
+                let app = Self::path2app(config)?;
+                Self::run_webserver(app, *port, html_dir).await?;
             }
             Some(Commands::Test { config }) => {
                 let app = Self::path2app(config)?;

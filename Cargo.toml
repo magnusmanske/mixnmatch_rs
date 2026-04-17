@@ -33,6 +33,7 @@ axum = "*"
 wikibase = "*"
 mlua = { version = "0.10", features = ["lua54", "vendored", "serialize"] }
 tower = "*"
+tower-http = { version = "*", features = ["fs", "trace"] }
 
 [profile.release]
 lto = 'thin'
