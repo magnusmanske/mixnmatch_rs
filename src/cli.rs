@@ -128,6 +128,12 @@ enum Commands {
         /// Path to the static HTML directory (defaults to ./html)
         #[arg(long, default_value = "html")]
         html_dir: PathBuf,
+
+        /// Serve HTTPS with a self-signed certificate (for local dev only —
+        /// browsers will show a warning on first visit). Toolforge terminates
+        /// TLS upstream, so leave this off in production.
+        #[arg(long)]
+        tls: bool,
     },
 
     /// test
@@ -158,7 +164,13 @@ impl ShellCommands {
     ///   GET/POST /api.php       -> Rust replacement for the PHP API
     ///   POST     /api/v1/import_catalog
     ///   GET      everything else -> static files from `html_dir`
-    async fn run_webserver(app: AppState, port: u16, html_dir: &PathBuf) -> Result<()> {
+    #[allow(clippy::print_stdout)]
+    async fn run_webserver(
+        app: AppState,
+        port: u16,
+        html_dir: &PathBuf,
+        tls: bool,
+    ) -> Result<()> {
         use axum::Router;
         use tower_http::services::ServeDir;
         use tower_sessions::{Expiry, MemoryStore, SessionManagerLayer, cookie::SameSite};
@@ -181,9 +193,11 @@ impl ShellCommands {
         let lifetime = tower_sessions::cookie::time::Duration::days(
             oauth_cfg.session_lifetime_days,
         );
+        // Over TLS the cookie must be Secure; over plain HTTP it can't be.
+        let cookie_secure = oauth_cfg.cookie_secure || tls;
         let session_layer = SessionManagerLayer::new(session_store)
             .with_name(oauth_cfg.cookie_name.clone())
-            .with_secure(oauth_cfg.cookie_secure)
+            .with_secure(cookie_secure)
             .with_http_only(true)
             .with_same_site(SameSite::Lax)
             .with_expiry(Expiry::OnInactivity(lifetime));
@@ -195,11 +209,46 @@ impl ShellCommands {
             .fallback_service(static_service)
             .layer(session_layer);
 
-        let addr = format!("0.0.0.0:{port}");
-        let listener = tokio::net::TcpListener::bind(&addr).await?;
-        log::info!("webserver: listening on http://127.0.0.1:{port}");
-        axum::serve(listener, router).await?;
+        let scheme = if tls { "https" } else { "http" };
+        let addr: std::net::SocketAddr = format!("0.0.0.0:{port}").parse()?;
+        let url = format!("{scheme}://127.0.0.1:{port}");
+        println!("webserver: listening on {url}");
+        log::info!("webserver: listening on {url}");
+
+        if tls {
+            let tls_config = Self::build_self_signed_tls().await?;
+            axum_server::bind_rustls(addr, tls_config)
+                .serve(router.into_make_service())
+                .await?;
+        } else {
+            let listener = tokio::net::TcpListener::bind(&addr).await?;
+            axum::serve(listener, router).await?;
+        }
         Ok(())
+    }
+
+    /// Build an in-memory self-signed TLS config covering `localhost` /
+    /// `127.0.0.1`. Strictly for local dev — browsers show a warning page
+    /// the first time you visit, which you have to accept manually.
+    async fn build_self_signed_tls() -> Result<axum_server::tls_rustls::RustlsConfig> {
+        use rcgen::{CertificateParams, KeyPair};
+
+        let subject_alt_names = vec![
+            "localhost".to_string(),
+            "127.0.0.1".to_string(),
+            "::1".to_string(),
+        ];
+        let params = CertificateParams::new(subject_alt_names)
+            .map_err(|e| anyhow!("rcgen params: {e}"))?;
+        let key_pair = KeyPair::generate().map_err(|e| anyhow!("rcgen keygen: {e}"))?;
+        let cert = params
+            .self_signed(&key_pair)
+            .map_err(|e| anyhow!("rcgen self-sign: {e}"))?;
+        let cert_pem = cert.pem().into_bytes();
+        let key_pem = key_pair.serialize_pem().into_bytes();
+        let tls_config =
+            axum_server::tls_rustls::RustlsConfig::from_pem(cert_pem, key_pem).await?;
+        Ok(tls_config)
     }
 
     #[allow(clippy::print_stdout, clippy::print_stderr)]
@@ -314,9 +363,10 @@ impl ShellCommands {
                 config,
                 port,
                 html_dir,
+                tls,
             }) => {
                 let app = Self::path2app(config)?;
-                Self::run_webserver(app, *port, html_dir).await?;
+                Self::run_webserver(app, *port, html_dir, *tls).await?;
             }
             Some(Commands::Test { config }) => {
                 let app = Self::path2app(config)?;
