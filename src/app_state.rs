@@ -53,6 +53,7 @@ pub struct AppState {
     wdt: Wikidata, // To access Wikidata terms DB replica
     wdrc: Arc<WDRC>,
     storage: Arc<Box<dyn Storage>>,
+    large_catalogs: Arc<crate::large_catalogs::LargeCatalogs>,
     import_file_path: Arc<String>,
     task_specific_usize: Arc<HashMap<String, usize>>,
     max_concurrent_jobs: usize,
@@ -101,6 +102,7 @@ impl AppState {
             .as_str()
             .unwrap_or("php8.3")
             .to_string();
+        let large_catalogs = crate::large_catalogs::LargeCatalogs::from_config(&config["mixnmatch"])?;
         Ok(Self {
             wikidata: Wikidata::new(&config["wikidata"], bot_name.clone(), bot_password.clone()),
             wdt: Wikidata::new(&config["wdt"], bot_name, bot_password),
@@ -109,6 +111,7 @@ impl AppState {
                 &config["mixnmatch"],
                 &config["mixnmatch_ro"],
             ))),
+            large_catalogs: Arc::new(large_catalogs),
             import_file_path,
             task_specific_usize,
             max_concurrent_jobs,
@@ -128,6 +131,10 @@ impl AppState {
 
     pub fn storage(&self) -> &Arc<Box<dyn Storage>> {
         &self.storage
+    }
+
+    pub fn large_catalogs(&self) -> &crate::large_catalogs::LargeCatalogs {
+        &self.large_catalogs
     }
 
     pub const fn wikidata(&self) -> &Wikidata {

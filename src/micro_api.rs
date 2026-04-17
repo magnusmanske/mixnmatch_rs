@@ -62,6 +62,12 @@ async fn api_dispatch(
         "get_sync" => handle_get_sync(&app, &params).await,
         "creation_candidates" => handle_creation_candidates(&app, &params).await,
         "quick_compare" => handle_quick_compare(&app, &params).await,
+        "lc_catalogs" => handle_lc_catalogs(&app).await,
+        "lc_locations" => handle_lc_locations(&app, &params).await,
+        "lc_report" => handle_lc_report(&app, &params).await,
+        "lc_report_list" => handle_lc_report_list(&app, &params).await,
+        "lc_rc" => handle_lc_rc(&app, &params).await,
+        "lc_set_status" => handle_lc_set_status(&app, &params).await,
         "" => Err(ApiError::new("missing 'action' parameter")),
         other => Err(ApiError::new(&format!("unknown action: {other}"))),
     };
@@ -961,6 +967,143 @@ async fn handle_quick_compare(app: &AppState, params: &Params) -> Result<Respons
 }
 
 // ---------------------------------------------------------------------------
+// action=lc_* (Large Catalogs)
+// ---------------------------------------------------------------------------
+
+async fn handle_lc_catalogs(app: &AppState) -> Result<Response, ApiError> {
+    let catalogs = app.large_catalogs().get_catalogs().await
+        .map_err(|e| ApiError::internal(&format!("large catalogs DB error: {e}")))?;
+    let open_issues = app.large_catalogs().get_open_issue_counts().await.unwrap_or_default();
+    success(json!({
+        "catalogs": catalogs,
+        "open_issues": open_issues,
+    }))
+}
+
+async fn handle_lc_locations(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let limit = get_opt_param_usize(params, "limit").unwrap_or(100);
+    let limit = limit.min(10000);
+    let bbox_str = get_required_param(params, "bbox")?;
+    let bbox_parts: Vec<f64> = bbox_str
+        .split(',')
+        .filter_map(|s| s.trim().parse::<f64>().ok())
+        .collect();
+    if bbox_parts.len() != 4 {
+        return Err(ApiError::new("bbox must have 4 comma-separated numbers"));
+    }
+    let bbox = [bbox_parts[0], bbox_parts[1], bbox_parts[2], bbox_parts[3]];
+
+    let ignore_str = get_opt_param(params, "ignore_catalogs").unwrap_or("");
+    let ignore_catalogs: Vec<usize> = ignore_str
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
+
+    let catalogs = app.large_catalogs().get_catalogs().await
+        .map_err(|e| ApiError::internal(&format!("large catalogs DB error: {e}")))?;
+
+    let mut data: Vec<Value> = vec![];
+    let mut used_catalogs: HashMap<usize, Value> = HashMap::new();
+
+    for catalog in &catalogs {
+        let cat_id = catalog["id"].as_u64().unwrap_or(0) as usize;
+        let has_lat_lon = catalog["has_lat_lon"].as_u64().unwrap_or(0);
+        if has_lat_lon == 0 {
+            continue;
+        }
+        if ignore_catalogs.contains(&cat_id) {
+            continue;
+        }
+        let table = match catalog["table"].as_str() {
+            Some(t) if !t.is_empty() => t,
+            _ => continue,
+        };
+
+        let entries = app.large_catalogs().get_entries_in_bbox(table, &bbox, limit)
+            .await
+            .unwrap_or_default();
+
+        for mut entry in entries {
+            entry["catalog"] = json!(cat_id);
+            data.push(entry);
+            if data.len() >= limit {
+                break;
+            }
+        }
+        if !data.is_empty() {
+            used_catalogs.insert(cat_id, catalog.clone());
+        }
+        if data.len() >= limit {
+            break;
+        }
+    }
+
+    success(json!({
+        "data": data,
+        "catalogs": used_catalogs,
+    }))
+}
+
+async fn handle_lc_report(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let catalog_id = get_param_usize(params, "catalog")?;
+    let catalogs = app.large_catalogs().get_catalogs_map().await
+        .map_err(|e| ApiError::internal(&format!("large catalogs DB error: {e}")))?;
+    let catalog = catalogs.get(&catalog_id).cloned();
+    let matrix = app.large_catalogs().get_report_matrix(catalog_id).await
+        .map_err(|e| ApiError::internal(&format!("large catalogs DB error: {e}")))?;
+    success(json!({
+        "catalog": catalog,
+        "matrix": matrix,
+    }))
+}
+
+async fn handle_lc_report_list(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let catalog_id = get_param_usize(params, "catalog")?;
+    let catalogs = app.large_catalogs().get_catalogs_map().await
+        .map_err(|e| ApiError::internal(&format!("large catalogs DB error: {e}")))?;
+    let catalog = catalogs.get(&catalog_id).cloned();
+    let status = get_opt_param(params, "status").unwrap_or("");
+    let report_type = get_opt_param(params, "type").unwrap_or("");
+    let user = get_opt_param(params, "user").unwrap_or("");
+    let prop = get_opt_param(params, "prop").unwrap_or("");
+    let limit = get_opt_param_usize(params, "limit").unwrap_or(20).min(500);
+    let offset = get_opt_param_usize(params, "offset").unwrap_or(0);
+
+    let rows = app.large_catalogs().get_report_list(
+        catalog_id, status, report_type, user, prop, limit, offset,
+    ).await.map_err(|e| ApiError::internal(&format!("large catalogs DB error: {e}")))?;
+
+    success(json!({
+        "catalog": catalog,
+        "rows": rows,
+    }))
+}
+
+async fn handle_lc_rc(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let limit = get_opt_param_usize(params, "limit").unwrap_or(50).min(500);
+    let offset = get_opt_param_usize(params, "offset").unwrap_or(0);
+    let users_only = get_opt_param(params, "users") == Some("1");
+    let rows = app.large_catalogs().get_recent_changes(limit, offset, users_only).await
+        .map_err(|e| ApiError::internal(&format!("large catalogs DB error: {e}")))?;
+    success(json!({"rows": rows}))
+}
+
+async fn handle_lc_set_status(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let status = get_required_param(params, "status")?;
+    if status.trim().is_empty() {
+        return Err(ApiError::new("empty status"));
+    }
+    let id = get_param_usize(params, "id")?;
+    let user = get_required_param(params, "user")?;
+    if user.trim().is_empty() {
+        return Err(ApiError::new("not logged in"));
+    }
+    app.large_catalogs().set_report_status(id, status, user).await
+        .map_err(|e| ApiError::internal(&format!("update failed: {e}")))?;
+    success(json!({}))
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -1759,5 +1902,89 @@ if m then d[#d+1] = m end
         let mut p = Params::new();
         p.insert("k".into(), String::new());
         assert_eq!(get_opt_param(&p, "k"), None);
+    }
+
+    // --- lc_* tests ---
+
+    #[tokio::test]
+    async fn test_lc_locations_missing_bbox() {
+        let app = router(test_app());
+        let resp = app
+            .oneshot(build_request("/api?action=lc_locations"))
+            .await
+            .unwrap();
+        let (_, body) = response_json(resp).await;
+        assert_eq!(body["status"], "bad_request");
+    }
+
+    #[tokio::test]
+    async fn test_lc_locations_bad_bbox() {
+        let app = router(test_app());
+        let resp = app
+            .oneshot(build_request("/api?action=lc_locations&bbox=1,2,3"))
+            .await
+            .unwrap();
+        let (_, body) = response_json(resp).await;
+        assert_eq!(body["status"], "bad_request");
+        assert!(body["error"].as_str().unwrap().contains("4"));
+    }
+
+    #[tokio::test]
+    async fn test_lc_report_missing_catalog() {
+        let app = router(test_app());
+        let resp = app
+            .oneshot(build_request("/api?action=lc_report"))
+            .await
+            .unwrap();
+        let (_, body) = response_json(resp).await;
+        assert_eq!(body["status"], "bad_request");
+    }
+
+    #[tokio::test]
+    async fn test_lc_report_list_missing_catalog() {
+        let app = router(test_app());
+        let resp = app
+            .oneshot(build_request("/api?action=lc_report_list"))
+            .await
+            .unwrap();
+        let (_, body) = response_json(resp).await;
+        assert_eq!(body["status"], "bad_request");
+    }
+
+    #[tokio::test]
+    async fn test_lc_set_status_missing_params() {
+        let app = router(test_app());
+        let resp = app
+            .oneshot(build_request("/api?action=lc_set_status"))
+            .await
+            .unwrap();
+        let (_, body) = response_json(resp).await;
+        assert_eq!(body["status"], "bad_request");
+    }
+
+    #[tokio::test]
+    async fn test_lc_set_status_empty_status() {
+        let app = router(test_app());
+        let resp = app
+            .oneshot(build_request(
+                "/api?action=lc_set_status&status=&id=1&user=test",
+            ))
+            .await
+            .unwrap();
+        let (_, body) = response_json(resp).await;
+        assert_eq!(body["status"], "bad_request");
+    }
+
+    #[tokio::test]
+    async fn test_lc_set_status_no_user() {
+        let app = router(test_app());
+        let resp = app
+            .oneshot(build_request(
+                "/api?action=lc_set_status&status=DONE&id=1&user=",
+            ))
+            .await
+            .unwrap();
+        let (_, body) = response_json(resp).await;
+        assert_eq!(body["status"], "bad_request");
     }
 }
