@@ -1349,11 +1349,15 @@ async fn query_mnm_unmatched_relations(
 }
 
 async fn query_creation_candidates(
-    _app: &AppState,
-    _params: &Params,
+    app: &AppState,
+    params: &Params,
 ) -> Result<Response, ApiError> {
-    // Complex multi-strategy endpoint — stub for now
-    Ok(ok(serde_json::json!({"entries": [], "users": {}})))
+    // Delegate to the micro-API handler (in-process, no HTTP round-trip),
+    // which implements the full PHP `query_creation_candidates` logic.
+    let data = crate::micro_api::data_creation_candidates(app, params)
+        .await
+        .map_err(ApiError)?;
+    Ok(ok(data))
 }
 
 // ─── Locations ──────────────────────────────────────────────────────────────

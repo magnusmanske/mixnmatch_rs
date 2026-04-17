@@ -205,7 +205,12 @@ impl StorageMySQL {
             q: Entry::value2opt_isize(row.get("q")?).ok()?,
             user: Entry::value2opt_usize(row.get("user")?).ok()?,
             timestamp: Entry::value2opt_string(row.get("timestamp")?).ok()?,
-            random: row.get("random").unwrap_or(0.0), // random might be null, who cares
+            // `random` is nullable in the entry table; reading it as f64
+            // panics on Null, so pull through Option<f64> first.
+            random: row
+                .get::<Option<f64>, _>("random")
+                .flatten()
+                .unwrap_or(0.0),
             type_name: Entry::value2opt_string(row.get("type")?).ok()?,
             app: None,
         })
