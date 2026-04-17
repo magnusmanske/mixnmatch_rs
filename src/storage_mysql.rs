@@ -192,18 +192,21 @@ impl StorageMySQL {
 
     // #lizard forgives
     fn entry_from_row(row: &Row) -> Option<Entry> {
+        // Read by column name — positional reads break whenever a SELECT
+        // prepends extra columns (e.g. `cnt`, `property`, `source_entry_id`)
+        // before `entry.*`, which several API endpoints do.
         Some(Entry {
-            id: row.get(0)?,
-            catalog: row.get(1)?,
-            ext_id: row.get(2)?,
-            ext_url: row.get(3)?,
-            ext_name: row.get(4)?,
-            ext_desc: row.get(5)?,
-            q: Entry::value2opt_isize(row.get(6)?).ok()?,
-            user: Entry::value2opt_usize(row.get(7)?).ok()?,
-            timestamp: Entry::value2opt_string(row.get(8)?).ok()?,
-            random: row.get(9).unwrap_or(0.0), // random might be null, who cares
-            type_name: Entry::value2opt_string(row.get(10)?).ok()?,
+            id: row.get("id")?,
+            catalog: row.get("catalog")?,
+            ext_id: row.get("ext_id")?,
+            ext_url: row.get("ext_url")?,
+            ext_name: row.get("ext_name")?,
+            ext_desc: row.get("ext_desc")?,
+            q: Entry::value2opt_isize(row.get("q")?).ok()?,
+            user: Entry::value2opt_usize(row.get("user")?).ok()?,
+            timestamp: Entry::value2opt_string(row.get("timestamp")?).ok()?,
+            random: row.get("random").unwrap_or(0.0), // random might be null, who cares
+            type_name: Entry::value2opt_string(row.get("type")?).ok()?,
             app: None,
         })
     }
