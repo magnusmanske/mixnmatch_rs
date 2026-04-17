@@ -161,7 +161,7 @@ impl BespokeScraper53 {
         if let Some(first_space) = s.find(' ') {
             let suffix = &s[first_space..]; // " Smith Smith"
             let half = suffix.len() / 2;
-            if half > 0 && suffix.len() % 2 == 0 && suffix[..half] == suffix[half..] {
+            if half > 0 && suffix.len().is_multiple_of(2) && suffix[..half] == suffix[half..] {
                 return format!("{}{}", &s[..first_space], &suffix[..half]);
             }
         }

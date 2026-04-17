@@ -7,12 +7,18 @@ use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
+use lazy_static::lazy_static;
+use regex::Regex;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::net::TcpListener;
-use regex::Regex;
 use wikimisc::wikibase::EntityTrait;
+
+lazy_static! {
+    static ref RE_NAME_VARIANTS: Regex = Regex::new(r"^(\S+) (.+) (\S+)$").unwrap();
+    static ref RE_SPARQL_Q: Regex = Regex::new(r"(Q\d+)$").unwrap();
+}
 
 type SharedState = Arc<AppState>;
 type Params = HashMap<String, String>;
@@ -34,13 +40,13 @@ pub async fn serve(app: AppState, port: u16) {
     let addr = format!("0.0.0.0:{port}");
     match TcpListener::bind(&addr).await {
         Ok(listener) => {
-            eprintln!("micro_api: listening on http://127.0.0.1:{port}");
+            log::info!("micro_api: listening on http://127.0.0.1:{port}");
             if let Err(e) = axum::serve(listener, router).await {
-                eprintln!("micro_api server error: {e}");
+                log::error!("micro_api server error: {e}");
             }
         }
         Err(e) => {
-            eprintln!("micro_api: failed to bind to {addr}: {e}");
+            log::error!("micro_api: failed to bind to {addr}: {e}");
         }
     }
 }
@@ -365,16 +371,16 @@ async fn handle_save_code_fragment(app: &AppState, params: &Params) -> Result<Re
 /// The Q-number is extracted from the URI via a regex that matches the
 /// trailing `Q\d+` portion.
 fn parse_sparql_label2q(sparql_result: &Value) -> Result<HashMap<String, String>, ApiError> {
-    let vars = sparql_result["head"]["vars"]
+    let head_vars = sparql_result["head"]["vars"]
         .as_array()
         .ok_or_else(|| ApiError::internal("SPARQL result missing head.vars"))?;
-    if vars.len() < 2 {
+    if head_vars.len() < 2 {
         return Err(ApiError::internal("SPARQL result must have at least 2 variables"));
     }
-    let var1 = vars[0]
+    let label_var = head_vars[0]
         .as_str()
         .ok_or_else(|| ApiError::internal("variable name is not a string"))?;
-    let var2 = vars[1]
+    let qnum_var = head_vars[1]
         .as_str()
         .ok_or_else(|| ApiError::internal("variable name is not a string"))?;
 
@@ -382,14 +388,13 @@ fn parse_sparql_label2q(sparql_result: &Value) -> Result<HashMap<String, String>
         .as_array()
         .ok_or_else(|| ApiError::internal("SPARQL result missing results.bindings"))?;
 
-    let re = Regex::new(r"(Q\d+)$").unwrap();
     let mut label2q: HashMap<String, String> = HashMap::new();
 
     for b in bindings {
-        let v1_type = b[var1]["type"].as_str().unwrap_or("");
-        let v2_type = b[var2]["type"].as_str().unwrap_or("");
-        let v1_value = b[var1]["value"].as_str().unwrap_or("");
-        let v2_value = b[var2]["value"].as_str().unwrap_or("");
+        let v1_type = b[label_var]["type"].as_str().unwrap_or("");
+        let v2_type = b[qnum_var]["type"].as_str().unwrap_or("");
+        let v1_value = b[label_var]["value"].as_str().unwrap_or("");
+        let v2_value = b[qnum_var]["value"].as_str().unwrap_or("");
 
         let (uri_val, lit_val) = if v1_type == "uri" && v2_type == "literal" {
             (v1_value, v2_value)
@@ -399,7 +404,7 @@ fn parse_sparql_label2q(sparql_result: &Value) -> Result<HashMap<String, String>
             continue;
         };
 
-        if let Some(caps) = re.captures(uri_val) {
+        if let Some(caps) = RE_SPARQL_Q.captures(uri_val) {
             let q = caps[1].to_string();
             label2q.insert(lit_val.to_string(), q);
         }
@@ -632,6 +637,7 @@ fn is_safe_table_name(name: &str) -> bool {
     !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_')
 }
 
+#[allow(clippy::cognitive_complexity)]
 async fn handle_creation_candidates(app: &AppState, params: &Params) -> Result<Response, ApiError> {
     let min: usize = get_opt_param_usize(params, "min").unwrap_or(3);
     let mode = get_opt_param(params, "mode").unwrap_or("");
@@ -704,8 +710,7 @@ async fn handle_creation_candidates(app: &AppState, params: &Params) -> Result<R
         } else {
             let mut names = vec![ext_name.clone()];
             // Generate name variants: "First Middle Last" -> "First-Middle Last", "First Middle-Last"
-            let re = regex::Regex::new(r"^(\S+) (.+) (\S+)$").unwrap();
-            if let Some(caps) = re.captures(&ext_name) {
+            if let Some(caps) = RE_NAME_VARIANTS.captures(&ext_name) {
                 let (a, b, c) = (&caps[1], &caps[2], &caps[3]);
                 names.push(format!("{a}-{b} {c}"));
                 names.push(format!("{a} {b}-{c}"));
@@ -720,7 +725,7 @@ async fn handle_creation_candidates(app: &AppState, params: &Params) -> Result<R
         };
 
         // Step 3: Check constraints
-        let mut found_unset = 0usize;
+        let mut found_unset = 0_usize;
         let mut required_found: HashMap<String, usize> = HashMap::new();
         let req_cats: Vec<String> = require_catalogs.split(',').filter(|s| !s.is_empty()).map(|s| s.to_string()).collect();
 
@@ -830,6 +835,7 @@ fn parse_location_distance(s: &str) -> Option<f64> {
     None
 }
 
+#[allow(clippy::cognitive_complexity)]
 async fn handle_quick_compare(app: &AppState, params: &Params) -> Result<Response, ApiError> {
     let catalog_id = get_param_usize(params, "catalog")?;
     let entry_id = get_opt_param_usize(params, "entry_id");
@@ -837,21 +843,19 @@ async fn handle_quick_compare(app: &AppState, params: &Params) -> Result<Respons
     let require_coordinates = get_opt_param(params, "require_coordinates") == Some("1");
 
     // Determine max distance
-    let mut max_distance_m = f64::MAX;
+    let mut max_distance_m: Option<f64> = None;
     let catalog_kvs = app.storage().get_catalog_key_value_pairs(catalog_id).await.unwrap_or_default();
     if let Some(ld) = catalog_kvs.get("location_distance") {
-        if let Some(d) = parse_location_distance(ld) {
-            max_distance_m = d;
-        }
+        max_distance_m = parse_location_distance(ld);
     }
     if let Some(d) = get_opt_param(params, "max_distance_m").and_then(|s| s.parse::<f64>().ok()) {
-        max_distance_m = d;
+        max_distance_m = Some(d);
     }
 
     let max_results = 10;
     let mut result_entries: Vec<Value> = vec![];
 
-    for retry in 0..3u8 {
+    for retry in 0..3_u8 {
         let random_threshold = if retry < 2 { rand::random::<f64>() } else { 0.0 };
 
         let rows = app.storage().qc_get_entries(
@@ -921,7 +925,7 @@ async fn handle_quick_compare(app: &AppState, params: &Params) -> Result<Respons
                             row["lon"].as_f64(),
                         ) {
                             let dist = haversine_distance_m(lat_item, lon_item, lat_e, lon_e);
-                            if dist > max_distance_m {
+                            if max_distance_m.is_some_and(|max| dist > max) {
                                 continue;
                             }
                             entry_json["distance_m"] = json!(dist);
@@ -962,7 +966,7 @@ async fn handle_quick_compare(app: &AppState, params: &Params) -> Result<Respons
 
     success(json!({
         "entries": result_entries,
-        "max_distance_m": if max_distance_m == f64::MAX { json!(null) } else { json!(max_distance_m) },
+        "max_distance_m": json!(max_distance_m),
     }))
 }
 

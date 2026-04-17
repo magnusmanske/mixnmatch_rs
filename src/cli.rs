@@ -138,6 +138,7 @@ impl ShellCommands {
         Ok(app)
     }
 
+    #[allow(clippy::print_stdout, clippy::print_stderr)]
     pub async fn run(&self) -> Result<()> {
         let cli = Cli::parse();
         match &cli.command {

@@ -72,7 +72,7 @@ impl BespokeScraper85 {
         catalog_id: usize,
         item: &serde_json::Value,
     ) -> Option<ExtendedEntry> {
-        let id = item["hoogleraar_id"].as_str().or_else(|| {
+        let id = item["hoogleraar_id"].as_str().or({
             // Could also be a number
             None
         }).or_else(|| {
@@ -104,10 +104,10 @@ impl BespokeScraper85 {
 
         let born = item["hoogleraar_geboortedatum"]
             .as_str()
-            .and_then(|s| Self::parse_date(s));
+            .and_then(Self::parse_date);
         let died = item["hoogleraar_overlijdensdatum"]
             .as_str()
-            .and_then(|s| Self::parse_date(s));
+            .and_then(Self::parse_date);
 
         let entry = Entry {
             catalog: catalog_id,

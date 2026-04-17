@@ -56,6 +56,7 @@ pub use scraper_7697::BespokeScraper7697;
 pub use scraper_7700::BespokeScraper7700;
 
 /** WHEN YOU CREATE A NEW `BespokeScraper`, ALSO ADD IT HERE TO BE CALLED! **/
+#[allow(clippy::cognitive_complexity)]
 pub async fn run_bespoke_scraper(catalog_id: usize, app: &AppState) -> Result<()> {
     match catalog_id {
         53 => BespokeScraper53::new(app).run().await,

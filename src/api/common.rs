@@ -150,6 +150,7 @@ fn apply_multi_match(entries: &mut Value, rows: anyhow::Result<HashMap<usize, St
     });
 }
 
+#[allow(clippy::type_complexity)]
 fn apply_kv(entries: &mut Value, rows: anyhow::Result<HashMap<usize, Vec<(String, String, u8)>>>) {
     apply_field(entries, rows, |entry, kv_rows| {
         for (kv_key, kv_value, done) in &kv_rows {

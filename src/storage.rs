@@ -66,6 +66,7 @@ impl OverviewTableRow {
 }
 
 #[async_trait]
+#[allow(clippy::too_many_arguments)]
 pub trait Storage: std::fmt::Debug + Send + Sync {
     // fn new(j: &Value) -> impl Storage;
     async fn disconnect(&self) -> Result<()>;

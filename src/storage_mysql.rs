@@ -3152,7 +3152,7 @@ impl Storage for StorageMySQL {
         let mut conn = self.get_conn_ro().await?;
 
         // Stats (only when catalog_id==0)
-        let stats = if catalog_id == 0 {
+        let job_stats = if catalog_id == 0 {
             conn.exec_iter(
                 "SELECT `status`,count(*) AS `cnt` FROM `jobs` WHERE `status`!='BLOCKED' GROUP BY `status` ORDER BY `status`",
                 (),
@@ -3200,7 +3200,7 @@ impl Storage for StorageMySQL {
             })
             .await?;
 
-        Ok((stats, jobs))
+        Ok((job_stats, jobs))
     }
 
     async fn api_get_issues_count(&self, issue_type: &str, catalogs: &str) -> Result<usize> {
@@ -3236,13 +3236,13 @@ impl Storage for StorageMySQL {
             .map_and_drop(|row: Row| {
                 let id: usize = row.get("id").unwrap_or(0);
                 let entry_id: usize = row.get("entry_id").unwrap_or(0);
-                let issue_type: String = row.get("type").unwrap_or_default();
+                let row_issue_type: String = row.get("type").unwrap_or_default();
                 let json_str: String = row.get("json").unwrap_or_default();
                 let status: String = row.get("status").unwrap_or_default();
                 let catalog: usize = row.get("catalog").unwrap_or(0);
                 let random: f64 = row.get("random").unwrap_or(0.0);
                 json!({
-                    "id": id, "entry_id": entry_id, "type": issue_type,
+                    "id": id, "entry_id": entry_id, "type": row_issue_type,
                     "json": json_str, "status": status, "catalog": catalog, "random": random
                 })
             })
@@ -3632,9 +3632,8 @@ impl Storage for StorageMySQL {
     async fn api_get_catalog_overview_for_ids(&self, catalog_ids: &[usize]) -> Result<Vec<serde_json::Value>> {
         let mut results = Vec::new();
         for &catalog_id in catalog_ids {
-            match self.api_get_single_catalog_overview(catalog_id).await {
-                Ok(val) => results.push(val),
-                Err(_) => {} // Skip catalogs that are not found
+            if let Ok(val) = self.api_get_single_catalog_overview(catalog_id).await {
+                results.push(val); // Skip catalogs that are not found
             }
         }
         Ok(results)
@@ -4099,7 +4098,7 @@ impl Storage for StorageMySQL {
     async fn save_code_fragment(&self, fragment: &serde_json::Value) -> Result<usize> {
         let php = fragment["php"].as_str().unwrap_or("");
         let lua_val = &fragment["lua"];
-        let lua: Option<&str> = if lua_val.is_null() || lua_val.as_str().map_or(false, |s| s.is_empty()) {
+        let lua: Option<&str> = if lua_val.is_null() || lua_val.as_str().is_some_and(|s| s.is_empty()) {
             None
         } else {
             lua_val.as_str()
