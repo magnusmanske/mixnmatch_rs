@@ -84,9 +84,7 @@ impl BespokeScraper2670 {
 
         // Step 5: Fix trailing commas
         let s = RE_TRAILING_COMMA_BRACE.replace_all(&s, "}").to_string();
-        let s = RE_TRAILING_COMMA_BRACKET.replace_all(&s, "]").to_string();
-
-        s
+        RE_TRAILING_COMMA_BRACKET.replace_all(&s, "]").to_string()
     }
 
     /// Extract the substring from the first `{` to the last `}`.

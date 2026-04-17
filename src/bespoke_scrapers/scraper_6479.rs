@@ -76,6 +76,7 @@ impl BespokeScraper for BespokeScraper6479 {
 }
 
 impl BespokeScraper6479 {
+    #[allow(clippy::cognitive_complexity)]
     pub(crate) fn record2ext_entry(
         &self,
         record: HashMap<String, String>,

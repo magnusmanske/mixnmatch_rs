@@ -112,8 +112,7 @@ impl BespokeScraper5100 {
         if given_name == "." {
             return family_name.to_string();
         }
-        let name = format!("{} {}", given_name, family_name).trim().to_string();
-        name
+        format!("{} {}", given_name, family_name).trim().to_string()
     }
 }
 
@@ -275,14 +274,14 @@ mod tests {
     #[test]
     fn test_5100_url_prefix_generation() {
         // Verify the double-letter prefix iteration produces expected patterns
-        let first = b'A';
-        let second = b'a';
-        let prefix = format!("{}{}", first as char, second as char);
-        assert_eq!(prefix, "Aa");
+        let first_a = b'A';
+        let second_a = b'a';
+        let prefix_aa = format!("{}{}", first_a as char, second_a as char);
+        assert_eq!(prefix_aa, "Aa");
 
-        let first = b'Z';
-        let second = b'z';
-        let prefix = format!("{}{}", first as char, second as char);
-        assert_eq!(prefix, "Zz");
+        let first_z = b'Z';
+        let second_z = b'z';
+        let prefix_zz = format!("{}{}", first_z as char, second_z as char);
+        assert_eq!(prefix_zz, "Zz");
     }
 }

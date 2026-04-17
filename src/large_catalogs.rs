@@ -22,6 +22,9 @@ impl MySQLMisc for LargeCatalogs {
 impl LargeCatalogs {
     /// Build from the main mixnmatch config value. Derives the large-catalogs
     /// DB URL by replacing the database name in the connection string.
+    ///
+    /// # Panics
+    /// Will not panic in practice; the pool constraints `(0, 2)` are valid.
     pub fn from_config(mixnmatch_config: &Value) -> Result<Self> {
         let url = mixnmatch_config["url"]
             .as_str()
@@ -130,6 +133,7 @@ impl LargeCatalogs {
     }
 
     /// Get a filtered, paginated list of report rows.
+    #[allow(clippy::too_many_arguments)]
     pub async fn get_report_list(
         &self,
         catalog_id: usize,

@@ -58,7 +58,7 @@ impl BespokeScraper5103 {
         catalog_id: usize,
         record: &serde_json::Value,
     ) -> Option<ExtendedEntry> {
-        let id = record["ID"].as_str().or_else(|| {
+        let id = record["ID"].as_str().or({
             // Could be numeric
             None
         }).or_else(|| {
@@ -94,7 +94,7 @@ impl BespokeScraper5103 {
         let period = record["period"].as_str().unwrap_or_default();
         let century = record["century"].as_str().unwrap_or_default();
         let gender = record["gender"].as_str().unwrap_or_default();
-        let desc_parts = vec![
+        let desc_parts = [
             wikidesc.to_string(),
             concat.to_string(),
             format!("Period: {}", period),

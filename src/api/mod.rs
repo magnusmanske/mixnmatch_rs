@@ -1,3 +1,5 @@
+#![allow(clippy::mod_module_files)]
+
 pub mod common;
 
 use crate::app_state::AppState;
@@ -980,7 +982,7 @@ async fn query_download(app: &AppState, params: &Params) -> Result<Response, Api
     let mut out = String::from("Q\tID\tURL\tName\tUser\n");
     for (q, ext_id, ext_url, ext_name, user_id) in &rows {
         let uname = user_id
-            .and_then(|u| users.get(&u.to_string()))
+            .and_then(|u| users.get(u.to_string().as_str()))
             .and_then(|v| v.get("name"))
             .and_then(|v| v.as_str())
             .unwrap_or("");
@@ -1002,6 +1004,7 @@ async fn query_download(app: &AppState, params: &Params) -> Result<Response, Api
         .into_response())
 }
 
+#[allow(clippy::cognitive_complexity)]
 async fn query_download2(app: &AppState, params: &Params) -> Result<Response, ApiError> {
     let catalogs: String = common::get_param(params, "catalogs", "")
         .chars()
@@ -1127,9 +1130,7 @@ async fn query_download2(app: &AppState, params: &Params) -> Result<Response, Ap
         sql.push_str(" AND entry.user!=4");
     }
 
-    let limit = common::get_param_int(params, "limit", 100_000)
-        .max(1)
-        .min(1_000_000);
+    let limit = common::get_param_int(params, "limit", 100_000).clamp(1, 1_000_000);
     let offset = common::get_param_int(params, "offset", 0).max(0);
     sql.push_str(&format!(" LIMIT {limit} OFFSET {offset}"));
 

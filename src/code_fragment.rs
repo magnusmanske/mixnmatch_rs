@@ -2,9 +2,15 @@ use crate::app_state::AppState;
 use crate::entry::Entry;
 use crate::person_date::PersonDate;
 use anyhow::{Result, anyhow};
+use lazy_static::lazy_static;
 use log::warn;
 use mlua::{Lua, LuaOptions, StdLib, Value, VmState};
 use serde::{Deserialize, Serialize};
+
+lazy_static! {
+    static ref RE_WHITESPACE: regex::Regex = regex::Regex::new(r"\s+").unwrap();
+    static ref RE_HTML_TAGS: regex::Regex = regex::Regex::new(r"<.+?>").unwrap();
+}
 
 /// Memory limit for Lua VM (1 MB)
 const LUA_MEMORY_LIMIT: usize = 1_048_576;
@@ -41,7 +47,7 @@ pub enum CodeFragmentFunction {
 }
 
 impl CodeFragmentFunction {
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             "PERSON_DATE" => Some(Self::PersonDate),
             "DESC_FROM_HTML" => Some(Self::DescFromHtml),
@@ -164,7 +170,7 @@ fn set_instruction_limit(lua: &Lua) {
     lua.set_hook(
         mlua::HookTriggers::new().every_nth_instruction(1000),
         {
-            let count = std::cell::Cell::new(0u32);
+            let count = std::cell::Cell::new(0_u32);
             move |_lua, _debug| {
                 let new_count = count.get() + 1000;
                 count.set(new_count);
@@ -232,7 +238,7 @@ fn register_date_helpers(lua: &Lua) -> Result<()> {
 fn register_command_functions(lua: &Lua) -> Result<()> {
     let commands_table = lua.create_table().map_err(lua_err)?;
     lua.globals().set("_commands", commands_table).map_err(lua_err)?;
-    lua.globals().set("_cmd_idx", 0i64).map_err(lua_err)?;
+    lua.globals().set("_cmd_idx", 0_i64).map_err(lua_err)?;
 
     // setAux(entry_id, property, value)
     let set_aux = lua
@@ -339,11 +345,9 @@ fn register_command_functions(lua: &Lua) -> Result<()> {
 fn collect_commands(lua: &Lua) -> Result<Vec<LuaCommand>> {
     let cmds: mlua::Table = lua.globals().get("_commands").map_err(lua_err)?;
     let mut result = Vec::new();
-    for pair in cmds.pairs::<i64, mlua::Table>() {
-        if let Ok((_, cmd_table)) = pair {
-            if let Ok(cmd) = table_to_command(&cmd_table) {
-                result.push(cmd);
-            }
+    for (_, cmd_table) in cmds.pairs::<i64, mlua::Table>().flatten() {
+        if let Ok(cmd) = table_to_command(&cmd_table) {
+            result.push(cmd);
         }
     }
     Ok(result)
@@ -394,17 +398,14 @@ pub fn run_desc_from_html(
     lua.load(lua_code).exec().map_err(lua_err)?;
 
     // Collect results
-    let mut result = DescFromHtmlResult::default();
-
-    result.born = lua.globals().get::<String>("born").unwrap_or_default();
-    result.died = lua.globals().get::<String>("died").unwrap_or_default();
+    let born = lua.globals().get::<String>("born").unwrap_or_default();
+    let died = lua.globals().get::<String>("died").unwrap_or_default();
+    let mut result = DescFromHtmlResult { born, died, ..DescFromHtmlResult::default() };
 
     // Read d[] (descriptions)
     if let Ok(d) = lua.globals().get::<mlua::Table>("d") {
-        for pair in d.pairs::<i64, String>() {
-            if let Ok((_, v)) = pair {
-                result.descriptions.push(v);
-            }
+        for (_, v) in d.pairs::<i64, String>().flatten() {
+            result.descriptions.push(v);
         }
     }
 
@@ -437,28 +438,24 @@ pub fn run_desc_from_html(
 
     // Read aux
     if let Ok(aux_table) = lua.globals().get::<mlua::Table>("aux") {
-        for pair in aux_table.pairs::<i64, mlua::Table>() {
-            if let Ok((_, t)) = pair {
-                let prop: String = match t.get::<Value>(1) {
-                    Ok(Value::Integer(n)) => n.to_string(),
-                    Ok(Value::String(s)) => s.to_string_lossy().to_string(),
-                    Ok(Value::Number(n)) => (n as i64).to_string(),
-                    _ => continue,
-                };
-                let val: String = t.get(2).unwrap_or_default();
-                result.aux.push((prop, val));
-            }
+        for (_, t) in aux_table.pairs::<i64, mlua::Table>().flatten() {
+            let prop: String = match t.get::<Value>(1) {
+                Ok(Value::Integer(n)) => n.to_string(),
+                Ok(Value::String(s)) => s.to_string_lossy().to_string(),
+                Ok(Value::Number(n)) => (n as i64).to_string(),
+                _ => continue,
+            };
+            let val: String = t.get(2).unwrap_or_default();
+            result.aux.push((prop, val));
         }
     }
 
     // Read location_texts
     if let Ok(lt_table) = lua.globals().get::<mlua::Table>("location_texts") {
-        for pair in lt_table.pairs::<i64, mlua::Table>() {
-            if let Ok((_, t)) = pair {
-                let prop: usize = t.get(1).unwrap_or_default();
-                let val: String = t.get(2).unwrap_or_default();
-                result.location_texts.push((prop, val));
-            }
+        for (_, t) in lt_table.pairs::<i64, mlua::Table>().flatten() {
+            let prop: usize = t.get(1).unwrap_or_default();
+            let val: String = t.get(2).unwrap_or_default();
+            result.location_texts.push((prop, val));
         }
     }
 
@@ -558,7 +555,7 @@ pub fn parse_date(d: &str) -> String {
 /// Try to parse a natural-language date string like "12 jan 2000" or "jan 12, 2000".
 fn try_parse_natural_date(d: &str) -> Option<String> {
     let d_lower = d.to_lowercase();
-    let d_clean = d_lower.replace(',', " ").replace('.', " ");
+    let d_clean: String = d_lower.chars().map(|c| if c == ',' || c == '.' { ' ' } else { c }).collect();
     let parts: Vec<&str> = d_clean.split_whitespace().collect();
 
     if parts.len() < 2 {
@@ -572,7 +569,7 @@ fn try_parse_natural_date(d: &str) -> Option<String> {
             parts[0]
                 .parse::<u32>()
                 .ok()
-                .filter(|&d| (1..=31).contains(&d)),
+                .filter(|&day_num| (1..=31).contains(&day_num)),
             month_name_to_number(parts[1]),
             parts[2].parse::<i32>().ok(),
         ) {
@@ -584,7 +581,7 @@ fn try_parse_natural_date(d: &str) -> Option<String> {
             parts[1]
                 .parse::<u32>()
                 .ok()
-                .filter(|&d| (1..=31).contains(&d)),
+                .filter(|&day_num| (1..=31).contains(&day_num)),
             parts[2].parse::<i32>().ok(),
         ) {
             return Some(format!("{:0>4}-{:02}-{:02}", year, month_num, day));
@@ -677,15 +674,16 @@ pub fn try_get_three_letter_month(month: &str) -> String {
 
 /// Equivalent to PHP's `clean_html()`.
 /// Removes HTML tags, collapses whitespace, decodes entities.
+///
+/// # Panics
+/// Will not panic in practice; the regex patterns are valid literals.
 pub fn clean_html(html: &str) -> String {
     // Replace &nbsp; with space
     let s = html.replace("&nbsp;", " ");
     // Remove HTML tags
-    let s = regex::Regex::new(r"<.+?>")
-        .unwrap()
-        .replace_all(&s, " ");
+    let s = RE_HTML_TAGS.replace_all(&s, " ");
     // Collapse whitespace
-    let s = regex::Regex::new(r"\s+").unwrap().replace_all(&s, " ");
+    let s = RE_WHITESPACE.replace_all(&s, " ");
     // Decode HTML entities
     let s = html_escape::decode_html_entities(&s);
     s.trim().to_string()
@@ -723,11 +721,7 @@ fn validate_person_date(d: &str) -> Option<String> {
         return None;
     }
     // Must match: pure year, year-month, or year-month-day
-    if let Some(pd) = PersonDate::from_db_string(&d) {
-        Some(pd.to_db_string())
-    } else {
-        None
-    }
+    PersonDate::from_db_string(&d).map(|pd| pd.to_db_string())
 }
 
 /// Validates a born/died pair. Returns None if the pair should be rejected.
@@ -905,6 +899,7 @@ pub async fn run_aux_from_desc_job(catalog_id: usize, app: &AppState) -> Result<
 /// Run the update_descriptions_from_url job for a catalog using Lua.
 /// Fetches HTML from each entry's ext_url, runs DESC_FROM_HTML Lua code, applies results.
 /// Returns Ok(()) on success, or an error if no Lua code fragment exists.
+#[allow(clippy::cognitive_complexity)]
 pub async fn run_desc_from_html_job(catalog_id: usize, app: &AppState) -> Result<()> {
     let lua_code = app
         .storage()
@@ -943,10 +938,7 @@ pub async fn run_desc_from_html_job(catalog_id: usize, app: &AppState) -> Result
             };
 
             // Collapse whitespace (matches PHP behavior)
-            let html = regex::Regex::new(r"\s+")
-                .unwrap()
-                .replace_all(&html, " ")
-                .to_string();
+            let html = RE_WHITESPACE.replace_all(&html, " ").to_string();
 
             let result = match run_desc_from_html(&lua_code, &lua_entry, &html) {
                 Ok(r) => r,
@@ -1467,15 +1459,15 @@ if d2 then died = d2 end
 
         // Test YYYY-YYYY
         entry.ext_desc = "1850-1920".into();
-        let result = run_person_date(lua, &entry).unwrap();
-        assert_eq!(result.born, "1850");
-        assert_eq!(result.died, "1920");
+        let result1 = run_person_date(lua, &entry).unwrap();
+        assert_eq!(result1.born, "1850");
+        assert_eq!(result1.died, "1920");
 
         // Test b./d. format
         entry.ext_desc = "b. 1900; d. 1980".into();
-        let result = run_person_date(lua, &entry).unwrap();
-        assert_eq!(result.born, "1900");
-        assert_eq!(result.died, "1980");
+        let result2 = run_person_date(lua, &entry).unwrap();
+        assert_eq!(result2.born, "1900");
+        assert_eq!(result2.died, "1980");
     }
 
     #[test]
@@ -1598,11 +1590,11 @@ end
 
     #[test]
     fn test_validate_born_died_one_date_only() {
-        let result = validate_born_died("1920", "");
-        assert_eq!(result, Some(("1920".into(), "".into())));
+        let result1 = validate_born_died("1920", "");
+        assert_eq!(result1, Some(("1920".into(), "".into())));
 
-        let result = validate_born_died("", "2000");
-        assert_eq!(result, Some(("".into(), "2000".into())));
+        let result2 = validate_born_died("", "2000");
+        assert_eq!(result2, Some(("".into(), "2000".into())));
     }
 
     #[test]
