@@ -746,10 +746,11 @@ async fn handle_creation_candidates(app: &AppState, params: &Params) -> Result<R
         }
     };
 
-    let max_tries = 250;
+    let max_tries = 250_usize;
     let mut result_data = json!({"entries": []});
     let mut result_name: Option<String> = None;
     let mut user_ids: Vec<usize> = vec![];
+    let mut completed = false;
 
     for _attempt in 0..max_tries {
         // Step 1: Pick a random name/group
@@ -768,7 +769,12 @@ async fn handle_creation_candidates(app: &AppState, params: &Params) -> Result<R
         }
 
         let pick = &picks[0];
-        let ext_name = pick["ext_name"].as_str().unwrap_or("").to_string();
+        // Pick column may be `ext_name` (most modes) or `aux_name` (random_prop mode).
+        let ext_name = pick["ext_name"]
+            .as_str()
+            .or_else(|| pick["aux_name"].as_str())
+            .unwrap_or("")
+            .to_string();
         if !ext_name.is_empty() {
             result_name = Some(ext_name.clone());
         }
@@ -838,7 +844,14 @@ async fn handle_creation_candidates(app: &AppState, params: &Params) -> Result<R
         // Build result
         let entries_json: Vec<Value> = entries.iter().map(|e| serde_json::to_value(e).unwrap_or(json!(null))).collect();
         result_data = json!({"entries": entries_json});
+        completed = true;
         break;
+    }
+
+    if !completed {
+        return Err(ApiError::new(&format!(
+            "No results after {max_tries} attempts, giving up"
+        )));
     }
 
     if let Some(name) = &result_name {
@@ -866,13 +879,22 @@ fn cc_mode_sql(mode: &str, table: &str, min: usize, prop: &str, require_catalogs
         }
         "random_prop" => {
             let min_rp = if min < 2 { 2 } else { min };
-            let mut sql = format!("SELECT aux_name AS ext_name, entry_ids, cnt FROM aux_candidates WHERE cnt>={min_rp}");
+            let mut sql = format!("SELECT aux_name, entry_ids, cnt FROM aux_candidates WHERE cnt>={min_rp}");
             if !prop.is_empty() {
                 if let Ok(p) = prop.parse::<usize>() {
                     sql += &format!(" AND aux_p={p}");
                 }
             }
             Ok(sql + " ORDER BY rand() LIMIT 1")
+        }
+        "dynamic_name_year_birth" => {
+            let r: f64 = rand::random();
+            Ok(format!(
+                "SELECT ext_name, year_born, count(*) AS cnt, group_concat(entry_id) AS ids \
+                 FROM vw_dates \
+                 WHERE ext_name=(SELECT ext_name FROM entry WHERE random>={r} AND `type`='Q5' AND q IS NULL ORDER BY random LIMIT 1) \
+                 GROUP BY year_born, ext_name HAVING cnt>=2"
+            ))
         }
         "" => {
             if !require_catalogs.is_empty() {
@@ -1960,10 +1982,12 @@ if m then d[#d+1] = m end
             .await
             .unwrap();
         let (_, body) = response_json(resp).await;
-        // Should return ok with entries array (may be empty if no data)
+        // If the pick query never yields a row within 250 tries we now surface
+        // that as a "giving up" error (matching the PHP legacy fallback).
+        // Any of {ok, bad_request, internal_error} is acceptable here.
         let status = body["status"].as_str().unwrap_or("");
         assert!(
-            status == "ok" || status == "internal_error",
+            status == "ok" || status == "internal_error" || status == "bad_request",
             "unexpected status: {status}"
         );
     }

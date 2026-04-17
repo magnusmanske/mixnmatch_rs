@@ -345,10 +345,12 @@ async fn query_catalog(app: &AppState, params: &Params) -> Result<Response, ApiE
     let offset = meta.get("offset").and_then(|v| v.as_u64()).unwrap_or(0);
     let entry_type = common::get_param(params, "type", "");
     let title_match = common::get_param(params, "title_match", "");
+    let keyword = common::get_param(params, "keyword", "");
+    let user_id_raw = common::get_param(params, "user_id", "");
 
     let mut conds = vec![format!("catalog={catalog}")];
     if show_multiple == 1 {
-        conds.push("EXISTS (SELECT * FROM multi_match WHERE entry_id=entry.id) AND (user<=0 OR user is null)".into());
+        conds.push("EXISTS (SELECT 1 FROM multi_match WHERE entry_id=entry.id) AND (user<=0 OR user is null)".into());
     } else if show_noq + show_autoq + show_userq + show_nowd == 0 && show_na == 1 {
         conds.push("q=0".into());
     } else if show_noq + show_autoq + show_userq + show_na == 0 && show_nowd == 1 {
@@ -376,17 +378,42 @@ async fn query_catalog(app: &AppState, params: &Params) -> Result<Response, ApiE
             title_match.replace('\'', "''")
         ));
     }
+    if !keyword.is_empty() {
+        let kw = keyword.replace('\'', "''");
+        conds.push(format!("(`ext_name` LIKE '%{kw}%' OR `ext_desc` LIKE '%{kw}%')"));
+    }
+    if !user_id_raw.is_empty() {
+        // Parse as signed so "0" (auto-matched) is distinguished from a missing param.
+        if let Ok(uid) = user_id_raw.parse::<i64>() {
+            if uid > 0 {
+                conds.push(format!("`user`={uid}"));
+            } else if uid == 0 {
+                conds.push("`user`=0".into());
+            }
+        }
+    }
+
+    let where_clause = conds.join(" AND ");
+    // Total filtered count (same WHERE, no LIMIT/OFFSET) — powers accurate pagination.
+    let total_filtered = app
+        .storage()
+        .api_get_catalog_entries_count(&where_clause)
+        .await
+        .unwrap_or(0);
 
     let sql = format!(
-        "SELECT * FROM entry WHERE {} LIMIT {} OFFSET {}",
-        conds.join(" AND "),
-        per_page,
-        offset
+        "SELECT * FROM entry WHERE {where_clause} LIMIT {per_page} OFFSET {offset}"
     );
     let entries = app.storage().api_get_catalog_entries_raw(&sql).await?;
     let mut data = common::entries_to_json_data(&entries, app).await?;
     common::add_extended_entry_data(app, &mut data).await?;
-    Ok(ok(data))
+    // PHP places `total_filtered` alongside `status`/`data`, not inside `data`,
+    // so return a manually-assembled envelope here.
+    Ok(json_resp(serde_json::json!({
+        "status": "OK",
+        "data": data,
+        "total_filtered": total_filtered,
+    })))
 }
 
 async fn query_edit_catalog(app: &AppState, params: &Params) -> Result<Response, ApiError> {
@@ -488,7 +515,7 @@ async fn query_search(app: &AppState, params: &Params) -> Result<Response, ApiEr
     let max_results = common::get_param_int(params, "max", 100) as usize;
     let desc_search = common::get_param_int(params, "description_search", 0) != 0;
     let no_label = common::get_param_int(params, "no_label_search", 0) != 0;
-    let exclude: Vec<usize> = common::get_param(params, "exclude", "")
+    let user_exclude: Vec<usize> = common::get_param(params, "exclude", "")
         .split(',')
         .filter_map(|s| s.trim().parse().ok())
         .collect();
@@ -496,6 +523,12 @@ async fn query_search(app: &AppState, params: &Params) -> Result<Response, ApiEr
         .split(',')
         .filter_map(|s| s.trim().parse().ok())
         .collect();
+    // Mirror PHP: the effective exclude list is the user-provided one plus every
+    // inactive catalog, so disabled catalogs never leak into text or Q-number search.
+    let mut exclude = user_exclude;
+    exclude.extend(app.storage().api_get_inactive_catalog_ids().await?);
+    exclude.sort();
+    exclude.dedup();
 
     let what_clean = what.replace('-', " ");
     let q_match = regex::Regex::new(r"^\s*[Qq]?(\d+)\s*$")
@@ -505,7 +538,7 @@ async fn query_search(app: &AppState, params: &Params) -> Result<Response, ApiEr
                 .map(|c| c[1].parse::<isize>().unwrap_or(0))
         });
     let entries = if let Some(q) = q_match.filter(|q| *q > 0) {
-        app.storage().api_search_by_q(q).await?
+        app.storage().api_search_by_q(q, &exclude).await?
     } else {
         let words: Vec<String> = what_clean
             .split_whitespace()
@@ -538,37 +571,44 @@ async fn query_random(app: &AppState, params: &Params) -> Result<Response, ApiEr
     let submode = common::get_param(params, "submode", "");
     let entry_type = common::get_param(params, "type", "");
     let id = common::get_param_int(params, "id", 0) as usize;
-    let active = app.storage().api_get_active_catalog_ids().await?;
 
-    if id != 0 {
-        let entry = crate::entry::Entry::from_id(id, app).await?;
-        return Ok(ok(serde_json::json!(entry)));
-    }
-    for attempt in 0..=10 {
-        let r: f64 = if attempt > 10 { 0.0 } else { rand::random() };
-        if let Some(entry) = app
-            .storage()
-            .api_get_random_entry(catalog, &submode, &entry_type, r, &active)
+    // Find the candidate entry. Mirrors query_random() in PHP API.php:
+    //   id != 0            → direct lookup by id (test hook in PHP)
+    //   catalog > 0        → catalog-specific random pick (catalog_q_random index)
+    //   catalog == 0       → global random pick across active catalogs
+    let entry_opt = if id != 0 {
+        crate::entry::Entry::from_id(id, app).await.ok()
+    } else if catalog > 0 {
+        app.storage()
+            .api_get_random_entry(catalog, &submode, &entry_type, &[])
             .await?
-        {
-            let eid = entry.id.unwrap_or(0);
-            let mut data = serde_json::json!(entry);
-            let pd = app
-                .storage()
-                .api_get_person_dates_for_entries(&[eid])
-                .await?;
-            if let Some((born, died)) = pd.get(&eid) {
-                if !born.is_empty() {
-                    data["born"] = serde_json::json!(born);
-                }
-                if !died.is_empty() {
-                    data["died"] = serde_json::json!(died);
-                }
-            }
-            return Ok(ok(data));
+    } else {
+        let active = app.storage().api_get_active_catalog_ids().await?;
+        app.storage()
+            .api_get_random_entry(0, &submode, &entry_type, &active)
+            .await?
+    };
+
+    let Some(entry) = entry_opt else {
+        return Ok(ok(serde_json::Value::Null));
+    };
+
+    // Augment with person dates if we have them.
+    let eid = entry.id.unwrap_or(0);
+    let mut data = serde_json::json!(entry);
+    let pd = app
+        .storage()
+        .api_get_person_dates_for_entries(&[eid])
+        .await?;
+    if let Some((born, died)) = pd.get(&eid) {
+        if !born.is_empty() {
+            data["born"] = serde_json::json!(born);
+        }
+        if !died.is_empty() {
+            data["died"] = serde_json::json!(died);
         }
     }
-    Ok(ok(serde_json::Value::Null))
+    Ok(ok(data))
 }
 
 async fn query_entries_query(app: &AppState, params: &Params) -> Result<Response, ApiError> {
@@ -1207,6 +1247,12 @@ async fn query_download2(app: &AppState, params: &Params) -> Result<Response, Ap
     }
     if hb("unmatched") {
         sql.push_str(" AND entry.q IS NOT NULL");
+    }
+    if hb("no_multiple") {
+        sql.push_str(" AND NOT EXISTS (SELECT 1 FROM multi_match WHERE entry.id=multi_match.entry_id)");
+    }
+    if hb("name_date_matched") {
+        sql.push_str(" AND entry.user!=3");
     }
     if hb("automatched") {
         sql.push_str(" AND entry.user!=0");
