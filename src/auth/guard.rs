@@ -3,6 +3,21 @@ use crate::app_state::AppState;
 use crate::auth::session::{SessionData, SessionState, load, normalize_username};
 use tower_sessions::Session;
 
+/// Off-toolforge (i.e. local dev) bypass. Pretend every request is
+/// authenticated as Magnus Manske / uid 2, with catalog-admin rights.
+/// Keeps the rest of the server honest — on toolforge this returns `None`
+/// and the real OAuth check runs.
+pub fn dev_bypass_user() -> Option<AuthedUser> {
+    if AppState::is_on_toolforge() {
+        None
+    } else {
+        Some(AuthedUser {
+            wikidata_username: "Magnus Manske".to_string(),
+            mnm_user_id: 2,
+        })
+    }
+}
+
 /// Extract the legacy `username` / `tusc_user` form field, if non-empty.
 /// These fields are informational — `require_user` still anchors identity
 /// to the session — but we verify the claim matches on every write.
@@ -42,6 +57,9 @@ pub async fn require_user(
     session: &Session,
     claimed_username: Option<&str>,
 ) -> Result<AuthedUser, ApiError> {
+    if let Some(u) = dev_bypass_user() {
+        return Ok(u);
+    }
     let data: SessionData = load(session).await;
     let (username, _access_key, _access_secret) = match &data.state {
         SessionState::Authenticated {
@@ -102,6 +120,10 @@ pub async fn require_catalog_admin(
     session: &Session,
     claimed_username: Option<&str>,
 ) -> Result<AuthedUser, ApiError> {
+    if let Some(u) = dev_bypass_user() {
+        // Dev bypass: skip the DB admin check entirely.
+        return Ok(u);
+    }
     let user = require_user(app, session, claimed_username).await?;
     let info = app
         .storage()
