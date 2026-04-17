@@ -28,16 +28,83 @@ pub fn router(app: AppState) -> Router {
 /// Avoids deploying a symlink to a sibling tool's tree.
 const MAGNUSTOOLS_RESOURCES_BASE: &str = "https://magnustools.toolforge.org/resources/";
 
-/// Transparently proxy `GET /resources/<path>` to magnustools. Streams the
-/// body back as-is and forwards the upstream `Content-Type` / cache headers
-/// so the browser treats it identically to a locally-served asset.
+/// Only cache successful responses — non-2xx bodies are rarely worth caching
+/// and may include transient errors from the upstream proxy.
+const RESOURCES_CACHE_MAX_ENTRIES: usize = 2000;
+
+/// Don't cache anything larger than this (mostly a guard against surprise
+/// huge files — static JS/CSS/images are typically well under 1 MB).
+const RESOURCES_CACHE_MAX_ENTRY_BYTES: usize = 5 * 1024 * 1024;
+
+#[derive(Clone)]
+struct CachedResource {
+    status: u16,
+    content_type: Option<axum::http::HeaderValue>,
+    cache_control: Option<axum::http::HeaderValue>,
+    etag: Option<axum::http::HeaderValue>,
+    last_modified: Option<axum::http::HeaderValue>,
+    content_encoding: Option<axum::http::HeaderValue>,
+    body: bytes::Bytes,
+}
+
+fn resources_cache() -> &'static dashmap::DashMap<String, std::sync::Arc<CachedResource>> {
+    use std::sync::OnceLock;
+    static CACHE: OnceLock<dashmap::DashMap<String, std::sync::Arc<CachedResource>>> =
+        OnceLock::new();
+    CACHE.get_or_init(dashmap::DashMap::new)
+}
+
+fn build_resource_response(entry: &CachedResource) -> Response {
+    let mut builder = axum::http::Response::builder().status(
+        axum::http::StatusCode::from_u16(entry.status)
+            .unwrap_or(axum::http::StatusCode::BAD_GATEWAY),
+    );
+    if let Some(v) = &entry.content_type {
+        builder = builder.header(axum::http::header::CONTENT_TYPE, v);
+    }
+    if let Some(v) = &entry.cache_control {
+        builder = builder.header(axum::http::header::CACHE_CONTROL, v);
+    }
+    if let Some(v) = &entry.etag {
+        builder = builder.header(axum::http::header::ETAG, v);
+    }
+    if let Some(v) = &entry.last_modified {
+        builder = builder.header(axum::http::header::LAST_MODIFIED, v);
+    }
+    if let Some(v) = &entry.content_encoding {
+        builder = builder.header(axum::http::header::CONTENT_ENCODING, v);
+    }
+    builder
+        .body(axum::body::Body::from(entry.body.clone()))
+        .unwrap_or_else(|_| ApiError("resources proxy: cannot build response".into()).into_response())
+}
+
+/// Transparently proxy `GET /resources/<path>` to magnustools. Responses are
+/// cached in-process — these are static JS/CSS/image assets that change
+/// rarely, so re-fetching on every hit wastes several hundred ms per asset.
+/// The body and a conservative set of content headers are stored as-is.
 async fn proxy_magnustools_resources(
     axum::extract::Path(path): axum::extract::Path<String>,
     uri: axum::http::Uri,
 ) -> Response {
-    // Preserve any query string the caller sent (cache-busters, etc.).
-    let query = uri.query().map(|q| format!("?{q}")).unwrap_or_default();
-    let upstream_url = format!("{MAGNUSTOOLS_RESOURCES_BASE}{path}{query}");
+    // Cache key includes the query string so cache-busters (e.g. ?v=123) hit
+    // distinct entries.
+    let query = uri.query().unwrap_or("");
+    let cache_key = if query.is_empty() {
+        path.clone()
+    } else {
+        format!("{path}?{query}")
+    };
+    let cache = resources_cache();
+    if let Some(hit) = cache.get(&cache_key) {
+        return build_resource_response(&hit);
+    }
+    let query_suffix = if query.is_empty() {
+        String::new()
+    } else {
+        format!("?{query}")
+    };
+    let upstream_url = format!("{MAGNUSTOOLS_RESOURCES_BASE}{path}{query_suffix}");
 
     // Wikimedia rejects requests without a User-Agent. Send something
     // identifying us — matches the agent we'd use for the MW API.
@@ -52,35 +119,49 @@ async fn proxy_magnustools_resources(
         }
     };
     let status = resp.status();
-    // Copy a conservative set of content headers. Hop-by-hop headers
-    // (connection, transfer-encoding, …) are intentionally dropped.
-    let passthrough = [
-        axum::http::header::CONTENT_TYPE,
-        axum::http::header::CACHE_CONTROL,
-        axum::http::header::ETAG,
-        axum::http::header::LAST_MODIFIED,
-        axum::http::header::CONTENT_ENCODING,
-    ];
-    let mut headers = axum::http::HeaderMap::new();
-    for name in &passthrough {
-        if let Some(v) = resp.headers().get(name) {
-            headers.insert(name, v.clone());
-        }
-    }
+    let content_type = resp
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .cloned();
+    let cache_control = resp
+        .headers()
+        .get(axum::http::header::CACHE_CONTROL)
+        .cloned();
+    let etag = resp.headers().get(axum::http::header::ETAG).cloned();
+    let last_modified = resp
+        .headers()
+        .get(axum::http::header::LAST_MODIFIED)
+        .cloned();
+    let content_encoding = resp
+        .headers()
+        .get(axum::http::header::CONTENT_ENCODING)
+        .cloned();
     let bytes = match resp.bytes().await {
         Ok(b) => b,
         Err(e) => {
             return ApiError(format!("resources proxy read failed: {e}")).into_response();
         }
     };
-    let mut builder =
-        axum::http::Response::builder().status(axum::http::StatusCode::from_u16(status.as_u16()).unwrap_or(axum::http::StatusCode::BAD_GATEWAY));
-    for (name, value) in &headers {
-        builder = builder.header(name, value);
+
+    let entry = std::sync::Arc::new(CachedResource {
+        status: status.as_u16(),
+        content_type,
+        cache_control,
+        etag,
+        last_modified,
+        content_encoding,
+        body: bytes,
+    });
+    // Only cache successful, reasonably-sized responses. Skip when full so
+    // we don't evict hot entries — the cap is generous enough that it
+    // shouldn't matter in practice.
+    if status.is_success()
+        && entry.body.len() <= RESOURCES_CACHE_MAX_ENTRY_BYTES
+        && cache.len() < RESOURCES_CACHE_MAX_ENTRIES
+    {
+        cache.insert(cache_key, entry.clone());
     }
-    builder
-        .body(axum::body::Body::from(bytes))
-        .unwrap_or_else(|_| ApiError("resources proxy: cannot build response".into()).into_response())
+    build_resource_response(&entry)
 }
 
 async fn api_dispatcher(
