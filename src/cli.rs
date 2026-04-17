@@ -173,7 +173,7 @@ impl ShellCommands {
     ) -> Result<()> {
         use axum::Router;
         use tower_http::services::ServeDir;
-        use tower_sessions::{Expiry, MemoryStore, SessionManagerLayer, cookie::SameSite};
+        use tower_sessions::{Expiry, SessionManagerLayer, cookie::SameSite};
 
         if !html_dir.exists() {
             return Err(anyhow!("html directory not found: {}", html_dir.display()));
@@ -184,11 +184,14 @@ impl ShellCommands {
             .ok_or_else(|| anyhow!("config.oauth is required for the webserver"))?
             .clone();
 
-        // In-memory session store: survives the lifetime of the process. On
-        // toolforge we run `rustbot` as a continuous job; a restart logs users
-        // out. Swap for a persistent store once tower-sessions 0.15-compatible
-        // sqlx/redis backends are published.
-        let session_store = MemoryStore::default();
+        // Persistent session store: one JSON file per session under
+        // `oauth.session_dir`. Users stay logged in across restarts up to the
+        // configured `session_lifetime_days` (default 90 days, matching the
+        // PHP Widar cookie lifetime).
+        let session_store = crate::auth::file_store::FileSessionStore::new(
+            PathBuf::from(&oauth_cfg.session_dir),
+        )
+        .map_err(|e| anyhow!("cannot open session_dir '{}': {e}", oauth_cfg.session_dir))?;
 
         let lifetime = tower_sessions::cookie::time::Duration::days(
             oauth_cfg.session_lifetime_days,

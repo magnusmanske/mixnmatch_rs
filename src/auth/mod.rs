@@ -9,6 +9,7 @@
 //! username, never to whatever the client put in the `username` form field.
 
 pub mod config;
+pub mod file_store;
 pub mod flow;
 pub mod guard;
 pub mod session;
