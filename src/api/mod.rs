@@ -192,6 +192,20 @@ async fn query_widar(
         _ => {
             // Default is "get_rights" — returns the same JSON shape the PHP
             // `Widar::get_rights()` produces so the Vue frontend works unchanged.
+            // Off-toolforge the dev bypass pretends we're always logged in.
+            if let Some(u) = auth::guard::dev_bypass_user() {
+                return Ok(json_resp(serde_json::json!({
+                    "status": "OK",
+                    "data": {
+                        "query": {
+                            "userinfo": {
+                                "id": u.mnm_user_id,
+                                "name": u.wikidata_username,
+                            }
+                        }
+                    }
+                })));
+            }
             let data = auth::session::load(session).await;
             match data.state {
                 auth::session::SessionState::Authenticated {
