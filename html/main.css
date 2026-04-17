@@ -1,0 +1,588 @@
+/*
+ * Mix'n'match — main stylesheet
+ *
+ * Wikipedia style guide: https://wikimedia.github.io/WikimediaUI-Style-Guide/visual-style_colors.html
+ */
+
+/* ========== Custom properties ========== */
+
+:root {
+	--mnm-blue: #36c;
+	--mnm-green: #14866d;
+	--mnm-red: #b32424;
+	--mnm-yellow: #fc3;
+	--mnm-bg: #fff;
+	--mnm-bg-alt: #f4f6f8;
+	--mnm-border: #dee2e6;
+	--mnm-text: #202122;
+	--mnm-text-muted: #6c757d;
+	--mnm-text-light: #767676;
+}
+
+/* ========== Base ========== */
+
+a {
+	text-decoration: none;
+}
+
+a:hover {
+	text-decoration: underline;
+}
+
+#app {
+	max-width: 960px;
+	margin-left: auto;
+	margin-right: auto;
+}
+
+/* ========== Links ========== */
+
+a.page-link {
+	color: var(--mnm-blue);
+}
+
+a.set_user_q {
+	color: var(--mnm-green);
+}
+
+a.new_item {
+	color: var(--mnm-red);
+}
+
+a.n_a {
+	color: var(--mnm-yellow);
+}
+
+.wikidata_link small {
+	font-size: 60%;
+}
+
+.text-info {
+	color: #00af89;
+}
+
+/* ========== Typography ========== */
+
+.entry_cell_desc,
+.wp_search_result_summary,
+.autodesc_description {
+	font-family: Charter, Verdana, Times New Roman;
+}
+
+.num {
+	font-family: Courier;
+	text-align: right;
+	white-space: nowrap;
+}
+
+td.num {
+	text-align: right;
+	font-family: Courier;
+	font-size: 11pt;
+}
+
+.searchmatch {
+	font-weight: bold;
+}
+
+/* ========== Loading spinner ========== */
+
+[tt='loading'] {
+	display: inline-block;
+	width: 1.2rem;
+	height: 1.2rem;
+	border: 0.18em solid var(--mnm-border);
+	border-top-color: var(--mnm-blue);
+	border-radius: 50%;
+	animation: mnm-spin 0.7s linear infinite;
+	vertical-align: middle;
+	font-size: 0; /* hide translated text */
+}
+
+@keyframes mnm-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+/* ========== Navbar ========== */
+
+#tooltranslate_wrapper {
+	margin-top: 6px;
+	margin-right: 10px;
+}
+
+/* Override inline padding:2px on dropdown items for better touch targets */
+.dropdown-menu .dropdown-item[style*="padding:2px"],
+.dropdown-menu .dropdown-item {
+	padding: 4px 12px !important;
+}
+
+/* ========== Entry rows ========== */
+
+.entry_row {
+	margin-bottom: 4px;
+	padding: 6px 8px;
+}
+
+.entry_row:nth-child(odd) {
+	background-color: var(--mnm-bg-alt);
+}
+
+.entry_row.inactive {
+	pointer-events: none;
+	opacity: 0.4;
+	transition: opacity 0.2s;
+}
+
+.entry_cell_left,
+.entry_cell_desc,
+.entry_cell_right,
+.entry_cell_joined {
+	display: table-cell;
+	vertical-align: top;
+}
+
+.entry_cell_left {
+	line-height: 1em;
+}
+
+.permalink-hover {
+	position: absolute;
+	left: -1em;
+	opacity: 0;
+}
+
+.entry_cell_left:hover .permalink-hover {
+	opacity: 1;
+}
+
+.permalink-hover-inline {
+	display: inline-block;
+	width: 0;
+	overflow: visible;
+	position: relative;
+	left: -1em;
+	opacity: 0;
+}
+
+.entry_cell_left:hover .permalink-hover-inline {
+	opacity: 1;
+}
+
+.entry_cell_desc {
+	font-size: 0.875rem;
+	padding-right: 5px;
+}
+
+.entry_cell_right {
+	font-size: 0.875rem;
+}
+
+.entry_cell_right .entry_cell_joined {}
+
+.entry_cell_right div.link_row {
+	display: inline;
+	margin-right: 20px;
+}
+
+.entry_cell_right div.catalog-list-item {
+	display: table-cell;
+	padding: 2px;
+	max-width: 20%;
+}
+
+.second-row {
+	border-top: 1px solid var(--mnm-border);
+	padding-top: 4px;
+}
+
+div.check-and-radio {
+	min-width: 1rem;
+	margin-right: 0.2rem;
+}
+
+/* Entry action buttons */
+.mnm-action-btn {
+	font-size: 0.75rem;
+	padding: 2px 8px;
+	line-height: 1.4;
+	white-space: nowrap;
+}
+
+/* Empty state */
+.mnm-empty-state {
+	text-align: center;
+	padding: 2rem 1rem;
+	color: var(--mnm-text-muted);
+}
+
+.mnm-empty-state .mnm-empty-icon {
+	font-size: 2rem;
+	margin-bottom: 0.5rem;
+}
+
+/* ========== Results overflow ========== */
+
+@media (min-width: 576px) {
+	.results_overflow_box {
+		max-height: 20em;
+		overflow: auto;
+	}
+}
+
+/* ========== Progress bar legend ========== */
+
+.progress-legend {
+	font-size: 0.7rem;
+	color: var(--mnm-text-light);
+	display: flex;
+	gap: 0.8rem;
+	flex-wrap: wrap;
+	margin-top: 2px;
+}
+
+.progress-legend span::before {
+	content: '';
+	display: inline-block;
+	width: 8px;
+	height: 8px;
+	border-radius: 2px;
+	margin-right: 3px;
+	vertical-align: middle;
+}
+
+.progress-legend .pl-manual::before {
+	background: var(--bs-success, #198754);
+}
+
+.progress-legend .pl-auto::before {
+	background: var(--bs-info, #0dcaf0);
+}
+
+.progress-legend .pl-nowd::before {
+	background: var(--bs-warning, #ffc107);
+}
+
+.progress-legend .pl-na::before {
+	background: var(--bs-danger, #dc3545);
+}
+
+/* ========== Catalog preview cards ========== */
+
+.cat-preview { cursor: pointer; transition: box-shadow 0.15s, background 0.15s; }
+.cat-preview:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.12); background: #edf2f7 !important; }
+
+/* ========== Catalog list item ========== */
+
+.cat-table {
+	display: table;
+	width: 100%;
+}
+
+.cat-row {
+	display: table-row;
+}
+
+.cat-cell-desc {
+	display: table-cell;
+	padding: 2px;
+	max-width: 400px;
+	width: 400px;
+	font-size: 0.8rem;
+	overflow: hidden;
+	white-space: nowrap;
+}
+
+.cat-cell-progress {
+	display: table-cell;
+	padding: 2px;
+	width: 300px;
+	overflow: hidden;
+}
+
+.cat-cell-check {
+	display: table-cell;
+	width: 24px;
+}
+
+.catalogleft {
+	margin-left: 10px;
+}
+
+.catalogleft:hover {
+	margin-left: 0px;
+	border-left: 10px solid blue;
+}
+
+td.catalog_row_left {
+	width: 100%;
+}
+
+.catalog_no_prop {
+	border-left: 5px solid #FF8A8A;
+}
+
+.catalog_broken {
+	background-color: red;
+}
+
+/* ========== Recent changes ========== */
+
+.rc-row {
+	display: table-cell;
+}
+
+.rc-cell-entry {
+	display: table-cell;
+	width: 250px;
+	vertical-align: top;
+}
+
+.rc-cell-event {
+	display: table-cell;
+	width: 350px;
+	vertical-align: top;
+}
+
+/* ========== Pagination (fist-pag component) ========== */
+
+.fist-pag { margin: 0.5rem 0; }
+.fist-pag-bar {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 2px;
+	flex-wrap: wrap;
+}
+.fist-pag-btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 2rem;
+	padding: 0.25rem 0.5rem;
+	font-size: 0.875rem;
+	line-height: 1.5;
+	border: 1px solid var(--bs-border-color, #dee2e6);
+	border-radius: 0.25rem;
+	background: #fff;
+	color: var(--mnm-blue);
+	cursor: pointer;
+	text-decoration: none;
+}
+.fist-pag-btn:hover:not(:disabled):not(.fist-pag-active) { background: #e9ecef; }
+.fist-pag-btn:disabled { color: #6c757d; cursor: default; opacity: 0.65; }
+.fist-pag-active {
+	background: var(--mnm-blue);
+	color: #fff;
+	border-color: var(--mnm-blue);
+	pointer-events: none;
+}
+.fist-pag-ellipsis { color: #6c757d; border-style: dashed; }
+.fist-pag-info { margin-left: 0.5rem; color: #6c757d; font-size: 0.8125rem; white-space: nowrap; }
+
+/* Bootstrap Icons fallback — only the few glyphs used by the pagination component */
+.bi-chevron-left::before    { content: '\2039'; }
+.bi-chevron-right::before   { content: '\203A'; }
+.bi-chevron-double-left::before  { content: '\00AB'; }
+.bi-chevron-double-right::before { content: '\00BB'; }
+.bi-shuffle::before         { content: '\21C4'; }
+
+/* ========== Tablet: <= 991px ========== */
+
+@media (max-width: 991.98px) {
+	#app {
+		max-width: 100%;
+	}
+
+	.cat-cell-desc {
+		width: auto;
+		max-width: 200px;
+	}
+
+	.cat-cell-progress {
+		width: 140px;
+	}
+
+	/* RC: switch to block layout on tablets */
+	.rc-row,
+	.rc-cell-entry,
+	.rc-cell-event {
+		display: block;
+		width: 100%;
+	}
+
+	.rc-cell-entry { margin-bottom: 2px; }
+}
+
+/* ========== Phone: <= 767px ========== */
+
+@media (max-width: 767.98px) {
+	/* Entry list: let Bootstrap grid stack columns */
+	.entry_cell_left {
+		display: flex !important;
+		width: 100% !important;
+	}
+
+	.entry_cell_desc,
+	.entry_cell_right,
+	.entry_cell_joined {
+		display: block !important;
+		width: 100% !important;
+	}
+
+	.entry_cell_desc {
+		padding-right: 0;
+	}
+
+	.entry_cell_right {
+		white-space: normal !important;
+	}
+
+	.entry_row {
+		padding: 8px 6px;
+	}
+
+	/* Second-row action links: wrap nicely */
+	.second-row .entry_cell_joined {
+		font-size: 0.85rem;
+	}
+
+	.second-row .entry_cell_joined a {
+		white-space: nowrap;
+	}
+
+	/* Catalog list: stack vertically */
+	.cat-table {
+		display: block !important;
+	}
+
+	.cat-row {
+		display: block !important;
+		margin-bottom: 8px;
+		padding: 4px 0;
+		border-bottom: 1px solid #eee;
+	}
+
+	.catalog-list-item,
+	.cat-cell-desc,
+	.cat-cell-progress,
+	.cat-cell-check {
+		display: block !important;
+		width: 100% !important;
+		max-width: 100% !important;
+	}
+
+	.catalog-list-item .btn-group {
+		width: 100%;
+	}
+
+	.catalog-list-item .btn-group > .btn:first-child {
+		width: calc(100% - 2.5rem) !important;
+		max-width: none !important;
+	}
+
+	.cat-cell-desc {
+		white-space: normal !important;
+		padding: 2px 0;
+	}
+
+	.cat-cell-progress {
+		padding: 4px 0;
+	}
+
+	.cat-cell-check {
+		display: inline-block !important;
+		width: auto !important;
+	}
+
+	/* Catalog slice table wrapper */
+	div[style*="display:table;width:100%"],
+	div[style*="display:table; width:100%"] {
+		display: block !important;
+	}
+
+	/* RC entries: stack */
+	.rc-row {
+		display: block !important;
+	}
+
+	.rc-cell-entry,
+	.rc-cell-event {
+		display: block !important;
+		width: 100% !important;
+	}
+
+	/* Multi-match dropdown: constrain to viewport */
+	.dropdown-menu {
+		max-width: 90vw !important;
+	}
+
+	/* Tables: horizontal scroll instead of overflow */
+	.container-fluid table.table,
+	.card table.table {
+		display: block;
+		overflow-x: auto;
+		-webkit-overflow-scrolling: touch;
+	}
+
+	/* Touch-friendly action buttons on mobile */
+	.mnm-action-btn {
+		font-size: 0.85rem;
+		padding: 6px 14px;
+		min-height: 2.2rem;
+	}
+
+	/* Touch-friendly dropdown items */
+	.dropdown-menu .dropdown-item {
+		padding: 8px 12px !important;
+	}
+
+	/* Search page inline buttons */
+	div[style="display:inline-block"] {
+		display: inline-block;
+		margin-bottom: 4px;
+	}
+}
+
+/* ========== Small phone: <= 575px ========== */
+
+@media (max-width: 575.98px) {
+	/* Navbar search: full width when visible */
+	.search_box_form {
+		width: 100%;
+	}
+
+	/* Main page tabs: smaller text on mobile so they fit */
+	.nav-tabs .nav-link {
+		font-size: 0.85rem;
+		padding: 0.4rem 0.6rem;
+	}
+
+	.search_box_form input[type="text"] {
+		flex: 1;
+		min-width: 0;
+	}
+
+	/* Font bump for readability */
+	.entry_cell_desc {
+		font-size: 0.9rem;
+	}
+
+	.entry_cell_right {
+		font-size: 0.85rem;
+	}
+
+	/* Entries page: stacked form labels */
+	.entries-page .col-4,
+	.entries-page .col-8 {
+		flex: 0 0 100%;
+		max-width: 100%;
+	}
+
+	/* Multi-match description: legible */
+	.catalog-entry-multi-match-desc,
+	div[style*="font-size:7pt"] {
+		font-size: 0.7rem !important;
+	}
+}

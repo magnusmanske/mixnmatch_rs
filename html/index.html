@@ -1,0 +1,112 @@
+<!DOCTYPE HTML>
+<html>
+
+<head>
+	<META NAME="ROBOTS" CONTENT="NOINDEX, NOFOLLOW" />
+	<meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<link rel="icon" href="favicon.png" type="image/png" />
+	<title tt="toolname"></title>
+	<link rel="stylesheet"
+		href="https://tools-static.wmflabs.org/cdnjs/ajax/libs/twitter-bootstrap/5.3.8/css/bootstrap.min.css" />
+	<link rel="stylesheet" href="https://mix-n-match.toolforge.org/resources/html/wikimedia.css" />
+	<link href="https://mix-n-match.toolforge.org/api.php?query=rc_atom" type="application/atom+xml" rel="alternate"
+		title="Recent Changes Atom feed" />
+	<script
+		src="https://tools-static.wmflabs.org/cdnjs/ajax/libs/twitter-bootstrap/5.3.8/js/bootstrap.bundle.min.js"></script>
+
+	<script src="https://tools-static.wmflabs.org/cdnjs/ajax/libs/vue/2.7.16/vue.min.js"></script>
+	<script src="https://tools-static.wmflabs.org/cdnjs/ajax/libs/vue-router/3.6.5/vue-router.min.js"></script>
+	<script type="module">
+		import ToolTranslation from './resources/js_es6/tt.js';
+		import {WikiData, WikiDataItem} from './resources/js_es6/wikidata.js';
+		window.ToolTranslation = ToolTranslation;
+		window.WikiData = WikiData;
+		window.WikiDataItem = WikiDataItem;
+	</script>
+	<link rel="stylesheet" href="main.css" />
+
+</head>
+
+<body>
+
+	<div id='app'>
+
+		<nav class="navbar navbar-expand-lg navbar-light bg-light">
+
+			<!-- Mix'n'match dropdown + loading spinner — always visible -->
+			<div class="btn-group">
+				<a href='#/' class="btn btn-light fw-bold" tt='toolname'></a>
+				<button type="button" class="btn btn-light dropdown-toggle dropdown-toggle-split"
+					data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false"></button>
+				<div class="dropdown-menu dropdown-menu-start" style="padding:4px 0">
+					<router-link to='/rc' class="dropdown-item" style="padding:2px" tt="recent_changes"></router-link>
+					<router-link to='/creation_candidates/human' class="dropdown-item" style="padding:2px"
+						tt="creation_candidates_human"></router-link>
+					<router-link to='/creation_candidates/dates' class="dropdown-item" style="padding:2px"
+						tt="creation_candidates_dates"></router-link>
+					<!-- <router-link to='/creation_candidates/birth_year' class="dropdown-item" style="padding:2px" tt="creation_candidates_birth_year"></router-link> -->
+					<router-link to='/creation_candidates/artwork' class="dropdown-item" style="padding:2px"
+						tt="creation_candidates_artwork"></router-link>
+					<router-link to='/creation_candidates/aux' class="dropdown-item" style="padding:2px"
+						tt="creation_candidates_aux"></router-link>
+					<router-link to='/entries' class="dropdown-item" style="padding:2px"
+						tt="entries_page"></router-link>
+					<router-link to='/top_groups' class="dropdown-item" style="padding:2px"
+						tt="top_groups"></router-link>
+					<router-link to='/sparql' class="dropdown-item" style="padding:2px" tt="sparql_list"></router-link>
+					<router-link to='/top_missing' class="dropdown-item" style="padding:2px"
+						tt="top_missing"></router-link>
+					<router-link to='/jobs' class="dropdown-item" style="padding:2px" tt="jobs"></router-link>
+					<router-link to='/issues' class="dropdown-item" style="padding:2px" tt="issues"></router-link>
+					<router-link to='/import' class="dropdown-item" style="padding:2px"
+						tt="import_or_update_catalog"></router-link>
+					<router-link to='/scraper/new' class="dropdown-item" style="padding:2px"
+						tt="new_scraper"></router-link>
+					<router-link to='/missing_properties' class="dropdown-item" style="padding:2px"
+						tt="missing_properties"></router-link>
+					<router-link to='/random' class="dropdown-item" style="padding:2px"
+						tt="random_entry_all_catalogs"></router-link>
+					<router-link to='/large_catalogs' class="dropdown-item" style="padding:2px">Large catalogs</router-link>
+					<a style="padding:2px" class="dropdown-item external"
+						href="https://meta.wikimedia.org/wiki/Mix%27n%27match" target='_blank' tt="about"></a>
+				</div>
+			</div>
+			<button class="navbar-toggler" type="button" data-bs-toggle="collapse"
+				data-bs-target="#navbarSupportedContent" aria-controls="navbarSupportedContent" aria-expanded="false"
+				aria-label="Toggle navigation">
+				<span class="navbar-toggler-icon"></span>
+			</button>
+
+			<div class="collapse navbar-collapse" id="navbarSupportedContent">
+				<ul class="navbar-nav me-auto">
+					<li class="nav-item active">
+						<div id='tooltranslate_wrapper'></div>
+					</li>
+
+				</ul>
+				<span id="mnm-navbar-loading" style="display:none" class="ms-2" title="Loading…"><span
+						class="spinner-border spinner-border-sm text-primary" role="status"></span></span>
+
+				<widar></widar>
+				<search-box></search-box>
+				<a style="margin:0px;padding:0px;margin-top:4px;margin-left:10px;" href="/" target='_blank'>
+					<img src="https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Toolforge_logo.svg/60px-Toolforge_logo.svg.png"
+						tt_title="wmf_powered" border="0" width="32px" />
+				</a>
+
+			</div>
+		</nav>
+
+		<router-view :key="$route.path" class="container-fluid"><i tt='loading'></i></router-view>
+	</div>
+
+	<!-- Toast notification container -->
+	<div id="mnm-toast-container" aria-live="polite" aria-atomic="true"
+		style="position:fixed; bottom:1.5rem; right:1.5rem; z-index:1100; min-width:260px; max-width:400px;"></div>
+
+</body>
+
+<script src="index_vue.js"></script>
+
+</html>
