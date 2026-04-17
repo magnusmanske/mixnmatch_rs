@@ -3281,7 +3281,8 @@ impl Storage for StorageMySQL {
         if words.is_empty() {
             return Ok(vec![]);
         }
-        let ft_words = words.iter().map(|w| format!("+{w}")).collect::<Vec<String>>().join(",");
+        // Boolean-mode MATCH terms are space-separated (not comma-separated; that was a PHP bug).
+        let ft_words = words.iter().map(|w| format!("+{w}")).collect::<Vec<String>>().join(" ");
         let mut conditions = Vec::new();
         if !no_label_search {
             conditions.push(format!("MATCH(`ext_name`) AGAINST('{ft_words}' IN BOOLEAN MODE)"));
@@ -3315,8 +3316,16 @@ impl Storage for StorageMySQL {
         Ok(rows)
     }
 
-    async fn api_search_by_q(&self, q: isize) -> Result<Vec<Entry>> {
-        let sql = format!("{} WHERE `q`={q}", Self::entry_sql_select());
+    async fn api_search_by_q(&self, q: isize, exclude_catalogs: &[usize]) -> Result<Vec<Entry>> {
+        let mut sql = format!("{} WHERE `q`={q}", Self::entry_sql_select());
+        if !exclude_catalogs.is_empty() {
+            let list = exclude_catalogs
+                .iter()
+                .map(|c| c.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            sql += &format!(" AND `catalog` NOT IN ({list})");
+        }
         let mut conn = self.get_conn_ro().await?;
         let rows = conn
             .exec_iter(sql, ())
@@ -3332,14 +3341,20 @@ impl Storage for StorageMySQL {
     async fn api_get_recent_changes(&self, ts: &str, catalog_id: usize, limit: usize) -> Result<(Vec<serde_json::Value>, Vec<serde_json::Value>)> {
         let mut conn = self.get_conn_ro().await?;
 
-        // Events from entry table (entries matched/changed after timestamp)
+        // Events from entry table — human-matched entries only (user!=0,3,4), with
+        // a non-null timestamp. Rows here represent current matches.
+        let ts_filter = if ts.is_empty() {
+            String::new()
+        } else {
+            format!(" AND `timestamp` >= '{}'", ts.replace('\'', "''"))
+        };
         let catalog_filter = if catalog_id > 0 {
             format!(" AND `catalog`={catalog_id}")
         } else {
             String::new()
         };
         let entry_sql = format!(
-            "SELECT `id`,`catalog`,`ext_id`,`ext_name`,`q`,`user`,`timestamp` FROM `entry` WHERE `timestamp`>='{ts}' AND `user`>0{catalog_filter} ORDER BY `timestamp` DESC LIMIT {limit}"
+            "SELECT * FROM `entry` WHERE `user`!=0 AND `user`!=3 AND `user`!=4 AND `timestamp` IS NOT NULL{ts_filter}{catalog_filter} ORDER BY `timestamp` DESC LIMIT {limit}"
         );
         let entry_events = conn
             .exec_iter(entry_sql, ())
@@ -3348,40 +3363,71 @@ impl Storage for StorageMySQL {
                 let id: usize = row.get("id").unwrap_or(0);
                 let catalog: usize = row.get("catalog").unwrap_or(0);
                 let ext_id: String = row.get("ext_id").unwrap_or_default();
+                let ext_url: String = row.get("ext_url").unwrap_or_default();
                 let ext_name: String = row.get("ext_name").unwrap_or_default();
+                let ext_desc: String = row.get("ext_desc").unwrap_or_default();
                 let q: Option<isize> = row.get("q");
                 let user: Option<usize> = row.get("user");
                 let timestamp: String = row.get("timestamp").unwrap_or_default();
                 json!({
-                    "id": id, "catalog": catalog, "ext_id": ext_id, "ext_name": ext_name,
-                    "q": q, "user": user, "timestamp": timestamp
+                    "id": id, "catalog": catalog,
+                    "ext_id": ext_id, "ext_url": ext_url, "ext_name": ext_name, "ext_desc": ext_desc,
+                    "q": q, "user": user, "timestamp": timestamp,
+                    "event_type": "match"
                 })
             })
             .await?;
 
-        // Events from log table
+        // PHP mirrors: if the entry query returned no rows, don't look at `log`.
+        // Otherwise bound the log query to [max_ts, min_ts] — the same window
+        // covered by the entry query.
+        if entry_events.is_empty() {
+            return Ok((entry_events, vec![]));
+        }
+        let min_ts = entry_events
+            .first()
+            .and_then(|e| e.get("timestamp").and_then(|v| v.as_str()))
+            .unwrap_or("")
+            .to_string();
+        let max_ts = entry_events
+            .last()
+            .and_then(|e| e.get("timestamp").and_then(|v| v.as_str()))
+            .unwrap_or("")
+            .to_string();
+
         let log_catalog_filter = if catalog_id > 0 {
-            format!(" AND `entry`.`catalog`={catalog_id}")
+            format!(" AND entry.catalog={catalog_id}")
         } else {
             String::new()
         };
+        let min_ts_safe = min_ts.replace('\'', "''");
+        let max_ts_safe = max_ts.replace('\'', "''");
         let log_sql = format!(
-            "SELECT `log`.*,`entry`.`catalog` FROM `log`,`entry` WHERE `entry`.`id`=`log`.`entry_id` AND `log`.`timestamp`>='{ts}'{log_catalog_filter} ORDER BY `log`.`timestamp` DESC LIMIT {limit}"
+            "SELECT entry.id AS id, catalog, ext_id, ext_url, ext_name, ext_desc, entry.q, \
+                    log.action AS event_type, log.user AS user, log.timestamp AS timestamp \
+             FROM log, entry \
+             WHERE log.entry_id=entry.id \
+               AND log.timestamp BETWEEN '{max_ts_safe}' AND '{min_ts_safe}'{log_catalog_filter}"
         );
         let log_events = conn
             .exec_iter(log_sql, ())
             .await?
             .map_and_drop(|row: Row| {
                 let id: usize = row.get("id").unwrap_or(0);
-                let entry_id: usize = row.get("entry_id").unwrap_or(0);
-                let user_id: usize = row.get("user_id").unwrap_or(0);
-                let action: String = row.get("action").unwrap_or_default();
-                let timestamp: String = row.get("timestamp").unwrap_or_default();
                 let catalog: usize = row.get("catalog").unwrap_or(0);
-                let json_str: Option<String> = row.get("json");
+                let ext_id: String = row.get("ext_id").unwrap_or_default();
+                let ext_url: String = row.get("ext_url").unwrap_or_default();
+                let ext_name: String = row.get("ext_name").unwrap_or_default();
+                let ext_desc: String = row.get("ext_desc").unwrap_or_default();
+                let q: Option<isize> = row.get("q");
+                let event_type: String = row.get("event_type").unwrap_or_default();
+                let user: Option<usize> = row.get("user");
+                let timestamp: String = row.get("timestamp").unwrap_or_default();
                 json!({
-                    "id": id, "entry_id": entry_id, "user_id": user_id, "action": action,
-                    "timestamp": timestamp, "catalog": catalog, "json": json_str
+                    "id": id, "catalog": catalog,
+                    "ext_id": ext_id, "ext_url": ext_url, "ext_name": ext_name, "ext_desc": ext_desc,
+                    "q": q, "user": user, "timestamp": timestamp,
+                    "event_type": event_type
                 })
             })
             .await?;
@@ -3402,6 +3448,20 @@ impl Storage for StorageMySQL {
         Ok(rows)
     }
 
+    async fn api_get_catalog_entries_count(&self, where_clause: &str) -> Result<usize> {
+        let sql = format!("SELECT COUNT(*) AS cnt FROM entry WHERE {where_clause}");
+        let mut conn = self.get_conn_ro().await?;
+        let cnt = conn
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(from_row::<usize>)
+            .await?
+            .into_iter()
+            .next()
+            .unwrap_or(0);
+        Ok(cnt)
+    }
+
     async fn api_get_existing_job_actions(&self) -> Result<Vec<String>> {
         let sql = "SELECT DISTINCT `action` FROM `jobs` UNION SELECT DISTINCT `action` FROM `job_sizes`";
         let mut conn = self.get_conn_ro().await?;
@@ -3413,33 +3473,70 @@ impl Storage for StorageMySQL {
         Ok(rows)
     }
 
-    async fn api_get_random_entry(&self, catalog_id: usize, submode: &str, entry_type: &str, random: f64, active_catalogs: &[usize]) -> Result<Option<Entry>> {
-        let mut sql = format!("{} FORCE INDEX (`random_2`) WHERE `random`>={random}", Self::entry_sql_select());
-        if submode == "no_q" || submode.is_empty() {
-            sql += " AND `q` IS NULL";
-        }
-        if catalog_id > 0 {
-            sql += &format!(" AND `catalog`={catalog_id}");
-        }
-        if !entry_type.is_empty() {
-            sql += &format!(" AND `type`='{}'", entry_type.replace('\'', "''"));
-        }
-        sql += " ORDER BY `random` LIMIT 1";
+    async fn api_get_random_entry(
+        &self,
+        catalog_id: usize,
+        submode: &str,
+        entry_type: &str,
+        active_catalogs: &[usize],
+    ) -> Result<Option<Entry>> {
+        let where_clause: &str = match submode {
+            "prematched" => "user=0",
+            "no_manual" => "(user=0 OR q IS NULL)",
+            _ => "q IS NULL",
+        };
+        let type_filter = if entry_type.is_empty() {
+            String::new()
+        } else {
+            format!(" AND `type`='{}'", entry_type.replace('\'', "''"))
+        };
 
         let mut conn = self.get_conn_ro().await?;
-        let rows = conn
-            .exec_iter(sql, ())
-            .await?
-            .map_and_drop(|row| Self::entry_from_row(&row))
-            .await?
-            .into_iter()
-            .flatten()
-            .collect::<Vec<Entry>>();
 
-        // Only return if the entry's catalog is in active_catalogs
-        if let Some(entry) = rows.into_iter().next() {
-            if active_catalogs.contains(&entry.catalog) {
-                return Ok(Some(entry));
+        if catalog_id > 0 {
+            // Catalog-specific: FORCE INDEX (catalog_q_random). Two attempts —
+            // first with a random threshold, then wrap to threshold 0.
+            let base = format!(
+                "{} FORCE INDEX (`catalog_q_random`) WHERE `random`>=%R% AND `catalog`={catalog_id} AND {where_clause}{type_filter} ORDER BY `random` LIMIT 1",
+                Self::entry_sql_select()
+            );
+            for threshold in [rand::random::<f64>(), 0.0] {
+                let sql = base.replace("%R%", &format!("{threshold}"));
+                let rows = conn
+                    .exec_iter(sql, ())
+                    .await?
+                    .map_and_drop(|row| Self::entry_from_row(&row))
+                    .await?
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<Entry>>();
+                if let Some(entry) = rows.into_iter().next() {
+                    return Ok(Some(entry));
+                }
+            }
+            return Ok(None);
+        }
+
+        // Global: FORCE INDEX (random_2), 11 attempts, filter by active_catalogs.
+        let base = format!(
+            "{} FORCE INDEX (`random_2`) WHERE `random`>=%R% AND {where_clause}{type_filter} ORDER BY `random` LIMIT 10",
+            Self::entry_sql_select()
+        );
+        for attempt in 0..=10 {
+            let threshold = if attempt >= 10 { 0.0 } else { rand::random::<f64>() };
+            let sql = base.replace("%R%", &format!("{threshold}"));
+            let rows = conn
+                .exec_iter(sql, ())
+                .await?
+                .map_and_drop(|row| Self::entry_from_row(&row))
+                .await?
+                .into_iter()
+                .flatten()
+                .collect::<Vec<Entry>>();
+            for entry in rows {
+                if active_catalogs.contains(&entry.catalog) {
+                    return Ok(Some(entry));
+                }
             }
         }
         Ok(None)
@@ -3447,6 +3544,17 @@ impl Storage for StorageMySQL {
 
     async fn api_get_active_catalog_ids(&self) -> Result<Vec<usize>> {
         let sql = "SELECT `id` FROM `catalog` WHERE `active`=1";
+        let mut conn = self.get_conn_ro().await?;
+        let rows = conn
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(from_row::<usize>)
+            .await?;
+        Ok(rows)
+    }
+
+    async fn api_get_inactive_catalog_ids(&self) -> Result<Vec<usize>> {
+        let sql = "SELECT `id` FROM `catalog` WHERE `active`!=1";
         let mut conn = self.get_conn_ro().await?;
         let rows = conn
             .exec_iter(sql, ())

@@ -512,20 +512,33 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
 
     // Search
     async fn api_search_entries(&self, words: &[String], description_search: bool, no_label_search: bool, exclude: &[usize], include: &[usize], max_results: usize) -> Result<Vec<Entry>>;
-    async fn api_search_by_q(&self, q: isize) -> Result<Vec<Entry>>;
+    async fn api_search_by_q(&self, q: isize, exclude_catalogs: &[usize]) -> Result<Vec<Entry>>;
 
     // Recent changes
     async fn api_get_recent_changes(&self, ts: &str, catalog_id: usize, limit: usize) -> Result<(Vec<serde_json::Value>, Vec<serde_json::Value>)>; // (events from entry, events from log)
 
     // Catalog entry listing (query=catalog)
     async fn api_get_catalog_entries_raw(&self, sql: &str) -> Result<Vec<Entry>>;
+    /// Count `entry` rows matching the given WHERE clause (without LIMIT/OFFSET).
+    /// Powers the `total_filtered` field on query_catalog.
+    async fn api_get_catalog_entries_count(&self, where_clause: &str) -> Result<usize>;
 
     // Existing job actions
     async fn api_get_existing_job_actions(&self) -> Result<Vec<String>>;
 
     // Random entry
-    async fn api_get_random_entry(&self, catalog_id: usize, submode: &str, entry_type: &str, random: f64, active_catalogs: &[usize]) -> Result<Option<Entry>>;
+    /// Pick a random entry matching the given submode.
+    ///
+    /// * `catalog_id == 0` → global pick: force `random_2` index, scan forward from a
+    ///   random threshold (retry up to 11 times, final attempt with threshold 0), then
+    ///   filter by `active_catalogs` on the Rust side.
+    /// * `catalog_id > 0`  → catalog-specific: force `catalog_q_random` index, scan
+    ///   forward from a random threshold, then wrap around to threshold 0 if nothing
+    ///   matched. `active_catalogs` is ignored (PHP mirrors this, so an inactive
+    ///   catalog explicitly requested by id still returns entries).
+    async fn api_get_random_entry(&self, catalog_id: usize, submode: &str, entry_type: &str, active_catalogs: &[usize]) -> Result<Option<Entry>>;
     async fn api_get_active_catalog_ids(&self) -> Result<Vec<usize>>;
+    async fn api_get_inactive_catalog_ids(&self) -> Result<Vec<usize>>;
 
     // Additional API support methods
     async fn api_get_wd_props(&self) -> Result<Vec<usize>>;
