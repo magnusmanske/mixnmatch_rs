@@ -3984,15 +3984,7 @@ impl Storage for StorageMySQL {
         let rows = conn
             .exec_iter(sql, ())
             .await?
-            .map_and_drop(|row: Row| {
-                let mut obj = serde_json::Map::new();
-                for col in row.columns_ref() {
-                    let col_name = col.name_str().to_string();
-                    let val: Option<String> = row.get(&col_name as &str);
-                    obj.insert(col_name, json!(val));
-                }
-                serde_json::Value::Object(obj)
-            })
+            .map_and_drop(row_to_json)
             .await?;
         Ok(rows)
     }
@@ -4587,13 +4579,17 @@ impl Storage for StorageMySQL {
             let sql_groups = format!(
                 "SELECT pc.prop_group, pc.property, pc.item, pc.label FROM property_cache pc WHERE pc.property IN ({in_list})"
             );
-            let prop_rows: Vec<(String, usize, usize, String)> = conn
+            // `prop_group` is the numeric property id the group is keyed to
+            // (31 = "instance of" meaning top-level group; anything else is a
+            // country/subgroup). Stored as INT on the server; mysql_async
+            // would panic if we asked for String.
+            let prop_rows: Vec<(usize, usize, usize, String)> = conn
                 .exec_iter(sql_groups, ())
                 .await?
-                .map_and_drop(from_row::<(String, usize, usize, String)>)
+                .map_and_drop(from_row::<(usize, usize, usize, String)>)
                 .await?;
             for (prop_group, property, item, label) in prop_rows {
-                let prefix = if prop_group == "31" { "ig_" } else { "country_" };
+                let prefix = if prop_group == 31 { "ig_" } else { "country_" };
                 let key = format!(
                     "{prefix}{}",
                     label.to_lowercase().split_whitespace().collect::<Vec<_>>().join("_")
