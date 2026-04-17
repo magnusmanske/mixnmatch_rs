@@ -3259,15 +3259,22 @@ impl Storage for StorageMySQL {
             .exec_iter(entry_sql, ())
             .await?
             .map_and_drop(|row: Row| {
+                // Nullable columns (q, user, timestamp, ext_*) must be pulled
+                // through Option<T> explicitly — `row.get::<T, _>` panics on NULL.
                 let id: usize = row.get("id").unwrap_or(0);
                 let catalog: usize = row.get("catalog").unwrap_or(0);
-                let ext_id: String = row.get("ext_id").unwrap_or_default();
-                let ext_url: String = row.get("ext_url").unwrap_or_default();
-                let ext_name: String = row.get("ext_name").unwrap_or_default();
-                let ext_desc: String = row.get("ext_desc").unwrap_or_default();
-                let q: Option<isize> = row.get("q");
-                let user: Option<usize> = row.get("user");
-                let timestamp: String = row.get("timestamp").unwrap_or_default();
+                let ext_id: String =
+                    row.get::<Option<String>, _>("ext_id").flatten().unwrap_or_default();
+                let ext_url: String =
+                    row.get::<Option<String>, _>("ext_url").flatten().unwrap_or_default();
+                let ext_name: String =
+                    row.get::<Option<String>, _>("ext_name").flatten().unwrap_or_default();
+                let ext_desc: String =
+                    row.get::<Option<String>, _>("ext_desc").flatten().unwrap_or_default();
+                let q: Option<isize> = row.get::<Option<isize>, _>("q").flatten();
+                let user: Option<usize> = row.get::<Option<usize>, _>("user").flatten();
+                let timestamp: String =
+                    row.get::<Option<String>, _>("timestamp").flatten().unwrap_or_default();
                 json!({
                     "id": id, "catalog": catalog,
                     "ext_id": ext_id, "ext_url": ext_url, "ext_name": ext_name, "ext_desc": ext_desc,
@@ -3314,14 +3321,20 @@ impl Storage for StorageMySQL {
             .map_and_drop(|row: Row| {
                 let id: usize = row.get("id").unwrap_or(0);
                 let catalog: usize = row.get("catalog").unwrap_or(0);
-                let ext_id: String = row.get("ext_id").unwrap_or_default();
-                let ext_url: String = row.get("ext_url").unwrap_or_default();
-                let ext_name: String = row.get("ext_name").unwrap_or_default();
-                let ext_desc: String = row.get("ext_desc").unwrap_or_default();
-                let q: Option<isize> = row.get("q");
-                let event_type: String = row.get("event_type").unwrap_or_default();
-                let user: Option<usize> = row.get("user");
-                let timestamp: String = row.get("timestamp").unwrap_or_default();
+                let ext_id: String =
+                    row.get::<Option<String>, _>("ext_id").flatten().unwrap_or_default();
+                let ext_url: String =
+                    row.get::<Option<String>, _>("ext_url").flatten().unwrap_or_default();
+                let ext_name: String =
+                    row.get::<Option<String>, _>("ext_name").flatten().unwrap_or_default();
+                let ext_desc: String =
+                    row.get::<Option<String>, _>("ext_desc").flatten().unwrap_or_default();
+                let q: Option<isize> = row.get::<Option<isize>, _>("q").flatten();
+                let event_type: String =
+                    row.get::<Option<String>, _>("event_type").flatten().unwrap_or_default();
+                let user: Option<usize> = row.get::<Option<usize>, _>("user").flatten();
+                let timestamp: String =
+                    row.get::<Option<String>, _>("timestamp").flatten().unwrap_or_default();
                 json!({
                     "id": id, "catalog": catalog,
                     "ext_id": ext_id, "ext_url": ext_url, "ext_name": ext_name, "ext_desc": ext_desc,
