@@ -21,7 +21,7 @@ lazy_static! {
 }
 
 type SharedState = Arc<AppState>;
-type Params = HashMap<String, String>;
+pub type Params = HashMap<String, String>;
 
 // ---------------------------------------------------------------------------
 // Router
@@ -125,6 +125,86 @@ impl IntoResponse for ApiError {
 
 fn success(data: Value) -> Result<Response, ApiError> {
     Ok(Json(json!({ "status": "ok", "data": data })).into_response())
+}
+
+// ---------------------------------------------------------------------------
+// Public helpers for internal callers (e.g., the main /api.php dispatcher).
+// These return `Result<Value, String>` — plain data with the status envelope
+// stripped — so they can be embedded in any other API response shape.
+// ---------------------------------------------------------------------------
+
+/// Convert an internal `ApiError` to a plain string for cross-module callers.
+impl From<ApiError> for String {
+    fn from(e: ApiError) -> String {
+        e.message
+    }
+}
+
+async fn response_to_data(r: Result<Response, ApiError>) -> Result<Value, String> {
+    let resp = r.map_err(|e| e.message)?;
+    let bytes = axum::body::to_bytes(resp.into_body(), 100_000_000)
+        .await
+        .map_err(|e| format!("read body: {e}"))?;
+    let v: Value = serde_json::from_slice(&bytes)
+        .map_err(|e| format!("parse body: {e}"))?;
+    if v.get("status").and_then(|s| s.as_str()) == Some("ok") {
+        Ok(v.get("data").cloned().unwrap_or(Value::Null))
+    } else {
+        let msg = v.get("error").and_then(|s| s.as_str()).unwrap_or("unknown error");
+        Err(msg.to_string())
+    }
+}
+
+pub async fn data_creation_candidates(app: &AppState, params: &Params) -> Result<Value, String> {
+    response_to_data(handle_creation_candidates(app, params).await).await
+}
+
+pub async fn data_quick_compare(app: &AppState, params: &Params) -> Result<Value, String> {
+    response_to_data(handle_quick_compare(app, params).await).await
+}
+
+pub async fn data_get_sync(app: &AppState, params: &Params) -> Result<Value, String> {
+    response_to_data(handle_get_sync(app, params).await).await
+}
+
+pub async fn data_sparql_list(app: &AppState, params: &Params) -> Result<Value, String> {
+    response_to_data(handle_sparql_list(app, params).await).await
+}
+
+pub async fn data_get_code_fragments(app: &AppState, params: &Params) -> Result<Value, String> {
+    response_to_data(handle_get_code_fragments(app, params).await).await
+}
+
+pub async fn data_save_code_fragment(app: &AppState, params: &Params) -> Result<Value, String> {
+    response_to_data(handle_save_code_fragment(app, params).await).await
+}
+
+pub async fn data_run_lua(app: &AppState, params: &Params) -> Result<Value, String> {
+    response_to_data(handle_run_lua(app, params).await).await
+}
+
+pub async fn data_lc_catalogs(app: &AppState) -> Result<Value, String> {
+    response_to_data(handle_lc_catalogs(app).await).await
+}
+
+pub async fn data_lc_locations(app: &AppState, params: &Params) -> Result<Value, String> {
+    response_to_data(handle_lc_locations(app, params).await).await
+}
+
+pub async fn data_lc_report(app: &AppState, params: &Params) -> Result<Value, String> {
+    response_to_data(handle_lc_report(app, params).await).await
+}
+
+pub async fn data_lc_report_list(app: &AppState, params: &Params) -> Result<Value, String> {
+    response_to_data(handle_lc_report_list(app, params).await).await
+}
+
+pub async fn data_lc_rc(app: &AppState, params: &Params) -> Result<Value, String> {
+    response_to_data(handle_lc_rc(app, params).await).await
+}
+
+pub async fn data_lc_set_status(app: &AppState, params: &Params) -> Result<Value, String> {
+    response_to_data(handle_lc_set_status(app, params).await).await
 }
 
 fn get_required_param<'a>(params: &'a Params, key: &str) -> Result<&'a str, ApiError> {
