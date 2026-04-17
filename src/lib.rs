@@ -45,6 +45,7 @@ pub type ItemId = isize;
 
 pub mod api;
 pub mod app_state;
+pub mod auth;
 pub mod automatch;
 pub mod autoscrape;
 pub mod autoscrape_levels;

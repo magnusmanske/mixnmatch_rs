@@ -34,6 +34,12 @@ wikibase = "*"
 mlua = { version = "0.10", features = ["lua54", "vendored", "serialize"] }
 tower = "*"
 tower-http = { version = "*", features = ["fs", "trace"] }
+tower-sessions = "0.15"
+rust-ini = "0.21"
+hmac = "0.12"
+sha1 = "0.10"
+base64 = "0.22"
+time = "0.3"
 
 [profile.release]
 lto = 'thin'
