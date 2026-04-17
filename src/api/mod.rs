@@ -3,13 +3,15 @@
 pub mod common;
 
 use crate::app_state::AppState;
+use crate::auth;
 use crate::import_catalog::ImportMode;
 use axum::Router;
 use axum::extract::{Query, State};
-use axum::response::{IntoResponse, Response};
+use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use common::{ApiError, Params};
 use std::sync::Arc;
+use tower_sessions::Session;
 
 pub type SharedState = Arc<AppState>;
 
@@ -21,18 +23,29 @@ pub fn router(app: AppState) -> Router {
         .with_state(state)
 }
 
-async fn api_dispatcher(State(app): State<SharedState>, Query(params): Query<Params>) -> Response {
-    dispatcher_common(&app, params).await
+async fn api_dispatcher(
+    State(app): State<SharedState>,
+    session: Session,
+    Query(params): Query<Params>,
+) -> Response {
+    dispatcher_common(&app, &session, params).await
 }
 
 async fn api_dispatcher_form(
     State(app): State<SharedState>,
+    session: Session,
     axum::extract::Form(params): axum::extract::Form<Params>,
 ) -> Response {
-    dispatcher_common(&app, params).await
+    dispatcher_common(&app, &session, params).await
 }
 
-async fn dispatcher_common(app: &AppState, params: Params) -> Response {
+async fn dispatcher_common(app: &AppState, session: &Session, params: Params) -> Response {
+    // Intercept the OAuth callback (user returning from Special:OAuth/authorize).
+    // This mirrors PHP's constructor-time check in MW_OAuth::__construct.
+    if params.contains_key("oauth_verifier") && params.contains_key("oauth_token") {
+        return handle_oauth_callback(app, session, &params).await;
+    }
+
     // Mirror the PHP behaviour: legacy callers may use "action" instead of "query"
     // to reach the distributed-game endpoints, which become "dg_<action>".
     let query = match params.get("query").filter(|s| !s.is_empty()).cloned() {
@@ -42,8 +55,14 @@ async fn dispatcher_common(app: &AppState, params: Params) -> Response {
             None => String::new(),
         },
     };
-    let callback = params.get("callback").cloned().unwrap_or_default();
-    let result = dispatch(&query, app, &params).await;
+    // JSONP wrapping is disabled on auth endpoints — cookies + JSONP is a CSRF vector.
+    let callback_allowed = query != "widar";
+    let callback = if callback_allowed {
+        params.get("callback").cloned().unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let result = dispatch(&query, app, session, &params).await;
     let resp = match result {
         Ok(r) => r,
         Err(e) => e.into_response(),
@@ -77,8 +96,137 @@ async fn dispatcher_common(app: &AppState, params: Params) -> Response {
     resp
 }
 
+/// Implements `?query=widar&widar_action=…`. Mirrors PHP `query_widar`.
+/// Sub-actions: `authorize`, `get_rights`, `logout`. `get_rights` (the default)
+/// returns the shape that the existing Vue frontend already consumes from
+/// `widar.getUserName()`.
+async fn query_widar(
+    app: &AppState,
+    session: &Session,
+    params: &Params,
+) -> Result<Response, ApiError> {
+    let cfg = app
+        .oauth_config()
+        .ok_or_else(|| ApiError("OAuth is not configured on this server".into()))?
+        .clone();
+    let action = common::get_param(params, "widar_action", "get_rights");
+    match action.as_str() {
+        "authorize" => {
+            let token = auth::flow::initiate_request_token(&cfg)
+                .await
+                .map_err(|e| ApiError(format!("OAuth initiate failed: {e}")))?;
+            let new_state = auth::session::SessionData {
+                state: auth::session::SessionState::PendingVerifier {
+                    request_token_key: token.key.clone(),
+                    request_token_secret: token.secret.clone(),
+                },
+            };
+            auth::session::store(session, &new_state).await?;
+            let url = auth::flow::build_authorize_redirect_url(&cfg, &token.key);
+            Ok(Redirect::to(&url).into_response())
+        }
+        "logout" => {
+            auth::session::clear(session).await?;
+            Ok(common::success_with_data(serde_json::json!({})).into_response())
+        }
+        _ => {
+            // Default is "get_rights" — returns the same JSON shape the PHP
+            // `Widar::get_rights()` produces so the Vue frontend works unchanged.
+            let data = auth::session::load(session).await;
+            match data.state {
+                auth::session::SessionState::Authenticated {
+                    wikidata_user_id,
+                    wikidata_username,
+                    ..
+                } => Ok(json_resp(serde_json::json!({
+                    "status": "OK",
+                    "data": {
+                        "query": {
+                            "userinfo": {
+                                "id": wikidata_user_id,
+                                "name": wikidata_username,
+                            }
+                        }
+                    }
+                }))),
+                _ => Ok(json_resp(serde_json::json!({
+                    "status": "OK",
+                    "data": {
+                        "error": {
+                            "code": "mwoauth-invalid-authorization",
+                            "info": "Not logged in",
+                        }
+                    }
+                }))),
+            }
+        }
+    }
+}
+
+/// Finish the OAuth1 handshake. Runs when the user returns from the authorize
+/// step with `oauth_verifier` and `oauth_token` query parameters.
+async fn handle_oauth_callback(app: &AppState, session: &Session, params: &Params) -> Response {
+    let cfg = match app.oauth_config() {
+        Some(c) => c.clone(),
+        None => return ApiError("OAuth is not configured on this server".into()).into_response(),
+    };
+    let verifier = params.get("oauth_verifier").cloned().unwrap_or_default();
+    let incoming_token = params.get("oauth_token").cloned().unwrap_or_default();
+
+    let data = auth::session::load(session).await;
+    let (rk, rs) = match data.state {
+        auth::session::SessionState::PendingVerifier {
+            request_token_key,
+            request_token_secret,
+        } => (request_token_key, request_token_secret),
+        _ => {
+            return ApiError(
+                "No pending OAuth login — start over from the authorize link".into(),
+            )
+            .into_response();
+        }
+    };
+    // Session fixation guard: the verifier must match the token we stashed.
+    if incoming_token != rk {
+        return ApiError("OAuth token mismatch".into()).into_response();
+    }
+    let pair = auth::flow::TokenPair { key: rk, secret: rs };
+    let access = match auth::flow::exchange_verifier(&cfg, &pair, &verifier).await {
+        Ok(a) => a,
+        Err(e) => return ApiError(format!("OAuth exchange failed: {e}")).into_response(),
+    };
+    let user = match auth::flow::fetch_userinfo(&cfg, &access).await {
+        Ok(u) => u,
+        Err(e) => return ApiError(format!("OAuth userinfo failed: {e}")).into_response(),
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let new_data = auth::session::SessionData {
+        state: auth::session::SessionState::Authenticated {
+            access_token_key: access.key,
+            access_token_secret: access.secret,
+            wikidata_user_id: user.id,
+            wikidata_username: auth::session::normalize_username(&user.name),
+            authenticated_at: now,
+        },
+    };
+    if let Err(e) = auth::session::store(session, &new_data).await {
+        return e.into_response();
+    }
+    // Re-cycle session id to prevent session fixation on the now-authenticated session.
+    let _ = session.cycle_id().await;
+    Redirect::to("/").into_response()
+}
+
 #[allow(clippy::cognitive_complexity)]
-async fn dispatch(query: &str, app: &AppState, params: &Params) -> Result<Response, ApiError> {
+async fn dispatch(
+    query: &str,
+    app: &AppState,
+    session: &Session,
+    params: &Params,
+) -> Result<Response, ApiError> {
     match query {
         // Catalog
         "catalogs" => query_catalogs(app).await,
@@ -86,7 +234,7 @@ async fn dispatch(query: &str, app: &AppState, params: &Params) -> Result<Respon
         "catalog_details" => query_catalog_details(app, params).await,
         "get_catalog_info" => query_get_catalog_info(app, params).await,
         "catalog" => query_catalog(app, params).await,
-        "edit_catalog" => query_edit_catalog(app, params).await,
+        "edit_catalog" => query_edit_catalog(app, session, params).await,
         "catalog_overview" => query_catalog_overview(app, params).await,
 
         // Entry
@@ -98,22 +246,22 @@ async fn dispatch(query: &str, app: &AppState, params: &Params) -> Result<Respon
         "entries_via_property_value" => query_entries_via_property_value(app, params).await,
         "get_entries_by_q_or_value" => query_get_entries_by_q_or_value(app, params).await,
 
-        // Matching
-        "match_q" => query_match_q(app, params).await,
-        "match_q_multi" => query_match_q_multi(app, params).await,
-        "remove_q" => query_remove_q(app, params).await,
-        "remove_all_q" => query_remove_all_q(app, params).await,
-        "remove_all_multimatches" => query_remove_all_multimatches(app, params).await,
-        "suggest" => query_suggest(app, params).await,
+        // Matching — all DB-writing actions are gated behind OAuth
+        "match_q" => query_match_q(app, session, params).await,
+        "match_q_multi" => query_match_q_multi(app, session, params).await,
+        "remove_q" => query_remove_q(app, session, params).await,
+        "remove_all_q" => query_remove_all_q(app, session, params).await,
+        "remove_all_multimatches" => query_remove_all_multimatches(app, session, params).await,
+        "suggest" => query_suggest(app, session, params).await,
 
         // Jobs
         "get_jobs" => query_get_jobs(app, params).await,
-        "start_new_job" => query_start_new_job(app, params).await,
+        "start_new_job" => query_start_new_job(app, session, params).await,
 
         // Issues
         "get_issues" => query_get_issues(app, params).await,
         "all_issues" => query_all_issues(app, params).await,
-        "resolve_issue" => query_resolve_issue(app, params).await,
+        "resolve_issue" => query_resolve_issue(app, session, params).await,
 
         // User & auth
         "get_user_info" => query_get_user_info(app, params).await,
@@ -144,15 +292,17 @@ async fn dispatch(query: &str, app: &AppState, params: &Params) -> Result<Respon
         "proxy_entry_url" => query_proxy_entry_url(app, params).await,
         "cersei_forward" => query_cersei_forward(app, params).await,
 
-        // Admin & config
-        "update_overview" => query_update_overview(app, params).await,
-        "update_ext_urls" => query_update_ext_urls(app, params).await,
-        "add_aliases" => query_add_aliases(app, params).await,
+        // Admin & config — writes require OAuth; admin checks go via require_catalog_admin
+        "update_overview" => query_update_overview(app, session, params).await,
+        "update_ext_urls" => query_update_ext_urls(app, session, params).await,
+        "add_aliases" => query_add_aliases(app, session, params).await,
         "get_missing_properties" => query_get_missing_properties(app).await,
-        "set_missing_properties_status" => query_set_missing_properties_status(app, params).await,
+        "set_missing_properties_status" => {
+            query_set_missing_properties_status(app, session, params).await
+        }
         "get_top_groups" => query_get_top_groups(app).await,
-        "set_top_group" => query_set_top_group(app, params).await,
-        "remove_empty_top_group" => query_remove_empty_top_group(app, params).await,
+        "set_top_group" => query_set_top_group(app, session, params).await,
+        "remove_empty_top_group" => query_remove_empty_top_group(app, session, params).await,
         "quick_compare_list" => query_quick_compare_list(app).await,
         "rc_atom" => query_rc_atom(app, params).await,
         "get_flickr_key" => query_get_flickr_key().await,
@@ -162,8 +312,8 @@ async fn dispatch(query: &str, app: &AppState, params: &Params) -> Result<Respon
         "sparql_list" => query_sparql_list(app, params).await,
         "quick_compare" => query_quick_compare(app, params).await,
         "get_code_fragments" => query_get_code_fragments(app, params).await,
-        "save_code_fragment" => query_save_code_fragment(app, params).await,
-        "test_code_fragment" => query_test_code_fragment(app, params).await,
+        "save_code_fragment" => query_save_code_fragment(app, session, params).await,
+        "test_code_fragment" => query_test_code_fragment(app, session, params).await,
 
         // Large-catalogs endpoints (backed by the large_catalogs DB)
         "lc_catalogs" => query_lc_catalogs(app).await,
@@ -171,7 +321,7 @@ async fn dispatch(query: &str, app: &AppState, params: &Params) -> Result<Respon
         "lc_report" => query_lc_report(app, params).await,
         "lc_report_list" => query_lc_report_list(app, params).await,
         "lc_rc" => query_lc_rc(app, params).await,
-        "lc_set_status" => query_lc_set_status(app, params).await,
+        "lc_set_status" => query_lc_set_status(app, session, params).await,
 
         // Newly ported lightweight catalog endpoints
         "batch_catalogs" => query_batch_catalogs(app, params).await,
@@ -187,7 +337,7 @@ async fn dispatch(query: &str, app: &AppState, params: &Params) -> Result<Respon
         "create" => query_create(app, params).await,
         "user_edits" => query_user_edits(app, params).await,
         "get_statement_text_groups" => query_get_statement_text_groups(app, params).await,
-        "set_statement_text_q" => query_set_statement_text_q(app, params).await,
+        "set_statement_text_q" => query_set_statement_text_q(app, session, params).await,
         "missingpages" => query_missingpages(app, params).await,
         "sitestats" => query_sitestats(app, params).await,
 
@@ -212,9 +362,7 @@ async fn dispatch(query: &str, app: &AppState, params: &Params) -> Result<Respon
         "import_source" => Err(ApiError("import_source not yet ported to Rust".into())),
         "get_source_headers" => Err(ApiError("get_source_headers not yet ported to Rust".into())),
         "test_import_source" => Err(ApiError("test_import_source not yet ported to Rust".into())),
-        "widar" => Err(ApiError(
-            "widar OAuth endpoint not yet ported to Rust".into(),
-        )),
+        "widar" => query_widar(app, session, params).await,
 
         _ => Err(ApiError(format!("Unknown query '{query}'"))),
     }
@@ -416,18 +564,16 @@ async fn query_catalog(app: &AppState, params: &Params) -> Result<Response, ApiE
     })))
 }
 
-async fn query_edit_catalog(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+async fn query_edit_catalog(
+    app: &AppState,
+    session: &Session,
+    params: &Params,
+) -> Result<Response, ApiError> {
     let cid = common::get_catalog(params)?;
     let data_str = common::get_param(params, "data", "");
     let data: serde_json::Value =
         serde_json::from_str(&data_str).map_err(|_| ApiError("Bad data".into()))?;
-    let username = common::get_param(params, "username", "").replace('_', " ");
-    let user = app.storage().get_user_by_name(&username).await?;
-    match user {
-        Some((_, _, is_admin)) if is_admin => {}
-        Some((_, _, _)) => return Err(ApiError(format!("'{username}' is not a catalog admin"))),
-        None => return Err(ApiError(format!("No such user '{username}'"))),
-    }
+    auth::guard::require_catalog_admin_from_params(app, session, params).await?;
     let name = data
         .get("name")
         .and_then(|v| v.as_str())
@@ -717,10 +863,16 @@ async fn query_get_entries_by_q_or_value(
 
 // ─── Matching handlers ──────────────────────────────────────────────────────
 
-async fn query_match_q(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+async fn query_match_q(
+    app: &AppState,
+    session: &Session,
+    params: &Params,
+) -> Result<Response, ApiError> {
     let eid = common::get_param_int(params, "entry", -1) as usize;
     let q = common::get_param_int(params, "q", -1);
-    let uid = common::check_user(app, params).await?;
+    let uid = auth::guard::require_user_from_params(app, session, params)
+        .await?
+        .mnm_user_id;
     let mut entry = crate::entry::Entry::from_id(eid, app).await?;
     entry.set_match(&format!("Q{q}"), uid).await?;
     let out = crate::entry::Entry::from_id(eid, app).await?;
@@ -730,9 +882,15 @@ async fn query_match_q(app: &AppState, params: &Params) -> Result<Response, ApiE
     Ok(json_resp(serde_json::json!({"status": "OK", "entry": ej})))
 }
 
-async fn query_match_q_multi(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+async fn query_match_q_multi(
+    app: &AppState,
+    session: &Session,
+    params: &Params,
+) -> Result<Response, ApiError> {
     let catalog = common::get_catalog(params)?;
-    let uid = common::check_user(app, params).await?;
+    let uid = auth::guard::require_user_from_params(app, session, params)
+        .await?
+        .mnm_user_id;
     let data_str = common::get_param(params, "data", "[]");
     let data: Vec<serde_json::Value> = serde_json::from_str(&data_str).unwrap_or_default();
     let mut not_found = 0_usize;
@@ -763,16 +921,24 @@ async fn query_match_q_multi(app: &AppState, params: &Params) -> Result<Response
     ))
 }
 
-async fn query_remove_q(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+async fn query_remove_q(
+    app: &AppState,
+    session: &Session,
+    params: &Params,
+) -> Result<Response, ApiError> {
     let eid = common::get_param_int(params, "entry", -1) as usize;
-    common::check_user(app, params).await?;
+    auth::guard::require_user_from_params(app, session, params).await?;
     let mut entry = crate::entry::Entry::from_id(eid, app).await?;
     entry.unmatch().await?;
     Ok(ok(serde_json::json!({})))
 }
 
-async fn query_remove_all_q(app: &AppState, params: &Params) -> Result<Response, ApiError> {
-    common::check_user(app, params).await?;
+async fn query_remove_all_q(
+    app: &AppState,
+    session: &Session,
+    params: &Params,
+) -> Result<Response, ApiError> {
+    auth::guard::require_user_from_params(app, session, params).await?;
     let eid = common::get_param_int(params, "entry", -1) as usize;
     let entry = crate::entry::Entry::from_id(eid, app).await?;
     if let Some(q) = entry.q {
@@ -783,15 +949,21 @@ async fn query_remove_all_q(app: &AppState, params: &Params) -> Result<Response,
 
 async fn query_remove_all_multimatches(
     app: &AppState,
+    session: &Session,
     params: &Params,
 ) -> Result<Response, ApiError> {
-    common::check_user(app, params).await?;
+    auth::guard::require_user_from_params(app, session, params).await?;
     let eid = common::get_param_int(params, "entry", -1) as usize;
     app.storage().api_remove_all_multimatches(eid).await?;
     Ok(ok(serde_json::json!({})))
 }
 
-async fn query_suggest(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+async fn query_suggest(
+    app: &AppState,
+    session: &Session,
+    params: &Params,
+) -> Result<Response, ApiError> {
+    auth::guard::require_user_from_params(app, session, params).await?;
     let catalog = common::get_param_int(params, "catalog", 0) as usize;
     let overwrite = common::get_param_int(params, "overwrite", 0) != 0;
     let suggestions = common::get_param(params, "suggestions", "");
@@ -845,12 +1017,16 @@ async fn query_get_jobs(app: &AppState, params: &Params) -> Result<Response, Api
     Ok(json_resp(out))
 }
 
-async fn query_start_new_job(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+async fn query_start_new_job(
+    app: &AppState,
+    session: &Session,
+    params: &Params,
+) -> Result<Response, ApiError> {
     let cid = common::get_catalog(params)?;
     let action = common::get_param(params, "action", "")
         .trim()
         .to_lowercase();
-    common::check_user(app, params).await?;
+    auth::guard::require_user_from_params(app, session, params).await?;
     if !regex::Regex::new(r"^[a-z_]+$").unwrap().is_match(&action) {
         return Err(ApiError(format!("Bad action: '{action}'")));
     }
@@ -914,12 +1090,16 @@ async fn query_all_issues(app: &AppState, params: &Params) -> Result<Response, A
     )))
 }
 
-async fn query_resolve_issue(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+async fn query_resolve_issue(
+    app: &AppState,
+    session: &Session,
+    params: &Params,
+) -> Result<Response, ApiError> {
     let iid = common::get_param_int(params, "issue_id", 0) as usize;
     if iid == 0 {
         return Err(ApiError("Bad issue ID".into()));
     }
-    common::check_user(app, params).await?;
+    auth::guard::require_user_from_params(app, session, params).await?;
     app.storage()
         .set_issue_status(iid, crate::issue::IssueStatus::Done)
         .await?;
@@ -1362,7 +1542,12 @@ async fn query_cersei_forward(app: &AppState, params: &Params) -> Result<Respons
 
 // ─── Admin & config ─────────────────────────────────────────────────────────
 
-async fn query_update_overview(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+async fn query_update_overview(
+    app: &AppState,
+    session: &Session,
+    params: &Params,
+) -> Result<Response, ApiError> {
+    auth::guard::require_user_from_params(app, session, params).await?;
     let cs = common::get_param(params, "catalog", "");
     let ids: Vec<usize> = if cs.is_empty() {
         app.storage().api_get_active_catalog_ids().await?
@@ -1377,12 +1562,12 @@ async fn query_update_overview(app: &AppState, params: &Params) -> Result<Respon
     Ok(ok(serde_json::json!({})))
 }
 
-async fn query_update_ext_urls(app: &AppState, params: &Params) -> Result<Response, ApiError> {
-    let username = common::get_param(params, "username", "").replace('_', " ");
-    match app.storage().get_user_by_name(&username).await? {
-        Some((_, _, true)) => {}
-        _ => return Err(ApiError(format!("'{username}' is not a catalog admin"))),
-    }
+async fn query_update_ext_urls(
+    app: &AppState,
+    session: &Session,
+    params: &Params,
+) -> Result<Response, ApiError> {
+    auth::guard::require_catalog_admin_from_params(app, session, params).await?;
     let cid = common::get_catalog(params)?;
     let url = common::get_param(params, "url", "");
     let parts: Vec<&str> = url.split("$1").collect();
@@ -1398,8 +1583,14 @@ async fn query_update_ext_urls(app: &AppState, params: &Params) -> Result<Respon
     Ok(ok(serde_json::json!({"sql": sql})))
 }
 
-async fn query_add_aliases(app: &AppState, params: &Params) -> Result<Response, ApiError> {
-    let uid = common::check_user(app, params).await?;
+async fn query_add_aliases(
+    app: &AppState,
+    session: &Session,
+    params: &Params,
+) -> Result<Response, ApiError> {
+    let uid = auth::guard::require_user_from_params(app, session, params)
+        .await?
+        .mnm_user_id;
     let text = common::get_param(params, "text", "").trim().to_string();
     let cid = common::get_param_int(params, "catalog", 0) as usize;
     if cid == 0 || text.is_empty() {
@@ -1441,9 +1632,12 @@ async fn query_get_missing_properties(app: &AppState) -> Result<Response, ApiErr
 
 async fn query_set_missing_properties_status(
     app: &AppState,
+    session: &Session,
     params: &Params,
 ) -> Result<Response, ApiError> {
-    let uid = common::check_user(app, params).await?;
+    let uid = auth::guard::require_user_from_params(app, session, params)
+        .await?
+        .mnm_user_id;
     let row_id = common::get_param_int(params, "row_id", 0) as usize;
     if row_id == 0 {
         return Err(ApiError("Bad/missing row ID".into()));
@@ -1464,8 +1658,14 @@ async fn query_get_top_groups(app: &AppState) -> Result<Response, ApiError> {
     Ok(ok(serde_json::json!(data)))
 }
 
-async fn query_set_top_group(app: &AppState, params: &Params) -> Result<Response, ApiError> {
-    let uid = common::check_user(app, params).await?;
+async fn query_set_top_group(
+    app: &AppState,
+    session: &Session,
+    params: &Params,
+) -> Result<Response, ApiError> {
+    let uid = auth::guard::require_user_from_params(app, session, params)
+        .await?
+        .mnm_user_id;
     let name = common::get_param(params, "group_name", "");
     let catalogs = common::get_param(params, "catalogs", "");
     let based_on = common::get_param_int(params, "group_id", 0) as usize;
@@ -1477,8 +1677,10 @@ async fn query_set_top_group(app: &AppState, params: &Params) -> Result<Response
 
 async fn query_remove_empty_top_group(
     app: &AppState,
+    session: &Session,
     params: &Params,
 ) -> Result<Response, ApiError> {
+    auth::guard::require_user_from_params(app, session, params).await?;
     let gid = common::get_param_int(params, "group_id", 0) as usize;
     app.storage().api_remove_empty_top_group(gid).await?;
     Ok(ok(serde_json::json!({})))
@@ -1605,9 +1807,15 @@ async fn query_get_code_fragments(app: &AppState, params: &Params) -> Result<Res
     Ok(ok(data))
 }
 
-async fn query_save_code_fragment(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+async fn query_save_code_fragment(
+    app: &AppState,
+    session: &Session,
+    params: &Params,
+) -> Result<Response, ApiError> {
     // Verify the calling user is allowed.
-    let uid = common::check_user(app, params).await?;
+    let uid = auth::guard::require_user_from_params(app, session, params)
+        .await?
+        .mnm_user_id;
     if uid != 2 {
         return Err(ApiError("Not allowed, ask Magnus".into()));
     }
@@ -1617,9 +1825,15 @@ async fn query_save_code_fragment(app: &AppState, params: &Params) -> Result<Res
     Ok(ok(data))
 }
 
-async fn query_test_code_fragment(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+async fn query_test_code_fragment(
+    app: &AppState,
+    session: &Session,
+    params: &Params,
+) -> Result<Response, ApiError> {
     // Verify the calling user is allowed.
-    let uid = common::check_user(app, params).await?;
+    let uid = auth::guard::require_user_from_params(app, session, params)
+        .await?
+        .mnm_user_id;
     if uid != 2 {
         return Err(ApiError("Not allowed, ask Magnus".into()));
     }
@@ -1704,9 +1918,17 @@ async fn query_lc_rc(app: &AppState, params: &Params) -> Result<Response, ApiErr
     Ok(ok(data))
 }
 
-async fn query_lc_set_status(app: &AppState, params: &Params) -> Result<Response, ApiError> {
-    // PHP uses the `user` request parameter (text, not user_id).
-    let data = crate::micro_api::data_lc_set_status(app, params)
+async fn query_lc_set_status(
+    app: &AppState,
+    session: &Session,
+    params: &Params,
+) -> Result<Response, ApiError> {
+    // Gate behind OAuth, then attribute the status change to the session user
+    // rather than the free-text `user` field the PHP endpoint used to accept.
+    let authed = auth::guard::require_user_from_params(app, session, params).await?;
+    let mut patched = params.clone();
+    patched.insert("user".into(), authed.wikidata_username.clone());
+    let data = crate::micro_api::data_lc_set_status(app, &patched)
         .await
         .map_err(ApiError)?;
     Ok(ok(data))
@@ -1841,13 +2063,16 @@ async fn query_get_statement_text_groups(
 
 async fn query_set_statement_text_q(
     app: &AppState,
+    session: &Session,
     params: &Params,
 ) -> Result<Response, ApiError> {
     let catalog = common::get_catalog(params)?;
     let text = common::get_param(params, "text", "");
     let property = common::get_param_int(params, "property", 0);
     let q = common::get_param_int(params, "q", 0);
-    let user_id = common::check_user(app, params).await?;
+    let user_id = auth::guard::require_user_from_params(app, session, params)
+        .await?
+        .mnm_user_id;
     if text.is_empty() {
         return Err(ApiError("Missing text parameter".into()));
     }

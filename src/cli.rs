@@ -161,19 +161,39 @@ impl ShellCommands {
     async fn run_webserver(app: AppState, port: u16, html_dir: &PathBuf) -> Result<()> {
         use axum::Router;
         use tower_http::services::ServeDir;
+        use tower_sessions::{Expiry, MemoryStore, SessionManagerLayer, cookie::SameSite};
 
         if !html_dir.exists() {
-            return Err(anyhow!(
-                "html directory not found: {}",
-                html_dir.display()
-            ));
+            return Err(anyhow!("html directory not found: {}", html_dir.display()));
         }
 
-        let api_router = crate::api::router(app);
-        let static_service = ServeDir::new(html_dir)
-            .append_index_html_on_directories(true);
+        let oauth_cfg = app
+            .oauth_config()
+            .ok_or_else(|| anyhow!("config.oauth is required for the webserver"))?
+            .clone();
 
-        let router: Router = api_router.fallback_service(static_service);
+        // In-memory session store: survives the lifetime of the process. On
+        // toolforge we run `rustbot` as a continuous job; a restart logs users
+        // out. Swap for a persistent store once tower-sessions 0.15-compatible
+        // sqlx/redis backends are published.
+        let session_store = MemoryStore::default();
+
+        let lifetime = tower_sessions::cookie::time::Duration::days(
+            oauth_cfg.session_lifetime_days,
+        );
+        let session_layer = SessionManagerLayer::new(session_store)
+            .with_name(oauth_cfg.cookie_name.clone())
+            .with_secure(oauth_cfg.cookie_secure)
+            .with_http_only(true)
+            .with_same_site(SameSite::Lax)
+            .with_expiry(Expiry::OnInactivity(lifetime));
+
+        let api_router = crate::api::router(app);
+        let static_service = ServeDir::new(html_dir).append_index_html_on_directories(true);
+
+        let router: Router = api_router
+            .fallback_service(static_service)
+            .layer(session_layer);
 
         let addr = format!("0.0.0.0:{port}");
         let listener = tokio::net::TcpListener::bind(&addr).await?;
