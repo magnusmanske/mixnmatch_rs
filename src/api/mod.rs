@@ -655,17 +655,17 @@ async fn query_catalog(app: &AppState, params: &Params) -> Result<Response, ApiE
     }
 
     let where_clause = conds.join(" AND ");
-    // Total filtered count (same WHERE, no LIMIT/OFFSET) — powers accurate pagination.
-    let total_filtered = app
-        .storage()
-        .api_get_catalog_entries_count(&where_clause)
-        .await
-        .unwrap_or(0);
-
     let sql = format!(
         "SELECT * FROM entry WHERE {where_clause} LIMIT {per_page} OFFSET {offset}"
     );
-    let entries = app.storage().api_get_catalog_entries_raw(&sql).await?;
+    // Count and page query are independent SELECTs — run them in parallel.
+    let s = app.storage();
+    let (total_filtered, entries) = tokio::join!(
+        s.api_get_catalog_entries_count(&where_clause),
+        s.api_get_catalog_entries_raw(&sql),
+    );
+    let total_filtered = total_filtered.unwrap_or(0);
+    let entries = entries?;
     let mut data = common::entries_to_json_data(&entries, app).await?;
     common::add_extended_entry_data(app, &mut data).await?;
     // PHP places `total_filtered` alongside `status`/`data`, not inside `data`,
@@ -962,14 +962,19 @@ async fn query_get_entries_by_q_or_value(
     let mut data = common::entries_to_json_data(&entries, app).await?;
     common::add_extended_entry_data(app, &mut data).await?;
 
-    // Add catalog info
-    let cat_ids: std::collections::HashSet<usize> = entries.iter().map(|e| e.catalog).collect();
-    let mut catalogs = serde_json::Map::new();
-    for cid in cat_ids {
-        if let Ok(c) = app.storage().api_get_single_catalog_overview(cid).await {
-            catalogs.insert(cid.to_string(), c);
-        }
-    }
+    // Add catalog info — fetch each catalog's overview concurrently, but
+    // cap at 8 in-flight to match the read-only MySQL pool size.
+    use futures::stream::{self, StreamExt};
+    let cat_ids: std::collections::HashSet<usize> =
+        entries.iter().map(|e| e.catalog).collect();
+    let catalogs: serde_json::Map<String, serde_json::Value> = stream::iter(cat_ids)
+        .map(|cid| async move {
+            (cid, app.storage().api_get_single_catalog_overview(cid).await)
+        })
+        .buffer_unordered(8)
+        .filter_map(|(cid, r)| async move { r.ok().map(|c| (cid.to_string(), c)) })
+        .collect()
+        .await;
     data["catalogs"] = serde_json::Value::Object(catalogs);
     Ok(ok(data))
 }
@@ -1669,9 +1674,15 @@ async fn query_update_overview(
             .filter_map(|s| s.trim().parse().ok())
             .collect()
     };
-    for id in ids {
-        let _ = app.storage().catalog_refresh_overview_table(id).await;
-    }
+    // Refresh catalogs in parallel, but cap concurrency so a huge
+    // `catalog=""` request doesn't overwhelm the MySQL connection pool
+    // (config default max_connections=4 — stay at or below that).
+    use futures::stream::{self, StreamExt};
+    stream::iter(ids)
+        .for_each_concurrent(4, |id| async move {
+            let _ = app.storage().catalog_refresh_overview_table(id).await;
+        })
+        .await;
     Ok(ok(serde_json::json!({})))
 }
 
