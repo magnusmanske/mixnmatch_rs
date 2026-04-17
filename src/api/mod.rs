@@ -156,10 +156,10 @@ async fn dispatcher_common(app: &AppState, session: &Session, params: Params) ->
     resp
 }
 
-/// Implements `?query=widar&widar_action=…`. Mirrors PHP `query_widar`.
-/// Sub-actions: `authorize`, `get_rights`, `logout`. `get_rights` (the default)
-/// returns the shape that the existing Vue frontend already consumes from
-/// `widar.getUserName()`.
+/// Implements `?query=widar&action=…`. Mirrors PHP `query_widar` →
+/// `Widar::render_reponse`, which reads the sub-action from the `action`
+/// form field and writes its userinfo into the `result` key (not `data`).
+/// Sub-actions: `authorize`, `get_rights`, `logout`.
 async fn query_widar(
     app: &AppState,
     session: &Session,
@@ -169,9 +169,21 @@ async fn query_widar(
         .oauth_config()
         .ok_or_else(|| ApiError("OAuth is not configured on this server".into()))?
         .clone();
-    let action = common::get_param(params, "widar_action", "get_rights");
+    // Match the PHP Widar convention: the sub-action is the `action` parameter.
+    // `widar_action` is accepted as a legacy alias so older callers keep working.
+    let action = params
+        .get("action")
+        .filter(|s| !s.is_empty())
+        .cloned()
+        .or_else(|| params.get("widar_action").cloned())
+        .unwrap_or_else(|| "get_rights".to_string());
     match action.as_str() {
         "authorize" => {
+            // Off-toolforge the bypass pretends we're already logged in —
+            // just redirect home instead of triggering a real OAuth dance.
+            if auth::guard::dev_bypass_user().is_some() {
+                return Ok(Redirect::to("/").into_response());
+            }
             let token = auth::flow::initiate_request_token(&cfg)
                 .await
                 .map_err(|e| ApiError(format!("OAuth initiate failed: {e}")))?;
@@ -187,16 +199,23 @@ async fn query_widar(
         }
         "logout" => {
             auth::session::clear(session).await?;
-            Ok(common::success_with_data(serde_json::json!({})).into_response())
+            Ok(json_resp(serde_json::json!({
+                "status": "OK",
+                "error": "OK",
+                "data": [],
+            })))
         }
+        // Default (including the explicit "get_rights").
         _ => {
-            // Default is "get_rights" — returns the same JSON shape the PHP
-            // `Widar::get_rights()` produces so the Vue frontend works unchanged.
-            // Off-toolforge the dev bypass pretends we're always logged in.
+            // Return the shape PHP `Widar::render_reponse` produces:
+            // a top-level `result` holding the rights query, not `data`.
+            // The Vue frontend reads `d.result.query.userinfo`.
             if let Some(u) = auth::guard::dev_bypass_user() {
                 return Ok(json_resp(serde_json::json!({
                     "status": "OK",
-                    "data": {
+                    "error": "OK",
+                    "data": [],
+                    "result": {
                         "query": {
                             "userinfo": {
                                 "id": u.mnm_user_id,
@@ -214,7 +233,9 @@ async fn query_widar(
                     ..
                 } => Ok(json_resp(serde_json::json!({
                     "status": "OK",
-                    "data": {
+                    "error": "OK",
+                    "data": [],
+                    "result": {
                         "query": {
                             "userinfo": {
                                 "id": wikidata_user_id,
@@ -225,7 +246,9 @@ async fn query_widar(
                 }))),
                 _ => Ok(json_resp(serde_json::json!({
                     "status": "OK",
-                    "data": {
+                    "error": "OK",
+                    "data": [],
+                    "result": {
                         "error": {
                             "code": "mwoauth-invalid-authorization",
                             "info": "Not logged in",
