@@ -20,7 +20,67 @@ pub fn router(app: AppState) -> Router {
     Router::new()
         .route("/api.php", get(api_dispatcher).post(api_dispatcher_form))
         .route("/api/v1/import_catalog", post(api_import_catalog))
+        .route("/resources/{*path}", get(proxy_magnustools_resources))
         .with_state(state)
+}
+
+/// Base URL that `/resources/*` requests are internally proxied to.
+/// Avoids deploying a symlink to a sibling tool's tree.
+const MAGNUSTOOLS_RESOURCES_BASE: &str = "https://magnustools.toolforge.org/resources/";
+
+/// Transparently proxy `GET /resources/<path>` to magnustools. Streams the
+/// body back as-is and forwards the upstream `Content-Type` / cache headers
+/// so the browser treats it identically to a locally-served asset.
+async fn proxy_magnustools_resources(
+    axum::extract::Path(path): axum::extract::Path<String>,
+    uri: axum::http::Uri,
+) -> Response {
+    // Preserve any query string the caller sent (cache-busters, etc.).
+    let query = uri.query().map(|q| format!("?{q}")).unwrap_or_default();
+    let upstream_url = format!("{MAGNUSTOOLS_RESOURCES_BASE}{path}{query}");
+
+    // Wikimedia rejects requests without a User-Agent. Send something
+    // identifying us — matches the agent we'd use for the MW API.
+    let client = reqwest::Client::builder()
+        .user_agent("mix-n-match (https://mix-n-match.toolforge.org)")
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
+    let resp = match client.get(&upstream_url).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            return ApiError(format!("resources proxy fetch failed: {e}")).into_response();
+        }
+    };
+    let status = resp.status();
+    // Copy a conservative set of content headers. Hop-by-hop headers
+    // (connection, transfer-encoding, …) are intentionally dropped.
+    let passthrough = [
+        axum::http::header::CONTENT_TYPE,
+        axum::http::header::CACHE_CONTROL,
+        axum::http::header::ETAG,
+        axum::http::header::LAST_MODIFIED,
+        axum::http::header::CONTENT_ENCODING,
+    ];
+    let mut headers = axum::http::HeaderMap::new();
+    for name in &passthrough {
+        if let Some(v) = resp.headers().get(name) {
+            headers.insert(name, v.clone());
+        }
+    }
+    let bytes = match resp.bytes().await {
+        Ok(b) => b,
+        Err(e) => {
+            return ApiError(format!("resources proxy read failed: {e}")).into_response();
+        }
+    };
+    let mut builder =
+        axum::http::Response::builder().status(axum::http::StatusCode::from_u16(status.as_u16()).unwrap_or(axum::http::StatusCode::BAD_GATEWAY));
+    for (name, value) in &headers {
+        builder = builder.header(name, value);
+    }
+    builder
+        .body(axum::body::Body::from(bytes))
+        .unwrap_or_else(|_| ApiError("resources proxy: cannot build response".into()).into_response())
 }
 
 async fn api_dispatcher(
