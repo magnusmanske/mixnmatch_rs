@@ -857,8 +857,26 @@ async fn handle_creation_candidates(app: &AppState, params: &Params) -> Result<R
     if let Some(name) = &result_name {
         result_data["name"] = json!(name);
     }
-    // Users lookup would go here for full parity, but we return entries directly
-    result_data["users"] = json!({});
+    // Resolve collected uids → user objects (matches PHP `$out['data']['users']`).
+    let unique_ids: Vec<usize> = {
+        let set: std::collections::HashSet<usize> = user_ids.iter().copied().collect();
+        set.into_iter().collect()
+    };
+    let users_map = if unique_ids.is_empty() {
+        json!({})
+    } else {
+        let rows = app
+            .storage()
+            .get_users_by_ids(&unique_ids)
+            .await
+            .unwrap_or_default();
+        let mut obj = serde_json::Map::new();
+        for (id, val) in rows {
+            obj.insert(id.to_string(), val);
+        }
+        Value::Object(obj)
+    };
+    result_data["users"] = users_map;
     success(result_data)
 }
 
