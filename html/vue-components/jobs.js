@@ -132,18 +132,15 @@ export default Vue.extend({
             if ( ts == '' ) return '';
             return ts.substr(0,4)+'-'+ts.substr(4,2)+'-'+ts.substr(6,2)+' '+ts.substr(8,2)+':'+ts.substr(10,2)+':'+ts.substr(12,2);
         },
-        goToPage: function(page) {
-            this.start = page * this.per_page;
+        goToOffset: function(new_offset) {
+            this.start = new_offset;
             this.load();
+            if (typeof window != 'undefined' && window.scrollTo) window.scrollTo(0, 0);
         },
         applyStatusFilter: function() {
             this.start = 0;
             this.load();
         }
-    },
-    computed: {
-        total_pages: function () { return Math.ceil(this.total_jobs / this.per_page); },
-        current_page: function () { return Math.floor(this.start / this.per_page); }
     },
     template: `
 <div class='mt-2'>
@@ -187,21 +184,8 @@ export default Vue.extend({
     </div>
 
     <!-- Pagination -->
-    <nav v-if='total_pages > 1' class='mb-2'>
-        <ul class='pagination pagination-sm justify-content-center flex-wrap'>
-            <li :class="'page-item'+(current_page==0?' disabled':'')">
-                <a class='page-link' href='#' @click.prevent='goToPage(current_page-1)'>&laquo;</a>
-            </li>
-            <li v-for='p in total_pages' v-if='p-1==0 || p-1==total_pages-1 || Math.abs(p-1-current_page)<=2'
-                :class="'page-item'+(p-1==current_page?' active':'')">
-                <a class='page-link' href='#' @click.prevent='goToPage(p-1)'>{{p}}</a>
-            </li>
-            <li :class="'page-item'+(current_page>=total_pages-1?' disabled':'')">
-                <a class='page-link' href='#' @click.prevent='goToPage(current_page+1)'>&raquo;</a>
-            </li>
-        </ul>
-        <div class='text-center text-muted small'>{{total_jobs}} jobs total</div>
-    </nav>
+    <pagination v-if='total_jobs > per_page' :offset='start' :items-per-page='per_page' :total='total_jobs'
+        :show-first-last='true' @go-to-page='goToOffset'></pagination>
 
     <table class='table table-striped' id='jobs_table' style='font-size:90%'>
         <thead>
@@ -239,20 +223,8 @@ export default Vue.extend({
     </table>
 
     <!-- Bottom pagination -->
-    <nav v-if='total_pages > 1' class='mb-2'>
-        <ul class='pagination pagination-sm justify-content-center flex-wrap'>
-            <li :class="'page-item'+(current_page==0?' disabled':'')">
-                <a class='page-link' href='#' @click.prevent='goToPage(current_page-1)'>&laquo;</a>
-            </li>
-            <li v-for='p in total_pages' v-if='p-1==0 || p-1==total_pages-1 || Math.abs(p-1-current_page)<=2'
-                :class="'page-item'+(p-1==current_page?' active':'')">
-                <a class='page-link' href='#' @click.prevent='goToPage(p-1)'>{{p}}</a>
-            </li>
-            <li :class="'page-item'+(current_page>=total_pages-1?' disabled':'')">
-                <a class='page-link' href='#' @click.prevent='goToPage(current_page+1)'>&raquo;</a>
-            </li>
-        </ul>
-    </nav>
+    <pagination v-if='total_jobs > per_page' :offset='start' :items-per-page='per_page' :total='total_jobs'
+        @go-to-page='goToOffset'></pagination>
 
     <div class='d-flex align-items-center gap-2'>
         <button class='btn btn-outline-primary btn-sm' @click.prevent='load()' tt='refresh'></button>
