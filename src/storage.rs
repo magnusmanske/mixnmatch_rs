@@ -102,12 +102,22 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     async fn get_data_source_type_for_uuid(&self, uuid: &str) -> Result<Vec<String>>;
     /// Returns `(type, user)` for the given import_file UUID, or `None` if not found.
     async fn get_import_file_info(&self, uuid: &str) -> Result<Option<(String, usize)>>;
+    /// Insert a new import_file row; the file must already be on disk under `import_file_path`.
+    async fn save_import_file(&self, uuid: &str, file_type: &str, user_id: usize) -> Result<()>;
     async fn get_existing_ext_ids(
         &self,
         catalog_id: usize,
         ext_ids: &[String],
     ) -> Result<Vec<String>>;
     async fn update_catalog_get_update_info(&self, catalog_id: usize) -> Result<Vec<UpdateInfo>>;
+    /// Upsert the "current" update_info row for a catalog. Marks any prior
+    /// rows for the catalog as non-current and inserts a fresh one.
+    async fn update_catalog_set_update_info(
+        &self,
+        catalog_id: usize,
+        json: &str,
+        user_id: usize,
+    ) -> Result<()>;
 
     // Catalog
 

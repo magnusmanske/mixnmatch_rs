@@ -29,7 +29,7 @@ dashmap = "5"
 anyhow = "*"
 sysinfo = "*"
 log = "*"
-axum = "*"
+axum = { version = "*", features = ["multipart"] }
 wikibase = "*"
 mlua = { version = "0.10", features = ["lua54", "vendored", "serialize"] }
 tower = "*"

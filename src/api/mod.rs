@@ -17,10 +17,13 @@ pub type SharedState = Arc<AppState>;
 
 pub fn router(app: AppState) -> Router {
     let state: SharedState = Arc::new(app);
+    // 512 MB: big enough for realistic catalog uploads, still bounded.
+    const UPLOAD_MAX_BYTES: usize = 512 * 1024 * 1024;
     Router::new()
         .route("/api.php", get(api_dispatcher).post(api_dispatcher_form))
         .route("/api/v1/import_catalog", post(api_import_catalog))
         .route("/resources/{*path}", get(proxy_magnustools_resources))
+        .layer(axum::extract::DefaultBodyLimit::max(UPLOAD_MAX_BYTES))
         .with_state(state)
 }
 
@@ -177,9 +180,147 @@ async fn api_dispatcher(
 async fn api_dispatcher_form(
     State(app): State<SharedState>,
     session: Session,
-    axum::extract::Form(params): axum::extract::Form<Params>,
+    req: axum::extract::Request,
 ) -> Response {
-    dispatcher_common(&app, &session, params).await
+    use axum::extract::FromRequest;
+    // Sniff content-type to decide between form-urlencoded (the common case)
+    // and multipart uploads (used only by `upload_import_file`).
+    let ct = req
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    if ct.starts_with("multipart/form-data") {
+        return handle_multipart_upload(&app, &session, req).await;
+    }
+
+    match axum::extract::Form::<Params>::from_request(req, &app).await {
+        Ok(axum::extract::Form(params)) => dispatcher_common(&app, &session, params).await,
+        Err(e) => ApiError(format!("invalid form body: {e}")).into_response(),
+    }
+}
+
+/// Parse a multipart request that carries a `query=upload_import_file` field
+/// plus the file under `import_file`. Streams the file to
+/// `{import_file_path}/{uuid}` and records the upload in the `import_file`
+/// table so later endpoints can resolve the UUID.
+async fn handle_multipart_upload(
+    app: &AppState,
+    _session: &Session,
+    req: axum::extract::Request,
+) -> Response {
+    use axum::extract::FromRequest;
+    let mut multipart =
+        match axum::extract::Multipart::from_request(req, &(app.clone())).await {
+            Ok(m) => m,
+            Err(e) => return ApiError(format!("multipart parse error: {e}")).into_response(),
+        };
+
+    let mut query = String::new();
+    let mut data_format = String::new();
+    let mut username = String::new();
+    let mut uuid: Option<String> = None;
+    let mut file_bytes_written: u64 = 0;
+
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(f)) => f,
+            Ok(None) => break,
+            Err(e) => return ApiError(format!("multipart field error: {e}")).into_response(),
+        };
+        let name = field.name().unwrap_or("").to_string();
+        match name.as_str() {
+            "query" => query = field.text().await.unwrap_or_default(),
+            "data_format" => data_format = field.text().await.unwrap_or_default(),
+            "username" => username = field.text().await.unwrap_or_default(),
+            "import_file" => {
+                // Stream the file to disk chunk by chunk — never buffer the
+                // whole thing in memory; uploaded catalogs can be 100s of MB.
+                let new_uuid = uuid::Uuid::new_v4().to_string();
+                let path = format!("{}/{}", app.import_file_path(), &new_uuid);
+                let file = match tokio::fs::File::create(&path).await {
+                    Ok(f) => f,
+                    Err(e) => {
+                        return ApiError(format!("cannot create upload file: {e}"))
+                            .into_response();
+                    }
+                };
+                let mut writer = tokio::io::BufWriter::new(file);
+                let mut field = field;
+                use tokio::io::AsyncWriteExt;
+                loop {
+                    match field.chunk().await {
+                        Ok(Some(chunk)) => {
+                            file_bytes_written += chunk.len() as u64;
+                            if let Err(e) = writer.write_all(&chunk).await {
+                                let _ = tokio::fs::remove_file(&path).await;
+                                return ApiError(format!("write failed: {e}")).into_response();
+                            }
+                        }
+                        Ok(None) => break,
+                        Err(e) => {
+                            let _ = tokio::fs::remove_file(&path).await;
+                            return ApiError(format!("upload chunk error: {e}")).into_response();
+                        }
+                    }
+                }
+                if let Err(e) = writer.flush().await {
+                    let _ = tokio::fs::remove_file(&path).await;
+                    return ApiError(format!("flush failed: {e}")).into_response();
+                }
+                uuid = Some(new_uuid);
+            }
+            _ => {
+                // Drain unknown fields so the stream advances.
+                let _ = field.text().await;
+            }
+        }
+    }
+
+    if query != "upload_import_file" {
+        return ApiError(format!(
+            "multipart POST only supported for query=upload_import_file (got '{query}')"
+        ))
+        .into_response();
+    }
+
+    if username.is_empty() {
+        return ApiError("missing 'username' field".into()).into_response();
+    }
+    if data_format.is_empty() {
+        return ApiError("missing 'data_format' field".into()).into_response();
+    }
+    let uuid = match uuid {
+        Some(u) if file_bytes_written > 0 => u,
+        _ => return ApiError("missing or empty 'import_file' field".into()).into_response(),
+    };
+
+    let user_id = match app
+        .storage()
+        .get_user_by_name(&username.replace('_', " "))
+        .await
+    {
+        Ok(Some((id, _, _))) => id,
+        Ok(None) => return ApiError(format!("unknown user '{username}'")).into_response(),
+        Err(e) => return ApiError(e.to_string()).into_response(),
+    };
+
+    if let Err(e) = app
+        .storage()
+        .save_import_file(&uuid, &data_format, user_id)
+        .await
+    {
+        // Roll back the file on DB failure so we don't orphan on-disk bytes.
+        let _ = tokio::fs::remove_file(format!("{}/{}", app.import_file_path(), &uuid)).await;
+        return ApiError(format!("cannot record upload: {e}")).into_response();
+    }
+
+    ok(serde_json::json!({
+        "uuid": uuid,
+        "bytes": file_bytes_written,
+    }))
 }
 
 async fn dispatcher_common(app: &AppState, session: &Session, params: Params) -> Response {
@@ -554,14 +695,159 @@ async fn dispatch(
         )),
         "autoscrape_test" => Err(ApiError("autoscrape_test not yet ported to Rust".into())),
         "save_scraper" => Err(ApiError("save_scraper not yet ported to Rust".into())),
-        "upload_import_file" => Err(ApiError("upload_import_file not yet ported to Rust".into())),
-        "import_source" => Err(ApiError("import_source not yet ported to Rust".into())),
-        "get_source_headers" => Err(ApiError("get_source_headers not yet ported to Rust".into())),
-        "test_import_source" => Err(ApiError("test_import_source not yet ported to Rust".into())),
+        "upload_import_file" => Err(ApiError(
+            "upload_import_file must be POSTed as multipart/form-data".into(),
+        )),
+        "import_source" => query_import_source(app, session, params).await,
+        "get_source_headers" => query_get_source_headers(app, params).await,
+        "test_import_source" => query_test_import_source(app, params).await,
         "widar" => query_widar(app, session, params).await,
 
         _ => Err(ApiError(format!("Unknown query '{query}'"))),
     }
+}
+
+// ─── Import / update catalog (frontend wizard) ──────────────────────────────
+
+fn parse_update_info(params: &Params) -> Result<serde_json::Value, ApiError> {
+    let raw = common::get_param(params, "update_info", "");
+    if raw.is_empty() {
+        return Err(ApiError("missing 'update_info' parameter".into()));
+    }
+    serde_json::from_str(&raw)
+        .map_err(|e| ApiError(format!("invalid update_info JSON: {e}")))
+}
+
+async fn query_get_source_headers(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let update_info = parse_update_info(params)?;
+    let (headers, _preview) =
+        crate::datasource::DataSource::read_headers_and_preview(app, &update_info, 0)
+            .await
+            .map_err(|e| ApiError(e.to_string()))?;
+    Ok(ok(serde_json::json!(headers)))
+}
+
+async fn query_test_import_source(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let update_info = parse_update_info(params)?;
+    let max_rows = update_info
+        .get("read_max_rows")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(1000) as usize;
+
+    let (headers, preview) =
+        crate::datasource::DataSource::read_headers_and_preview(app, &update_info, 10)
+            .await
+            .map_err(|e| ApiError(e.to_string()))?;
+    let (total, with_id, row_errors) =
+        crate::datasource::DataSource::count_rows(app, &update_info, max_rows)
+            .await
+            .map_err(|e| ApiError(e.to_string()))?;
+
+    // Frontend reads counters from `data` (summary cards) and preview rows
+    // from the top-level `rows` array (used by `load_preview_rows`).
+    Ok(json_resp(serde_json::json!({
+        "status": "OK",
+        "data": {
+            "rows_scanned": total,
+            "rows_with_id": with_id,
+            "errors": row_errors,
+            "headers": headers,
+        },
+        "rows": preview,
+    })))
+}
+
+async fn query_import_source(
+    app: &AppState,
+    _session: &Session,
+    params: &Params,
+) -> Result<Response, ApiError> {
+    let update_info = parse_update_info(params)?;
+    let meta_raw = common::get_param(params, "meta", "{}");
+    let meta: serde_json::Value =
+        serde_json::from_str(&meta_raw).unwrap_or(serde_json::Value::Null);
+    let catalog_id = common::get_param_int(params, "catalog", 0) as usize;
+    let _seconds = common::get_param_int(params, "seconds", 0) as u64;
+    let username = common::get_param(params, "username", "").replace('_', " ");
+
+    // Resolve the user id — required for anything that writes to the DB.
+    let user_id = match app.storage().get_user_by_name(&username).await? {
+        Some((id, _, _)) => id,
+        None => return Err(ApiError(format!("unknown user '{username}'"))),
+    };
+
+    // Two modes:
+    //  (a) file_uuid pointing at a json/jsonl upload → reuse import_catalog
+    //  (b) CSV/TSV/SSV via source_url or file_uuid → reuse UpdateCatalog
+    //
+    // Mode (a) is the "JSON import" flow from the frontend; it requires a
+    // catalog_id that already exists. Mode (b) is the tabbed-file flow.
+    let uuid = update_info
+        .get("file_uuid")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let data_format = update_info
+        .get("data_format")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    if let Some(uuid) = &uuid {
+        if data_format == "json" || data_format == "jsonl" {
+            let cid = if catalog_id > 0 {
+                catalog_id
+            } else {
+                meta.get("catalog_id")
+                    .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                    .unwrap_or(0) as usize
+            };
+            if cid == 0 {
+                return Err(ApiError(
+                    "catalog_id required for JSON/JSONL import".into(),
+                ));
+            }
+            let result = crate::import_catalog::import_from_import_file(
+                app,
+                cid,
+                uuid,
+                crate::import_catalog::ImportMode::AddReplace,
+            )
+            .await
+            .map_err(|e| ApiError(e.to_string()))?;
+            return Ok(ok(serde_json::json!({
+                "catalog_id": cid,
+                "created": result.created,
+                "updated": result.updated,
+                "skipped_fully_matched": result.skipped_fully_matched,
+                "deleted": result.deleted,
+                "errors": result.errors,
+            })));
+        }
+    }
+
+    // Tabbed-file path. For an existing catalog, persist the update_info
+    // JSON and run the shared updater. A "new catalog" wizard path needs a
+    // catalog-creation step that doesn't exist yet at the trait level —
+    // surface that clearly rather than silently no-oping.
+    if catalog_id == 0 {
+        return Err(ApiError(
+            "creating a new catalog from the wizard is not yet supported; please create the catalog first and re-run in 'update' mode".into(),
+        ));
+    }
+
+    let update_info_json = serde_json::to_string(&update_info)
+        .map_err(|e| ApiError(format!("serialize update_info: {e}")))?;
+    app.storage()
+        .update_catalog_set_update_info(catalog_id, &update_info_json, user_id)
+        .await
+        .map_err(|e| ApiError(format!("persist update_info: {e}")))?;
+
+    let mut uc = crate::update_catalog::UpdateCatalog::new(app);
+    uc.update_from_tabbed_file(catalog_id)
+        .await
+        .map_err(|e| ApiError(e.to_string()))?;
+
+    Ok(ok(serde_json::json!({ "catalog_id": catalog_id })))
 }
 
 // ─── Import catalog endpoint ────────────────────────────────────────────────
