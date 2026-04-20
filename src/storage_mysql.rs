@@ -3002,6 +3002,19 @@ impl Storage for StorageMySQL {
             .ok_or_else(|| anyhow!("Catalog {catalog_id} not found in overview"))
     }
 
+    async fn api_get_catalog_info(&self, catalog_id: usize) -> Result<serde_json::Value> {
+        let sql = format!("SELECT * FROM `catalog` WHERE `id`={catalog_id} AND `active`>=1");
+        let mut conn = self.get_conn_ro().await?;
+        let rows = conn
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(row_to_json)
+            .await?;
+        rows.into_iter()
+            .next()
+            .ok_or_else(|| anyhow!("Catalog {catalog_id} not found"))
+    }
+
     async fn api_get_catalog_type_counts(&self, catalog_id: usize) -> Result<Vec<serde_json::Value>> {
         let sql = "SELECT `type`,count(*) AS `cnt` FROM `entry` WHERE `catalog`=:catalog_id GROUP BY `type` ORDER BY `cnt` DESC";
         let mut conn = self.get_conn_ro().await?;

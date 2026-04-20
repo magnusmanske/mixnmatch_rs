@@ -496,6 +496,7 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     // Catalog overview
     async fn api_get_catalog_overview(&self) -> Result<Vec<serde_json::Value>>; // Full overview with catalog+overview+user+autoscrape data
     async fn api_get_single_catalog_overview(&self, catalog_id: usize) -> Result<serde_json::Value>;
+    async fn api_get_catalog_info(&self, catalog_id: usize) -> Result<serde_json::Value>; // Lightweight: catalog row only
 
     // Catalog details (3 aggregate queries)
     async fn api_get_catalog_type_counts(&self, catalog_id: usize) -> Result<Vec<serde_json::Value>>;
