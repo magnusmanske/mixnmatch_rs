@@ -19,7 +19,7 @@ use crate::{
     mnm_link::MnmLink,
     mysql_misc::MySQLMisc,
     prop_todo::PropTodo,
-    storage::OverviewTableRow,
+    storage::{CatalogEntryListFilter, Download2Filter, OverviewTableRow},
     task_size::TaskSize,
     taxon_matcher::{RankedNames, TAXON_RANKS, TaxonMatcher, TaxonNameField},
     update_catalog::UpdateInfo,
@@ -214,6 +214,154 @@ impl StorageMySQL {
             type_name: Entry::value2opt_string(row.get("type")?).ok()?,
             app: None,
         })
+    }
+
+    /// Build the WHERE-clause body for `api_get_catalog_entries`.
+    ///
+    /// Note: text filters (`entry_type`, `title_match`, `keyword`) are
+    /// interpolated with single-quote doubling. The MySQL `exec_iter` API does
+    /// not accept positional placeholders inside `LIKE '%...%'` without
+    /// restructuring every call site, so we use PHP-era escaping here — the
+    /// inputs reach us via user-supplied query strings, so the escape keeps
+    /// pre-existing behaviour. Numeric inputs are `format!`-ed after parsing
+    /// to integers, so they cannot inject.
+    fn catalog_entries_where_clause(filter: &CatalogEntryListFilter) -> String {
+        let mut conds = vec![format!("catalog={}", filter.catalog_id)];
+        if filter.show_multiple {
+            conds.push(
+                "EXISTS (SELECT 1 FROM multi_match WHERE entry_id=entry.id) AND (user<=0 OR user is null)"
+                    .into(),
+            );
+        } else if !filter.show_noq
+            && !filter.show_autoq
+            && !filter.show_userq
+            && !filter.show_nowd
+            && filter.show_na
+        {
+            conds.push("q=0".into());
+        } else if !filter.show_noq
+            && !filter.show_autoq
+            && !filter.show_userq
+            && !filter.show_na
+            && filter.show_nowd
+        {
+            conds.push("q=-1".into());
+        } else {
+            if !filter.show_noq {
+                conds.push("q IS NOT NULL".into());
+            }
+            if !filter.show_autoq {
+                conds.push("(q is null OR user!=0)".into());
+            }
+            if !filter.show_userq {
+                conds.push("(user<=0 OR user is null)".into());
+            }
+            if !filter.show_na {
+                conds.push("(q!=0 or q is null)".into());
+            }
+        }
+        if !filter.entry_type.is_empty() {
+            conds.push(format!(
+                "`type`='{}'",
+                filter.entry_type.replace('\'', "''")
+            ));
+        }
+        if !filter.title_match.is_empty() {
+            conds.push(format!(
+                "`ext_name` LIKE '%{}%'",
+                filter.title_match.replace('\'', "''")
+            ));
+        }
+        if !filter.keyword.is_empty() {
+            let kw = filter.keyword.replace('\'', "''");
+            conds.push(format!(
+                "(`ext_name` LIKE '%{kw}%' OR `ext_desc` LIKE '%{kw}%')"
+            ));
+        }
+        if let Some(uid) = filter.user_id {
+            if uid > 0 {
+                conds.push(format!("`user`={uid}"));
+            } else if uid == 0 {
+                conds.push("`user`=0".into());
+            }
+        }
+        conds.join(" AND ")
+    }
+
+    /// Build the full SELECT for `api_download2`. All conditional joins,
+    /// columns, and row filters are derived from the typed filter — callers
+    /// never see raw SQL.
+    fn build_download2_sql(filter: &Download2Filter) -> String {
+        // Defensive re-filter: the API layer already strips non-digits/commas,
+        // but the backend must not trust that.
+        let catalogs: String = filter
+            .catalogs
+            .chars()
+            .filter(|c| c.is_ascii_digit() || *c == ',')
+            .collect();
+
+        let mut sql = "SELECT entry.id AS entry_id,entry.catalog,ext_id AS external_id".to_string();
+        if filter.include_ext_url {
+            sql.push_str(
+                ",ext_url AS external_url,ext_name AS `name`,ext_desc AS description,`type` AS entry_type,entry.user AS mnm_user_id",
+            );
+        }
+        sql.push_str(
+            ",(CASE WHEN q IS NULL THEN NULL else concat('Q',q) END) AS q,`timestamp` AS matched_on",
+        );
+        if filter.include_username {
+            sql.push_str(",user.name AS matched_by_username");
+        }
+        if filter.include_dates {
+            sql.push_str(",person_dates.born,person_dates.died");
+        }
+        if filter.include_location {
+            sql.push_str(",location.lat,location.lon");
+        }
+
+        sql.push_str(" FROM entry");
+        if filter.include_dates {
+            sql.push_str(" LEFT JOIN person_dates ON (entry.id=person_dates.entry_id)");
+        }
+        if filter.include_location {
+            sql.push_str(" LEFT JOIN location ON (entry.id=location.entry_id)");
+        }
+        if filter.include_username {
+            sql.push_str(" LEFT JOIN user ON (entry.user=user.id)");
+        }
+
+        sql.push_str(&format!(" WHERE entry.catalog IN ({catalogs})"));
+        if filter.hide_any_matched {
+            sql.push_str(" AND entry.q IS NULL");
+        }
+        if filter.hide_firmly_matched {
+            sql.push_str(" AND (entry.q IS NULL OR entry.user=0)");
+        }
+        if filter.hide_user_matched {
+            sql.push_str(" AND (entry.user IS NULL OR entry.user IN (0,3,4))");
+        }
+        if filter.hide_unmatched {
+            sql.push_str(" AND entry.q IS NOT NULL");
+        }
+        if filter.hide_no_multiple {
+            sql.push_str(
+                " AND NOT EXISTS (SELECT 1 FROM multi_match WHERE entry.id=multi_match.entry_id)",
+            );
+        }
+        if filter.hide_name_date_matched {
+            sql.push_str(" AND entry.user!=3");
+        }
+        if filter.hide_automatched {
+            sql.push_str(" AND entry.user!=0");
+        }
+        if filter.hide_aux_matched {
+            sql.push_str(" AND entry.user!=4");
+        }
+        sql.push_str(&format!(
+            " LIMIT {} OFFSET {}",
+            filter.limit, filter.offset
+        ));
+        sql
     }
 
     async fn match_taxa_get_ranked_names_batch_get_results(
@@ -3462,31 +3610,48 @@ impl Storage for StorageMySQL {
         Ok((entry_events, log_events))
     }
 
-    async fn api_get_catalog_entries_raw(&self, sql: &str) -> Result<Vec<Entry>> {
-        let mut conn = self.get_conn_ro().await?;
-        let rows = conn
-            .exec_iter(sql, ())
-            .await?
-            .map_and_drop(|row| Self::entry_from_row(&row))
-            .await?
-            .into_iter()
-            .flatten()
-            .collect();
-        Ok(rows)
-    }
+    async fn api_get_catalog_entries(
+        &self,
+        filter: &CatalogEntryListFilter,
+    ) -> Result<(Vec<Entry>, usize)> {
+        let where_clause = Self::catalog_entries_where_clause(filter);
+        let page_sql = format!(
+            "SELECT * FROM entry WHERE {where_clause} LIMIT {} OFFSET {}",
+            filter.per_page, filter.offset
+        );
+        let count_sql = format!("SELECT COUNT(*) AS cnt FROM entry WHERE {where_clause}");
 
-    async fn api_get_catalog_entries_count(&self, where_clause: &str) -> Result<usize> {
-        let sql = format!("SELECT COUNT(*) AS cnt FROM entry WHERE {where_clause}");
-        let mut conn = self.get_conn_ro().await?;
-        let cnt = conn
-            .exec_iter(sql, ())
-            .await?
-            .map_and_drop(from_row::<usize>)
-            .await?
-            .into_iter()
-            .next()
-            .unwrap_or(0);
-        Ok(cnt)
+        // Independent SELECTs — run them in parallel. Count failures are lossy
+        // (yield 0) to match the legacy behaviour; listing failures propagate.
+        let (count_res, entries_res) = tokio::join!(
+            async {
+                let mut conn = self.get_conn_ro().await?;
+                let cnt = conn
+                    .exec_iter(count_sql, ())
+                    .await?
+                    .map_and_drop(from_row::<usize>)
+                    .await?
+                    .into_iter()
+                    .next()
+                    .unwrap_or(0);
+                Ok::<usize, anyhow::Error>(cnt)
+            },
+            async {
+                let mut conn = self.get_conn_ro().await?;
+                let rows: Vec<Entry> = conn
+                    .exec_iter(page_sql, ())
+                    .await?
+                    .map_and_drop(|row| Self::entry_from_row(&row))
+                    .await?
+                    .into_iter()
+                    .flatten()
+                    .collect();
+                Ok::<Vec<Entry>, anyhow::Error>(rows)
+            }
+        );
+        let total_filtered = count_res.unwrap_or(0);
+        let entries = entries_res?;
+        Ok((entries, total_filtered))
     }
 
     async fn api_get_existing_job_actions(&self) -> Result<Vec<String>> {
@@ -3731,7 +3896,11 @@ impl Storage for StorageMySQL {
         Ok(rows)
     }
 
-    async fn api_get_download2(&self, sql: &str) -> Result<Vec<HashMap<String, String>>> {
+    async fn api_download2(
+        &self,
+        filter: &Download2Filter,
+    ) -> Result<Vec<HashMap<String, String>>> {
+        let sql = Self::build_download2_sql(filter);
         let mut conn = self.get_conn_ro().await?;
         let rows = conn
             .exec_iter(sql, ())
@@ -3760,6 +3929,26 @@ impl Storage for StorageMySQL {
             })
             .await?;
         Ok(rows)
+    }
+
+    async fn api_update_catalog_ext_urls(
+        &self,
+        catalog_id: usize,
+        prefix: &str,
+        suffix: &str,
+    ) -> Result<()> {
+        // The parent API path only passes non-empty, user-supplied template
+        // fragments (no way to use named params for the concat() arguments on
+        // the legacy MySQL build), so escape single quotes by doubling them —
+        // same scheme PHP used. Identifier is an integer so no escaping needed.
+        let sql = format!(
+            "UPDATE entry SET ext_url=concat('{}',ext_id,'{}') WHERE catalog={catalog_id}",
+            prefix.replace('\'', "''"),
+            suffix.replace('\'', "''")
+        );
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop(sql, ()).await?;
+        Ok(())
     }
 
     async fn api_edit_catalog(&self, catalog_id: usize, name: &str, url: &str, desc: &str, type_name: &str, search_wp: &str, wd_prop: Option<usize>, wd_qual: Option<usize>, active: bool) -> Result<()> {

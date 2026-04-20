@@ -22,6 +22,55 @@ use mysql_async::Row;
 use std::collections::HashMap;
 use wikimisc::wikibase::LocaleString;
 
+/// Filter criteria for `query=catalog` (paginated entry listing).
+///
+/// The boolean `show_*` flags interact in non-trivial ways (multi-match is
+/// mutually exclusive with the other "show" flags, na-only and nowd-only are
+/// their own modes, and the default mode excludes categories whose `show_*`
+/// flag is false). The mapping from these flags to SQL lives in the MySQL
+/// implementation so api/mod.rs only deals with the parsed user intent.
+#[derive(Debug, Clone, Default)]
+pub struct CatalogEntryListFilter {
+    pub catalog_id: usize,
+    pub show_noq: bool,
+    pub show_autoq: bool,
+    pub show_userq: bool,
+    pub show_na: bool,
+    pub show_nowd: bool,
+    pub show_multiple: bool,
+    pub entry_type: String,
+    pub title_match: String,
+    pub keyword: String,
+    /// `Some(uid>0)` filters to that user; `Some(0)` to automatic matches;
+    /// `None` disables the user filter.
+    pub user_id: Option<i64>,
+    pub per_page: u64,
+    pub offset: u64,
+}
+
+/// Column selection + row filter + pagination for `query=download2`.
+///
+/// `catalogs` is the pre-sanitised comma-separated catalog id list (digits and
+/// commas only — the MySQL backend re-checks it defensively).
+#[derive(Debug, Clone, Default)]
+pub struct Download2Filter {
+    pub catalogs: String,
+    pub include_ext_url: bool,
+    pub include_username: bool,
+    pub include_dates: bool,
+    pub include_location: bool,
+    pub hide_any_matched: bool,
+    pub hide_firmly_matched: bool,
+    pub hide_user_matched: bool,
+    pub hide_unmatched: bool,
+    pub hide_no_multiple: bool,
+    pub hide_name_date_matched: bool,
+    pub hide_automatched: bool,
+    pub hide_aux_matched: bool,
+    pub limit: u64,
+    pub offset: u64,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct OverviewTableRow {
     catalog_id: usize,
@@ -542,10 +591,13 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     async fn api_get_recent_changes(&self, ts: &str, catalog_id: usize, limit: usize) -> Result<(Vec<serde_json::Value>, Vec<serde_json::Value>)>; // (events from entry, events from log)
 
     // Catalog entry listing (query=catalog)
-    async fn api_get_catalog_entries_raw(&self, sql: &str) -> Result<Vec<Entry>>;
-    /// Count `entry` rows matching the given WHERE clause (without LIMIT/OFFSET).
-    /// Powers the `total_filtered` field on query_catalog.
-    async fn api_get_catalog_entries_count(&self, where_clause: &str) -> Result<usize>;
+    /// Fetch a page of entries matching `filter` plus the total filtered count.
+    /// The count-all and page queries are independent and run in parallel; the
+    /// count is lossy — a count-query failure yields 0 without failing the page.
+    async fn api_get_catalog_entries(
+        &self,
+        filter: &CatalogEntryListFilter,
+    ) -> Result<(Vec<Entry>, usize)>;
 
     // Existing job actions
     async fn api_get_existing_job_actions(&self) -> Result<Vec<String>>;
@@ -571,7 +623,22 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     async fn api_get_locations_bbox(&self, lon_min: f64, lat_min: f64, lon_max: f64, lat_max: f64) -> Result<Vec<serde_json::Value>>;
     async fn api_get_locations_in_catalog(&self, catalog_id: usize) -> Result<Vec<serde_json::Value>>;
     async fn api_get_download_entries(&self, catalog_id: usize) -> Result<Vec<(isize, String, String, String, Option<usize>)>>; // (q, ext_id, ext_url, ext_name, user_id)
-    async fn api_get_download2(&self, sql: &str) -> Result<Vec<HashMap<String, String>>>;
+    /// Bulk entry export for `query=download2`. Column selection and row
+    /// filtering are driven entirely by `filter`; values are returned as
+    /// stringified representations of the underlying MySQL types so the caller
+    /// can emit them as tab-separated text or JSON unchanged.
+    async fn api_download2(
+        &self,
+        filter: &Download2Filter,
+    ) -> Result<Vec<HashMap<String, String>>>;
+    /// Rewrite `entry.ext_url` for every row in `catalog_id` as
+    /// `concat(prefix, ext_id, suffix)`. Powers `query=update_ext_urls`.
+    async fn api_update_catalog_ext_urls(
+        &self,
+        catalog_id: usize,
+        prefix: &str,
+        suffix: &str,
+    ) -> Result<()>;
     async fn api_edit_catalog(&self, catalog_id: usize, name: &str, url: &str, desc: &str, type_name: &str, search_wp: &str, wd_prop: Option<usize>, wd_qual: Option<usize>, active: bool) -> Result<()>;
     async fn api_get_catalog_overview_for_ids(&self, catalog_ids: &[usize]) -> Result<Vec<serde_json::Value>>;
     async fn api_match_q_multi(&self, catalog_id: usize, ext_id: &str, q: isize, user_id: usize) -> Result<bool>;

@@ -1062,79 +1062,34 @@ async fn query_catalog(app: &AppState, params: &Params) -> Result<Response, ApiE
     let catalog = common::get_catalog(params)?;
     let meta_str = common::get_param(params, "meta", "{}");
     let meta: serde_json::Value = serde_json::from_str(&meta_str).unwrap_or(serde_json::json!({}));
-    let show_noq = meta.get("show_noq").and_then(|v| v.as_i64()).unwrap_or(0);
-    let show_autoq = meta.get("show_autoq").and_then(|v| v.as_i64()).unwrap_or(0);
-    let show_userq = meta.get("show_userq").and_then(|v| v.as_i64()).unwrap_or(0);
-    let show_na = meta.get("show_na").and_then(|v| v.as_i64()).unwrap_or(0);
-    let show_nowd = meta.get("show_nowd").and_then(|v| v.as_i64()).unwrap_or(0);
-    let show_multiple = meta
-        .get("show_multiple")
-        .and_then(|v| v.as_i64())
-        .unwrap_or(0);
+    let meta_flag = |k: &str| meta.get(k).and_then(|v| v.as_i64()).unwrap_or(0) == 1;
     let per_page = meta.get("per_page").and_then(|v| v.as_u64()).unwrap_or(50);
     let offset = meta.get("offset").and_then(|v| v.as_u64()).unwrap_or(0);
-    let entry_type = common::get_param(params, "type", "");
-    let title_match = common::get_param(params, "title_match", "");
-    let keyword = common::get_param(params, "keyword", "");
     let user_id_raw = common::get_param(params, "user_id", "");
-
-    let mut conds = vec![format!("catalog={catalog}")];
-    if show_multiple == 1 {
-        conds.push("EXISTS (SELECT 1 FROM multi_match WHERE entry_id=entry.id) AND (user<=0 OR user is null)".into());
-    } else if show_noq + show_autoq + show_userq + show_nowd == 0 && show_na == 1 {
-        conds.push("q=0".into());
-    } else if show_noq + show_autoq + show_userq + show_na == 0 && show_nowd == 1 {
-        conds.push("q=-1".into());
+    // Parse as signed so "0" (auto-matched) is distinguished from a missing param.
+    let user_id = if user_id_raw.is_empty() {
+        None
     } else {
-        if show_noq != 1 {
-            conds.push("q IS NOT NULL".into());
-        }
-        if show_autoq != 1 {
-            conds.push("(q is null OR user!=0)".into());
-        }
-        if show_userq != 1 {
-            conds.push("(user<=0 OR user is null)".into());
-        }
-        if show_na != 1 {
-            conds.push("(q!=0 or q is null)".into());
-        }
-    }
-    if !entry_type.is_empty() {
-        conds.push(format!("`type`='{}'", entry_type.replace('\'', "''")));
-    }
-    if !title_match.is_empty() {
-        conds.push(format!(
-            "`ext_name` LIKE '%{}%'",
-            title_match.replace('\'', "''")
-        ));
-    }
-    if !keyword.is_empty() {
-        let kw = keyword.replace('\'', "''");
-        conds.push(format!(
-            "(`ext_name` LIKE '%{kw}%' OR `ext_desc` LIKE '%{kw}%')"
-        ));
-    }
-    if !user_id_raw.is_empty() {
-        // Parse as signed so "0" (auto-matched) is distinguished from a missing param.
-        if let Ok(uid) = user_id_raw.parse::<i64>() {
-            if uid > 0 {
-                conds.push(format!("`user`={uid}"));
-            } else if uid == 0 {
-                conds.push("`user`=0".into());
-            }
-        }
-    }
+        user_id_raw.parse::<i64>().ok().filter(|uid| *uid >= 0)
+    };
 
-    let where_clause = conds.join(" AND ");
-    let sql = format!("SELECT * FROM entry WHERE {where_clause} LIMIT {per_page} OFFSET {offset}");
-    // Count and page query are independent SELECTs — run them in parallel.
-    let s = app.storage();
-    let (total_filtered, entries) = tokio::join!(
-        s.api_get_catalog_entries_count(&where_clause),
-        s.api_get_catalog_entries_raw(&sql),
-    );
-    let total_filtered = total_filtered.unwrap_or(0);
-    let entries = entries?;
+    let filter = crate::storage::CatalogEntryListFilter {
+        catalog_id: catalog,
+        show_noq: meta_flag("show_noq"),
+        show_autoq: meta_flag("show_autoq"),
+        show_userq: meta_flag("show_userq"),
+        show_na: meta_flag("show_na"),
+        show_nowd: meta_flag("show_nowd"),
+        show_multiple: meta_flag("show_multiple"),
+        entry_type: common::get_param(params, "type", ""),
+        title_match: common::get_param(params, "title_match", ""),
+        keyword: common::get_param(params, "keyword", ""),
+        user_id,
+        per_page,
+        offset,
+    };
+
+    let (entries, total_filtered) = app.storage().api_get_catalog_entries(&filter).await?;
     let mut data = common::entries_to_json_data(&entries, app).await?;
     common::add_extended_entry_data(app, &mut data).await?;
     // PHP places `total_filtered` alongside `status`/`data`, not inside `data`,
@@ -1907,7 +1862,6 @@ async fn query_download(app: &AppState, params: &Params) -> Result<Response, Api
         .into_response())
 }
 
-#[allow(clippy::cognitive_complexity)]
 async fn query_download2(app: &AppState, params: &Params) -> Result<Response, ApiError> {
     let catalogs: String = common::get_param(params, "catalogs", "")
         .chars()
@@ -1920,132 +1874,37 @@ async fn query_download2(app: &AppState, params: &Params) -> Result<Response, Ap
     let hidden: serde_json::Value =
         serde_json::from_str(&common::get_param(params, "hidden", "{}"))
             .unwrap_or(serde_json::json!({}));
-
-    let mut sql = "SELECT entry.id AS entry_id,entry.catalog,ext_id AS external_id".to_string();
-    if columns
-        .get("exturl")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
-        || columns
-            .get("exturl")
-            .and_then(|v| v.as_i64())
-            .map(|v| v != 0)
-            .unwrap_or(false)
-    {
-        sql.push_str(",ext_url AS external_url,ext_name AS `name`,ext_desc AS description,`type` AS entry_type,entry.user AS mnm_user_id");
-    }
-    sql.push_str(
-        ",(CASE WHEN q IS NULL THEN NULL else concat('Q',q) END) AS q,`timestamp` AS matched_on",
-    );
-    if columns
-        .get("username")
-        .and_then(|v| v.as_bool())
-        .or(columns
-            .get("username")
-            .and_then(|v| v.as_i64())
-            .map(|v| v != 0))
-        .unwrap_or(false)
-    {
-        sql.push_str(",user.name AS matched_by_username");
-    }
-    if columns
-        .get("dates")
-        .and_then(|v| v.as_bool())
-        .or(columns
-            .get("dates")
-            .and_then(|v| v.as_i64())
-            .map(|v| v != 0))
-        .unwrap_or(false)
-    {
-        sql.push_str(",person_dates.born,person_dates.died");
-    }
-    if columns
-        .get("location")
-        .and_then(|v| v.as_bool())
-        .or(columns
-            .get("location")
-            .and_then(|v| v.as_i64())
-            .map(|v| v != 0))
-        .unwrap_or(false)
-    {
-        sql.push_str(",location.lat,location.lon");
-    }
-
-    sql.push_str(" FROM entry");
-    if columns
-        .get("dates")
-        .and_then(|v| v.as_bool())
-        .or(columns
-            .get("dates")
-            .and_then(|v| v.as_i64())
-            .map(|v| v != 0))
-        .unwrap_or(false)
-    {
-        sql.push_str(" LEFT JOIN person_dates ON (entry.id=person_dates.entry_id)");
-    }
-    if columns
-        .get("location")
-        .and_then(|v| v.as_bool())
-        .or(columns
-            .get("location")
-            .and_then(|v| v.as_i64())
-            .map(|v| v != 0))
-        .unwrap_or(false)
-    {
-        sql.push_str(" LEFT JOIN location ON (entry.id=location.entry_id)");
-    }
-    if columns
-        .get("username")
-        .and_then(|v| v.as_bool())
-        .or(columns
-            .get("username")
-            .and_then(|v| v.as_i64())
-            .map(|v| v != 0))
-        .unwrap_or(false)
-    {
-        sql.push_str(" LEFT JOIN user ON (entry.user=user.id)");
-    }
-
-    sql.push_str(&format!(" WHERE entry.catalog IN ({catalogs})"));
-    let hb = |k: &str| {
-        hidden
-            .get(k)
+    // PHP emits the column/hidden flags as either booleans or 0/1 integers
+    // depending on the caller. Accept both.
+    let flag = |obj: &serde_json::Value, key: &str| -> bool {
+        obj.get(key)
             .and_then(|v| v.as_bool())
-            .or(hidden.get(k).and_then(|v| v.as_i64()).map(|v| v != 0))
+            .or(obj.get(key).and_then(|v| v.as_i64()).map(|v| v != 0))
             .unwrap_or(false)
     };
-    if hb("any_matched") {
-        sql.push_str(" AND entry.q IS NULL");
-    }
-    if hb("firmly_matched") {
-        sql.push_str(" AND (entry.q IS NULL OR entry.user=0)");
-    }
-    if hb("user_matched") {
-        sql.push_str(" AND (entry.user IS NULL OR entry.user IN (0,3,4))");
-    }
-    if hb("unmatched") {
-        sql.push_str(" AND entry.q IS NOT NULL");
-    }
-    if hb("no_multiple") {
-        sql.push_str(
-            " AND NOT EXISTS (SELECT 1 FROM multi_match WHERE entry.id=multi_match.entry_id)",
-        );
-    }
-    if hb("name_date_matched") {
-        sql.push_str(" AND entry.user!=3");
-    }
-    if hb("automatched") {
-        sql.push_str(" AND entry.user!=0");
-    }
-    if hb("aux_matched") {
-        sql.push_str(" AND entry.user!=4");
-    }
 
-    let limit = common::get_param_int(params, "limit", 100_000).clamp(1, 1_000_000);
-    let offset = common::get_param_int(params, "offset", 0).max(0);
-    sql.push_str(&format!(" LIMIT {limit} OFFSET {offset}"));
+    let limit = common::get_param_int(params, "limit", 100_000).clamp(1, 1_000_000) as u64;
+    let offset = common::get_param_int(params, "offset", 0).max(0) as u64;
 
-    let rows = app.storage().api_get_download2(&sql).await?;
+    let filter = crate::storage::Download2Filter {
+        catalogs,
+        include_ext_url: flag(&columns, "exturl"),
+        include_username: flag(&columns, "username"),
+        include_dates: flag(&columns, "dates"),
+        include_location: flag(&columns, "location"),
+        hide_any_matched: flag(&hidden, "any_matched"),
+        hide_firmly_matched: flag(&hidden, "firmly_matched"),
+        hide_user_matched: flag(&hidden, "user_matched"),
+        hide_unmatched: flag(&hidden, "unmatched"),
+        hide_no_multiple: flag(&hidden, "no_multiple"),
+        hide_name_date_matched: flag(&hidden, "name_date_matched"),
+        hide_automatched: flag(&hidden, "automatched"),
+        hide_aux_matched: flag(&hidden, "aux_matched"),
+        limit,
+        offset,
+    };
+
+    let rows = app.storage().api_download2(&filter).await?;
     let ct = if format == "json" {
         "application/json; charset=UTF-8"
     } else {
@@ -2180,13 +2039,14 @@ async fn query_update_ext_urls(
     if parts.len() != 2 {
         return Err(ApiError(format!("Bad $1 replacement for '{url}'")));
     }
-    let sql = format!(
-        "UPDATE entry SET ext_url=concat('{}',ext_id,'{}') WHERE catalog={cid}",
-        parts[0].replace('\'', "''"),
-        parts[1].replace('\'', "''")
-    );
-    app.storage().api_get_catalog_entries_raw(&sql).await.ok(); // execute the update
-    Ok(ok(serde_json::json!({"sql": sql})))
+    app.storage()
+        .api_update_catalog_ext_urls(cid, parts[0], parts[1])
+        .await?;
+    Ok(ok(serde_json::json!({
+        "catalog": cid,
+        "prefix": parts[0],
+        "suffix": parts[1],
+    })))
 }
 
 async fn query_add_aliases(
