@@ -1,35 +1,35 @@
 import { mnm_api, mnm_notify, ensure_catalog, get_specific_catalog, tt_update_interface, widar } from './store.js';
 
 export default Vue.extend({
-    props: ['id'],
-    data: function () { return { text: '', catalog: {} } },
-    created: async function () {
-        const me = this;
-        await ensure_catalog(me.id);
-        me.catalog = get_specific_catalog(me.id);
-    },
-    updated: function () { tt_update_interface() },
-    mounted: function () { tt_update_interface() },
-    methods: {
-        onSave: async function () {
-            const me = this;
-            try {
-                await mnm_api('add_aliases', {
-                    username: widar.getUserName(),
-                    catalog: me.id,
-                    text: me.text
-                }, { method: 'POST' });
-                await ensure_catalog(me.id, true);
-                mnm_notify('Aliases added', 'success');
-                router.push('/catalog/' + me.id);
-            } catch (e) {
-                mnm_notify('Failed: ' + e.message, 'danger');
-            }
-        }
-    },
-    template: `
+	props: ['id'],
+	data: function () { return { text: '', catalog: {} } },
+	created: async function () {
+		const me = this;
+		await ensure_catalog(me.id);
+		me.catalog = get_specific_catalog(me.id);
+	},
+	updated: function () { tt_update_interface() },
+	mounted: function () { tt_update_interface() },
+	methods: {
+		onSave: async function () {
+			const me = this;
+			try {
+				await mnm_api('add_aliases', {
+					username: widar.getUserName(),
+					catalog: me.id,
+					text: me.text
+				}, { method: 'POST' });
+				await ensure_catalog(me.id, true);
+				mnm_notify('Aliases added', 'success');
+				router.push('/catalog/' + me.id);
+			} catch (e) {
+				mnm_notify('Failed: ' + e.message, 'danger');
+			}
+		}
+	},
+	template: `
 <div class='mt-2'>
-	<mnm-breadcrumb v-if='catalog && catalog.id' :crumbs="[
+	<mnm-breadcrumb v-if='typeof catalog != "undefined" && catalog && catalog.id' :crumbs="[
 		{text: catalog.name, to: '/catalog/'+catalog.id},
 		{tt: 'aliases'}
 	]"></mnm-breadcrumb>
