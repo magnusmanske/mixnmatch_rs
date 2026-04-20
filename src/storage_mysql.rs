@@ -3163,15 +3163,7 @@ impl Storage for StorageMySQL {
         let rows = conn
             .exec_iter(sql, ())
             .await?
-            .map_and_drop(|row: Row| {
-                let mut obj = serde_json::Map::new();
-                for col in row.columns_ref() {
-                    let col_name = col.name_str().to_string();
-                    let val: Option<String> = row.get(&col_name as &str);
-                    obj.insert(col_name, json!(val));
-                }
-                serde_json::Value::Object(obj)
-            })
+            .map_and_drop(row_to_json)
             .await?;
         Ok(rows)
     }
@@ -3591,15 +3583,7 @@ impl Storage for StorageMySQL {
         let rows = conn
             .exec_iter(sql, ())
             .await?
-            .map_and_drop(|row: Row| {
-                let mut obj = serde_json::Map::new();
-                for col in row.columns_ref() {
-                    let col_name = col.name_str().to_string();
-                    let val: Option<String> = row.get(&col_name as &str);
-                    obj.insert(col_name, json!(val));
-                }
-                serde_json::Value::Object(obj)
-            })
+            .map_and_drop(row_to_json)
             .await?;
         Ok(rows)
     }
@@ -3630,11 +3614,24 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, ())
             .await?
             .map_and_drop(|row: Row| {
+                // Pull every column as a string regardless of its DB type —
+                // reading non-string columns as String panics, so dispatch on
+                // the underlying mysql value.
                 let mut map = HashMap::new();
-                for col in row.columns_ref() {
+                for (i, col) in row.columns_ref().iter().enumerate() {
                     let col_name = col.name_str().to_string();
-                    let val: Option<String> = row.get(&col_name as &str);
-                    map.insert(col_name, val.unwrap_or_default());
+                    let s = match &row[i] {
+                        mysql_async::Value::NULL => String::new(),
+                        mysql_async::Value::Int(n) => n.to_string(),
+                        mysql_async::Value::UInt(n) => n.to_string(),
+                        mysql_async::Value::Float(n) => n.to_string(),
+                        mysql_async::Value::Double(n) => n.to_string(),
+                        mysql_async::Value::Bytes(b) => {
+                            String::from_utf8_lossy(b).to_string()
+                        }
+                        other => format!("{other:?}"),
+                    };
+                    map.insert(col_name, s);
                 }
                 map
             })
@@ -3835,15 +3832,7 @@ impl Storage for StorageMySQL {
         let rows = conn
             .exec_iter(sql, ())
             .await?
-            .map_and_drop(|row: Row| {
-                let mut obj = serde_json::Map::new();
-                for col in row.columns_ref() {
-                    let col_name = col.name_str().to_string();
-                    let val: Option<String> = row.get(&col_name as &str);
-                    obj.insert(col_name, json!(val));
-                }
-                serde_json::Value::Object(obj)
-            })
+            .map_and_drop(row_to_json)
             .await?;
         Ok(rows)
     }
@@ -3989,15 +3978,7 @@ impl Storage for StorageMySQL {
         let rows = conn
             .exec_iter(sql, ())
             .await?
-            .map_and_drop(|row: Row| {
-                let mut obj = serde_json::Map::new();
-                for col in row.columns_ref() {
-                    let col_name = col.name_str().to_string();
-                    let val: Option<String> = row.get(&col_name as &str);
-                    obj.insert(col_name, json!(val));
-                }
-                serde_json::Value::Object(obj)
-            })
+            .map_and_drop(row_to_json)
             .await?;
         Ok(rows)
     }
