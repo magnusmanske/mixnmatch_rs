@@ -504,7 +504,7 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     async fn api_get_catalog_matcher_by_user(&self, catalog_id: usize) -> Result<Vec<serde_json::Value>>;
 
     // Jobs
-    async fn api_get_jobs(&self, catalog_id: usize, start: usize, max: usize) -> Result<(Vec<serde_json::Value>, Vec<serde_json::Value>)>; // (stats, jobs)
+    async fn api_get_jobs(&self, catalog_id: usize, start: usize, max: usize, status_filter: &str) -> Result<(Vec<serde_json::Value>, Vec<serde_json::Value>, usize)>; // (stats, jobs, total)
 
     // Issues
     async fn api_get_issues_count(&self, issue_type: &str, catalogs: &str) -> Result<usize>;

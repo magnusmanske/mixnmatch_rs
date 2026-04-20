@@ -3061,10 +3061,10 @@ impl Storage for StorageMySQL {
         Ok(rows)
     }
 
-    async fn api_get_jobs(&self, catalog_id: usize, start: usize, max: usize) -> Result<(Vec<serde_json::Value>, Vec<serde_json::Value>)> {
+    async fn api_get_jobs(&self, catalog_id: usize, start: usize, max: usize, status_filter: &str) -> Result<(Vec<serde_json::Value>, Vec<serde_json::Value>, usize)> {
         let mut conn = self.get_conn_ro().await?;
 
-        // Stats (only when catalog_id==0)
+        // Stats (only when catalog_id==0, as arrays [status, cnt] for the frontend)
         let job_stats = if catalog_id == 0 {
             conn.exec_iter(
                 "SELECT `status`,count(*) AS `cnt` FROM `jobs` WHERE `status`!='BLOCKED' GROUP BY `status` ORDER BY `status`",
@@ -3074,21 +3074,43 @@ impl Storage for StorageMySQL {
             .map_and_drop(|row: Row| {
                 let status: String = row.get::<Option<String>, _>("status").flatten().unwrap_or_default();
                 let cnt: usize = row.get::<Option<usize>, _>("cnt").flatten().unwrap_or(0);
-                json!({"status": status, "cnt": cnt})
+                json!([status, cnt])
             })
             .await?
         } else {
             vec![]
         };
 
-        // Jobs
-        let catalog_filter = if catalog_id > 0 {
-            format!(" AND `catalog`={catalog_id}")
-        } else {
-            String::new()
-        };
+        // Build WHERE clause
+        let mut filters = vec!["1=1".to_string(), "`status`!='BLOCKED'".to_string()];
+        if catalog_id > 0 {
+            filters.push(format!("`catalog`={catalog_id}"));
+        }
+        if !status_filter.is_empty() {
+            let safe = status_filter.replace('\'', "''");
+            filters.push(format!("`status`='{safe}'"));
+        }
+        let where_clause = filters.join(" AND ");
+
+        // Total count for pagination
+        let count_sql = format!("SELECT count(*) AS cnt FROM `jobs` WHERE {where_clause}");
+        let total: usize = conn
+            .exec_iter(count_sql, ())
+            .await?
+            .map_and_drop(|row: Row| row.get::<Option<usize>, _>("cnt").flatten().unwrap_or(0))
+            .await?
+            .into_iter()
+            .next()
+            .unwrap_or(0);
+
+        // Jobs with catalog name
         let jobs_sql = format!(
-            "SELECT `jobs`.*,(SELECT `user`.`name` FROM `user` WHERE `user`.`id`=`jobs`.`user_id`) AS `user_name` FROM `jobs` WHERE `status`!='BLOCKED'{catalog_filter} ORDER BY FIELD(`status`,'RUNNING','FAILED','TODO','LOW_PRIORITY','PAUSED','DONE'), `last_ts` DESC,`next_ts` DESC LIMIT {max} OFFSET {start}"
+            "SELECT `jobs`.*,\
+            (SELECT `user`.`name` FROM `user` WHERE `user`.`id`=`jobs`.`user_id`) AS `user_name`,\
+            (SELECT `catalog`.`name` FROM `catalog` WHERE `catalog`.`id`=`jobs`.`catalog`) AS `catalog_name`\
+            FROM `jobs` WHERE {where_clause}\
+            ORDER BY FIELD(`status`,'RUNNING','FAILED','TODO','LOW_PRIORITY','PAUSED','DONE'),\
+            `last_ts` DESC,`next_ts` DESC LIMIT {max} OFFSET {start}"
         );
         let jobs = conn
             .exec_iter(jobs_sql, ())
@@ -3100,20 +3122,24 @@ impl Storage for StorageMySQL {
                 let status: String = row.get::<Option<String>, _>("status").flatten().unwrap_or_default();
                 let last_ts: String = row.get::<Option<String>, _>("last_ts").flatten().unwrap_or_default();
                 let next_ts: String = row.get::<Option<String>, _>("next_ts").flatten().unwrap_or_default();
+                let repeat_after_sec: Option<usize> = row.get::<Option<usize>, _>("repeat_after_sec").flatten();
                 let depends_on: Option<usize> = row.get::<Option<usize>, _>("depends_on").flatten();
                 let user_id: Option<usize> = row.get::<Option<usize>, _>("user_id").flatten();
                 let user_name: Option<String> = row.get::<Option<String>, _>("user_name").flatten();
+                let catalog_name: Option<String> = row.get::<Option<String>, _>("catalog_name").flatten();
                 let note: Option<String> = row.get::<Option<String>, _>("note").flatten();
                 let json_str: Option<String> = row.get::<Option<String>, _>("json").flatten();
                 json!({
-                    "id": id, "catalog": catalog, "action": action, "status": status,
-                    "last_ts": last_ts, "next_ts": next_ts, "depends_on": depends_on,
+                    "id": id, "catalog": catalog, "catalog_name": catalog_name,
+                    "action": action, "status": status,
+                    "last_ts": last_ts, "next_ts": next_ts,
+                    "repeat_after_sec": repeat_after_sec, "depends_on": depends_on,
                     "user_id": user_id, "user_name": user_name, "note": note, "json": json_str
                 })
             })
             .await?;
 
-        Ok((job_stats, jobs))
+        Ok((job_stats, jobs, total))
     }
 
     async fn api_get_issues_count(&self, issue_type: &str, catalogs: &str) -> Result<usize> {
