@@ -231,8 +231,8 @@ impl DataSource {
             }
         };
 
-        let tmp_to_remove = matches!(location, DataSourceLocation::Url(_))
-            .then(|| path_buf.clone());
+        let tmp_to_remove =
+            matches!(location, DataSourceLocation::Url(_)).then(|| path_buf.clone());
 
         let mut builder = csv::ReaderBuilder::new();
         let mut reader = builder
@@ -292,8 +292,8 @@ impl DataSource {
                 path_buf.as_path()
             }
         };
-        let tmp_to_remove = matches!(location, DataSourceLocation::Url(_))
-            .then(|| path_buf.clone());
+        let tmp_to_remove =
+            matches!(location, DataSourceLocation::Url(_)).then(|| path_buf.clone());
 
         // Which column is `id`?  columns is parallel to headers; value is
         // the label the user mapped to that column ("id", "name", "?" …).
@@ -316,9 +316,9 @@ impl DataSource {
         // Consume headers row
         let _ = records.next();
 
-        let mut total = 0usize;
-        let mut with_id = 0usize;
-        let mut errors = 0usize;
+        let mut total = 0;
+        let mut with_id = 0;
+        let mut errors = 0;
         for _ in 0..max_rows {
             match records.next() {
                 Some(Ok(rec)) => {
