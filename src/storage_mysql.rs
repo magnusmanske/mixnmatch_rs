@@ -3177,12 +3177,13 @@ impl Storage for StorageMySQL {
                 let entry_id: usize = row.get::<Option<usize>, _>("entry_id").flatten().unwrap_or(0);
                 let row_issue_type: String = row.get::<Option<String>, _>("type").flatten().unwrap_or_default();
                 let json_str: String = row.get::<Option<String>, _>("json").flatten().unwrap_or_default();
+                let json_val: serde_json::Value = serde_json::from_str(&json_str).unwrap_or(serde_json::Value::Null);
                 let status: String = row.get::<Option<String>, _>("status").flatten().unwrap_or_default();
                 let catalog: usize = row.get::<Option<usize>, _>("catalog").flatten().unwrap_or(0);
                 let random: f64 = row.get::<Option<f64>, _>("random").flatten().unwrap_or(0.0);
                 json!({
                     "id": id, "entry_id": entry_id, "type": row_issue_type,
-                    "json": json_str, "status": status, "catalog": catalog, "random": random
+                    "json": json_val, "status": status, "catalog": catalog, "random": random
                 })
             })
             .await?;
