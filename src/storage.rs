@@ -102,12 +102,35 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     async fn get_data_source_type_for_uuid(&self, uuid: &str) -> Result<Vec<String>>;
     /// Returns `(type, user)` for the given import_file UUID, or `None` if not found.
     async fn get_import_file_info(&self, uuid: &str) -> Result<Option<(String, usize)>>;
+    /// Insert a new import_file row; the file must already be on disk under `import_file_path`.
+    async fn save_import_file(&self, uuid: &str, file_type: &str, user_id: usize) -> Result<()>;
+    /// Upsert the autoscrape row for a catalog with the given JSON config and owner.
+    async fn save_scraper(&self, catalog_id: usize, json: &str, owner: usize) -> Result<()>;
+    /// Create a new catalog row from a wizard-style metadata blob, returning the new id.
+    /// `meta` fields: name (required), desc, url, type (catalog type), wd_prop (P-number).
+    async fn create_catalog_from_meta(
+        &self,
+        name: &str,
+        desc: &str,
+        url: &str,
+        type_name: &str,
+        wd_prop: Option<usize>,
+        owner: usize,
+    ) -> Result<usize>;
     async fn get_existing_ext_ids(
         &self,
         catalog_id: usize,
         ext_ids: &[String],
     ) -> Result<Vec<String>>;
     async fn update_catalog_get_update_info(&self, catalog_id: usize) -> Result<Vec<UpdateInfo>>;
+    /// Upsert the "current" update_info row for a catalog. Marks any prior
+    /// rows for the catalog as non-current and inserts a fresh one.
+    async fn update_catalog_set_update_info(
+        &self,
+        catalog_id: usize,
+        json: &str,
+        user_id: usize,
+    ) -> Result<()>;
 
     // Catalog
 
@@ -496,6 +519,7 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     // Catalog overview
     async fn api_get_catalog_overview(&self) -> Result<Vec<serde_json::Value>>; // Full overview with catalog+overview+user+autoscrape data
     async fn api_get_single_catalog_overview(&self, catalog_id: usize) -> Result<serde_json::Value>;
+    async fn api_get_catalog_info(&self, catalog_id: usize) -> Result<serde_json::Value>; // Lightweight: catalog row only
 
     // Catalog details (3 aggregate queries)
     async fn api_get_catalog_type_counts(&self, catalog_id: usize) -> Result<Vec<serde_json::Value>>;
@@ -503,7 +527,7 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     async fn api_get_catalog_matcher_by_user(&self, catalog_id: usize) -> Result<Vec<serde_json::Value>>;
 
     // Jobs
-    async fn api_get_jobs(&self, catalog_id: usize, start: usize, max: usize) -> Result<(Vec<serde_json::Value>, Vec<serde_json::Value>)>; // (stats, jobs)
+    async fn api_get_jobs(&self, catalog_id: usize, start: usize, max: usize, status_filter: &str) -> Result<(Vec<serde_json::Value>, Vec<serde_json::Value>, usize)>; // (stats, jobs, total)
 
     // Issues
     async fn api_get_issues_count(&self, issue_type: &str, catalogs: &str) -> Result<usize>;
@@ -512,20 +536,33 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
 
     // Search
     async fn api_search_entries(&self, words: &[String], description_search: bool, no_label_search: bool, exclude: &[usize], include: &[usize], max_results: usize) -> Result<Vec<Entry>>;
-    async fn api_search_by_q(&self, q: isize) -> Result<Vec<Entry>>;
+    async fn api_search_by_q(&self, q: isize, exclude_catalogs: &[usize]) -> Result<Vec<Entry>>;
 
     // Recent changes
     async fn api_get_recent_changes(&self, ts: &str, catalog_id: usize, limit: usize) -> Result<(Vec<serde_json::Value>, Vec<serde_json::Value>)>; // (events from entry, events from log)
 
     // Catalog entry listing (query=catalog)
     async fn api_get_catalog_entries_raw(&self, sql: &str) -> Result<Vec<Entry>>;
+    /// Count `entry` rows matching the given WHERE clause (without LIMIT/OFFSET).
+    /// Powers the `total_filtered` field on query_catalog.
+    async fn api_get_catalog_entries_count(&self, where_clause: &str) -> Result<usize>;
 
     // Existing job actions
     async fn api_get_existing_job_actions(&self) -> Result<Vec<String>>;
 
     // Random entry
-    async fn api_get_random_entry(&self, catalog_id: usize, submode: &str, entry_type: &str, random: f64, active_catalogs: &[usize]) -> Result<Option<Entry>>;
+    /// Pick a random entry matching the given submode.
+    ///
+    /// * `catalog_id == 0` → global pick: force `random_2` index, scan forward from a
+    ///   random threshold (retry up to 11 times, final attempt with threshold 0), then
+    ///   filter by `active_catalogs` on the Rust side.
+    /// * `catalog_id > 0`  → catalog-specific: force `catalog_q_random` index, scan
+    ///   forward from a random threshold, then wrap around to threshold 0 if nothing
+    ///   matched. `active_catalogs` is ignored (PHP mirrors this, so an inactive
+    ///   catalog explicitly requested by id still returns entries).
+    async fn api_get_random_entry(&self, catalog_id: usize, submode: &str, entry_type: &str, active_catalogs: &[usize]) -> Result<Option<Entry>>;
     async fn api_get_active_catalog_ids(&self) -> Result<Vec<usize>>;
+    async fn api_get_inactive_catalog_ids(&self) -> Result<Vec<usize>>;
 
     // Additional API support methods
     async fn api_get_wd_props(&self) -> Result<Vec<usize>>;
@@ -583,6 +620,48 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
 
     // Micro-API: quick_compare
     async fn qc_get_entries(&self, catalog_id: usize, entry_id: Option<usize>, require_image: bool, require_coordinates: bool, random_threshold: f64, max_results: usize) -> Result<Vec<serde_json::Value>>;
+
+    // Lightweight catalog endpoints (ported from PHP API.php)
+    async fn api_search_catalogs(&self, q: &str, limit: usize) -> Result<Vec<serde_json::Value>>;
+    async fn api_catalog_type_counts(&self) -> Result<Vec<serde_json::Value>>;
+    async fn api_latest_catalogs(&self, limit: usize) -> Result<Vec<serde_json::Value>>;
+    async fn api_catalogs_with_locations(&self) -> Result<Vec<serde_json::Value>>;
+    async fn api_catalog_property_groups(&self) -> Result<serde_json::Value>;
+    async fn api_check_wd_prop_usage(&self, wd_prop: usize, exclude_catalog: usize) -> Result<serde_json::Value>;
+    async fn api_catalog_by_group(&self, group: &str) -> Result<serde_json::Value>;
+
+    // Other ported endpoints
+    async fn api_create_list(&self, catalog_id: usize) -> Result<Vec<serde_json::Value>>;
+    #[allow(clippy::type_complexity)]
+    async fn api_user_edits(
+        &self,
+        user_id: usize,
+        catalog: usize,
+        limit: usize,
+        offset: usize,
+    ) -> Result<(Vec<serde_json::Value>, serde_json::Value, usize, Option<serde_json::Value>)>;
+    async fn api_get_statement_text_groups(
+        &self,
+        catalog_id: usize,
+        property: usize,
+        limit: usize,
+        offset: usize,
+    ) -> Result<(Vec<serde_json::Value>, Vec<serde_json::Value>)>;
+    async fn api_set_statement_text_q(
+        &self,
+        catalog_id: usize,
+        property: usize,
+        text: &str,
+        q: usize,
+        user_id: usize,
+    ) -> Result<(usize, usize)>;
+    async fn api_missingpages(
+        &self,
+        catalog_id: usize,
+        site: &str,
+    ) -> Result<(serde_json::Value, serde_json::Value)>;
+    async fn api_sitestats(&self, catalog: Option<usize>) -> Result<serde_json::Value>;
+    async fn api_dg_tiles(&self, num: usize, type_filter: &str) -> Result<Vec<serde_json::Value>>;
 }
 
 #[cfg(test)]

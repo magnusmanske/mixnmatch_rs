@@ -86,7 +86,7 @@ export default Vue.extend({
 			if (Array.isArray(me.entry.ext_img)) me.entry.ext_img = me.entry.ext_img[0];
 			delete me.entries[entry_id];
 			await ensure_catalog(me.entry.catalog);
-		me.catalog = get_specific_catalog(me.entry.catalog);
+			me.catalog = get_specific_catalog(me.entry.catalog);
 			if (entry_ids.length < 8) me.load_entries(false);
 
 			me.mapdata_wd = { layers: [], sources: {} };
@@ -123,11 +123,11 @@ export default Vue.extend({
 		}
 	},
 	template: `<div class='mt-2'>
-<mnm-breadcrumb v-if='catalog && catalog.id' :crumbs="[
+<mnm-breadcrumb v-if='typeof catalog != "undefined" && catalog && catalog.id' :crumbs="[
 	{text: catalog.name, to: '/catalog/'+catalog.id},
 	{text: 'Quick compare'}
 ]"></mnm-breadcrumb>
-<catalog-header v-if='catalog && catalog.id' :catalog="catalog"></catalog-header>
+<catalog-header v-if='typeof catalog != "undefined" && catalog && catalog.id' :catalog="catalog"></catalog-header>
 <div>
 	<label v-if='catalog.has_locations=="yes"'>
 		<input type='checkbox' v-model='require_coordinates' @change='clear_and_next_entry()' /> <span tt='require_coordinates'></span>

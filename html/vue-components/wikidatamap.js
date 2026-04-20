@@ -50,7 +50,7 @@ export function MapSourceMnM(catalog_id) {
 	let self = this;
 	MapSource.call(self);
 	self.name = 'mnm';
-	self.api = 'https://mix-n-match.toolforge.org/api.php';
+	self.api = 'api.php';
 	self.catalog_id = catalog_id;
 	self.edit_mixin = JSON.parse(JSON.stringify(editEntryMixin));
 	self.edit_mixin.methods = Object.assign({}, editEntryMixin.methods);
@@ -162,7 +162,7 @@ MapSourceMnM.prototype.mnm_entry2map_entry = function (entry) {
 		label: entry.ext_name,
 		desc: entry.ext_desc,
 		url: entry.ext_url,
-		url2: "https://mix-n-match.toolforge.org/#/entry/" + entry.id,
+		url2: "/#/entry/" + entry.id,
 		lat: entry.lat,
 		lon: entry.lon,
 		aux: {
@@ -511,4 +511,3 @@ export default {
     </div>
 </div>`
 };
-

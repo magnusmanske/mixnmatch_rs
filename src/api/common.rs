@@ -226,27 +226,10 @@ pub async fn get_users(app: &AppState, user_ids: &HashSet<usize>) -> Result<Valu
     Ok(Value::Object(result))
 }
 
-// ---------------------------------------------------------------------------
-// Auth helper (simplified — full OAuth would need Widar integration)
-// ---------------------------------------------------------------------------
-
-pub async fn check_user(app: &AppState, params: &Params) -> Result<usize, ApiError> {
-    let username = get_param(params, "username", "");
-    let tusc_user = get_param(params, "tusc_user", "");
-    let name = if !username.is_empty() {
-        username
-    } else {
-        tusc_user
-    };
-    if name.is_empty() || name == "-1" {
-        return Err(ApiError("OAuth login required".into()));
-    }
-    let user_id = app.storage().get_or_create_user_id(&name).await?;
-    if user_id == 0 {
-        return Err(ApiError("OAuth login failure, please log in again".into()));
-    }
-    Ok(user_id)
-}
+// Auth is now enforced via `crate::auth::guard::require_user` against the
+// session — callers must no longer trust the request-body `username` field.
+// The previous `check_user` helper has been removed intentionally: any handler
+// that still needs to identify a user must call the guard module.
 
 // ---------------------------------------------------------------------------
 // Tests
