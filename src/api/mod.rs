@@ -1219,8 +1219,9 @@ async fn query_get_jobs(app: &AppState, params: &Params) -> Result<Response, Api
     let cid = common::get_param_int(params, "catalog", 0) as usize;
     let start = common::get_param_int(params, "start", 0) as usize;
     let max = common::get_param_int(params, "max", 50) as usize;
-    let (stats, jobs) = app.storage().api_get_jobs(cid, start, max).await?;
-    let mut out = serde_json::json!({"status": "OK", "data": jobs});
+    let status_filter = common::get_param(params, "status_filter", "");
+    let (stats, jobs, total) = app.storage().api_get_jobs(cid, start, max, &status_filter).await?;
+    let mut out = serde_json::json!({"status": "OK", "data": jobs, "total": total});
     if cid == 0 {
         out["stats"] = serde_json::json!(stats);
     }
