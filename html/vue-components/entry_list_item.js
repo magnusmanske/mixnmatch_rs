@@ -209,7 +209,7 @@ export default {
 			</div>
 			<!-- new sub-row -->
 
-			<div v-if='entry.q===null' class="second-row row">
+			<div v-if='entry.q==null' class="second-row row">
 				<div class='entry_cell_left col-sm-12 col-md-2'></div>
 				<div class='entry_cell_desc col-sm-12 col-md-7'>
 					<div class='d-flex flex-wrap gap-1 align-items-center'>
