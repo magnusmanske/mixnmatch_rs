@@ -122,7 +122,7 @@ enum Commands {
         config: Option<PathBuf>,
 
         /// Port to listen on
-        #[arg(short, long, default_value = "8000")]
+        #[arg(short, long, env = "MNM_PORT", default_value = "8000")]
         port: u16,
 
         /// Path to the static HTML directory (defaults to ./html)
