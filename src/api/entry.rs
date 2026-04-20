@@ -129,16 +129,14 @@ pub async fn query_random(app: &AppState, params: &Params) -> Result<Response, A
     //   id != 0            → direct lookup by id (test hook in PHP)
     //   catalog > 0        → catalog-specific random pick (catalog_q_random index)
     //   catalog == 0       → global random pick across active catalogs
+    //                        (the storage layer filters by `catalog.active=1`
+    //                        directly in SQL — no separate active-id fetch
+    //                        needed on this path).
     let entry_opt = if id != 0 {
         crate::entry::Entry::from_id(id, app).await.ok()
-    } else if catalog > 0 {
-        app.storage()
-            .api_get_random_entry(catalog, &submode, &entry_type, &[])
-            .await?
     } else {
-        let active = app.storage().api_get_active_catalog_ids().await?;
         app.storage()
-            .api_get_random_entry(0, &submode, &entry_type, &active)
+            .api_get_random_entry(catalog, &submode, &entry_type)
             .await?
     };
 

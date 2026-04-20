@@ -3670,12 +3670,11 @@ impl Storage for StorageMySQL {
         catalog_id: usize,
         submode: &str,
         entry_type: &str,
-        active_catalogs: &[usize],
     ) -> Result<Option<Entry>> {
         let where_clause: &str = match submode {
-            "prematched" => "user=0",
-            "no_manual" => "(user=0 OR q IS NULL)",
-            _ => "q IS NULL",
+            "prematched" => "`user`=0",
+            "no_manual" => "(`user`=0 OR `q` IS NULL)",
+            _ => "`q` IS NULL",
         };
         let type_filter = if entry_type.is_empty() {
             String::new()
@@ -3709,13 +3708,25 @@ impl Storage for StorageMySQL {
             return Ok(None);
         }
 
-        // Global: FORCE INDEX (random_2), 11 attempts, filter by active_catalogs.
+        // Global pick across active catalogs.
+        //
+        // Was: prefetch the active-catalog ID list, then loop up to 11 SQL
+        // roundtrips returning 10 random rows each, filtering in Rust. That's
+        // 1 + (1..=11) RTTs in the worst case.
+        //
+        // Now: filter by `catalog.active=1` directly in SQL via an EXISTS
+        // join against the (small) catalog table. With LIMIT 1 the planner
+        // walks the random_2 index in order until it finds one matching row,
+        // so the response is normally a single roundtrip — and the prefetch
+        // of `active_catalogs` from the caller becomes unnecessary.
         let base = format!(
-            "{} FORCE INDEX (`random_2`) WHERE `random`>=%R% AND {where_clause}{type_filter} ORDER BY `random` LIMIT 10",
+            "{} FORCE INDEX (`random_2`) \
+             WHERE `random`>=%R% AND {where_clause}{type_filter} \
+               AND EXISTS (SELECT 1 FROM `catalog` `c` WHERE `c`.`id`=`entry`.`catalog` AND `c`.`active`=1) \
+             ORDER BY `random` LIMIT 1",
             Self::entry_sql_select()
         );
-        for attempt in 0..=10 {
-            let threshold = if attempt >= 10 { 0.0 } else { rand::random::<f64>() };
+        for threshold in [rand::random::<f64>(), 0.0] {
             let sql = base.replace("%R%", &format!("{threshold}"));
             let rows = conn
                 .exec_iter(sql, ())
@@ -3725,10 +3736,8 @@ impl Storage for StorageMySQL {
                 .into_iter()
                 .flatten()
                 .collect::<Vec<Entry>>();
-            for entry in rows {
-                if active_catalogs.contains(&entry.catalog) {
-                    return Ok(Some(entry));
-                }
+            if let Some(entry) = rows.into_iter().next() {
+                return Ok(Some(entry));
             }
         }
         Ok(None)
