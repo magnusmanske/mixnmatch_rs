@@ -1,7 +1,7 @@
 use crate::app_state::AppState;
 use crate::entry::Entry;
 use axum::Json;
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -80,6 +80,16 @@ impl IntoResponse for ApiError {
 
 pub fn success_with_data(data: Value) -> Json<Value> {
     Json(json!({ "status": "OK", "data": data }))
+}
+
+/// Wrap an arbitrary JSON value as an axum response.
+pub fn json_resp(v: Value) -> Response {
+    Json(v).into_response()
+}
+
+/// Standard `{"status":"OK","data":…}` envelope. Most handlers use this.
+pub fn ok(data: Value) -> Response {
+    success_with_data(data).into_response()
 }
 
 // ---------------------------------------------------------------------------
