@@ -92,15 +92,85 @@ pub async fn exchange_verifier(
 /// Fetch `meta=userinfo` on the editing wiki, signed with the access token.
 /// PHP equivalent: `MW_OAuth::doApiQuery(['action'=>'query','meta'=>'userinfo'])`,
 /// which is how `Widar::get_username` resolves the logged-in user.
+///
+/// Matches PHP's `doApiQuery`: POSTs the API params as form data and passes the
+/// OAuth parameters in an `Authorization: OAuth ...` header. MediaWiki's OAuth
+/// extension honours query-string params for the handshake endpoints but
+/// authenticated API calls that use query-string OAuth get silently treated as
+/// anonymous, which is why the earlier GET implementation returned `anon`.
 pub async fn fetch_userinfo(cfg: &OauthConfig, access: &TokenPair) -> Result<WikidataUser> {
-    let mut params = base_oauth_params(cfg);
-    params.push(("oauth_token".to_string(), access.key.clone()));
-    params.push(("format".to_string(), "json".to_string()));
-    params.push(("action".to_string(), "query".to_string()));
-    params.push(("meta".to_string(), "userinfo".to_string()));
-
-    let body = signed_get(cfg, MW_API_URL, params, &access.key, &access.secret).await?;
+    let post = vec![
+        ("format".to_string(), "json".to_string()),
+        ("action".to_string(), "query".to_string()),
+        ("meta".to_string(), "userinfo".to_string()),
+    ];
+    let body = signed_api_post(cfg, MW_API_URL, post, &access.key, &access.secret).await?;
     parse_userinfo_response(&body)
+}
+
+// ---------------------------------------------------------------------------
+// Low-level: signed POST with Authorization header (for authenticated API calls)
+// ---------------------------------------------------------------------------
+
+/// POST `post` as `application/x-www-form-urlencoded` with an
+/// `Authorization: OAuth ...` header. Mirrors PHP `doApiQuery` for the non-upload
+/// path: the signature is computed over the union of POST params and OAuth
+/// header params (minus `oauth_signature` itself).
+async fn signed_api_post(
+    cfg: &OauthConfig,
+    url: &str,
+    post: Vec<(String, String)>,
+    token_key: &str,
+    token_secret: &str,
+) -> Result<String> {
+    let mut oauth_header = base_oauth_params(cfg);
+    oauth_header.push(("oauth_token".to_string(), token_key.to_string()));
+
+    // Sign over post body + oauth header params combined.
+    let mut to_sign: Vec<(String, String)> = post.clone();
+    to_sign.extend(oauth_header.iter().cloned());
+    let signature = sign_request("POST", url, &to_sign, &cfg.consumer_secret, token_secret);
+    oauth_header.push(("oauth_signature".to_string(), signature));
+
+    let auth_value = oauth_header
+        .iter()
+        .map(|(k, v)| format!("{}=\"{}\"", rfc3986_encode(k), rfc3986_encode(v)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let auth_value = format!("OAuth {auth_value}");
+
+    let body_str = post
+        .iter()
+        .map(|(k, v)| format!("{}={}", rfc3986_encode(k), rfc3986_encode(v)))
+        .collect::<Vec<_>>()
+        .join("&");
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(url)
+        .header(reqwest::header::USER_AGENT, &cfg.agent)
+        .header(reqwest::header::AUTHORIZATION, auth_value)
+        .header(
+            reqwest::header::CONTENT_TYPE,
+            "application/x-www-form-urlencoded",
+        )
+        .body(body_str)
+        .send()
+        .await
+        .map_err(|e| anyhow!("OAuth API request failed: {e}"))?;
+
+    let status = resp.status();
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| anyhow!("OAuth API response read failed: {e}"))?;
+    if !status.is_success() {
+        return Err(anyhow!(
+            "OAuth API returned HTTP {status}: {}",
+            truncate_for_log(&body)
+        ));
+    }
+    Ok(body)
 }
 
 // ---------------------------------------------------------------------------
