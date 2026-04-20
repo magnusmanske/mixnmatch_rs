@@ -11,6 +11,15 @@ pub async fn query_get_issues(app: &AppState, params: &Params) -> Result<Respons
     let limit = common::get_param_int(params, "limit", 50) as usize;
     let offset = common::get_param_int(params, "offset", 0) as usize;
     let catalogs = common::get_param(params, "catalogs", "");
+
+    // Optional client-supplied seed so subsequent paginated requests scan the
+    // same random ordering as the first page. Without this, every page click
+    // re-rolled the threshold and could overlap or skip rows.
+    let client_threshold = common::get_param(params, "random_threshold", "")
+        .parse::<f64>()
+        .ok()
+        .filter(|v| (0.0..=1.0).contains(v));
+
     let count = app
         .storage()
         .api_get_issues_count(&itype, &catalogs)
@@ -18,10 +27,12 @@ pub async fn query_get_issues(app: &AppState, params: &Params) -> Result<Respons
     if count == 0 {
         return Ok(ok(serde_json::json!({})));
     }
-    let r: f64 = if count < limit * 2 {
-        0.0
-    } else {
-        rand::random()
+    let r: f64 = match client_threshold {
+        Some(t) => t,
+        // Few issues → start from 0 so we always see them all; many issues →
+        // pick a random window so first-page reloads sample different items.
+        None if count < limit * 2 => 0.0,
+        None => rand::random(),
     };
     let issues = app
         .storage()
@@ -46,6 +57,7 @@ pub async fn query_get_issues(app: &AppState, params: &Params) -> Result<Respons
         "issues": issues,
         "entries": entries.get("entries"),
         "users": entries.get("users"),
+        "random_threshold": r,
     })))
 }
 
