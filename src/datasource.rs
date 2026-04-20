@@ -32,6 +32,7 @@ enum DataSourceType {
     Unknown,
     Csv,
     Tsv,
+    Ssv,
 }
 
 impl DataSourceType {
@@ -40,7 +41,17 @@ impl DataSourceType {
         match s.trim().to_uppercase().as_str() {
             "CSV" => Self::Csv,
             "TSV" => Self::Tsv,
+            "SSV" => Self::Ssv,
             _ => Self::Unknown,
+        }
+    }
+
+    fn delimiter(&self) -> Option<u8> {
+        match self {
+            Self::Csv => Some(b','),
+            Self::Tsv => Some(b'\t'),
+            Self::Ssv => Some(b';'),
+            Self::Unknown => None,
         }
     }
 }
@@ -169,11 +180,12 @@ impl DataSource {
     pub async fn get_reader(&mut self, app: &AppState) -> Result<csv::Reader<File>> {
         let mut builder = csv::ReaderBuilder::new();
         let builder = builder.flexible(true).has_headers(false);
-        let builder = match self.get_source_type(app).await? {
-            DataSourceType::Csv => builder.delimiter(b','),
-            DataSourceType::Tsv => builder.delimiter(b'\t'),
-            DataSourceType::Unknown => return Err(UpdateCatalogError::MissingDataSourceType.into()),
-        };
+        let delim = self
+            .get_source_type(app)
+            .await?
+            .delimiter()
+            .ok_or(UpdateCatalogError::MissingDataSourceType)?;
+        let builder = builder.delimiter(delim);
         match self.get_source_location(app)? {
             DataSourceLocation::Url(url) => {
                 let mut full_path = temp_dir();
@@ -188,6 +200,198 @@ impl DataSource {
             }
             DataSourceLocation::FilePath(path) => Ok(builder.from_path(path)?),
         }
+    }
+
+    /// Read the first row (treated as a header row) and up to `max_rows`
+    /// data rows. Bypasses the `DataSource::new` invariant that `id`/`name`
+    /// columns be present, because this is called *before* the user has
+    /// mapped them.
+    pub async fn read_headers_and_preview(
+        app: &AppState,
+        update_info: &serde_json::Value,
+        max_rows: usize,
+    ) -> Result<(Vec<String>, Vec<Vec<String>>)> {
+        let (delim, location) = Self::location_and_delimiter(app, update_info).await?;
+
+        // Download URL to a temp file if needed so csv::Reader can iterate
+        // by path (simplest; CSV reader doesn't accept &str bytes directly
+        // without an async->sync bridge).
+        let path_buf;
+        let path: &std::path::Path = match &location {
+            DataSourceLocation::Url(url) => {
+                let mut p = temp_dir();
+                p.push(format!("{}.tmp", Uuid::new_v4()));
+                Self::fetch_url_static(url, &p).await?;
+                path_buf = p;
+                path_buf.as_path()
+            }
+            DataSourceLocation::FilePath(s) => {
+                path_buf = std::path::PathBuf::from(s);
+                path_buf.as_path()
+            }
+        };
+
+        let tmp_to_remove = matches!(location, DataSourceLocation::Url(_))
+            .then(|| path_buf.clone());
+
+        let mut builder = csv::ReaderBuilder::new();
+        let mut reader = builder
+            .flexible(true)
+            .has_headers(false)
+            .delimiter(delim)
+            .from_path(path)?;
+        let mut records = reader.records();
+
+        let headers: Vec<String> = match records.next() {
+            Some(Ok(rec)) => rec.iter().map(|s| s.to_string()).collect(),
+            Some(Err(e)) => {
+                if let Some(p) = tmp_to_remove {
+                    let _ = fs::remove_file(p);
+                }
+                return Err(e.into());
+            }
+            None => vec![],
+        };
+
+        let mut preview: Vec<Vec<String>> = Vec::new();
+        for _ in 0..max_rows {
+            match records.next() {
+                Some(Ok(rec)) => preview.push(rec.iter().map(|s| s.to_string()).collect()),
+                Some(Err(_)) => continue,
+                None => break,
+            }
+        }
+
+        if let Some(p) = tmp_to_remove {
+            let _ = fs::remove_file(p);
+        }
+        Ok((headers, preview))
+    }
+
+    /// Count rows (after the first header row) up to `max_rows`, plus how
+    /// many of them yield a non-empty ext_id in the column mapped to `id`.
+    /// Cheap dry-run for the Review step.
+    pub async fn count_rows(
+        app: &AppState,
+        update_info: &serde_json::Value,
+        max_rows: usize,
+    ) -> Result<(usize, usize, usize)> {
+        let (delim, location) = Self::location_and_delimiter(app, update_info).await?;
+
+        let path_buf;
+        let path: &std::path::Path = match &location {
+            DataSourceLocation::Url(url) => {
+                let mut p = temp_dir();
+                p.push(format!("{}.tmp", Uuid::new_v4()));
+                Self::fetch_url_static(url, &p).await?;
+                path_buf = p;
+                path_buf.as_path()
+            }
+            DataSourceLocation::FilePath(s) => {
+                path_buf = std::path::PathBuf::from(s);
+                path_buf.as_path()
+            }
+        };
+        let tmp_to_remove = matches!(location, DataSourceLocation::Url(_))
+            .then(|| path_buf.clone());
+
+        // Which column is `id`?  columns is parallel to headers; value is
+        // the label the user mapped to that column ("id", "name", "?" …).
+        let id_col_idx = update_info
+            .get("columns")
+            .and_then(|v| v.as_array())
+            .and_then(|arr| {
+                arr.iter()
+                    .position(|c| c.as_str().map(|s| s == "id").unwrap_or(false))
+            });
+
+        let mut builder = csv::ReaderBuilder::new();
+        let mut reader = builder
+            .flexible(true)
+            .has_headers(false)
+            .delimiter(delim)
+            .from_path(path)?;
+        let mut records = reader.records();
+
+        // Consume headers row
+        let _ = records.next();
+
+        let mut total = 0usize;
+        let mut with_id = 0usize;
+        let mut errors = 0usize;
+        for _ in 0..max_rows {
+            match records.next() {
+                Some(Ok(rec)) => {
+                    total += 1;
+                    if let Some(idx) = id_col_idx {
+                        if rec.get(idx).map(|s| !s.trim().is_empty()).unwrap_or(false) {
+                            with_id += 1;
+                        }
+                    }
+                }
+                Some(Err(_)) => errors += 1,
+                None => break,
+            }
+        }
+
+        if let Some(p) = tmp_to_remove {
+            let _ = fs::remove_file(p);
+        }
+        Ok((total, with_id, errors))
+    }
+
+    async fn location_and_delimiter(
+        app: &AppState,
+        update_info: &serde_json::Value,
+    ) -> Result<(u8, DataSourceLocation)> {
+        // data_format in the update_info wins; fall back to import_file.type for
+        // uploaded files.
+        let data_format = update_info
+            .get("data_format")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let ds_type = if let Some(df) = &data_format {
+            DataSourceType::from_str(df)
+        } else if let Some(uuid) = update_info.get("file_uuid").and_then(|v| v.as_str()) {
+            let results = app.storage().get_data_source_type_for_uuid(uuid).await?;
+            results
+                .into_iter()
+                .next()
+                .map(|s| DataSourceType::from_str(&s))
+                .unwrap_or(DataSourceType::Unknown)
+        } else {
+            DataSourceType::Unknown
+        };
+        let delim = ds_type
+            .delimiter()
+            .ok_or(UpdateCatalogError::MissingDataSourceType)?;
+        let location = if let Some(url) = update_info.get("source_url").and_then(|v| v.as_str()) {
+            if url.is_empty() {
+                if let Some(uuid) = update_info.get("file_uuid").and_then(|v| v.as_str()) {
+                    DataSourceLocation::FilePath(format!("{}/{}", app.import_file_path(), uuid))
+                } else {
+                    return Err(UpdateCatalogError::MissingDataSourceLocation.into());
+                }
+            } else {
+                DataSourceLocation::Url(url.to_string())
+            }
+        } else if let Some(uuid) = update_info.get("file_uuid").and_then(|v| v.as_str()) {
+            DataSourceLocation::FilePath(format!("{}/{}", app.import_file_path(), uuid))
+        } else {
+            return Err(UpdateCatalogError::MissingDataSourceLocation.into());
+        };
+        Ok((delim, location))
+    }
+
+    async fn fetch_url_static(url: &str, file_name: &Path) -> Result<()> {
+        let response = Autoscrape::reqwest_client_external()?
+            .get(url)
+            .send()
+            .await?;
+        let mut file = std::fs::File::create(file_name)?;
+        let mut content = Cursor::new(response.bytes().await?);
+        std::io::copy(&mut content, &mut file)?;
+        Ok(())
     }
 
     pub fn get_source_location(&self, app: &AppState) -> Result<DataSourceLocation> {

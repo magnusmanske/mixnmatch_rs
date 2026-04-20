@@ -501,6 +501,17 @@ impl Storage for StorageMySQL {
         Ok(results.into_iter().next())
     }
 
+    async fn save_import_file(&self, uuid: &str, file_type: &str, user_id: usize) -> Result<()> {
+        let timestamp = chrono::Utc::now().format("%Y%m%d%H%M%S").to_string();
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop(
+            "INSERT INTO `import_file` (`uuid`,`user`,`timestamp`,`type`) VALUES (:uuid,:user,:timestamp,:file_type)",
+            params! {uuid, "user" => user_id, timestamp, file_type},
+        )
+        .await?;
+        Ok(())
+    }
+
     async fn get_existing_ext_ids(
         &self,
         catalog_id: usize,
@@ -524,6 +535,28 @@ impl Storage for StorageMySQL {
             })
             .await?;
         Ok(results)
+    }
+
+    async fn update_catalog_set_update_info(
+        &self,
+        catalog_id: usize,
+        json: &str,
+        user_id: usize,
+    ) -> Result<()> {
+        let mut conn = self.get_conn().await?;
+        // Mark any existing current row as stale so get_update_info only sees
+        // the latest configuration.
+        conn.exec_drop(
+            "UPDATE `update_info` SET `is_current`=0 WHERE `catalog`=:catalog_id AND `is_current`=1",
+            params! {catalog_id},
+        )
+        .await?;
+        conn.exec_drop(
+            "INSERT INTO `update_info` (`catalog`,`json`,`note`,`user_id`,`is_current`) VALUES (:catalog_id,:json,'',:user_id,1)",
+            params! {catalog_id, json, "user_id" => user_id},
+        )
+        .await?;
+        Ok(())
     }
 
     // Catalog
