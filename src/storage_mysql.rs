@@ -2320,8 +2320,8 @@ impl Storage for StorageMySQL {
             )
             .await?
             .map_and_drop(|row| {
-                let lat: f64 = row.get(0).unwrap_or_default();
-                let lon: f64 = row.get(1).unwrap_or_default();
+                let lat: f64 = row.get::<Option<f64>, _>(0).flatten().unwrap_or_default();
+                let lon: f64 = row.get::<Option<f64>, _>(1).flatten().unwrap_or_default();
                 let precision: Option<f64> = row.get_opt(2).and_then(|r| r.ok());
                 CoordinateLocation::new_with_precision(lat, lon, precision)
             })
@@ -2487,9 +2487,9 @@ impl Storage for StorageMySQL {
         let mut scrapers = HashMap::new();
         for row in rows {
             let scraper = CurrentScraper {
-                cersei_scraper_id: row.get("cersei_scraper_id").unwrap(),
-                catalog_id: row.get("catalog_id").unwrap(),
-                last_sync: row.get("last_sync"),
+                cersei_scraper_id: row.get::<Option<usize>, _>("cersei_scraper_id").flatten().unwrap_or(0),
+                catalog_id: row.get::<Option<usize>, _>("catalog_id").flatten().unwrap_or(0),
+                last_sync: row.get::<Option<String>, _>("last_sync").flatten(),
             };
             scrapers.insert(scraper.cersei_scraper_id, scraper);
         }
@@ -2527,8 +2527,8 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, params! { entry_id })
             .await?
             .map_and_drop(|row| {
-                let property: usize = row.get(0).unwrap_or_default();
-                let target_entry_id: usize = row.get(1).unwrap_or_default();
+                let property: usize = row.get::<Option<usize>, _>(0).flatten().unwrap_or_default();
+                let target_entry_id: usize = row.get::<Option<usize>, _>(1).flatten().unwrap_or_default();
                 MetaMnmRelation {
                     property,
                     target: MnmLink::EntryId(target_entry_id),
@@ -2547,12 +2547,12 @@ impl Storage for StorageMySQL {
             .await?
             .map_and_drop(|row| {
                 let id: Option<usize> = row.get(0);
-                let issue_type: String = row.get(1).unwrap_or_default();
-                let json_str: String = row.get(2).unwrap_or_default();
-                let status: String = row.get(3).unwrap_or_default();
-                let user_id: Option<usize> = row.get(4);
-                let resolved_ts: Option<String> = row.get(5);
-                let catalog_id: usize = row.get(6).unwrap_or_default();
+                let issue_type: String = row.get::<Option<String>, _>(1).flatten().unwrap_or_default();
+                let json_str: String = row.get::<Option<String>, _>(2).flatten().unwrap_or_default();
+                let status: String = row.get::<Option<String>, _>(3).flatten().unwrap_or_default();
+                let user_id: Option<usize> = row.get::<Option<usize>, _>(4).flatten();
+                let resolved_ts: Option<String> = row.get::<Option<String>, _>(5).flatten();
+                let catalog_id: usize = row.get::<Option<usize>, _>(6).flatten().unwrap_or_default();
                 MetaIssue {
                     id,
                     issue_type,
@@ -2575,8 +2575,8 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, params! { entry_id })
             .await?
             .map_and_drop(|row| {
-                let key: String = row.get(0).unwrap_or_default();
-                let value: String = row.get(1).unwrap_or_default();
+                let key: String = row.get::<Option<String>, _>(0).flatten().unwrap_or_default();
+                let value: String = row.get::<Option<String>, _>(1).flatten().unwrap_or_default();
                 MetaKvEntry { key, value }
             })
             .await?;
@@ -2592,10 +2592,10 @@ impl Storage for StorageMySQL {
             .await?
             .map_and_drop(|row| {
                 let id: Option<usize> = row.get(0);
-                let action: String = row.get(1).unwrap_or_default();
-                let user: Option<usize> = row.get(2);
-                let timestamp: Option<String> = row.get(3);
-                let q: Option<isize> = row.get(4);
+                let action: String = row.get::<Option<String>, _>(1).flatten().unwrap_or_default();
+                let user: Option<usize> = row.get::<Option<usize>, _>(2).flatten();
+                let timestamp: Option<String> = row.get::<Option<String>, _>(3).flatten();
+                let q: Option<isize> = row.get::<Option<isize>, _>(4).flatten();
                 MetaLogEntry {
                     id,
                     action,
@@ -2620,11 +2620,11 @@ impl Storage for StorageMySQL {
             .await?
             .map_and_drop(|row| {
                 let id: Option<usize> = row.get(0);
-                let property: usize = row.get(1).unwrap_or_default();
-                let text: String = row.get(2).unwrap_or_default();
-                let in_wikidata: bool = row.get(3).unwrap_or_default();
-                let entry_is_matched: bool = row.get(4).unwrap_or_default();
-                let q: Option<ItemId> = row.get(5);
+                let property: usize = row.get::<Option<usize>, _>(1).flatten().unwrap_or_default();
+                let text: String = row.get::<Option<String>, _>(2).flatten().unwrap_or_default();
+                let in_wikidata: bool = row.get::<Option<bool>, _>(3).flatten().unwrap_or_default();
+                let entry_is_matched: bool = row.get::<Option<bool>, _>(4).flatten().unwrap_or_default();
+                let q: Option<ItemId> = row.get::<Option<ItemId>, _>(5).flatten();
                 MetaStatementText {
                     id,
                     property,
@@ -2711,9 +2711,9 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, params! { name })
             .await?
             .map_and_drop(|row: Row| {
-                let id: usize = row.get("id").unwrap_or(0);
-                let uname: String = row.get("name").unwrap_or_default();
-                let is_admin: u8 = row.get("is_catalog_admin").unwrap_or(0);
+                let id: usize = row.get::<Option<usize>, _>("id").flatten().unwrap_or(0);
+                let uname: String = row.get::<Option<String>, _>("name").flatten().unwrap_or_default();
+                let is_admin: u8 = row.get::<Option<u8>, _>("is_catalog_admin").flatten().unwrap_or(0);
                 (id, uname, is_admin != 0)
             })
             .await?;
@@ -2751,9 +2751,9 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                let id: usize = row.get("id").unwrap_or(0);
-                let name: String = row.get("name").unwrap_or_default();
-                let is_catalog_admin: u8 = row.get("is_catalog_admin").unwrap_or(0);
+                let id: usize = row.get::<Option<usize>, _>("id").flatten().unwrap_or(0);
+                let name: String = row.get::<Option<String>, _>("name").flatten().unwrap_or_default();
+                let is_catalog_admin: u8 = row.get::<Option<u8>, _>("is_catalog_admin").flatten().unwrap_or(0);
                 (id, json!({
                     "id": id,
                     "name": name,
@@ -2775,9 +2775,9 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                let entry_id: usize = row.get("entry_id").unwrap_or(0);
-                let born: String = row.get("year_born").unwrap_or_default();
-                let died: String = row.get("year_died").unwrap_or_default();
+                let entry_id: usize = row.get::<Option<usize>, _>("entry_id").flatten().unwrap_or(0);
+                let born: String = row.get::<Option<String>, _>("year_born").flatten().unwrap_or_default();
+                let died: String = row.get::<Option<String>, _>("year_died").flatten().unwrap_or_default();
                 (entry_id, born, died)
             })
             .await?;
@@ -2801,9 +2801,9 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                let entry_id: usize = row.get("entry_id").unwrap_or(0);
-                let lat: f64 = row.get("lat").unwrap_or(0.0);
-                let lon: f64 = row.get("lon").unwrap_or(0.0);
+                let entry_id: usize = row.get::<Option<usize>, _>("entry_id").flatten().unwrap_or(0);
+                let lat: f64 = row.get::<Option<f64>, _>("lat").flatten().unwrap_or(0.0);
+                let lon: f64 = row.get::<Option<f64>, _>("lon").flatten().unwrap_or(0.0);
                 (entry_id, lat, lon)
             })
             .await?;
@@ -2821,8 +2821,8 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                let entry_id: usize = row.get("entry_id").unwrap_or(0);
-                let candidates: String = row.get("candidates").unwrap_or_default();
+                let entry_id: usize = row.get::<Option<usize>, _>("entry_id").flatten().unwrap_or(0);
+                let candidates: String = row.get::<Option<String>, _>("candidates").flatten().unwrap_or_default();
                 (entry_id, candidates)
             })
             .await?;
@@ -2840,11 +2840,11 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                let entry_id: usize = row.get("entry_id").unwrap_or(0);
-                let id: usize = row.get("id").unwrap_or(0);
-                let aux_p: usize = row.get("aux_p").unwrap_or(0);
-                let aux_name: String = row.get("aux_name").unwrap_or_default();
-                let in_wikidata: u8 = row.get("in_wikidata").unwrap_or(0);
+                let entry_id: usize = row.get::<Option<usize>, _>("entry_id").flatten().unwrap_or(0);
+                let id: usize = row.get::<Option<usize>, _>("id").flatten().unwrap_or(0);
+                let aux_p: usize = row.get::<Option<usize>, _>("aux_p").flatten().unwrap_or(0);
+                let aux_name: String = row.get::<Option<String>, _>("aux_name").flatten().unwrap_or_default();
+                let in_wikidata: u8 = row.get::<Option<u8>, _>("in_wikidata").flatten().unwrap_or(0);
                 (entry_id, json!({
                     "id": id,
                     "entry_id": entry_id,
@@ -2872,10 +2872,10 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                let entry_id: usize = row.get("entry_id").unwrap_or(0);
-                let id: usize = row.get("id").unwrap_or(0);
-                let language: String = row.get("language").unwrap_or_default();
-                let label: String = row.get("label").unwrap_or_default();
+                let entry_id: usize = row.get::<Option<usize>, _>("entry_id").flatten().unwrap_or(0);
+                let id: usize = row.get::<Option<usize>, _>("id").flatten().unwrap_or(0);
+                let language: String = row.get::<Option<String>, _>("language").flatten().unwrap_or_default();
+                let label: String = row.get::<Option<String>, _>("label").flatten().unwrap_or_default();
                 (entry_id, json!({
                     "id": id,
                     "entry_id": entry_id,
@@ -2902,10 +2902,10 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                let entry_id: usize = row.get("entry_id").unwrap_or(0);
-                let id: usize = row.get("id").unwrap_or(0);
-                let language: String = row.get("language").unwrap_or_default();
-                let label: String = row.get("label").unwrap_or_default();
+                let entry_id: usize = row.get::<Option<usize>, _>("entry_id").flatten().unwrap_or(0);
+                let id: usize = row.get::<Option<usize>, _>("id").flatten().unwrap_or(0);
+                let language: String = row.get::<Option<String>, _>("language").flatten().unwrap_or_default();
+                let label: String = row.get::<Option<String>, _>("label").flatten().unwrap_or_default();
                 (entry_id, json!({
                     "id": id,
                     "entry_id": entry_id,
@@ -2932,10 +2932,10 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                let entry_id: usize = row.get("entry_id").unwrap_or(0);
-                let key: String = row.get("kv_key").unwrap_or_default();
-                let value: String = row.get("kv_value").unwrap_or_default();
-                let done: u8 = row.get("done").unwrap_or(0);
+                let entry_id: usize = row.get::<Option<usize>, _>("entry_id").flatten().unwrap_or(0);
+                let key: String = row.get::<Option<String>, _>("kv_key").flatten().unwrap_or_default();
+                let value: String = row.get::<Option<String>, _>("kv_value").flatten().unwrap_or_default();
+                let done: u8 = row.get::<Option<u8>, _>("done").flatten().unwrap_or(0);
                 (entry_id, key, value, done)
             })
             .await?;
@@ -2959,8 +2959,8 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                let property: usize = row.get("property").unwrap_or(0);
-                let source_entry_id: usize = row.get("source_entry_id").unwrap_or(0);
+                let property: usize = row.get::<Option<usize>, _>("property").flatten().unwrap_or(0);
+                let source_entry_id: usize = row.get::<Option<usize>, _>("source_entry_id").flatten().unwrap_or(0);
                 let target_entry = Self::entry_from_row(&row);
                 (source_entry_id, property, target_entry)
             })
@@ -3022,8 +3022,8 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, params! { catalog_id })
             .await?
             .map_and_drop(|row: Row| {
-                let type_name: String = row.get("type").unwrap_or_default();
-                let cnt: usize = row.get("cnt").unwrap_or(0);
+                let type_name: String = row.get::<Option<String>, _>("type").flatten().unwrap_or_default();
+                let cnt: usize = row.get::<Option<usize>, _>("cnt").flatten().unwrap_or(0);
                 json!({"type": type_name, "cnt": cnt})
             })
             .await?;
@@ -3037,8 +3037,8 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, params! { catalog_id })
             .await?
             .map_and_drop(|row: Row| {
-                let ym: String = row.get("ym").unwrap_or_default();
-                let cnt: usize = row.get("cnt").unwrap_or(0);
+                let ym: String = row.get::<Option<String>, _>("ym").flatten().unwrap_or_default();
+                let cnt: usize = row.get::<Option<usize>, _>("cnt").flatten().unwrap_or(0);
                 json!({"ym": ym, "cnt": cnt})
             })
             .await?;
@@ -3052,9 +3052,9 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, params! { catalog_id })
             .await?
             .map_and_drop(|row: Row| {
-                let username: String = row.get("username").unwrap_or_default();
-                let uid: usize = row.get("uid").unwrap_or(0);
-                let cnt: usize = row.get("cnt").unwrap_or(0);
+                let username: String = row.get::<Option<String>, _>("username").flatten().unwrap_or_default();
+                let uid: usize = row.get::<Option<usize>, _>("uid").flatten().unwrap_or(0);
+                let cnt: usize = row.get::<Option<usize>, _>("cnt").flatten().unwrap_or(0);
                 json!({"username": username, "uid": uid, "cnt": cnt})
             })
             .await?;
@@ -3072,8 +3072,8 @@ impl Storage for StorageMySQL {
             )
             .await?
             .map_and_drop(|row: Row| {
-                let status: String = row.get("status").unwrap_or_default();
-                let cnt: usize = row.get("cnt").unwrap_or(0);
+                let status: String = row.get::<Option<String>, _>("status").flatten().unwrap_or_default();
+                let cnt: usize = row.get::<Option<usize>, _>("cnt").flatten().unwrap_or(0);
                 json!({"status": status, "cnt": cnt})
             })
             .await?
@@ -3094,17 +3094,17 @@ impl Storage for StorageMySQL {
             .exec_iter(jobs_sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                let id: usize = row.get("id").unwrap_or(0);
-                let catalog: usize = row.get("catalog").unwrap_or(0);
-                let action: String = row.get("action").unwrap_or_default();
-                let status: String = row.get("status").unwrap_or_default();
-                let last_ts: String = row.get("last_ts").unwrap_or_default();
-                let next_ts: String = row.get("next_ts").unwrap_or_default();
-                let depends_on: Option<usize> = row.get("depends_on");
-                let user_id: Option<usize> = row.get("user_id");
-                let user_name: Option<String> = row.get("user_name");
-                let note: Option<String> = row.get("note");
-                let json_str: Option<String> = row.get("json");
+                let id: usize = row.get::<Option<usize>, _>("id").flatten().unwrap_or(0);
+                let catalog: usize = row.get::<Option<usize>, _>("catalog").flatten().unwrap_or(0);
+                let action: String = row.get::<Option<String>, _>("action").flatten().unwrap_or_default();
+                let status: String = row.get::<Option<String>, _>("status").flatten().unwrap_or_default();
+                let last_ts: String = row.get::<Option<String>, _>("last_ts").flatten().unwrap_or_default();
+                let next_ts: String = row.get::<Option<String>, _>("next_ts").flatten().unwrap_or_default();
+                let depends_on: Option<usize> = row.get::<Option<usize>, _>("depends_on").flatten();
+                let user_id: Option<usize> = row.get::<Option<usize>, _>("user_id").flatten();
+                let user_name: Option<String> = row.get::<Option<String>, _>("user_name").flatten();
+                let note: Option<String> = row.get::<Option<String>, _>("note").flatten();
+                let json_str: Option<String> = row.get::<Option<String>, _>("json").flatten();
                 json!({
                     "id": id, "catalog": catalog, "action": action, "status": status,
                     "last_ts": last_ts, "next_ts": next_ts, "depends_on": depends_on,
@@ -3147,13 +3147,13 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                let id: usize = row.get("id").unwrap_or(0);
-                let entry_id: usize = row.get("entry_id").unwrap_or(0);
-                let row_issue_type: String = row.get("type").unwrap_or_default();
-                let json_str: String = row.get("json").unwrap_or_default();
-                let status: String = row.get("status").unwrap_or_default();
-                let catalog: usize = row.get("catalog").unwrap_or(0);
-                let random: f64 = row.get("random").unwrap_or(0.0);
+                let id: usize = row.get::<Option<usize>, _>("id").flatten().unwrap_or(0);
+                let entry_id: usize = row.get::<Option<usize>, _>("entry_id").flatten().unwrap_or(0);
+                let row_issue_type: String = row.get::<Option<String>, _>("type").flatten().unwrap_or_default();
+                let json_str: String = row.get::<Option<String>, _>("json").flatten().unwrap_or_default();
+                let status: String = row.get::<Option<String>, _>("status").flatten().unwrap_or_default();
+                let catalog: usize = row.get::<Option<usize>, _>("catalog").flatten().unwrap_or(0);
+                let random: f64 = row.get::<Option<f64>, _>("random").flatten().unwrap_or(0.0);
                 json!({
                     "id": id, "entry_id": entry_id, "type": row_issue_type,
                     "json": json_str, "status": status, "catalog": catalog, "random": random
@@ -3266,8 +3266,8 @@ impl Storage for StorageMySQL {
             .map_and_drop(|row: Row| {
                 // Nullable columns (q, user, timestamp, ext_*) must be pulled
                 // through Option<T> explicitly — `row.get::<T, _>` panics on NULL.
-                let id: usize = row.get("id").unwrap_or(0);
-                let catalog: usize = row.get("catalog").unwrap_or(0);
+                let id: usize = row.get::<Option<usize>, _>("id").flatten().unwrap_or(0);
+                let catalog: usize = row.get::<Option<usize>, _>("catalog").flatten().unwrap_or(0);
                 let ext_id: String =
                     row.get::<Option<String>, _>("ext_id").flatten().unwrap_or_default();
                 let ext_url: String =
@@ -3324,8 +3324,8 @@ impl Storage for StorageMySQL {
             .exec_iter(log_sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                let id: usize = row.get("id").unwrap_or(0);
-                let catalog: usize = row.get("catalog").unwrap_or(0);
+                let id: usize = row.get::<Option<usize>, _>("id").flatten().unwrap_or(0);
+                let catalog: usize = row.get::<Option<usize>, _>("catalog").flatten().unwrap_or(0);
                 let ext_id: String =
                     row.get::<Option<String>, _>("ext_id").flatten().unwrap_or_default();
                 let ext_url: String =
@@ -3504,8 +3504,8 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                let ext_name: String = row.get("ext_name").unwrap_or_default();
-                let cnt: usize = row.get("cnt").unwrap_or(0);
+                let ext_name: String = row.get::<Option<String>, _>("ext_name").flatten().unwrap_or_default();
+                let cnt: usize = row.get::<Option<usize>, _>("cnt").flatten().unwrap_or(0);
                 json!({"ext_name": ext_name, "cnt": cnt})
             })
             .await?;
@@ -3527,7 +3527,7 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                let cnt: usize = row.get("cnt").unwrap_or(0);
+                let cnt: usize = row.get::<Option<usize>, _>("cnt").flatten().unwrap_or(0);
                 let entry = Self::entry_from_row(&row);
                 (cnt, entry)
             })
@@ -3562,8 +3562,8 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                let lat: f64 = row.get("lat").unwrap_or(0.0);
-                let lon: f64 = row.get("lon").unwrap_or(0.0);
+                let lat: f64 = row.get::<Option<f64>, _>("lat").flatten().unwrap_or(0.0);
+                let lon: f64 = row.get::<Option<f64>, _>("lon").flatten().unwrap_or(0.0);
                 let entry = Self::entry_from_row(&row);
                 (lat, lon, entry)
             })
@@ -3610,11 +3610,11 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                let q: isize = row.get("q").unwrap_or(0);
-                let ext_id: String = row.get("ext_id").unwrap_or_default();
-                let ext_url: String = row.get("ext_url").unwrap_or_default();
-                let ext_name: String = row.get("ext_name").unwrap_or_default();
-                let user: Option<usize> = row.get("user");
+                let q: isize = row.get::<Option<isize>, _>("q").flatten().unwrap_or(0);
+                let ext_id: String = row.get::<Option<String>, _>("ext_id").flatten().unwrap_or_default();
+                let ext_url: String = row.get::<Option<String>, _>("ext_url").flatten().unwrap_or_default();
+                let ext_name: String = row.get::<Option<String>, _>("ext_name").flatten().unwrap_or_default();
+                let user: Option<usize> = row.get::<Option<usize>, _>("user").flatten();
                 (q, ext_id, ext_url, ext_name, user)
             })
             .await?;
@@ -3733,7 +3733,7 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                let ext_name: String = row.get("ext_name").unwrap_or_default();
+                let ext_name: String = row.get::<Option<String>, _>("ext_name").flatten().unwrap_or_default();
                 ext_name
             })
             .await?;
@@ -3780,7 +3780,7 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                let name_count: usize = row.get("name_count").unwrap_or(0);
+                let name_count: usize = row.get::<Option<usize>, _>("name_count").flatten().unwrap_or(0);
                 let entry = Self::entry_from_row(&row);
                 (name_count, entry)
             })
@@ -3813,7 +3813,7 @@ impl Storage for StorageMySQL {
             .exec_iter(sql1, ())
             .await?
             .map_and_drop(|row: Row| {
-                let prop_group: String = row.get("prop_group").unwrap_or_default();
+                let prop_group: String = row.get::<Option<String>, _>("prop_group").flatten().unwrap_or_default();
                 let property: usize = row.get::<Option<usize>, _>("property").flatten().unwrap_or(0);
                 let item: usize = row.get::<Option<usize>, _>("item").flatten().unwrap_or(0);
                 (prop_group, property, item)
@@ -3830,7 +3830,7 @@ impl Storage for StorageMySQL {
             .await?
             .map_and_drop(|row: Row| {
                 let item: usize = row.get::<Option<usize>, _>("item").flatten().unwrap_or(0);
-                let label: String = row.get("label").unwrap_or_default();
+                let label: String = row.get::<Option<String>, _>("label").flatten().unwrap_or_default();
                 (format!("{item}"), label)
             })
             .await?;
@@ -3864,8 +3864,8 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                let id: usize = row.get("id").unwrap_or(0);
-                let cnt: usize = row.get("cnt").unwrap_or(0);
+                let id: usize = row.get::<Option<usize>, _>("id").flatten().unwrap_or(0);
+                let cnt: usize = row.get::<Option<usize>, _>("cnt").flatten().unwrap_or(0);
                 (id, cnt)
             })
             .await?;
@@ -3973,8 +3973,8 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                let id: usize = row.get("id").unwrap_or(0);
-                let wd_prop: usize = row.get("wd_prop").unwrap_or(0);
+                let id: usize = row.get::<Option<usize>, _>("id").flatten().unwrap_or(0);
+                let wd_prop: usize = row.get::<Option<usize>, _>("wd_prop").flatten().unwrap_or(0);
                 (wd_prop, id)
             })
             .await?;
@@ -4010,15 +4010,15 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                let id: usize = row.get("id").unwrap_or(0);
-                let catalog: usize = row.get("catalog").unwrap_or(0);
-                let ext_id: String = row.get("ext_id").unwrap_or_default();
-                let ext_url: String = row.get("ext_url").unwrap_or_default();
-                let ext_name: String = row.get("ext_name").unwrap_or_default();
-                let ext_desc: String = row.get("ext_desc").unwrap_or_default();
-                let event_type: String = row.get("event_type").unwrap_or_default();
+                let id: usize = row.get::<Option<usize>, _>("id").flatten().unwrap_or(0);
+                let catalog: usize = row.get::<Option<usize>, _>("catalog").flatten().unwrap_or(0);
+                let ext_id: String = row.get::<Option<String>, _>("ext_id").flatten().unwrap_or_default();
+                let ext_url: String = row.get::<Option<String>, _>("ext_url").flatten().unwrap_or_default();
+                let ext_name: String = row.get::<Option<String>, _>("ext_name").flatten().unwrap_or_default();
+                let ext_desc: String = row.get::<Option<String>, _>("ext_desc").flatten().unwrap_or_default();
+                let event_type: String = row.get::<Option<String>, _>("event_type").flatten().unwrap_or_default();
                 let user: usize = row.get::<Option<usize>, _>("user").flatten().unwrap_or(0);
-                let timestamp: String = row.get("timestamp").unwrap_or_default();
+                let timestamp: String = row.get::<Option<String>, _>("timestamp").flatten().unwrap_or_default();
                 json!({
                     "id": id, "catalog": catalog, "ext_id": ext_id, "ext_url": ext_url,
                     "ext_name": ext_name, "ext_desc": ext_desc, "event_type": event_type,
@@ -4177,8 +4177,8 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, params! { catalog_id })
             .await?
             .map_and_drop(|row: Row| {
-                let wd_prop: usize = row.get("wd_prop").unwrap_or(0);
-                let wd_qual: usize = row.get("wd_qual").unwrap_or(0);
+                let wd_prop: usize = row.get::<Option<usize>, _>("wd_prop").flatten().unwrap_or(0);
+                let wd_qual: usize = row.get::<Option<usize>, _>("wd_qual").flatten().unwrap_or(0);
                 let wd_prop = if wd_prop == 0 { None } else { Some(wd_prop) };
                 let wd_qual = if wd_qual == 0 { None } else { Some(wd_qual) };
                 (wd_prop, wd_qual)
@@ -4196,8 +4196,8 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, params! { catalog_id })
             .await?
             .map_and_drop(|row: Row| {
-                let q: isize = row.get("q").unwrap_or(0);
-                let ext_id: String = row.get("ext_id").unwrap_or_default();
+                let q: isize = row.get::<Option<isize>, _>("q").flatten().unwrap_or(0);
+                let ext_id: String = row.get::<Option<String>, _>("ext_id").flatten().unwrap_or_default();
                 (q, ext_id)
             })
             .await?;
@@ -4211,8 +4211,8 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, params! { catalog_id })
             .await?
             .map_and_drop(|row: Row| {
-                let q: isize = row.get("q").unwrap_or(0);
-                let ext_id: String = row.get("ext_id").unwrap_or_default();
+                let q: isize = row.get::<Option<isize>, _>("q").flatten().unwrap_or(0);
+                let ext_id: String = row.get::<Option<String>, _>("ext_id").flatten().unwrap_or_default();
                 (q, ext_id)
             })
             .await?;
@@ -5034,15 +5034,15 @@ impl StorageMySQL {
             .exec_iter(overview_sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                let catalog_id: usize = row.get("catalog").unwrap_or(0);
-                let total: isize = row.get("total").unwrap_or(0);
-                let noq: isize = row.get("noq").unwrap_or(0);
-                let autoq: isize = row.get("autoq").unwrap_or(0);
-                let na: isize = row.get("na").unwrap_or(0);
-                let manual: isize = row.get("manual").unwrap_or(0);
-                let nowd: isize = row.get("nowd").unwrap_or(0);
-                let multi_match: isize = row.get("multi_match").unwrap_or(0);
-                let types: String = row.get("types").unwrap_or_default();
+                let catalog_id: usize = row.get::<Option<usize>, _>("catalog").flatten().unwrap_or(0);
+                let total: isize = row.get::<Option<isize>, _>("total").flatten().unwrap_or(0);
+                let noq: isize = row.get::<Option<isize>, _>("noq").flatten().unwrap_or(0);
+                let autoq: isize = row.get::<Option<isize>, _>("autoq").flatten().unwrap_or(0);
+                let na: isize = row.get::<Option<isize>, _>("na").flatten().unwrap_or(0);
+                let manual: isize = row.get::<Option<isize>, _>("manual").flatten().unwrap_or(0);
+                let nowd: isize = row.get::<Option<isize>, _>("nowd").flatten().unwrap_or(0);
+                let multi_match: isize = row.get::<Option<isize>, _>("multi_match").flatten().unwrap_or(0);
+                let types: String = row.get::<Option<String>, _>("types").flatten().unwrap_or_default();
                 (catalog_id, json!({
                     "total": total, "noq": noq, "autoq": autoq, "na": na,
                     "manual": manual, "nowd": nowd, "multi_match": multi_match, "types": types
@@ -5058,7 +5058,7 @@ impl StorageMySQL {
             .await?
             .map_and_drop(|row: Row| {
                 // All optional columns are wrapped in Option to survive NULLs.
-                let id: usize = row.get("id").unwrap_or(0);
+                let id: usize = row.get::<Option<usize>, _>("id").flatten().unwrap_or(0);
                 let name: String = row.get::<Option<String>, _>("name").flatten().unwrap_or_default();
                 let url: String = row.get::<Option<String>, _>("url").flatten().unwrap_or_default();
                 let desc: String = row.get::<Option<String>, _>("desc").flatten().unwrap_or_default();
@@ -5089,8 +5089,8 @@ impl StorageMySQL {
             .exec_iter(user_sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                let id: usize = row.get("id").unwrap_or(0);
-                let username: String = row.get("username").unwrap_or_default();
+                let id: usize = row.get::<Option<usize>, _>("id").flatten().unwrap_or(0);
+                let username: String = row.get::<Option<String>, _>("username").flatten().unwrap_or_default();
                 (id, username)
             })
             .await?;
@@ -5102,10 +5102,10 @@ impl StorageMySQL {
             .exec_iter(autoscrape_sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                let id: usize = row.get("id").unwrap_or(0);
-                let last_update: String = row.get("last_update").unwrap_or_default();
-                let do_auto_update: u8 = row.get("do_auto_update").unwrap_or(0);
-                let json_str: String = row.get("json").unwrap_or_default();
+                let id: usize = row.get::<Option<usize>, _>("id").flatten().unwrap_or(0);
+                let last_update: String = row.get::<Option<String>, _>("last_update").flatten().unwrap_or_default();
+                let do_auto_update: u8 = row.get::<Option<u8>, _>("do_auto_update").flatten().unwrap_or(0);
+                let json_str: String = row.get::<Option<String>, _>("json").flatten().unwrap_or_default();
                 (id, json!({
                     "last_update": last_update,
                     "do_auto_update": do_auto_update,
