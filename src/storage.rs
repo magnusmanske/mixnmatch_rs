@@ -104,6 +104,19 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     async fn get_import_file_info(&self, uuid: &str) -> Result<Option<(String, usize)>>;
     /// Insert a new import_file row; the file must already be on disk under `import_file_path`.
     async fn save_import_file(&self, uuid: &str, file_type: &str, user_id: usize) -> Result<()>;
+    /// Upsert the autoscrape row for a catalog with the given JSON config and owner.
+    async fn save_scraper(&self, catalog_id: usize, json: &str, owner: usize) -> Result<()>;
+    /// Create a new catalog row from a wizard-style metadata blob, returning the new id.
+    /// `meta` fields: name (required), desc, url, type (catalog type), wd_prop (P-number).
+    async fn create_catalog_from_meta(
+        &self,
+        name: &str,
+        desc: &str,
+        url: &str,
+        type_name: &str,
+        wd_prop: Option<usize>,
+        owner: usize,
+    ) -> Result<usize>;
     async fn get_existing_ext_ids(
         &self,
         catalog_id: usize,
