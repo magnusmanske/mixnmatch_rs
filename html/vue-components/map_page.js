@@ -120,7 +120,7 @@ export default Vue.extend({
 		}
 	},
 	template: `<div class='mt-2'>
-    <mnm-breadcrumb v-if='catalog && catalog.id' :crumbs="[
+    <mnm-breadcrumb v-if='typeof catalog != "undefined" && catalog.id' :crumbs="[
         {text: catalog.name, to: '/catalog/'+catalog.id},
         {text: 'Map'}
     ]"></mnm-breadcrumb>
