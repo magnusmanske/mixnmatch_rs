@@ -6,7 +6,7 @@ edition = "2024"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 regex = "^1"
 lazy_static = "^1"
 chrono = "*"
@@ -29,10 +29,20 @@ dashmap = "5"
 anyhow = "*"
 sysinfo = "*"
 log = "*"
-axum = "*"
+axum = { version = "*", features = ["multipart"] }
 wikibase = "*"
 mlua = { version = "0.10", features = ["lua54", "vendored", "serialize"] }
 tower = "*"
+tower-http = { version = "*", features = ["fs", "trace"] }
+tower-sessions = "0.15"
+axum-server = { version = "0.8", features = ["tls-rustls"] }
+rcgen = "0.14"
+rust-ini = "0.21"
+hmac = "0.12"
+sha1 = "0.10"
+base64 = "0.22"
+time = "0.3"
+bytes = "1"
 
 [profile.release]
 lto = 'thin'

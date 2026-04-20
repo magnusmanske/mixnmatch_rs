@@ -21,7 +21,7 @@ lazy_static! {
 }
 
 type SharedState = Arc<AppState>;
-type Params = HashMap<String, String>;
+pub type Params = HashMap<String, String>;
 
 // ---------------------------------------------------------------------------
 // Router
@@ -125,6 +125,86 @@ impl IntoResponse for ApiError {
 
 fn success(data: Value) -> Result<Response, ApiError> {
     Ok(Json(json!({ "status": "ok", "data": data })).into_response())
+}
+
+// ---------------------------------------------------------------------------
+// Public helpers for internal callers (e.g., the main /api.php dispatcher).
+// These return `Result<Value, String>` — plain data with the status envelope
+// stripped — so they can be embedded in any other API response shape.
+// ---------------------------------------------------------------------------
+
+/// Convert an internal `ApiError` to a plain string for cross-module callers.
+impl From<ApiError> for String {
+    fn from(e: ApiError) -> String {
+        e.message
+    }
+}
+
+async fn response_to_data(r: Result<Response, ApiError>) -> Result<Value, String> {
+    let resp = r.map_err(|e| e.message)?;
+    let bytes = axum::body::to_bytes(resp.into_body(), 100_000_000)
+        .await
+        .map_err(|e| format!("read body: {e}"))?;
+    let v: Value = serde_json::from_slice(&bytes)
+        .map_err(|e| format!("parse body: {e}"))?;
+    if v.get("status").and_then(|s| s.as_str()) == Some("ok") {
+        Ok(v.get("data").cloned().unwrap_or(Value::Null))
+    } else {
+        let msg = v.get("error").and_then(|s| s.as_str()).unwrap_or("unknown error");
+        Err(msg.to_string())
+    }
+}
+
+pub async fn data_creation_candidates(app: &AppState, params: &Params) -> Result<Value, String> {
+    response_to_data(handle_creation_candidates(app, params).await).await
+}
+
+pub async fn data_quick_compare(app: &AppState, params: &Params) -> Result<Value, String> {
+    response_to_data(handle_quick_compare(app, params).await).await
+}
+
+pub async fn data_get_sync(app: &AppState, params: &Params) -> Result<Value, String> {
+    response_to_data(handle_get_sync(app, params).await).await
+}
+
+pub async fn data_sparql_list(app: &AppState, params: &Params) -> Result<Value, String> {
+    response_to_data(handle_sparql_list(app, params).await).await
+}
+
+pub async fn data_get_code_fragments(app: &AppState, params: &Params) -> Result<Value, String> {
+    response_to_data(handle_get_code_fragments(app, params).await).await
+}
+
+pub async fn data_save_code_fragment(app: &AppState, params: &Params) -> Result<Value, String> {
+    response_to_data(handle_save_code_fragment(app, params).await).await
+}
+
+pub async fn data_run_lua(app: &AppState, params: &Params) -> Result<Value, String> {
+    response_to_data(handle_run_lua(app, params).await).await
+}
+
+pub async fn data_lc_catalogs(app: &AppState) -> Result<Value, String> {
+    response_to_data(handle_lc_catalogs(app).await).await
+}
+
+pub async fn data_lc_locations(app: &AppState, params: &Params) -> Result<Value, String> {
+    response_to_data(handle_lc_locations(app, params).await).await
+}
+
+pub async fn data_lc_report(app: &AppState, params: &Params) -> Result<Value, String> {
+    response_to_data(handle_lc_report(app, params).await).await
+}
+
+pub async fn data_lc_report_list(app: &AppState, params: &Params) -> Result<Value, String> {
+    response_to_data(handle_lc_report_list(app, params).await).await
+}
+
+pub async fn data_lc_rc(app: &AppState, params: &Params) -> Result<Value, String> {
+    response_to_data(handle_lc_rc(app, params).await).await
+}
+
+pub async fn data_lc_set_status(app: &AppState, params: &Params) -> Result<Value, String> {
+    response_to_data(handle_lc_set_status(app, params).await).await
 }
 
 fn get_required_param<'a>(params: &'a Params, key: &str) -> Result<&'a str, ApiError> {
@@ -666,10 +746,11 @@ async fn handle_creation_candidates(app: &AppState, params: &Params) -> Result<R
         }
     };
 
-    let max_tries = 250;
+    let max_tries = 250_usize;
     let mut result_data = json!({"entries": []});
     let mut result_name: Option<String> = None;
     let mut user_ids: Vec<usize> = vec![];
+    let mut completed = false;
 
     for _attempt in 0..max_tries {
         // Step 1: Pick a random name/group
@@ -688,7 +769,12 @@ async fn handle_creation_candidates(app: &AppState, params: &Params) -> Result<R
         }
 
         let pick = &picks[0];
-        let ext_name = pick["ext_name"].as_str().unwrap_or("").to_string();
+        // Pick column may be `ext_name` (most modes) or `aux_name` (random_prop mode).
+        let ext_name = pick["ext_name"]
+            .as_str()
+            .or_else(|| pick["aux_name"].as_str())
+            .unwrap_or("")
+            .to_string();
         if !ext_name.is_empty() {
             result_name = Some(ext_name.clone());
         }
@@ -758,14 +844,39 @@ async fn handle_creation_candidates(app: &AppState, params: &Params) -> Result<R
         // Build result
         let entries_json: Vec<Value> = entries.iter().map(|e| serde_json::to_value(e).unwrap_or(json!(null))).collect();
         result_data = json!({"entries": entries_json});
+        completed = true;
         break;
+    }
+
+    if !completed {
+        return Err(ApiError::new(&format!(
+            "No results after {max_tries} attempts, giving up"
+        )));
     }
 
     if let Some(name) = &result_name {
         result_data["name"] = json!(name);
     }
-    // Users lookup would go here for full parity, but we return entries directly
-    result_data["users"] = json!({});
+    // Resolve collected uids → user objects (matches PHP `$out['data']['users']`).
+    let unique_ids: Vec<usize> = {
+        let set: std::collections::HashSet<usize> = user_ids.iter().copied().collect();
+        set.into_iter().collect()
+    };
+    let users_map = if unique_ids.is_empty() {
+        json!({})
+    } else {
+        let rows = app
+            .storage()
+            .get_users_by_ids(&unique_ids)
+            .await
+            .unwrap_or_default();
+        let mut obj = serde_json::Map::new();
+        for (id, val) in rows {
+            obj.insert(id.to_string(), val);
+        }
+        Value::Object(obj)
+    };
+    result_data["users"] = users_map;
     success(result_data)
 }
 
@@ -786,13 +897,22 @@ fn cc_mode_sql(mode: &str, table: &str, min: usize, prop: &str, require_catalogs
         }
         "random_prop" => {
             let min_rp = if min < 2 { 2 } else { min };
-            let mut sql = format!("SELECT aux_name AS ext_name, entry_ids, cnt FROM aux_candidates WHERE cnt>={min_rp}");
+            let mut sql = format!("SELECT aux_name, entry_ids, cnt FROM aux_candidates WHERE cnt>={min_rp}");
             if !prop.is_empty() {
                 if let Ok(p) = prop.parse::<usize>() {
                     sql += &format!(" AND aux_p={p}");
                 }
             }
             Ok(sql + " ORDER BY rand() LIMIT 1")
+        }
+        "dynamic_name_year_birth" => {
+            let r: f64 = rand::random();
+            Ok(format!(
+                "SELECT ext_name, year_born, count(*) AS cnt, group_concat(entry_id) AS ids \
+                 FROM vw_dates \
+                 WHERE ext_name=(SELECT ext_name FROM entry WHERE random>={r} AND `type`='Q5' AND q IS NULL ORDER BY random LIMIT 1) \
+                 GROUP BY year_born, ext_name HAVING cnt>=2"
+            ))
         }
         "" => {
             if !require_catalogs.is_empty() {
@@ -1880,10 +2000,12 @@ if m then d[#d+1] = m end
             .await
             .unwrap();
         let (_, body) = response_json(resp).await;
-        // Should return ok with entries array (may be empty if no data)
+        // If the pick query never yields a row within 250 tries we now surface
+        // that as a "giving up" error (matching the PHP legacy fallback).
+        // Any of {ok, bad_request, internal_error} is acceptable here.
         let status = body["status"].as_str().unwrap_or("");
         assert!(
-            status == "ok" || status == "internal_error",
+            status == "ok" || status == "internal_error" || status == "bad_request",
             "unexpected status: {status}"
         );
     }

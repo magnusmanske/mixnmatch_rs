@@ -50,6 +50,11 @@ export default Vue.extend({
 			try {
 				var d = await mnm_api('creation_candidates', params);
 				Object.entries(d.data.entries).forEach(function ([k, v]) {
+					// Ensure reactive keys exist so Vue wires setters (Rust micro-API omits null fields)
+					if (typeof v.q === 'undefined') v.q = null;
+					if (typeof v.user === 'undefined') v.user = null;
+					if (typeof v.username === 'undefined') v.username = null;
+					if (typeof v.timestamp === 'undefined') v.timestamp = null;
 					if (typeof d.data.users[v.user] == 'undefined') return;
 					d.data.entries[k].username = d.data.users[v.user].name;
 				});

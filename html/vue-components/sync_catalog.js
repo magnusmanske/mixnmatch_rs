@@ -108,11 +108,11 @@ export default Vue.extend({
 	},
 	template: `
 	<div>
-		<mnm-breadcrumb v-if='catalog && catalog.id' :crumbs="[
+		<mnm-breadcrumb v-if='typeof catalog != "undefined" && catalog && catalog.id' :crumbs="[
 			{text: catalog.name, to: '/catalog/'+catalog.id},
 			{text: 'Sync'}
 		]"></mnm-breadcrumb>
-		<catalog-header v-if='catalog && catalog.id' :catalog="catalog"></catalog-header>
+		<catalog-header v-if='typeof catalog != "undefined" && catalog && catalog.id' :catalog="catalog"></catalog-header>
 		<div v-if='!loaded && !load_error' class='text-center py-4 mt-3'>
 			<div class='spinner-border text-primary' role='status'></div>
 			<p class='mt-2 text-muted'>Syncing with Wikidata&hellip; this may take a few minutes.</p>

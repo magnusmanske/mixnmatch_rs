@@ -3,35 +3,567 @@
 pub mod common;
 
 use crate::app_state::AppState;
+use crate::auth;
 use crate::import_catalog::ImportMode;
 use axum::Router;
 use axum::extract::{Query, State};
-use axum::response::{IntoResponse, Response};
+use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use common::{ApiError, Params};
 use std::sync::Arc;
+use tower_sessions::Session;
 
 pub type SharedState = Arc<AppState>;
 
 pub fn router(app: AppState) -> Router {
     let state: SharedState = Arc::new(app);
+    // 512 MB: big enough for realistic catalog uploads, still bounded.
+    const UPLOAD_MAX_BYTES: usize = 512 * 1024 * 1024;
     Router::new()
-        .route("/api.php", get(api_dispatcher).post(api_dispatcher))
+        .route("/api.php", get(api_dispatcher).post(api_dispatcher_form))
         .route("/api/v1/import_catalog", post(api_import_catalog))
+        .route("/resources/{*path}", get(proxy_magnustools_resources))
+        .layer(axum::extract::DefaultBodyLimit::max(UPLOAD_MAX_BYTES))
         .with_state(state)
 }
 
-async fn api_dispatcher(State(app): State<SharedState>, Query(params): Query<Params>) -> Response {
-    let query = params.get("query").cloned().unwrap_or_default();
-    let result = dispatch(&query, &app, &params).await;
-    match result {
-        Ok(resp) => resp,
-        Err(e) => e.into_response(),
+/// Base URL that `/resources/*` requests are internally proxied to.
+/// Avoids deploying a symlink to a sibling tool's tree.
+const MAGNUSTOOLS_RESOURCES_BASE: &str = "https://magnustools.toolforge.org/resources/";
+
+/// Only cache successful responses — non-2xx bodies are rarely worth caching
+/// and may include transient errors from the upstream proxy.
+const RESOURCES_CACHE_MAX_ENTRIES: usize = 2000;
+
+/// Don't cache anything larger than this (mostly a guard against surprise
+/// huge files — static JS/CSS/images are typically well under 1 MB).
+const RESOURCES_CACHE_MAX_ENTRY_BYTES: usize = 5 * 1024 * 1024;
+
+#[derive(Clone)]
+struct CachedResource {
+    status: u16,
+    content_type: Option<axum::http::HeaderValue>,
+    cache_control: Option<axum::http::HeaderValue>,
+    etag: Option<axum::http::HeaderValue>,
+    last_modified: Option<axum::http::HeaderValue>,
+    content_encoding: Option<axum::http::HeaderValue>,
+    body: bytes::Bytes,
+}
+
+fn resources_cache() -> &'static dashmap::DashMap<String, std::sync::Arc<CachedResource>> {
+    use std::sync::OnceLock;
+    static CACHE: OnceLock<dashmap::DashMap<String, std::sync::Arc<CachedResource>>> =
+        OnceLock::new();
+    CACHE.get_or_init(dashmap::DashMap::new)
+}
+
+fn build_resource_response(entry: &CachedResource) -> Response {
+    let mut builder = axum::http::Response::builder().status(
+        axum::http::StatusCode::from_u16(entry.status)
+            .unwrap_or(axum::http::StatusCode::BAD_GATEWAY),
+    );
+    if let Some(v) = &entry.content_type {
+        builder = builder.header(axum::http::header::CONTENT_TYPE, v);
+    }
+    if let Some(v) = &entry.cache_control {
+        builder = builder.header(axum::http::header::CACHE_CONTROL, v);
+    }
+    if let Some(v) = &entry.etag {
+        builder = builder.header(axum::http::header::ETAG, v);
+    }
+    if let Some(v) = &entry.last_modified {
+        builder = builder.header(axum::http::header::LAST_MODIFIED, v);
+    }
+    if let Some(v) = &entry.content_encoding {
+        builder = builder.header(axum::http::header::CONTENT_ENCODING, v);
+    }
+    builder
+        .body(axum::body::Body::from(entry.body.clone()))
+        .unwrap_or_else(|_| {
+            ApiError("resources proxy: cannot build response".into()).into_response()
+        })
+}
+
+/// Transparently proxy `GET /resources/<path>` to magnustools. Responses are
+/// cached in-process — these are static JS/CSS/image assets that change
+/// rarely, so re-fetching on every hit wastes several hundred ms per asset.
+/// The body and a conservative set of content headers are stored as-is.
+async fn proxy_magnustools_resources(
+    axum::extract::Path(path): axum::extract::Path<String>,
+    uri: axum::http::Uri,
+) -> Response {
+    // Cache key includes the query string so cache-busters (e.g. ?v=123) hit
+    // distinct entries.
+    let query = uri.query().unwrap_or("");
+    let cache_key = if query.is_empty() {
+        path.clone()
+    } else {
+        format!("{path}?{query}")
+    };
+    let cache = resources_cache();
+    if let Some(hit) = cache.get(&cache_key) {
+        return build_resource_response(&hit);
+    }
+    let query_suffix = if query.is_empty() {
+        String::new()
+    } else {
+        format!("?{query}")
+    };
+    let upstream_url = format!("{MAGNUSTOOLS_RESOURCES_BASE}{path}{query_suffix}");
+
+    // Wikimedia rejects requests without a User-Agent. Send something
+    // identifying us — matches the agent we'd use for the MW API.
+    let client = reqwest::Client::builder()
+        .user_agent("mix-n-match (https://mix-n-match.toolforge.org)")
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
+    let resp = match client.get(&upstream_url).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            return ApiError(format!("resources proxy fetch failed: {e}")).into_response();
+        }
+    };
+    let status = resp.status();
+    let content_type = resp
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .cloned();
+    let cache_control = resp
+        .headers()
+        .get(axum::http::header::CACHE_CONTROL)
+        .cloned();
+    let etag = resp.headers().get(axum::http::header::ETAG).cloned();
+    let last_modified = resp
+        .headers()
+        .get(axum::http::header::LAST_MODIFIED)
+        .cloned();
+    let content_encoding = resp
+        .headers()
+        .get(axum::http::header::CONTENT_ENCODING)
+        .cloned();
+    let bytes = match resp.bytes().await {
+        Ok(b) => b,
+        Err(e) => {
+            return ApiError(format!("resources proxy read failed: {e}")).into_response();
+        }
+    };
+
+    let entry = std::sync::Arc::new(CachedResource {
+        status: status.as_u16(),
+        content_type,
+        cache_control,
+        etag,
+        last_modified,
+        content_encoding,
+        body: bytes,
+    });
+    // Only cache successful, reasonably-sized responses. Skip when full so
+    // we don't evict hot entries — the cap is generous enough that it
+    // shouldn't matter in practice.
+    if status.is_success()
+        && entry.body.len() <= RESOURCES_CACHE_MAX_ENTRY_BYTES
+        && cache.len() < RESOURCES_CACHE_MAX_ENTRIES
+    {
+        cache.insert(cache_key, entry.clone());
+    }
+    build_resource_response(&entry)
+}
+
+async fn api_dispatcher(
+    State(app): State<SharedState>,
+    session: Session,
+    Query(params): Query<Params>,
+) -> Response {
+    dispatcher_common(&app, &session, params).await
+}
+
+async fn api_dispatcher_form(
+    State(app): State<SharedState>,
+    session: Session,
+    req: axum::extract::Request,
+) -> Response {
+    use axum::extract::FromRequest;
+    // Sniff content-type to decide between form-urlencoded (the common case)
+    // and multipart uploads (used only by `upload_import_file`).
+    let ct = req
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    if ct.starts_with("multipart/form-data") {
+        return handle_multipart_upload(&app, &session, req).await;
+    }
+
+    match axum::extract::Form::<Params>::from_request(req, &app).await {
+        Ok(axum::extract::Form(params)) => dispatcher_common(&app, &session, params).await,
+        Err(e) => ApiError(format!("invalid form body: {e}")).into_response(),
     }
 }
 
+/// Parse a multipart request that carries a `query=upload_import_file` field
+/// plus the file under `import_file`. Streams the file to
+/// `{import_file_path}/{uuid}` and records the upload in the `import_file`
+/// table so later endpoints can resolve the UUID.
+async fn handle_multipart_upload(
+    app: &AppState,
+    _session: &Session,
+    req: axum::extract::Request,
+) -> Response {
+    use axum::extract::FromRequest;
+    let mut multipart =
+        match axum::extract::Multipart::from_request(req, &(app.clone())).await {
+            Ok(m) => m,
+            Err(e) => return ApiError(format!("multipart parse error: {e}")).into_response(),
+        };
+
+    let mut query = String::new();
+    let mut data_format = String::new();
+    let mut username = String::new();
+    let mut uuid: Option<String> = None;
+    let mut file_bytes_written: u64 = 0;
+
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(f)) => f,
+            Ok(None) => break,
+            Err(e) => return ApiError(format!("multipart field error: {e}")).into_response(),
+        };
+        let name = field.name().unwrap_or("").to_string();
+        match name.as_str() {
+            "query" => query = field.text().await.unwrap_or_default(),
+            "data_format" => data_format = field.text().await.unwrap_or_default(),
+            "username" => username = field.text().await.unwrap_or_default(),
+            "import_file" => {
+                // Stream the file to disk chunk by chunk — never buffer the
+                // whole thing in memory; uploaded catalogs can be 100s of MB.
+                let new_uuid = uuid::Uuid::new_v4().to_string();
+                let path = format!("{}/{}", app.import_file_path(), &new_uuid);
+                let file = match tokio::fs::File::create(&path).await {
+                    Ok(f) => f,
+                    Err(e) => {
+                        return ApiError(format!("cannot create upload file: {e}"))
+                            .into_response();
+                    }
+                };
+                let mut writer = tokio::io::BufWriter::new(file);
+                let mut field = field;
+                use tokio::io::AsyncWriteExt;
+                loop {
+                    match field.chunk().await {
+                        Ok(Some(chunk)) => {
+                            file_bytes_written += chunk.len() as u64;
+                            if let Err(e) = writer.write_all(&chunk).await {
+                                let _ = tokio::fs::remove_file(&path).await;
+                                return ApiError(format!("write failed: {e}")).into_response();
+                            }
+                        }
+                        Ok(None) => break,
+                        Err(e) => {
+                            let _ = tokio::fs::remove_file(&path).await;
+                            return ApiError(format!("upload chunk error: {e}")).into_response();
+                        }
+                    }
+                }
+                if let Err(e) = writer.flush().await {
+                    let _ = tokio::fs::remove_file(&path).await;
+                    return ApiError(format!("flush failed: {e}")).into_response();
+                }
+                uuid = Some(new_uuid);
+            }
+            _ => {
+                // Drain unknown fields so the stream advances.
+                let _ = field.text().await;
+            }
+        }
+    }
+
+    if query != "upload_import_file" {
+        return ApiError(format!(
+            "multipart POST only supported for query=upload_import_file (got '{query}')"
+        ))
+        .into_response();
+    }
+
+    if username.is_empty() {
+        return ApiError("missing 'username' field".into()).into_response();
+    }
+    if data_format.is_empty() {
+        return ApiError("missing 'data_format' field".into()).into_response();
+    }
+    let uuid = match uuid {
+        Some(u) if file_bytes_written > 0 => u,
+        _ => return ApiError("missing or empty 'import_file' field".into()).into_response(),
+    };
+
+    let user_id = match app
+        .storage()
+        .get_user_by_name(&username.replace('_', " "))
+        .await
+    {
+        Ok(Some((id, _, _))) => id,
+        Ok(None) => return ApiError(format!("unknown user '{username}'")).into_response(),
+        Err(e) => return ApiError(e.to_string()).into_response(),
+    };
+
+    if let Err(e) = app
+        .storage()
+        .save_import_file(&uuid, &data_format, user_id)
+        .await
+    {
+        // Roll back the file on DB failure so we don't orphan on-disk bytes.
+        let _ = tokio::fs::remove_file(format!("{}/{}", app.import_file_path(), &uuid)).await;
+        return ApiError(format!("cannot record upload: {e}")).into_response();
+    }
+
+    ok(serde_json::json!({
+        "uuid": uuid,
+        "bytes": file_bytes_written,
+    }))
+}
+
+async fn dispatcher_common(app: &AppState, session: &Session, params: Params) -> Response {
+    // Intercept the OAuth callback (user returning from Special:OAuth/authorize).
+    // This mirrors PHP's constructor-time check in MW_OAuth::__construct.
+    if params.contains_key("oauth_verifier") && params.contains_key("oauth_token") {
+        return handle_oauth_callback(app, session, &params).await;
+    }
+
+    // Mirror the PHP behaviour: legacy callers may use "action" instead of "query"
+    // to reach the distributed-game endpoints, which become "dg_<action>".
+    let query = match params.get("query").filter(|s| !s.is_empty()).cloned() {
+        Some(q) => q,
+        None => match params.get("action").filter(|s| !s.is_empty()) {
+            Some(a) => format!("dg_{a}"),
+            None => String::new(),
+        },
+    };
+    // JSONP wrapping is disabled on auth endpoints — cookies + JSONP is a CSRF vector.
+    let callback_allowed = query != "widar";
+    let callback = if callback_allowed {
+        params.get("callback").cloned().unwrap_or_default()
+    } else {
+        String::new()
+    };
+    // Wrap the dispatcher in catch_unwind so a panic in a single handler
+    // (typically a MySQL type mismatch inside `row.get`) returns a clean
+    // error response instead of killing the connection mid-flight — the
+    // latter would surface in the browser as a NetworkError.
+    use futures::FutureExt;
+    let dispatch_fut = std::panic::AssertUnwindSafe(dispatch(&query, app, session, &params));
+    let result = dispatch_fut.catch_unwind().await;
+    let resp = match result {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => e.into_response(),
+        Err(panic) => {
+            let msg = panic
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| panic.downcast_ref::<&str>().map(|s| (*s).to_string()))
+                .unwrap_or_else(|| "unknown panic".to_string());
+            log::error!("api.php query={query} panicked: {msg}");
+            ApiError(format!("internal error: {msg}")).into_response()
+        }
+    };
+    if callback.is_empty() {
+        return resp;
+    }
+    // JSONP wrapping: only apply to JSON responses; pass non-JSON payloads through unchanged.
+    if resp
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|ct| ct.starts_with("application/json"))
+    {
+        let (parts, body) = resp.into_parts();
+        // Body may be arbitrarily large; cap at 100MB for safety.
+        let bytes = match axum::body::to_bytes(body, 100_000_000).await {
+            Ok(b) => b,
+            Err(_) => return axum::http::Response::from_parts(parts, axum::body::Body::empty()),
+        };
+        let wrapped = format!("{callback}({})", String::from_utf8_lossy(&bytes));
+        return (
+            [(
+                axum::http::header::CONTENT_TYPE,
+                "application/javascript; charset=UTF-8",
+            )],
+            wrapped,
+        )
+            .into_response();
+    }
+    resp
+}
+
+/// Implements `?query=widar&action=…`. Mirrors PHP `query_widar` →
+/// `Widar::render_reponse`, which reads the sub-action from the `action`
+/// form field and writes its userinfo into the `result` key (not `data`).
+/// Sub-actions: `authorize`, `get_rights`, `logout`.
+async fn query_widar(
+    app: &AppState,
+    session: &Session,
+    params: &Params,
+) -> Result<Response, ApiError> {
+    let cfg = app
+        .oauth_config()
+        .ok_or_else(|| ApiError("OAuth is not configured on this server".into()))?
+        .clone();
+    // Match the PHP Widar convention: the sub-action is the `action` parameter.
+    // `widar_action` is accepted as a legacy alias so older callers keep working.
+    let action = params
+        .get("action")
+        .filter(|s| !s.is_empty())
+        .cloned()
+        .or_else(|| params.get("widar_action").cloned())
+        .unwrap_or_else(|| "get_rights".to_string());
+    match action.as_str() {
+        "authorize" => {
+            // Off-toolforge the bypass pretends we're already logged in —
+            // just redirect home instead of triggering a real OAuth dance.
+            if auth::guard::dev_bypass_user().is_some() {
+                return Ok(Redirect::to("/").into_response());
+            }
+            let token = auth::flow::initiate_request_token(&cfg)
+                .await
+                .map_err(|e| ApiError(format!("OAuth initiate failed: {e}")))?;
+            let new_state = auth::session::SessionData {
+                state: auth::session::SessionState::PendingVerifier {
+                    request_token_key: token.key.clone(),
+                    request_token_secret: token.secret.clone(),
+                },
+            };
+            auth::session::store(session, &new_state).await?;
+            let url = auth::flow::build_authorize_redirect_url(&cfg, &token.key);
+            Ok(Redirect::to(&url).into_response())
+        }
+        "logout" => {
+            auth::session::clear(session).await?;
+            Ok(json_resp(serde_json::json!({
+                "status": "OK",
+                "error": "OK",
+                "data": [],
+            })))
+        }
+        // Default (including the explicit "get_rights").
+        _ => {
+            // Return the shape PHP `Widar::render_reponse` produces:
+            // a top-level `result` holding the rights query, not `data`.
+            // The Vue frontend reads `d.result.query.userinfo`.
+            if let Some(u) = auth::guard::dev_bypass_user() {
+                return Ok(json_resp(serde_json::json!({
+                    "status": "OK",
+                    "error": "OK",
+                    "data": [],
+                    "result": {
+                        "query": {
+                            "userinfo": {
+                                "id": u.mnm_user_id,
+                                "name": u.wikidata_username,
+                            }
+                        }
+                    }
+                })));
+            }
+            let data = auth::session::load(session).await;
+            match data.state {
+                auth::session::SessionState::Authenticated {
+                    wikidata_user_id,
+                    wikidata_username,
+                    ..
+                } => Ok(json_resp(serde_json::json!({
+                    "status": "OK",
+                    "error": "OK",
+                    "data": [],
+                    "result": {
+                        "query": {
+                            "userinfo": {
+                                "id": wikidata_user_id,
+                                "name": wikidata_username,
+                            }
+                        }
+                    }
+                }))),
+                _ => Ok(json_resp(serde_json::json!({
+                    "status": "OK",
+                    "error": "OK",
+                    "data": [],
+                    "result": {
+                        "error": {
+                            "code": "mwoauth-invalid-authorization",
+                            "info": "Not logged in",
+                        }
+                    }
+                }))),
+            }
+        }
+    }
+}
+
+/// Finish the OAuth1 handshake. Runs when the user returns from the authorize
+/// step with `oauth_verifier` and `oauth_token` query parameters.
+async fn handle_oauth_callback(app: &AppState, session: &Session, params: &Params) -> Response {
+    let cfg = match app.oauth_config() {
+        Some(c) => c.clone(),
+        None => return ApiError("OAuth is not configured on this server".into()).into_response(),
+    };
+    let verifier = params.get("oauth_verifier").cloned().unwrap_or_default();
+    let incoming_token = params.get("oauth_token").cloned().unwrap_or_default();
+
+    let data = auth::session::load(session).await;
+    let (rk, rs) = match data.state {
+        auth::session::SessionState::PendingVerifier {
+            request_token_key,
+            request_token_secret,
+        } => (request_token_key, request_token_secret),
+        _ => {
+            return ApiError("No pending OAuth login — start over from the authorize link".into())
+                .into_response();
+        }
+    };
+    // Session fixation guard: the verifier must match the token we stashed.
+    if incoming_token != rk {
+        return ApiError("OAuth token mismatch".into()).into_response();
+    }
+    let pair = auth::flow::TokenPair {
+        key: rk,
+        secret: rs,
+    };
+    let access = match auth::flow::exchange_verifier(&cfg, &pair, &verifier).await {
+        Ok(a) => a,
+        Err(e) => return ApiError(format!("OAuth exchange failed: {e}")).into_response(),
+    };
+    let user = match auth::flow::fetch_userinfo(&cfg, &access).await {
+        Ok(u) => u,
+        Err(e) => return ApiError(format!("OAuth userinfo failed: {e}")).into_response(),
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let new_data = auth::session::SessionData {
+        state: auth::session::SessionState::Authenticated {
+            access_token_key: access.key,
+            access_token_secret: access.secret,
+            wikidata_user_id: user.id,
+            wikidata_username: auth::session::normalize_username(&user.name),
+            authenticated_at: now,
+        },
+    };
+    if let Err(e) = auth::session::store(session, &new_data).await {
+        return e.into_response();
+    }
+    // Re-cycle session id to prevent session fixation on the now-authenticated session.
+    let _ = session.cycle_id().await;
+    Redirect::to("/").into_response()
+}
+
 #[allow(clippy::cognitive_complexity)]
-async fn dispatch(query: &str, app: &AppState, params: &Params) -> Result<Response, ApiError> {
+async fn dispatch(
+    query: &str,
+    app: &AppState,
+    session: &Session,
+    params: &Params,
+) -> Result<Response, ApiError> {
     match query {
         // Catalog
         "catalogs" => query_catalogs(app).await,
@@ -39,7 +571,7 @@ async fn dispatch(query: &str, app: &AppState, params: &Params) -> Result<Respon
         "catalog_details" => query_catalog_details(app, params).await,
         "get_catalog_info" => query_get_catalog_info(app, params).await,
         "catalog" => query_catalog(app, params).await,
-        "edit_catalog" => query_edit_catalog(app, params).await,
+        "edit_catalog" => query_edit_catalog(app, session, params).await,
         "catalog_overview" => query_catalog_overview(app, params).await,
 
         // Entry
@@ -51,22 +583,22 @@ async fn dispatch(query: &str, app: &AppState, params: &Params) -> Result<Respon
         "entries_via_property_value" => query_entries_via_property_value(app, params).await,
         "get_entries_by_q_or_value" => query_get_entries_by_q_or_value(app, params).await,
 
-        // Matching
-        "match_q" => query_match_q(app, params).await,
-        "match_q_multi" => query_match_q_multi(app, params).await,
-        "remove_q" => query_remove_q(app, params).await,
-        "remove_all_q" => query_remove_all_q(app, params).await,
-        "remove_all_multimatches" => query_remove_all_multimatches(app, params).await,
-        "suggest" => query_suggest(app, params).await,
+        // Matching — all DB-writing actions are gated behind OAuth
+        "match_q" => query_match_q(app, session, params).await,
+        "match_q_multi" => query_match_q_multi(app, session, params).await,
+        "remove_q" => query_remove_q(app, session, params).await,
+        "remove_all_q" => query_remove_all_q(app, session, params).await,
+        "remove_all_multimatches" => query_remove_all_multimatches(app, session, params).await,
+        "suggest" => query_suggest(app, session, params).await,
 
         // Jobs
         "get_jobs" => query_get_jobs(app, params).await,
-        "start_new_job" => query_start_new_job(app, params).await,
+        "start_new_job" => query_start_new_job(app, session, params).await,
 
         // Issues
         "get_issues" => query_get_issues(app, params).await,
         "all_issues" => query_all_issues(app, params).await,
-        "resolve_issue" => query_resolve_issue(app, params).await,
+        "resolve_issue" => query_resolve_issue(app, session, params).await,
 
         // User & auth
         "get_user_info" => query_get_user_info(app, params).await,
@@ -97,42 +629,325 @@ async fn dispatch(query: &str, app: &AppState, params: &Params) -> Result<Respon
         "proxy_entry_url" => query_proxy_entry_url(app, params).await,
         "cersei_forward" => query_cersei_forward(app, params).await,
 
-        // Admin & config
-        "update_overview" => query_update_overview(app, params).await,
-        "update_ext_urls" => query_update_ext_urls(app, params).await,
-        "add_aliases" => query_add_aliases(app, params).await,
+        // Admin & config — writes require OAuth; admin checks go via require_catalog_admin
+        "update_overview" => query_update_overview(app, session, params).await,
+        "update_ext_urls" => query_update_ext_urls(app, session, params).await,
+        "add_aliases" => query_add_aliases(app, session, params).await,
         "get_missing_properties" => query_get_missing_properties(app).await,
-        "set_missing_properties_status" => query_set_missing_properties_status(app, params).await,
+        "set_missing_properties_status" => {
+            query_set_missing_properties_status(app, session, params).await
+        }
         "get_top_groups" => query_get_top_groups(app).await,
-        "set_top_group" => query_set_top_group(app, params).await,
-        "remove_empty_top_group" => query_remove_empty_top_group(app, params).await,
+        "set_top_group" => query_set_top_group(app, session, params).await,
+        "remove_empty_top_group" => query_remove_empty_top_group(app, session, params).await,
         "quick_compare_list" => query_quick_compare_list(app).await,
         "rc_atom" => query_rc_atom(app, params).await,
         "get_flickr_key" => query_get_flickr_key().await,
 
-        // Stubs for endpoints requiring external services
+        // Delegated to micro-API internally (no HTTP round-trip)
         "get_sync" => query_get_sync(app, params).await,
-        "sitestats" => query_sitestats(app, params).await,
-        "disambig" => query_disambig(app, params).await,
-        "missingpages" => query_missingpages(app, params).await,
         "sparql_list" => query_sparql_list(app, params).await,
         "quick_compare" => query_quick_compare(app, params).await,
-        "prep_new_item" => query_prep_new_item(app, params).await,
-        "get_entry_reader_view" => query_get_entry_reader_view(app, params).await,
-
-        // Stubs for code fragment / scraper / import endpoints
         "get_code_fragments" => query_get_code_fragments(app, params).await,
-        "save_code_fragment" => query_save_code_fragment(app, params).await,
-        "test_code_fragment" => query_test_code_fragment(app, params).await,
+        "save_code_fragment" => query_save_code_fragment(app, session, params).await,
+        "test_code_fragment" => query_test_code_fragment(app, session, params).await,
+
+        // Large-catalogs endpoints (backed by the large_catalogs DB)
+        "lc_catalogs" => query_lc_catalogs(app).await,
+        "lc_bbox" => query_lc_bbox(app, params).await,
+        "lc_report" => query_lc_report(app, params).await,
+        "lc_report_list" => query_lc_report_list(app, params).await,
+        "lc_rc" => query_lc_rc(app, params).await,
+        "lc_set_status" => query_lc_set_status(app, session, params).await,
+
+        // Newly ported lightweight catalog endpoints
+        "batch_catalogs" => query_batch_catalogs(app, params).await,
+        "search_catalogs" => query_search_catalogs(app, params).await,
+        "catalog_type_counts" => query_catalog_type_counts(app).await,
+        "latest_catalogs" => query_latest_catalogs(app, params).await,
+        "catalogs_with_locations" => query_catalogs_with_locations(app).await,
+        "catalog_property_groups" => query_catalog_property_groups(app).await,
+        "check_wd_prop_usage" => query_check_wd_prop_usage(app, params).await,
+        "catalog_by_group" => query_catalog_by_group(app, params).await,
+
+        // Newly ported misc endpoints
+        "create" => query_create(app, params).await,
+        "user_edits" => query_user_edits(app, params).await,
+        "get_statement_text_groups" => query_get_statement_text_groups(app, params).await,
+        "set_statement_text_q" => query_set_statement_text_q(app, session, params).await,
+        "missingpages" => query_missingpages(app, params).await,
+        "sitestats" => query_sitestats(app, params).await,
+
+        // Distributed-game endpoints (also dispatched via action=… → query=dg_…)
+        "dg_desc" => query_dg_desc(params).await,
+        "dg_tiles" => query_dg_tiles(app, params).await,
+        "dg_log_action" => query_dg_log_action(app, params).await,
+
+        // Stubs: require external services that are not yet ported
+        "disambig" => Err(ApiError(
+            "disambig requires Wikidata DB replica access (not yet ported to Rust)".into(),
+        )),
+        "prep_new_item" => Err(ApiError(
+            "prep_new_item requires QuickStatements integration (not yet ported to Rust)".into(),
+        )),
+        "get_entry_reader_view" => Err(ApiError(
+            "get_entry_reader_view requires Readability library (not yet ported to Rust)".into(),
+        )),
         "autoscrape_test" => query_autoscrape_test(app, params).await,
         "save_scraper" => query_save_scraper(app, params).await,
-        "upload_import_file" => query_upload_import_file(app, params).await,
-        "import_source" => query_import_source(app, params).await,
+        "upload_import_file" => Err(ApiError(
+            "upload_import_file must be POSTed as multipart/form-data".into(),
+        )),
+        "import_source" => query_import_source(app, session, params).await,
         "get_source_headers" => query_get_source_headers(app, params).await,
         "test_import_source" => query_test_import_source(app, params).await,
+        "widar" => query_widar(app, session, params).await,
 
         _ => Err(ApiError(format!("Unknown query '{query}'"))),
     }
+}
+
+// ─── Import / update catalog (frontend wizard) ──────────────────────────────
+
+fn parse_update_info(params: &Params) -> Result<serde_json::Value, ApiError> {
+    let raw = common::get_param(params, "update_info", "");
+    if raw.is_empty() {
+        return Err(ApiError("missing 'update_info' parameter".into()));
+    }
+    serde_json::from_str(&raw)
+        .map_err(|e| ApiError(format!("invalid update_info JSON: {e}")))
+}
+
+async fn query_get_source_headers(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let update_info = parse_update_info(params)?;
+    let (headers, _preview) =
+        crate::datasource::DataSource::read_headers_and_preview(app, &update_info, 0)
+            .await
+            .map_err(|e| ApiError(e.to_string()))?;
+    Ok(ok(serde_json::json!(headers)))
+}
+
+async fn query_test_import_source(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let update_info = parse_update_info(params)?;
+    let max_rows = update_info
+        .get("read_max_rows")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(1000) as usize;
+
+    let (headers, preview) =
+        crate::datasource::DataSource::read_headers_and_preview(app, &update_info, 10)
+            .await
+            .map_err(|e| ApiError(e.to_string()))?;
+    let (total, with_id, row_errors) =
+        crate::datasource::DataSource::count_rows(app, &update_info, max_rows)
+            .await
+            .map_err(|e| ApiError(e.to_string()))?;
+
+    // Frontend reads counters from `data` (summary cards) and preview rows
+    // from the top-level `rows` array (used by `load_preview_rows`).
+    Ok(json_resp(serde_json::json!({
+        "status": "OK",
+        "data": {
+            "rows_scanned": total,
+            "rows_with_id": with_id,
+            "errors": row_errors,
+            "headers": headers,
+        },
+        "rows": preview,
+    })))
+}
+
+async fn query_import_source(
+    app: &AppState,
+    _session: &Session,
+    params: &Params,
+) -> Result<Response, ApiError> {
+    let update_info = parse_update_info(params)?;
+    let meta_raw = common::get_param(params, "meta", "{}");
+    let meta: serde_json::Value =
+        serde_json::from_str(&meta_raw).unwrap_or(serde_json::Value::Null);
+    let catalog_id = common::get_param_int(params, "catalog", 0) as usize;
+    let _seconds = common::get_param_int(params, "seconds", 0) as u64;
+    let username = common::get_param(params, "username", "").replace('_', " ");
+
+    // Resolve the user id — required for anything that writes to the DB.
+    let user_id = match app.storage().get_user_by_name(&username).await? {
+        Some((id, _, _)) => id,
+        None => return Err(ApiError(format!("unknown user '{username}'"))),
+    };
+
+    // Two modes:
+    //  (a) file_uuid pointing at a json/jsonl upload → reuse import_catalog
+    //  (b) CSV/TSV/SSV via source_url or file_uuid → reuse UpdateCatalog
+    //
+    // Mode (a) is the "JSON import" flow from the frontend; it requires a
+    // catalog_id that already exists. Mode (b) is the tabbed-file flow.
+    let uuid = update_info
+        .get("file_uuid")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let data_format = update_info
+        .get("data_format")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    if let Some(uuid) = &uuid {
+        if data_format == "json" || data_format == "jsonl" {
+            let cid = if catalog_id > 0 {
+                catalog_id
+            } else {
+                meta.get("catalog_id")
+                    .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                    .unwrap_or(0) as usize
+            };
+            if cid == 0 {
+                return Err(ApiError(
+                    "catalog_id required for JSON/JSONL import".into(),
+                ));
+            }
+            let result = crate::import_catalog::import_from_import_file(
+                app,
+                cid,
+                uuid,
+                crate::import_catalog::ImportMode::AddReplace,
+            )
+            .await
+            .map_err(|e| ApiError(e.to_string()))?;
+            return Ok(ok(serde_json::json!({
+                "catalog_id": cid,
+                "created": result.created,
+                "updated": result.updated,
+                "skipped_fully_matched": result.skipped_fully_matched,
+                "deleted": result.deleted,
+                "errors": result.errors,
+            })));
+        }
+    }
+
+    // Tabbed-file path. For an existing catalog, persist the update_info
+    // JSON and run the shared updater. A "new catalog" wizard path needs a
+    // catalog-creation step that doesn't exist yet at the trait level —
+    // surface that clearly rather than silently no-oping.
+    if catalog_id == 0 {
+        return Err(ApiError(
+            "creating a new catalog from the wizard is not yet supported; please create the catalog first and re-run in 'update' mode".into(),
+        ));
+    }
+
+    let update_info_json = serde_json::to_string(&update_info)
+        .map_err(|e| ApiError(format!("serialize update_info: {e}")))?;
+    app.storage()
+        .update_catalog_set_update_info(catalog_id, &update_info_json, user_id)
+        .await
+        .map_err(|e| ApiError(format!("persist update_info: {e}")))?;
+
+    let mut uc = crate::update_catalog::UpdateCatalog::new(app);
+    uc.update_from_tabbed_file(catalog_id)
+        .await
+        .map_err(|e| ApiError(e.to_string()))?;
+
+    Ok(ok(serde_json::json!({ "catalog_id": catalog_id })))
+}
+
+// ─── Scraper builder (autoscrape_test + save_scraper) ──────────────────────
+
+async fn query_autoscrape_test(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let json_str = common::get_param(params, "json", "");
+    if json_str.is_empty() {
+        return Err(ApiError("missing 'json' parameter".into()));
+    }
+    let json: serde_json::Value = serde_json::from_str(&json_str)
+        .map_err(|e| ApiError(format!("invalid scraper JSON: {e}")))?;
+    let (url, html, results) = crate::autoscrape::Autoscrape::test_fetch(app, &json)
+        .await
+        .map_err(|e| ApiError(e.to_string()))?;
+    // The client uses `data.html` for regex testing, `data.url` for display,
+    // and `data.results` for the "entries found" table + the save-button gate.
+    Ok(ok(serde_json::json!({ "url": url, "html": html, "results": results })))
+}
+
+async fn query_save_scraper(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let scraper_str = common::get_param(params, "scraper", "");
+    let options_str = common::get_param(params, "options", "{}");
+    let levels_str = common::get_param(params, "levels", "[]");
+    let meta_str = common::get_param(params, "meta", "{}");
+    let username = common::get_param(params, "tusc_user", "").replace('_', " ");
+
+    if scraper_str.is_empty() {
+        return Err(ApiError("missing 'scraper' parameter".into()));
+    }
+    if username.is_empty() {
+        return Err(ApiError("missing 'tusc_user' parameter".into()));
+    }
+
+    let scraper: serde_json::Value = serde_json::from_str(&scraper_str)
+        .map_err(|e| ApiError(format!("invalid 'scraper' JSON: {e}")))?;
+    let options: serde_json::Value = serde_json::from_str(&options_str)
+        .map_err(|e| ApiError(format!("invalid 'options' JSON: {e}")))?;
+    let levels: serde_json::Value = serde_json::from_str(&levels_str)
+        .map_err(|e| ApiError(format!("invalid 'levels' JSON: {e}")))?;
+    let meta: serde_json::Value = serde_json::from_str(&meta_str)
+        .map_err(|e| ApiError(format!("invalid 'meta' JSON: {e}")))?;
+
+    // Resolve user — fail loudly if the Widar-supplied username is unknown,
+    // so the scraper doesn't get attributed to owner 0.
+    let user_id = match app.storage().get_user_by_name(&username).await? {
+        Some((id, _, _)) => id,
+        None => return Err(ApiError(format!("unknown user '{username}'"))),
+    };
+
+    // Resolve target catalog_id. If the wizard left `meta.catalog_id` blank,
+    // we create the catalog first so the autoscrape row has something to FK to.
+    let meta_cid = meta
+        .get("catalog_id")
+        .and_then(|v| {
+            v.as_u64()
+                .map(|n| n as usize)
+                .or_else(|| v.as_str().and_then(|s| s.parse::<usize>().ok()))
+        })
+        .unwrap_or(0);
+
+    let catalog_id = if meta_cid > 0 {
+        meta_cid
+    } else {
+        let name = meta
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+        let desc = meta.get("desc").and_then(|v| v.as_str()).unwrap_or("");
+        let url = meta.get("url").and_then(|v| v.as_str()).unwrap_or("");
+        let type_name = meta.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        let wd_prop: Option<usize> = meta
+            .get("property")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim_start_matches(['P', 'p']))
+            .and_then(|s| s.parse::<usize>().ok());
+        if name.is_empty() {
+            return Err(ApiError("meta.name is required when creating a new catalog".into()));
+        }
+        app.storage()
+            .create_catalog_from_meta(name, desc, url, type_name, wd_prop, user_id)
+            .await
+            .map_err(|e| ApiError(format!("create catalog: {e}")))?
+    };
+
+    // Bundle scraper + options + levels into the single JSON column that
+    // `Autoscrape::new` parses when a live scraper is later run.
+    let combined = serde_json::json!({
+        "scraper": scraper,
+        "options": options,
+        "levels": levels,
+    });
+    let combined_str = serde_json::to_string(&combined)
+        .map_err(|e| ApiError(format!("serialize scraper JSON: {e}")))?;
+    app.storage()
+        .save_scraper(catalog_id, &combined_str, user_id)
+        .await
+        .map_err(|e| ApiError(format!("save scraper: {e}")))?;
+
+    Ok(ok(serde_json::json!({ "catalog": catalog_id })))
 }
 
 // ─── Import catalog endpoint ────────────────────────────────────────────────
@@ -239,7 +1054,7 @@ async fn query_catalog_details(app: &AppState, params: &Params) -> Result<Respon
 
 async fn query_get_catalog_info(app: &AppState, params: &Params) -> Result<Response, ApiError> {
     let cid = common::get_catalog(params)?;
-    let data = app.storage().api_get_single_catalog_overview(cid).await?;
+    let data = app.storage().api_get_catalog_info(cid).await?;
     Ok(ok(serde_json::json!([data])))
 }
 
@@ -260,10 +1075,12 @@ async fn query_catalog(app: &AppState, params: &Params) -> Result<Response, ApiE
     let offset = meta.get("offset").and_then(|v| v.as_u64()).unwrap_or(0);
     let entry_type = common::get_param(params, "type", "");
     let title_match = common::get_param(params, "title_match", "");
+    let keyword = common::get_param(params, "keyword", "");
+    let user_id_raw = common::get_param(params, "user_id", "");
 
     let mut conds = vec![format!("catalog={catalog}")];
     if show_multiple == 1 {
-        conds.push("EXISTS (SELECT * FROM multi_match WHERE entry_id=entry.id) AND (user<=0 OR user is null)".into());
+        conds.push("EXISTS (SELECT 1 FROM multi_match WHERE entry_id=entry.id) AND (user<=0 OR user is null)".into());
     } else if show_noq + show_autoq + show_userq + show_nowd == 0 && show_na == 1 {
         conds.push("q=0".into());
     } else if show_noq + show_autoq + show_userq + show_na == 0 && show_nowd == 1 {
@@ -291,31 +1108,54 @@ async fn query_catalog(app: &AppState, params: &Params) -> Result<Response, ApiE
             title_match.replace('\'', "''")
         ));
     }
+    if !keyword.is_empty() {
+        let kw = keyword.replace('\'', "''");
+        conds.push(format!(
+            "(`ext_name` LIKE '%{kw}%' OR `ext_desc` LIKE '%{kw}%')"
+        ));
+    }
+    if !user_id_raw.is_empty() {
+        // Parse as signed so "0" (auto-matched) is distinguished from a missing param.
+        if let Ok(uid) = user_id_raw.parse::<i64>() {
+            if uid > 0 {
+                conds.push(format!("`user`={uid}"));
+            } else if uid == 0 {
+                conds.push("`user`=0".into());
+            }
+        }
+    }
 
-    let sql = format!(
-        "SELECT * FROM entry WHERE {} LIMIT {} OFFSET {}",
-        conds.join(" AND "),
-        per_page,
-        offset
+    let where_clause = conds.join(" AND ");
+    let sql = format!("SELECT * FROM entry WHERE {where_clause} LIMIT {per_page} OFFSET {offset}");
+    // Count and page query are independent SELECTs — run them in parallel.
+    let s = app.storage();
+    let (total_filtered, entries) = tokio::join!(
+        s.api_get_catalog_entries_count(&where_clause),
+        s.api_get_catalog_entries_raw(&sql),
     );
-    let entries = app.storage().api_get_catalog_entries_raw(&sql).await?;
+    let total_filtered = total_filtered.unwrap_or(0);
+    let entries = entries?;
     let mut data = common::entries_to_json_data(&entries, app).await?;
     common::add_extended_entry_data(app, &mut data).await?;
-    Ok(ok(data))
+    // PHP places `total_filtered` alongside `status`/`data`, not inside `data`,
+    // so return a manually-assembled envelope here.
+    Ok(json_resp(serde_json::json!({
+        "status": "OK",
+        "data": data,
+        "total_filtered": total_filtered,
+    })))
 }
 
-async fn query_edit_catalog(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+async fn query_edit_catalog(
+    app: &AppState,
+    session: &Session,
+    params: &Params,
+) -> Result<Response, ApiError> {
     let cid = common::get_catalog(params)?;
     let data_str = common::get_param(params, "data", "");
     let data: serde_json::Value =
         serde_json::from_str(&data_str).map_err(|_| ApiError("Bad data".into()))?;
-    let username = common::get_param(params, "username", "").replace('_', " ");
-    let user = app.storage().get_user_by_name(&username).await?;
-    match user {
-        Some((_, _, is_admin)) if is_admin => {}
-        Some((_, _, _)) => return Err(ApiError(format!("'{username}' is not a catalog admin"))),
-        None => return Err(ApiError(format!("No such user '{username}'"))),
-    }
+    auth::guard::require_catalog_admin_from_params(app, session, params).await?;
     let name = data
         .get("name")
         .and_then(|v| v.as_str())
@@ -403,7 +1243,7 @@ async fn query_search(app: &AppState, params: &Params) -> Result<Response, ApiEr
     let max_results = common::get_param_int(params, "max", 100) as usize;
     let desc_search = common::get_param_int(params, "description_search", 0) != 0;
     let no_label = common::get_param_int(params, "no_label_search", 0) != 0;
-    let exclude: Vec<usize> = common::get_param(params, "exclude", "")
+    let user_exclude: Vec<usize> = common::get_param(params, "exclude", "")
         .split(',')
         .filter_map(|s| s.trim().parse().ok())
         .collect();
@@ -411,6 +1251,12 @@ async fn query_search(app: &AppState, params: &Params) -> Result<Response, ApiEr
         .split(',')
         .filter_map(|s| s.trim().parse().ok())
         .collect();
+    // Mirror PHP: the effective exclude list is the user-provided one plus every
+    // inactive catalog, so disabled catalogs never leak into text or Q-number search.
+    let mut exclude = user_exclude;
+    exclude.extend(app.storage().api_get_inactive_catalog_ids().await?);
+    exclude.sort();
+    exclude.dedup();
 
     let what_clean = what.replace('-', " ");
     let q_match = regex::Regex::new(r"^\s*[Qq]?(\d+)\s*$")
@@ -420,7 +1266,7 @@ async fn query_search(app: &AppState, params: &Params) -> Result<Response, ApiEr
                 .map(|c| c[1].parse::<isize>().unwrap_or(0))
         });
     let entries = if let Some(q) = q_match.filter(|q| *q > 0) {
-        app.storage().api_search_by_q(q).await?
+        app.storage().api_search_by_q(q, &exclude).await?
     } else {
         let words: Vec<String> = what_clean
             .split_whitespace()
@@ -453,37 +1299,44 @@ async fn query_random(app: &AppState, params: &Params) -> Result<Response, ApiEr
     let submode = common::get_param(params, "submode", "");
     let entry_type = common::get_param(params, "type", "");
     let id = common::get_param_int(params, "id", 0) as usize;
-    let active = app.storage().api_get_active_catalog_ids().await?;
 
-    if id != 0 {
-        let entry = crate::entry::Entry::from_id(id, app).await?;
-        return Ok(ok(serde_json::json!(entry)));
-    }
-    for attempt in 0..=10 {
-        let r: f64 = if attempt > 10 { 0.0 } else { rand::random() };
-        if let Some(entry) = app
-            .storage()
-            .api_get_random_entry(catalog, &submode, &entry_type, r, &active)
+    // Find the candidate entry. Mirrors query_random() in PHP API.php:
+    //   id != 0            → direct lookup by id (test hook in PHP)
+    //   catalog > 0        → catalog-specific random pick (catalog_q_random index)
+    //   catalog == 0       → global random pick across active catalogs
+    let entry_opt = if id != 0 {
+        crate::entry::Entry::from_id(id, app).await.ok()
+    } else if catalog > 0 {
+        app.storage()
+            .api_get_random_entry(catalog, &submode, &entry_type, &[])
             .await?
-        {
-            let eid = entry.id.unwrap_or(0);
-            let mut data = serde_json::json!(entry);
-            let pd = app
-                .storage()
-                .api_get_person_dates_for_entries(&[eid])
-                .await?;
-            if let Some((born, died)) = pd.get(&eid) {
-                if !born.is_empty() {
-                    data["born"] = serde_json::json!(born);
-                }
-                if !died.is_empty() {
-                    data["died"] = serde_json::json!(died);
-                }
-            }
-            return Ok(ok(data));
+    } else {
+        let active = app.storage().api_get_active_catalog_ids().await?;
+        app.storage()
+            .api_get_random_entry(0, &submode, &entry_type, &active)
+            .await?
+    };
+
+    let Some(entry) = entry_opt else {
+        return Ok(ok(serde_json::Value::Null));
+    };
+
+    // Augment with person dates if we have them.
+    let eid = entry.id.unwrap_or(0);
+    let mut data = serde_json::json!(entry);
+    let pd = app
+        .storage()
+        .api_get_person_dates_for_entries(&[eid])
+        .await?;
+    if let Some((born, died)) = pd.get(&eid) {
+        if !born.is_empty() {
+            data["born"] = serde_json::json!(born);
+        }
+        if !died.is_empty() {
+            data["died"] = serde_json::json!(died);
         }
     }
-    Ok(ok(serde_json::Value::Null))
+    Ok(ok(data))
 }
 
 async fn query_entries_query(app: &AppState, params: &Params) -> Result<Response, ApiError> {
@@ -578,12 +1431,26 @@ async fn query_get_entries_by_q_or_value(
     let mut data = common::entries_to_json_data(&entries, app).await?;
     common::add_extended_entry_data(app, &mut data).await?;
 
-    // Add catalog info
-    let cat_ids: std::collections::HashSet<usize> = entries.iter().map(|e| e.catalog).collect();
+    // Add catalog info — one batched fetch, not N full-overview fetches
+    // in a loop. `api_get_catalog_overview_for_ids` runs the 4 overview
+    // queries once and filters the result.
+    let cat_ids: Vec<usize> = entries
+        .iter()
+        .map(|e| e.catalog)
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
     let mut catalogs = serde_json::Map::new();
-    for cid in cat_ids {
-        if let Ok(c) = app.storage().api_get_single_catalog_overview(cid).await {
-            catalogs.insert(cid.to_string(), c);
+    if !cat_ids.is_empty() {
+        let rows = app
+            .storage()
+            .api_get_catalog_overview_for_ids(&cat_ids)
+            .await
+            .unwrap_or_default();
+        for item in rows {
+            if let Some(id) = item.get("id").and_then(|v| v.as_u64()) {
+                catalogs.insert(id.to_string(), item);
+            }
         }
     }
     data["catalogs"] = serde_json::Value::Object(catalogs);
@@ -592,10 +1459,16 @@ async fn query_get_entries_by_q_or_value(
 
 // ─── Matching handlers ──────────────────────────────────────────────────────
 
-async fn query_match_q(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+async fn query_match_q(
+    app: &AppState,
+    session: &Session,
+    params: &Params,
+) -> Result<Response, ApiError> {
     let eid = common::get_param_int(params, "entry", -1) as usize;
     let q = common::get_param_int(params, "q", -1);
-    let uid = common::check_user(app, params).await?;
+    let uid = auth::guard::require_user_from_params(app, session, params)
+        .await?
+        .mnm_user_id;
     let mut entry = crate::entry::Entry::from_id(eid, app).await?;
     entry.set_match(&format!("Q{q}"), uid).await?;
     let out = crate::entry::Entry::from_id(eid, app).await?;
@@ -605,9 +1478,15 @@ async fn query_match_q(app: &AppState, params: &Params) -> Result<Response, ApiE
     Ok(json_resp(serde_json::json!({"status": "OK", "entry": ej})))
 }
 
-async fn query_match_q_multi(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+async fn query_match_q_multi(
+    app: &AppState,
+    session: &Session,
+    params: &Params,
+) -> Result<Response, ApiError> {
     let catalog = common::get_catalog(params)?;
-    let uid = common::check_user(app, params).await?;
+    let uid = auth::guard::require_user_from_params(app, session, params)
+        .await?
+        .mnm_user_id;
     let data_str = common::get_param(params, "data", "[]");
     let data: Vec<serde_json::Value> = serde_json::from_str(&data_str).unwrap_or_default();
     let mut not_found = 0_usize;
@@ -638,16 +1517,24 @@ async fn query_match_q_multi(app: &AppState, params: &Params) -> Result<Response
     ))
 }
 
-async fn query_remove_q(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+async fn query_remove_q(
+    app: &AppState,
+    session: &Session,
+    params: &Params,
+) -> Result<Response, ApiError> {
     let eid = common::get_param_int(params, "entry", -1) as usize;
-    common::check_user(app, params).await?;
+    auth::guard::require_user_from_params(app, session, params).await?;
     let mut entry = crate::entry::Entry::from_id(eid, app).await?;
     entry.unmatch().await?;
     Ok(ok(serde_json::json!({})))
 }
 
-async fn query_remove_all_q(app: &AppState, params: &Params) -> Result<Response, ApiError> {
-    common::check_user(app, params).await?;
+async fn query_remove_all_q(
+    app: &AppState,
+    session: &Session,
+    params: &Params,
+) -> Result<Response, ApiError> {
+    auth::guard::require_user_from_params(app, session, params).await?;
     let eid = common::get_param_int(params, "entry", -1) as usize;
     let entry = crate::entry::Entry::from_id(eid, app).await?;
     if let Some(q) = entry.q {
@@ -658,15 +1545,21 @@ async fn query_remove_all_q(app: &AppState, params: &Params) -> Result<Response,
 
 async fn query_remove_all_multimatches(
     app: &AppState,
+    session: &Session,
     params: &Params,
 ) -> Result<Response, ApiError> {
-    common::check_user(app, params).await?;
+    auth::guard::require_user_from_params(app, session, params).await?;
     let eid = common::get_param_int(params, "entry", -1) as usize;
     app.storage().api_remove_all_multimatches(eid).await?;
     Ok(ok(serde_json::json!({})))
 }
 
-async fn query_suggest(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+async fn query_suggest(
+    app: &AppState,
+    session: &Session,
+    params: &Params,
+) -> Result<Response, ApiError> {
+    auth::guard::require_user_from_params(app, session, params).await?;
     let catalog = common::get_param_int(params, "catalog", 0) as usize;
     let overwrite = common::get_param_int(params, "overwrite", 0) != 0;
     let suggestions = common::get_param(params, "suggestions", "");
@@ -712,20 +1605,25 @@ async fn query_get_jobs(app: &AppState, params: &Params) -> Result<Response, Api
     let cid = common::get_param_int(params, "catalog", 0) as usize;
     let start = common::get_param_int(params, "start", 0) as usize;
     let max = common::get_param_int(params, "max", 50) as usize;
-    let (stats, jobs) = app.storage().api_get_jobs(cid, start, max).await?;
-    let mut out = serde_json::json!({"status": "OK", "data": jobs});
+    let status_filter = common::get_param(params, "status_filter", "");
+    let (stats, jobs, total) = app.storage().api_get_jobs(cid, start, max, &status_filter).await?;
+    let mut out = serde_json::json!({"status": "OK", "data": jobs, "total": total});
     if cid == 0 {
         out["stats"] = serde_json::json!(stats);
     }
     Ok(json_resp(out))
 }
 
-async fn query_start_new_job(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+async fn query_start_new_job(
+    app: &AppState,
+    session: &Session,
+    params: &Params,
+) -> Result<Response, ApiError> {
     let cid = common::get_catalog(params)?;
     let action = common::get_param(params, "action", "")
         .trim()
         .to_lowercase();
-    common::check_user(app, params).await?;
+    auth::guard::require_user_from_params(app, session, params).await?;
     if !regex::Regex::new(r"^[a-z_]+$").unwrap().is_match(&action) {
         return Err(ApiError(format!("Bad action: '{action}'")));
     }
@@ -789,12 +1687,16 @@ async fn query_all_issues(app: &AppState, params: &Params) -> Result<Response, A
     )))
 }
 
-async fn query_resolve_issue(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+async fn query_resolve_issue(
+    app: &AppState,
+    session: &Session,
+    params: &Params,
+) -> Result<Response, ApiError> {
     let iid = common::get_param_int(params, "issue_id", 0) as usize;
     if iid == 0 {
         return Err(ApiError("Bad issue ID".into()));
     }
-    common::check_user(app, params).await?;
+    auth::guard::require_user_from_params(app, session, params).await?;
     app.storage()
         .set_issue_status(iid, crate::issue::IssueStatus::Done)
         .await?;
@@ -925,12 +1827,13 @@ async fn query_mnm_unmatched_relations(
     Ok(ok(data))
 }
 
-async fn query_creation_candidates(
-    _app: &AppState,
-    _params: &Params,
-) -> Result<Response, ApiError> {
-    // Complex multi-strategy endpoint — stub for now
-    Ok(ok(serde_json::json!({"entries": [], "users": {}})))
+async fn query_creation_candidates(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    // Delegate to the micro-API handler (in-process, no HTTP round-trip),
+    // which implements the full PHP `query_creation_candidates` logic.
+    let data = crate::micro_api::data_creation_candidates(app, params)
+        .await
+        .map_err(ApiError)?;
+    Ok(ok(data))
 }
 
 // ─── Locations ──────────────────────────────────────────────────────────────
@@ -1123,6 +2026,14 @@ async fn query_download2(app: &AppState, params: &Params) -> Result<Response, Ap
     if hb("unmatched") {
         sql.push_str(" AND entry.q IS NOT NULL");
     }
+    if hb("no_multiple") {
+        sql.push_str(
+            " AND NOT EXISTS (SELECT 1 FROM multi_match WHERE entry.id=multi_match.entry_id)",
+        );
+    }
+    if hb("name_date_matched") {
+        sql.push_str(" AND entry.user!=3");
+    }
     if hb("automatched") {
         sql.push_str(" AND entry.user!=0");
     }
@@ -1216,7 +2127,7 @@ async fn query_cersei_forward(app: &AppState, params: &Params) -> Result<Respons
     let sid = common::get_param_int(params, "scraper", 0) as usize;
     match app.storage().api_get_cersei_catalog(sid).await? {
         Some(cid) => {
-            let url = format!("https://mix-n-match.toolforge.org/#/catalog/{cid}");
+            let url = format!("/#/catalog/{cid}");
             Ok((
                 axum::http::StatusCode::FOUND,
                 [(axum::http::header::LOCATION, url.as_str())],
@@ -1231,7 +2142,12 @@ async fn query_cersei_forward(app: &AppState, params: &Params) -> Result<Respons
 
 // ─── Admin & config ─────────────────────────────────────────────────────────
 
-async fn query_update_overview(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+async fn query_update_overview(
+    app: &AppState,
+    session: &Session,
+    params: &Params,
+) -> Result<Response, ApiError> {
+    auth::guard::require_user_from_params(app, session, params).await?;
     let cs = common::get_param(params, "catalog", "");
     let ids: Vec<usize> = if cs.is_empty() {
         app.storage().api_get_active_catalog_ids().await?
@@ -1240,18 +2156,24 @@ async fn query_update_overview(app: &AppState, params: &Params) -> Result<Respon
             .filter_map(|s| s.trim().parse().ok())
             .collect()
     };
-    for id in ids {
-        let _ = app.storage().catalog_refresh_overview_table(id).await;
-    }
+    // Refresh catalogs in parallel, but cap concurrency so a huge
+    // `catalog=""` request doesn't overwhelm the MySQL connection pool
+    // (config default max_connections=4 — stay at or below that).
+    use futures::stream::{self, StreamExt};
+    stream::iter(ids)
+        .for_each_concurrent(4, |id| async move {
+            let _ = app.storage().catalog_refresh_overview_table(id).await;
+        })
+        .await;
     Ok(ok(serde_json::json!({})))
 }
 
-async fn query_update_ext_urls(app: &AppState, params: &Params) -> Result<Response, ApiError> {
-    let username = common::get_param(params, "username", "").replace('_', " ");
-    match app.storage().get_user_by_name(&username).await? {
-        Some((_, _, true)) => {}
-        _ => return Err(ApiError(format!("'{username}' is not a catalog admin"))),
-    }
+async fn query_update_ext_urls(
+    app: &AppState,
+    session: &Session,
+    params: &Params,
+) -> Result<Response, ApiError> {
+    auth::guard::require_catalog_admin_from_params(app, session, params).await?;
     let cid = common::get_catalog(params)?;
     let url = common::get_param(params, "url", "");
     let parts: Vec<&str> = url.split("$1").collect();
@@ -1267,8 +2189,14 @@ async fn query_update_ext_urls(app: &AppState, params: &Params) -> Result<Respon
     Ok(ok(serde_json::json!({"sql": sql})))
 }
 
-async fn query_add_aliases(app: &AppState, params: &Params) -> Result<Response, ApiError> {
-    let uid = common::check_user(app, params).await?;
+async fn query_add_aliases(
+    app: &AppState,
+    session: &Session,
+    params: &Params,
+) -> Result<Response, ApiError> {
+    let uid = auth::guard::require_user_from_params(app, session, params)
+        .await?
+        .mnm_user_id;
     let text = common::get_param(params, "text", "").trim().to_string();
     let cid = common::get_param_int(params, "catalog", 0) as usize;
     if cid == 0 || text.is_empty() {
@@ -1310,9 +2238,12 @@ async fn query_get_missing_properties(app: &AppState) -> Result<Response, ApiErr
 
 async fn query_set_missing_properties_status(
     app: &AppState,
+    session: &Session,
     params: &Params,
 ) -> Result<Response, ApiError> {
-    let uid = common::check_user(app, params).await?;
+    let uid = auth::guard::require_user_from_params(app, session, params)
+        .await?
+        .mnm_user_id;
     let row_id = common::get_param_int(params, "row_id", 0) as usize;
     if row_id == 0 {
         return Err(ApiError("Bad/missing row ID".into()));
@@ -1333,8 +2264,14 @@ async fn query_get_top_groups(app: &AppState) -> Result<Response, ApiError> {
     Ok(ok(serde_json::json!(data)))
 }
 
-async fn query_set_top_group(app: &AppState, params: &Params) -> Result<Response, ApiError> {
-    let uid = common::check_user(app, params).await?;
+async fn query_set_top_group(
+    app: &AppState,
+    session: &Session,
+    params: &Params,
+) -> Result<Response, ApiError> {
+    let uid = auth::guard::require_user_from_params(app, session, params)
+        .await?
+        .mnm_user_id;
     let name = common::get_param(params, "group_name", "");
     let catalogs = common::get_param(params, "catalogs", "");
     let based_on = common::get_param_int(params, "group_id", 0) as usize;
@@ -1346,8 +2283,10 @@ async fn query_set_top_group(app: &AppState, params: &Params) -> Result<Response
 
 async fn query_remove_empty_top_group(
     app: &AppState,
+    session: &Session,
     params: &Params,
 ) -> Result<Response, ApiError> {
+    auth::guard::require_user_from_params(app, session, params).await?;
     let gid = common::get_param_int(params, "group_id", 0) as usize;
     app.storage().api_remove_empty_top_group(gid).await?;
     Ok(ok(serde_json::json!({})))
@@ -1424,96 +2363,415 @@ async fn query_get_flickr_key() -> Result<Response, ApiError> {
     Ok(ok(serde_json::json!(key)))
 }
 
-// ─── Stubs for endpoints requiring external services ────────────────────────
+// ─── Delegated to micro-API (called directly, no HTTP round-trip) ──────────
 
-async fn query_get_sync(_app: &AppState, params: &Params) -> Result<Response, ApiError> {
+async fn query_get_sync(app: &AppState, params: &Params) -> Result<Response, ApiError> {
     let _catalog = common::get_catalog(params)?;
-    // This requires SPARQL queries and temporary table operations
-    // which need the full Wikidata integration
-    Err(ApiError(
-        "get_sync requires Wikidata SPARQL access (not yet ported to Rust)".into(),
-    ))
+    let data = crate::micro_api::data_get_sync(app, params)
+        .await
+        .map_err(ApiError)?;
+    Ok(ok(data))
 }
 
-async fn query_sitestats(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
-    Err(ApiError(
-        "sitestats requires Wikidata DB replica access (not yet ported to Rust)".into(),
-    ))
+async fn query_sparql_list(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let data = crate::micro_api::data_sparql_list(app, params)
+        .await
+        .map_err(ApiError)?;
+    Ok(ok(data))
 }
 
-async fn query_disambig(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
-    Err(ApiError(
-        "disambig requires Wikidata DB replica access (not yet ported to Rust)".into(),
-    ))
+async fn query_quick_compare(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let data = crate::micro_api::data_quick_compare(app, params)
+        .await
+        .map_err(ApiError)?;
+    Ok(ok(data))
 }
 
-async fn query_missingpages(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
-    Err(ApiError(
-        "missingpages requires Wikidata DB replica access (not yet ported to Rust)".into(),
-    ))
+async fn query_get_code_fragments(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let catalog = common::get_catalog(params)?;
+    let mut data = crate::micro_api::data_get_code_fragments(app, params)
+        .await
+        .map_err(ApiError)?;
+    // PHP behaviour: add user_allowed flag based on the requesting user.
+    let username = common::get_param(params, "username", "");
+    let user_allowed = if username.is_empty() {
+        0
+    } else {
+        let uid = app
+            .storage()
+            .get_or_create_user_id(&username.replace('_', " "))
+            .await
+            .unwrap_or(0);
+        // Matches PHP: code_fragment_allowed_user_ids = [2]
+        i64::from(uid == 2)
+    };
+    if let Some(obj) = data.as_object_mut() {
+        obj.insert("user_allowed".into(), serde_json::json!(user_allowed));
+        obj.entry("catalog")
+            .or_insert_with(|| serde_json::json!(catalog));
+    }
+    Ok(ok(data))
 }
 
-async fn query_sparql_list(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
-    Err(ApiError(
-        "sparql_list requires SPARQL endpoint access (not yet ported to Rust)".into(),
-    ))
-}
-
-async fn query_quick_compare(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
-    Err(ApiError(
-        "quick_compare requires Wikidata item loading (not yet ported to Rust)".into(),
-    ))
-}
-
-async fn query_prep_new_item(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
-    Err(ApiError(
-        "prep_new_item requires QuickStatements integration (not yet ported to Rust)".into(),
-    ))
-}
-
-async fn query_get_entry_reader_view(
-    _app: &AppState,
-    _params: &Params,
+async fn query_save_code_fragment(
+    app: &AppState,
+    session: &Session,
+    params: &Params,
 ) -> Result<Response, ApiError> {
-    Err(ApiError(
-        "get_entry_reader_view requires Readability library (not yet ported to Rust)".into(),
+    // Verify the calling user is allowed.
+    let uid = auth::guard::require_user_from_params(app, session, params)
+        .await?
+        .mnm_user_id;
+    if uid != 2 {
+        return Err(ApiError("Not allowed, ask Magnus".into()));
+    }
+    let data = crate::micro_api::data_save_code_fragment(app, params)
+        .await
+        .map_err(ApiError)?;
+    Ok(ok(data))
+}
+
+async fn query_test_code_fragment(
+    app: &AppState,
+    session: &Session,
+    params: &Params,
+) -> Result<Response, ApiError> {
+    // Verify the calling user is allowed.
+    let uid = auth::guard::require_user_from_params(app, session, params)
+        .await?
+        .mnm_user_id;
+    if uid != 2 {
+        return Err(ApiError("Not allowed, ask Magnus".into()));
+    }
+    let entry_id = common::get_param_int(params, "entry_id", 0) as usize;
+    if entry_id == 0 {
+        return Err(ApiError("No entry_id".into()));
+    }
+    // Extract the fragment's "function" field and forward it to the Lua runner.
+    let fragment_str = common::get_param(params, "fragment", "{}");
+    let fragment: serde_json::Value =
+        serde_json::from_str(&fragment_str).map_err(|_| ApiError("Bad fragment".into()))?;
+    let function = fragment
+        .get("function")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if function.is_empty() {
+        return Err(ApiError(format!("Bad fragment function '{function}'")));
+    }
+    let mut run_params: crate::micro_api::Params = std::collections::HashMap::new();
+    run_params.insert("function".into(), function.to_string());
+    run_params.insert("entry_id".into(), entry_id.to_string());
+    if let Some(html) = params.get("html") {
+        run_params.insert("html".into(), html.clone());
+    }
+    let data = crate::micro_api::data_run_lua(app, &run_params)
+        .await
+        .map_err(ApiError)?;
+    Ok(json_resp(
+        serde_json::json!({"status":"OK","data": data,"tested_via":"lua"}),
     ))
 }
 
-async fn query_get_code_fragments(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
-    Err(ApiError("get_code_fragments not yet ported to Rust".into()))
+// ─── Large catalogs (delegated to micro_api helpers) ───────────────────────
+
+async fn query_lc_catalogs(app: &AppState) -> Result<Response, ApiError> {
+    // PHP shape: data.catalogs (array of catalog objects), data.open_issues (map)
+    let data = crate::micro_api::data_lc_catalogs(app)
+        .await
+        .map_err(ApiError)?;
+    // The micro_api returns {"catalogs": [...], "open_issues": {...}} — same shape.
+    Ok(ok(data))
 }
 
-async fn query_save_code_fragment(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
-    Err(ApiError("save_code_fragment not yet ported to Rust".into()))
+async fn query_lc_bbox(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let data = crate::micro_api::data_lc_locations(app, params)
+        .await
+        .map_err(ApiError)?;
+    // PHP shape: {bbox, data, catalogs}. Micro-API returns {data, catalogs}; add bbox for parity.
+    let bbox_raw = common::get_param(params, "bbox", "");
+    let bbox: Vec<f64> = bbox_raw
+        .chars()
+        .filter(|c| c.is_ascii_digit() || *c == ',' || *c == '.' || *c == '-')
+        .collect::<String>()
+        .split(',')
+        .filter_map(|s| s.parse().ok())
+        .collect();
+    let mut merged = data.clone();
+    if let Some(obj) = merged.as_object_mut() {
+        obj.insert("bbox".into(), serde_json::json!(bbox));
+    }
+    Ok(ok(merged))
 }
 
-async fn query_test_code_fragment(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
-    Err(ApiError("test_code_fragment not yet ported to Rust".into()))
+async fn query_lc_report(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let data = crate::micro_api::data_lc_report(app, params)
+        .await
+        .map_err(ApiError)?;
+    Ok(ok(data))
 }
 
-async fn query_autoscrape_test(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
-    Err(ApiError("autoscrape_test not yet ported to Rust".into()))
+async fn query_lc_report_list(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let data = crate::micro_api::data_lc_report_list(app, params)
+        .await
+        .map_err(ApiError)?;
+    Ok(ok(data))
 }
 
-async fn query_save_scraper(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
-    Err(ApiError("save_scraper not yet ported to Rust".into()))
+async fn query_lc_rc(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let data = crate::micro_api::data_lc_rc(app, params)
+        .await
+        .map_err(ApiError)?;
+    Ok(ok(data))
 }
 
-async fn query_upload_import_file(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
-    Err(ApiError("upload_import_file not yet ported to Rust".into()))
+async fn query_lc_set_status(
+    app: &AppState,
+    session: &Session,
+    params: &Params,
+) -> Result<Response, ApiError> {
+    // Gate behind OAuth, then attribute the status change to the session user
+    // rather than the free-text `user` field the PHP endpoint used to accept.
+    let authed = auth::guard::require_user_from_params(app, session, params).await?;
+    let mut patched = params.clone();
+    patched.insert("user".into(), authed.wikidata_username.clone());
+    let data = crate::micro_api::data_lc_set_status(app, &patched)
+        .await
+        .map_err(ApiError)?;
+    Ok(ok(data))
 }
 
-async fn query_import_source(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
-    Err(ApiError("import_source not yet ported to Rust".into()))
+// ─── Newly ported lightweight catalog endpoints ────────────────────────────
+
+async fn query_batch_catalogs(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let raw = common::get_param(params, "catalog_ids", "");
+    let mut ids: Vec<usize> = raw
+        .split(',')
+        .filter_map(|s| s.trim().parse::<usize>().ok())
+        .filter(|id| *id > 0)
+        .collect();
+    ids.sort();
+    ids.dedup();
+    ids.truncate(200);
+    if ids.is_empty() {
+        return Ok(ok(serde_json::json!({})));
+    }
+    let data = app.storage().api_get_catalog_overview_for_ids(&ids).await?;
+    let mut map = serde_json::Map::new();
+    for item in data {
+        if let Some(id) = item.get("id").and_then(|v| v.as_u64()) {
+            map.insert(id.to_string(), item);
+        }
+    }
+    Ok(ok(serde_json::Value::Object(map)))
 }
 
-async fn query_get_source_headers(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
-    Err(ApiError("get_source_headers not yet ported to Rust".into()))
+async fn query_search_catalogs(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let q = common::get_param(params, "q", "");
+    let limit = (common::get_param_int(params, "limit", 20).clamp(1, 100)) as usize;
+    if q.is_empty() {
+        return Ok(ok(serde_json::json!([])));
+    }
+    let rows = app.storage().api_search_catalogs(&q, limit).await?;
+    Ok(ok(serde_json::json!(rows)))
 }
 
-async fn query_test_import_source(_app: &AppState, _params: &Params) -> Result<Response, ApiError> {
-    Err(ApiError("test_import_source not yet ported to Rust".into()))
+async fn query_catalog_type_counts(app: &AppState) -> Result<Response, ApiError> {
+    let rows = app.storage().api_catalog_type_counts().await?;
+    Ok(ok(serde_json::json!(rows)))
+}
+
+async fn query_latest_catalogs(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let limit = (common::get_param_int(params, "limit", 9).clamp(1, 50)) as usize;
+    let rows = app.storage().api_latest_catalogs(limit).await?;
+    Ok(ok(serde_json::json!(rows)))
+}
+
+async fn query_catalogs_with_locations(app: &AppState) -> Result<Response, ApiError> {
+    let rows = app.storage().api_catalogs_with_locations().await?;
+    Ok(ok(serde_json::json!(rows)))
+}
+
+async fn query_catalog_property_groups(app: &AppState) -> Result<Response, ApiError> {
+    let data = app.storage().api_catalog_property_groups().await?;
+    Ok(ok(data))
+}
+
+async fn query_check_wd_prop_usage(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let wd_prop = common::get_param_int(params, "wd_prop", 0);
+    let exclude = common::get_param_int(params, "exclude_catalog", 0) as usize;
+    if wd_prop <= 0 {
+        return Ok(ok(serde_json::json!({"used": false})));
+    }
+    let result = app
+        .storage()
+        .api_check_wd_prop_usage(wd_prop as usize, exclude)
+        .await?;
+    Ok(ok(result))
+}
+
+async fn query_catalog_by_group(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let group = common::get_param(params, "group", "");
+    if group.is_empty() {
+        return Ok(ok(serde_json::json!({})));
+    }
+    let data = app.storage().api_catalog_by_group(&group).await?;
+    Ok(ok(data))
+}
+
+// ─── Other newly ported endpoints ──────────────────────────────────────────
+
+async fn query_create(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let catalog = common::get_catalog(params)?;
+    let rows = app.storage().api_create_list(catalog).await?;
+    Ok(ok(serde_json::json!(rows)))
+}
+
+async fn query_user_edits(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let user_id = common::get_param_int(params, "user_id", -1);
+    if user_id < 0 {
+        return Err(ApiError("Invalid user ID".into()));
+    }
+    let user_id = user_id as usize;
+    let catalog = common::get_param_int(params, "catalog", 0) as usize;
+    let limit = common::get_param_int(params, "limit", 50).clamp(1, 200) as usize;
+    let offset = common::get_param_int(params, "offset", 0).max(0) as usize;
+    let (events, users_map, total, user_info) = app
+        .storage()
+        .api_user_edits(user_id, catalog, limit, offset)
+        .await?;
+    Ok(json_resp(serde_json::json!({
+        "status": "OK",
+        "total": total,
+        "data": {
+            "user_info": user_info,
+            "events": events,
+            "users": users_map,
+        }
+    })))
+}
+
+async fn query_get_statement_text_groups(
+    app: &AppState,
+    params: &Params,
+) -> Result<Response, ApiError> {
+    let catalog = common::get_catalog(params)?;
+    let limit = common::get_param_int(params, "limit", 50).max(1) as usize;
+    let offset = common::get_param_int(params, "offset", 0).max(0) as usize;
+    let property = common::get_param_int(params, "property", 0).max(0) as usize;
+    let (properties, groups) = app
+        .storage()
+        .api_get_statement_text_groups(catalog, property, limit, offset)
+        .await?;
+    Ok(ok(
+        serde_json::json!({"properties": properties, "groups": groups}),
+    ))
+}
+
+async fn query_set_statement_text_q(
+    app: &AppState,
+    session: &Session,
+    params: &Params,
+) -> Result<Response, ApiError> {
+    let catalog = common::get_catalog(params)?;
+    let text = common::get_param(params, "text", "");
+    let property = common::get_param_int(params, "property", 0);
+    let q = common::get_param_int(params, "q", 0);
+    let user_id = auth::guard::require_user_from_params(app, session, params)
+        .await?
+        .mnm_user_id;
+    if text.is_empty() {
+        return Err(ApiError("Missing text parameter".into()));
+    }
+    if property <= 0 {
+        return Err(ApiError("Missing or invalid property parameter".into()));
+    }
+    if q <= 0 {
+        return Err(ApiError("Missing or invalid q parameter".into()));
+    }
+    let (rows_updated, aux_rows_added) = app
+        .storage()
+        .api_set_statement_text_q(catalog, property as usize, &text, q as usize, user_id)
+        .await?;
+    Ok(ok(serde_json::json!({
+        "rows_updated": rows_updated,
+        "aux_rows_added": aux_rows_added,
+    })))
+}
+
+async fn query_missingpages(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let catalog = common::get_catalog(params)?;
+    let site = common::get_param(params, "site", "");
+    if site.is_empty() {
+        return Err(ApiError("site parameter required".into()));
+    }
+    let (entries, users) = app.storage().api_missingpages(catalog, &site).await?;
+    Ok(ok(serde_json::json!({"entries": entries, "users": users})))
+}
+
+async fn query_sitestats(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let catalog_raw = common::get_param(params, "catalog", "");
+    let catalog = if catalog_raw.is_empty() {
+        None
+    } else {
+        catalog_raw.parse::<usize>().ok()
+    };
+    let data = app.storage().api_sitestats(catalog).await?;
+    Ok(ok(serde_json::json!(data)))
+}
+
+// ─── Distributed-game endpoints ────────────────────────────────────────────
+
+async fn query_dg_desc(params: &Params) -> Result<Response, ApiError> {
+    let mode = common::get_param(params, "mode", "");
+    let (title, sub) = if mode == "person" {
+        ("Mix'n'match people game", "of a person in")
+    } else {
+        ("Mix'n'match game", "in")
+    };
+    let out = serde_json::json!({
+        "label": {"en": title},
+        "description": {"en": format!("Verify that an entry {sub} an external catalog matches a given Wikidata item. Decisions count as mix'n'match actions!")},
+        "icon": "https://upload.wikimedia.org/wikipedia/commons/thumb/2/2d/Bipartite_graph_with_matching.svg/120px-Bipartite_graph_with_matching.svg.png",
+        "options": [
+            {"name": "Entry type", "key": "type", "values": {"any": "Any", "person": "Person", "not_person": "Not a person"}}
+        ],
+    });
+    // PHP returns this payload as the top-level response (no "data" envelope).
+    Ok(json_resp(out))
+}
+
+async fn query_dg_tiles(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let num = common::get_param_int(params, "num", 5).clamp(1, 20) as usize;
+    let type_filter = common::get_param(params, "type", "");
+    let tiles = app.storage().api_dg_tiles(num, &type_filter).await?;
+    Ok(json_resp(serde_json::json!(tiles)))
+}
+
+async fn query_dg_log_action(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let user = common::get_param(params, "user", "");
+    let entry_id = common::get_param_int(params, "tile", -1);
+    if entry_id < 0 {
+        return Err(ApiError("bad tile".into()));
+    }
+    let entry_id = entry_id as usize;
+    let decision = common::get_param(params, "decision", "");
+    let uid = app.storage().get_or_create_user_id(&user).await?;
+    let mut entry = crate::entry::Entry::from_id(entry_id, app).await?;
+    match decision.as_str() {
+        "yes" => {
+            if let Some(q) = entry.q {
+                entry.set_match(&format!("Q{q}"), uid).await?;
+            }
+        }
+        "no" => {
+            entry.unmatch().await?;
+        }
+        "n_a" => {
+            entry.set_match("Q-1", uid).await?;
+        }
+        _ => {}
+    }
+    Ok(json_resp(serde_json::json!([])))
 }
 
 #[cfg(test)]

@@ -192,18 +192,26 @@ impl StorageMySQL {
 
     // #lizard forgives
     fn entry_from_row(row: &Row) -> Option<Entry> {
+        // Read by column name — positional reads break whenever a SELECT
+        // prepends extra columns (e.g. `cnt`, `property`, `source_entry_id`)
+        // before `entry.*`, which several API endpoints do.
         Some(Entry {
-            id: row.get(0)?,
-            catalog: row.get(1)?,
-            ext_id: row.get(2)?,
-            ext_url: row.get(3)?,
-            ext_name: row.get(4)?,
-            ext_desc: row.get(5)?,
-            q: Entry::value2opt_isize(row.get(6)?).ok()?,
-            user: Entry::value2opt_usize(row.get(7)?).ok()?,
-            timestamp: Entry::value2opt_string(row.get(8)?).ok()?,
-            random: row.get(9).unwrap_or(0.0), // random might be null, who cares
-            type_name: Entry::value2opt_string(row.get(10)?).ok()?,
+            id: row.get("id")?,
+            catalog: row.get("catalog")?,
+            ext_id: row.get("ext_id")?,
+            ext_url: row.get("ext_url")?,
+            ext_name: row.get("ext_name")?,
+            ext_desc: row.get("ext_desc")?,
+            q: Entry::value2opt_isize(row.get("q")?).ok()?,
+            user: Entry::value2opt_usize(row.get("user")?).ok()?,
+            timestamp: Entry::value2opt_string(row.get("timestamp")?).ok()?,
+            // `random` is nullable in the entry table; reading it as f64
+            // panics on Null, so pull through Option<f64> first.
+            random: row
+                .get::<Option<f64>, _>("random")
+                .flatten()
+                .unwrap_or(0.0),
+            type_name: Entry::value2opt_string(row.get("type")?).ok()?,
             app: None,
         })
     }
@@ -493,6 +501,67 @@ impl Storage for StorageMySQL {
         Ok(results.into_iter().next())
     }
 
+    async fn save_import_file(&self, uuid: &str, file_type: &str, user_id: usize) -> Result<()> {
+        let timestamp = chrono::Utc::now().format("%Y%m%d%H%M%S").to_string();
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop(
+            "INSERT INTO `import_file` (`uuid`,`user`,`timestamp`,`type`) VALUES (:uuid,:user,:timestamp,:file_type)",
+            params! {uuid, "user" => user_id, timestamp, file_type},
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn save_scraper(&self, catalog_id: usize, json: &str, owner: usize) -> Result<()> {
+        // `autoscrape.catalog` is UNIQUE, so a straight INSERT ... ON DUPLICATE KEY UPDATE
+        // gives us upsert semantics without a separate round-trip. Using
+        // VALUES(col) in the UPDATE clause avoids binding the same named
+        // parameter twice.
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop(
+            "INSERT INTO `autoscrape` (`catalog`,`json`,`status`,`owner`,`notes`) VALUES (:catalog_id,:json,'',:owner,'') \
+             ON DUPLICATE KEY UPDATE `json`=VALUES(`json`), `owner`=VALUES(`owner`)",
+            params! {catalog_id, json, owner},
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn create_catalog_from_meta(
+        &self,
+        name: &str,
+        desc: &str,
+        url: &str,
+        type_name: &str,
+        wd_prop: Option<usize>,
+        owner: usize,
+    ) -> Result<usize> {
+        let mut conn = self.get_conn().await?;
+        // `name` is UNIQUE in the catalog table, so a duplicate wizard submission
+        // would silently return the existing id rather than erroring.
+        let wd_prop_val: usize = wd_prop.unwrap_or(0);
+        conn.exec_drop(
+            "INSERT INTO `catalog` (`name`,`url`,`desc`,`type`,`wd_prop`,`active`,`owner`,`note`,`has_person_date`) \
+             VALUES (:name,:url,:desc,:type_name,:wd_prop,1,:owner,'','no')",
+            params! {name, url, desc, type_name, "wd_prop" => wd_prop_val, owner},
+        )
+        .await?;
+        let id: Option<u64> = conn.last_insert_id();
+        let id = id.unwrap_or(0) as usize;
+        if id > 0 {
+            return Ok(id);
+        }
+        // Already existed — look it up by name.
+        let rows: Vec<usize> = conn
+            .exec_iter("SELECT `id` FROM `catalog` WHERE `name`=:name LIMIT 1", params! {name})
+            .await?
+            .map_and_drop(from_row::<usize>)
+            .await?;
+        rows.into_iter()
+            .next()
+            .ok_or_else(|| anyhow!("catalog insert returned no id and no existing row found"))
+    }
+
     async fn get_existing_ext_ids(
         &self,
         catalog_id: usize,
@@ -516,6 +585,28 @@ impl Storage for StorageMySQL {
             })
             .await?;
         Ok(results)
+    }
+
+    async fn update_catalog_set_update_info(
+        &self,
+        catalog_id: usize,
+        json: &str,
+        user_id: usize,
+    ) -> Result<()> {
+        let mut conn = self.get_conn().await?;
+        // Mark any existing current row as stale so get_update_info only sees
+        // the latest configuration.
+        conn.exec_drop(
+            "UPDATE `update_info` SET `is_current`=0 WHERE `catalog`=:catalog_id AND `is_current`=1",
+            params! {catalog_id},
+        )
+        .await?;
+        conn.exec_drop(
+            "INSERT INTO `update_info` (`catalog`,`json`,`note`,`user_id`,`is_current`) VALUES (:catalog_id,:json,'',:user_id,1)",
+            params! {catalog_id, json, "user_id" => user_id},
+        )
+        .await?;
+        Ok(())
     }
 
     // Catalog
@@ -2312,8 +2403,8 @@ impl Storage for StorageMySQL {
             )
             .await?
             .map_and_drop(|row| {
-                let lat: f64 = row.get(0).unwrap_or_default();
-                let lon: f64 = row.get(1).unwrap_or_default();
+                let lat: f64 = row.get::<Option<f64>, _>(0).flatten().unwrap_or_default();
+                let lon: f64 = row.get::<Option<f64>, _>(1).flatten().unwrap_or_default();
                 let precision: Option<f64> = row.get_opt(2).and_then(|r| r.ok());
                 CoordinateLocation::new_with_precision(lat, lon, precision)
             })
@@ -2479,9 +2570,9 @@ impl Storage for StorageMySQL {
         let mut scrapers = HashMap::new();
         for row in rows {
             let scraper = CurrentScraper {
-                cersei_scraper_id: row.get("cersei_scraper_id").unwrap(),
-                catalog_id: row.get("catalog_id").unwrap(),
-                last_sync: row.get("last_sync"),
+                cersei_scraper_id: row.get::<Option<usize>, _>("cersei_scraper_id").flatten().unwrap_or(0),
+                catalog_id: row.get::<Option<usize>, _>("catalog_id").flatten().unwrap_or(0),
+                last_sync: row.get::<Option<String>, _>("last_sync").flatten(),
             };
             scrapers.insert(scraper.cersei_scraper_id, scraper);
         }
@@ -2519,8 +2610,8 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, params! { entry_id })
             .await?
             .map_and_drop(|row| {
-                let property: usize = row.get(0).unwrap_or_default();
-                let target_entry_id: usize = row.get(1).unwrap_or_default();
+                let property: usize = row.get::<Option<usize>, _>(0).flatten().unwrap_or_default();
+                let target_entry_id: usize = row.get::<Option<usize>, _>(1).flatten().unwrap_or_default();
                 MetaMnmRelation {
                     property,
                     target: MnmLink::EntryId(target_entry_id),
@@ -2539,12 +2630,12 @@ impl Storage for StorageMySQL {
             .await?
             .map_and_drop(|row| {
                 let id: Option<usize> = row.get(0);
-                let issue_type: String = row.get(1).unwrap_or_default();
-                let json_str: String = row.get(2).unwrap_or_default();
-                let status: String = row.get(3).unwrap_or_default();
-                let user_id: Option<usize> = row.get(4);
-                let resolved_ts: Option<String> = row.get(5);
-                let catalog_id: usize = row.get(6).unwrap_or_default();
+                let issue_type: String = row.get::<Option<String>, _>(1).flatten().unwrap_or_default();
+                let json_str: String = row.get::<Option<String>, _>(2).flatten().unwrap_or_default();
+                let status: String = row.get::<Option<String>, _>(3).flatten().unwrap_or_default();
+                let user_id: Option<usize> = row.get::<Option<usize>, _>(4).flatten();
+                let resolved_ts: Option<String> = row.get::<Option<String>, _>(5).flatten();
+                let catalog_id: usize = row.get::<Option<usize>, _>(6).flatten().unwrap_or_default();
                 MetaIssue {
                     id,
                     issue_type,
@@ -2567,8 +2658,8 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, params! { entry_id })
             .await?
             .map_and_drop(|row| {
-                let key: String = row.get(0).unwrap_or_default();
-                let value: String = row.get(1).unwrap_or_default();
+                let key: String = row.get::<Option<String>, _>(0).flatten().unwrap_or_default();
+                let value: String = row.get::<Option<String>, _>(1).flatten().unwrap_or_default();
                 MetaKvEntry { key, value }
             })
             .await?;
@@ -2584,10 +2675,10 @@ impl Storage for StorageMySQL {
             .await?
             .map_and_drop(|row| {
                 let id: Option<usize> = row.get(0);
-                let action: String = row.get(1).unwrap_or_default();
-                let user: Option<usize> = row.get(2);
-                let timestamp: Option<String> = row.get(3);
-                let q: Option<isize> = row.get(4);
+                let action: String = row.get::<Option<String>, _>(1).flatten().unwrap_or_default();
+                let user: Option<usize> = row.get::<Option<usize>, _>(2).flatten();
+                let timestamp: Option<String> = row.get::<Option<String>, _>(3).flatten();
+                let q: Option<isize> = row.get::<Option<isize>, _>(4).flatten();
                 MetaLogEntry {
                     id,
                     action,
@@ -2612,11 +2703,11 @@ impl Storage for StorageMySQL {
             .await?
             .map_and_drop(|row| {
                 let id: Option<usize> = row.get(0);
-                let property: usize = row.get(1).unwrap_or_default();
-                let text: String = row.get(2).unwrap_or_default();
-                let in_wikidata: bool = row.get(3).unwrap_or_default();
-                let entry_is_matched: bool = row.get(4).unwrap_or_default();
-                let q: Option<ItemId> = row.get(5);
+                let property: usize = row.get::<Option<usize>, _>(1).flatten().unwrap_or_default();
+                let text: String = row.get::<Option<String>, _>(2).flatten().unwrap_or_default();
+                let in_wikidata: bool = row.get::<Option<bool>, _>(3).flatten().unwrap_or_default();
+                let entry_is_matched: bool = row.get::<Option<bool>, _>(4).flatten().unwrap_or_default();
+                let q: Option<ItemId> = row.get::<Option<ItemId>, _>(5).flatten();
                 MetaStatementText {
                     id,
                     property,
@@ -2703,9 +2794,9 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, params! { name })
             .await?
             .map_and_drop(|row: Row| {
-                let id: usize = row.get("id").unwrap_or(0);
-                let uname: String = row.get("name").unwrap_or_default();
-                let is_admin: u8 = row.get("is_catalog_admin").unwrap_or(0);
+                let id: usize = row.get::<Option<usize>, _>("id").flatten().unwrap_or(0);
+                let uname: String = row.get::<Option<String>, _>("name").flatten().unwrap_or_default();
+                let is_admin: u8 = row.get::<Option<u8>, _>("is_catalog_admin").flatten().unwrap_or(0);
                 (id, uname, is_admin != 0)
             })
             .await?;
@@ -2743,9 +2834,9 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                let id: usize = row.get("id").unwrap_or(0);
-                let name: String = row.get("name").unwrap_or_default();
-                let is_catalog_admin: u8 = row.get("is_catalog_admin").unwrap_or(0);
+                let id: usize = row.get::<Option<usize>, _>("id").flatten().unwrap_or(0);
+                let name: String = row.get::<Option<String>, _>("name").flatten().unwrap_or_default();
+                let is_catalog_admin: u8 = row.get::<Option<u8>, _>("is_catalog_admin").flatten().unwrap_or(0);
                 (id, json!({
                     "id": id,
                     "name": name,
@@ -2767,9 +2858,9 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                let entry_id: usize = row.get("entry_id").unwrap_or(0);
-                let born: String = row.get("year_born").unwrap_or_default();
-                let died: String = row.get("year_died").unwrap_or_default();
+                let entry_id: usize = row.get::<Option<usize>, _>("entry_id").flatten().unwrap_or(0);
+                let born: String = row.get::<Option<String>, _>("year_born").flatten().unwrap_or_default();
+                let died: String = row.get::<Option<String>, _>("year_died").flatten().unwrap_or_default();
                 (entry_id, born, died)
             })
             .await?;
@@ -2793,9 +2884,9 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                let entry_id: usize = row.get("entry_id").unwrap_or(0);
-                let lat: f64 = row.get("lat").unwrap_or(0.0);
-                let lon: f64 = row.get("lon").unwrap_or(0.0);
+                let entry_id: usize = row.get::<Option<usize>, _>("entry_id").flatten().unwrap_or(0);
+                let lat: f64 = row.get::<Option<f64>, _>("lat").flatten().unwrap_or(0.0);
+                let lon: f64 = row.get::<Option<f64>, _>("lon").flatten().unwrap_or(0.0);
                 (entry_id, lat, lon)
             })
             .await?;
@@ -2813,8 +2904,8 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                let entry_id: usize = row.get("entry_id").unwrap_or(0);
-                let candidates: String = row.get("candidates").unwrap_or_default();
+                let entry_id: usize = row.get::<Option<usize>, _>("entry_id").flatten().unwrap_or(0);
+                let candidates: String = row.get::<Option<String>, _>("candidates").flatten().unwrap_or_default();
                 (entry_id, candidates)
             })
             .await?;
@@ -2832,11 +2923,11 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                let entry_id: usize = row.get("entry_id").unwrap_or(0);
-                let id: usize = row.get("id").unwrap_or(0);
-                let aux_p: usize = row.get("aux_p").unwrap_or(0);
-                let aux_name: String = row.get("aux_name").unwrap_or_default();
-                let in_wikidata: u8 = row.get("in_wikidata").unwrap_or(0);
+                let entry_id: usize = row.get::<Option<usize>, _>("entry_id").flatten().unwrap_or(0);
+                let id: usize = row.get::<Option<usize>, _>("id").flatten().unwrap_or(0);
+                let aux_p: usize = row.get::<Option<usize>, _>("aux_p").flatten().unwrap_or(0);
+                let aux_name: String = row.get::<Option<String>, _>("aux_name").flatten().unwrap_or_default();
+                let in_wikidata: u8 = row.get::<Option<u8>, _>("in_wikidata").flatten().unwrap_or(0);
                 (entry_id, json!({
                     "id": id,
                     "entry_id": entry_id,
@@ -2864,10 +2955,10 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                let entry_id: usize = row.get("entry_id").unwrap_or(0);
-                let id: usize = row.get("id").unwrap_or(0);
-                let language: String = row.get("language").unwrap_or_default();
-                let label: String = row.get("label").unwrap_or_default();
+                let entry_id: usize = row.get::<Option<usize>, _>("entry_id").flatten().unwrap_or(0);
+                let id: usize = row.get::<Option<usize>, _>("id").flatten().unwrap_or(0);
+                let language: String = row.get::<Option<String>, _>("language").flatten().unwrap_or_default();
+                let label: String = row.get::<Option<String>, _>("label").flatten().unwrap_or_default();
                 (entry_id, json!({
                     "id": id,
                     "entry_id": entry_id,
@@ -2894,10 +2985,10 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                let entry_id: usize = row.get("entry_id").unwrap_or(0);
-                let id: usize = row.get("id").unwrap_or(0);
-                let language: String = row.get("language").unwrap_or_default();
-                let label: String = row.get("label").unwrap_or_default();
+                let entry_id: usize = row.get::<Option<usize>, _>("entry_id").flatten().unwrap_or(0);
+                let id: usize = row.get::<Option<usize>, _>("id").flatten().unwrap_or(0);
+                let language: String = row.get::<Option<String>, _>("language").flatten().unwrap_or_default();
+                let label: String = row.get::<Option<String>, _>("label").flatten().unwrap_or_default();
                 (entry_id, json!({
                     "id": id,
                     "entry_id": entry_id,
@@ -2924,10 +3015,10 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                let entry_id: usize = row.get("entry_id").unwrap_or(0);
-                let key: String = row.get("kv_key").unwrap_or_default();
-                let value: String = row.get("kv_value").unwrap_or_default();
-                let done: u8 = row.get("done").unwrap_or(0);
+                let entry_id: usize = row.get::<Option<usize>, _>("entry_id").flatten().unwrap_or(0);
+                let key: String = row.get::<Option<String>, _>("kv_key").flatten().unwrap_or_default();
+                let value: String = row.get::<Option<String>, _>("kv_value").flatten().unwrap_or_default();
+                let done: u8 = row.get::<Option<u8>, _>("done").flatten().unwrap_or(0);
                 (entry_id, key, value, done)
             })
             .await?;
@@ -2951,8 +3042,8 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                let property: usize = row.get("property").unwrap_or(0);
-                let source_entry_id: usize = row.get("source_entry_id").unwrap_or(0);
+                let property: usize = row.get::<Option<usize>, _>("property").flatten().unwrap_or(0);
+                let source_entry_id: usize = row.get::<Option<usize>, _>("source_entry_id").flatten().unwrap_or(0);
                 let target_entry = Self::entry_from_row(&row);
                 (source_entry_id, property, target_entry)
             })
@@ -2980,126 +3071,31 @@ impl Storage for StorageMySQL {
     }
 
     async fn api_get_catalog_overview(&self) -> Result<Vec<serde_json::Value>> {
-        let mut conn = self.get_conn_ro().await?;
-
-        // Query 1: overview data
-        let overview_rows = conn
-            .exec_iter("SELECT `overview`.* FROM `overview`,`catalog` WHERE `catalog`.`id`=`overview`.`catalog` AND `catalog`.`active`>=1", ())
-            .await?
-            .map_and_drop(|row: Row| {
-                let catalog_id: usize = row.get("catalog").unwrap_or(0);
-                let total: isize = row.get("total").unwrap_or(0);
-                let noq: isize = row.get("noq").unwrap_or(0);
-                let autoq: isize = row.get("autoq").unwrap_or(0);
-                let na: isize = row.get("na").unwrap_or(0);
-                let manual: isize = row.get("manual").unwrap_or(0);
-                let nowd: isize = row.get("nowd").unwrap_or(0);
-                let multi_match: isize = row.get("multi_match").unwrap_or(0);
-                let types: String = row.get("types").unwrap_or_default();
-                (catalog_id, json!({
-                    "total": total, "noq": noq, "autoq": autoq, "na": na,
-                    "manual": manual, "nowd": nowd, "multi_match": multi_match, "types": types
-                }))
-            })
-            .await?;
-        let mut overview_map: HashMap<usize, serde_json::Value> = overview_rows.into_iter().collect();
-
-        // Query 2: catalog data
-        let catalog_rows = conn
-            .exec_iter("SELECT * FROM `catalog` WHERE `active`>=1", ())
-            .await?
-            .map_and_drop(|row: Row| {
-                let id: usize = row.get("id").unwrap_or(0);
-                let name: String = row.get("name").unwrap_or_default();
-                let url: String = row.get("url").unwrap_or_default();
-                let desc: String = row.get("desc").unwrap_or_default();
-                let type_name: String = row.get("type").unwrap_or_default();
-                let wd_prop: usize = row.get("wd_prop").unwrap_or(0);
-                let wd_qual: Option<usize> = row.get("wd_qual");
-                let search_wp: String = row.get("search_wp").unwrap_or_default();
-                let active: u8 = row.get("active").unwrap_or(0);
-                let owner: usize = row.get("owner").unwrap_or(0);
-                let note: String = row.get("note").unwrap_or_default();
-                let source_item: usize = row.get("source_item").unwrap_or(0);
-                let has_person_date: String = row.get("has_person_date").unwrap_or_default();
-                let taxon_run: u8 = row.get("taxon_run").unwrap_or(0);
-                (id, json!({
-                    "id": id, "name": name, "url": url, "desc": desc, "type": type_name,
-                    "wd_prop": wd_prop, "wd_qual": wd_qual, "search_wp": search_wp,
-                    "active": active, "owner": owner, "note": note,
-                    "source_item": source_item, "has_person_date": has_person_date,
-                    "taxon_run": taxon_run
-                }))
-            })
-            .await?;
-        let catalog_map: HashMap<usize, serde_json::Value> = catalog_rows.into_iter().collect();
-
-        // Query 3: usernames
-        let user_rows = conn
-            .exec_iter("SELECT `user`.`name` AS `username`,`catalog`.`id` FROM `catalog`,`user` WHERE `owner`=`user`.`id` AND `active`>=1", ())
-            .await?
-            .map_and_drop(|row: Row| {
-                let id: usize = row.get("id").unwrap_or(0);
-                let username: String = row.get("username").unwrap_or_default();
-                (id, username)
-            })
-            .await?;
-        let user_map: HashMap<usize, String> = user_rows.into_iter().collect();
-
-        // Query 4: autoscrape data
-        let autoscrape_rows = conn
-            .exec_iter("SELECT `catalog`.`id` AS `id`,`last_update`,`do_auto_update`,`autoscrape`.`json` AS `json` FROM `catalog`,`autoscrape` WHERE `active`>=1 AND `catalog`.`id`=`autoscrape`.`catalog`", ())
-            .await?
-            .map_and_drop(|row: Row| {
-                let id: usize = row.get("id").unwrap_or(0);
-                let last_update: String = row.get("last_update").unwrap_or_default();
-                let do_auto_update: u8 = row.get("do_auto_update").unwrap_or(0);
-                let json_str: String = row.get("json").unwrap_or_default();
-                (id, json!({
-                    "last_update": last_update,
-                    "do_auto_update": do_auto_update,
-                    "autoscrape_json": json_str
-                }))
-            })
-            .await?;
-        let autoscrape_map: HashMap<usize, serde_json::Value> = autoscrape_rows.into_iter().collect();
-
-        // Merge all data by catalog_id
-        let mut results = Vec::new();
-        for (catalog_id, catalog_val) in &catalog_map {
-            let mut merged = catalog_val.clone();
-            if let Some(ov) = overview_map.remove(catalog_id) {
-                if let Some(obj) = ov.as_object() {
-                    for (k, v) in obj {
-                        merged[k] = v.clone();
-                    }
-                }
-            }
-            if let Some(username) = user_map.get(catalog_id) {
-                merged["username"] = json!(username);
-            }
-            if let Some(auto) = autoscrape_map.get(catalog_id) {
-                if let Some(obj) = auto.as_object() {
-                    for (k, v) in obj {
-                        merged[k] = v.clone();
-                    }
-                }
-            }
-            results.push(merged);
-        }
-        Ok(results)
+        self.api_get_catalog_overview_impl(None).await
     }
 
     async fn api_get_single_catalog_overview(&self, catalog_id: usize) -> Result<serde_json::Value> {
-        let all = self.api_get_catalog_overview().await?;
-        for item in all {
-            if let Some(id) = item.get("id").and_then(|v| v.as_u64()) {
-                if id as usize == catalog_id {
-                    return Ok(item);
-                }
-            }
-        }
-        Err(anyhow!("Catalog {catalog_id} not found in overview"))
+        // Push the id filter into SQL — avoids scanning the entire active
+        // catalog set (which made this call take ~10s on prod data).
+        let rows = self
+            .api_get_catalog_overview_impl(Some(&[catalog_id]))
+            .await?;
+        rows.into_iter()
+            .next()
+            .ok_or_else(|| anyhow!("Catalog {catalog_id} not found in overview"))
+    }
+
+    async fn api_get_catalog_info(&self, catalog_id: usize) -> Result<serde_json::Value> {
+        let sql = format!("SELECT * FROM `catalog` WHERE `id`={catalog_id} AND `active`>=1");
+        let mut conn = self.get_conn_ro().await?;
+        let rows = conn
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(row_to_json)
+            .await?;
+        rows.into_iter()
+            .next()
+            .ok_or_else(|| anyhow!("Catalog {catalog_id} not found"))
     }
 
     async fn api_get_catalog_type_counts(&self, catalog_id: usize) -> Result<Vec<serde_json::Value>> {
@@ -3109,8 +3105,8 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, params! { catalog_id })
             .await?
             .map_and_drop(|row: Row| {
-                let type_name: String = row.get("type").unwrap_or_default();
-                let cnt: usize = row.get("cnt").unwrap_or(0);
+                let type_name: String = row.get::<Option<String>, _>("type").flatten().unwrap_or_default();
+                let cnt: usize = row.get::<Option<usize>, _>("cnt").flatten().unwrap_or(0);
                 json!({"type": type_name, "cnt": cnt})
             })
             .await?;
@@ -3124,8 +3120,8 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, params! { catalog_id })
             .await?
             .map_and_drop(|row: Row| {
-                let ym: String = row.get("ym").unwrap_or_default();
-                let cnt: usize = row.get("cnt").unwrap_or(0);
+                let ym: String = row.get::<Option<String>, _>("ym").flatten().unwrap_or_default();
+                let cnt: usize = row.get::<Option<usize>, _>("cnt").flatten().unwrap_or(0);
                 json!({"ym": ym, "cnt": cnt})
             })
             .await?;
@@ -3139,19 +3135,19 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, params! { catalog_id })
             .await?
             .map_and_drop(|row: Row| {
-                let username: String = row.get("username").unwrap_or_default();
-                let uid: usize = row.get("uid").unwrap_or(0);
-                let cnt: usize = row.get("cnt").unwrap_or(0);
+                let username: String = row.get::<Option<String>, _>("username").flatten().unwrap_or_default();
+                let uid: usize = row.get::<Option<usize>, _>("uid").flatten().unwrap_or(0);
+                let cnt: usize = row.get::<Option<usize>, _>("cnt").flatten().unwrap_or(0);
                 json!({"username": username, "uid": uid, "cnt": cnt})
             })
             .await?;
         Ok(rows)
     }
 
-    async fn api_get_jobs(&self, catalog_id: usize, start: usize, max: usize) -> Result<(Vec<serde_json::Value>, Vec<serde_json::Value>)> {
+    async fn api_get_jobs(&self, catalog_id: usize, start: usize, max: usize, status_filter: &str) -> Result<(Vec<serde_json::Value>, Vec<serde_json::Value>, usize)> {
         let mut conn = self.get_conn_ro().await?;
 
-        // Stats (only when catalog_id==0)
+        // Stats (only when catalog_id==0, as arrays [status, cnt] for the frontend)
         let job_stats = if catalog_id == 0 {
             conn.exec_iter(
                 "SELECT `status`,count(*) AS `cnt` FROM `jobs` WHERE `status`!='BLOCKED' GROUP BY `status` ORDER BY `status`",
@@ -3159,48 +3155,74 @@ impl Storage for StorageMySQL {
             )
             .await?
             .map_and_drop(|row: Row| {
-                let status: String = row.get("status").unwrap_or_default();
-                let cnt: usize = row.get("cnt").unwrap_or(0);
-                json!({"status": status, "cnt": cnt})
+                let status: String = row.get::<Option<String>, _>("status").flatten().unwrap_or_default();
+                let cnt: usize = row.get::<Option<usize>, _>("cnt").flatten().unwrap_or(0);
+                json!([status, cnt])
             })
             .await?
         } else {
             vec![]
         };
 
-        // Jobs
-        let catalog_filter = if catalog_id > 0 {
-            format!(" AND `catalog`={catalog_id}")
-        } else {
-            String::new()
-        };
+        // Build WHERE clause
+        let mut filters = vec!["1=1".to_string(), "`status`!='BLOCKED'".to_string()];
+        if catalog_id > 0 {
+            filters.push(format!("`catalog`={catalog_id}"));
+        }
+        if !status_filter.is_empty() {
+            let safe = status_filter.replace('\'', "''");
+            filters.push(format!("`status`='{safe}'"));
+        }
+        let where_clause = filters.join(" AND ");
+
+        // Total count for pagination
+        let count_sql = format!("SELECT count(*) AS cnt FROM `jobs` WHERE {where_clause}");
+        let total: usize = conn
+            .exec_iter(count_sql, ())
+            .await?
+            .map_and_drop(|row: Row| row.get::<Option<usize>, _>("cnt").flatten().unwrap_or(0))
+            .await?
+            .into_iter()
+            .next()
+            .unwrap_or(0);
+
+        // Jobs with catalog name
         let jobs_sql = format!(
-            "SELECT `jobs`.*,(SELECT `user`.`name` FROM `user` WHERE `user`.`id`=`jobs`.`user_id`) AS `user_name` FROM `jobs` WHERE `status`!='BLOCKED'{catalog_filter} ORDER BY FIELD(`status`,'RUNNING','FAILED','TODO','LOW_PRIORITY','PAUSED','DONE'), `last_ts` DESC,`next_ts` DESC LIMIT {max} OFFSET {start}"
+            "SELECT `jobs`.*,\
+            (SELECT `user`.`name` FROM `user` WHERE `user`.`id`=`jobs`.`user_id`) AS `user_name`,\
+            (SELECT `catalog`.`name` FROM `catalog` WHERE `catalog`.`id`=`jobs`.`catalog`) AS `catalog_name`\
+            FROM `jobs` WHERE {where_clause}\
+            ORDER BY FIELD(`status`,'RUNNING','FAILED','TODO','LOW_PRIORITY','PAUSED','DONE'),\
+            `last_ts` DESC,`next_ts` DESC LIMIT {max} OFFSET {start}"
         );
         let jobs = conn
             .exec_iter(jobs_sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                let id: usize = row.get("id").unwrap_or(0);
-                let catalog: usize = row.get("catalog").unwrap_or(0);
-                let action: String = row.get("action").unwrap_or_default();
-                let status: String = row.get("status").unwrap_or_default();
-                let last_ts: String = row.get("last_ts").unwrap_or_default();
-                let next_ts: String = row.get("next_ts").unwrap_or_default();
-                let depends_on: Option<usize> = row.get("depends_on");
-                let user_id: Option<usize> = row.get("user_id");
-                let user_name: Option<String> = row.get("user_name");
-                let note: Option<String> = row.get("note");
-                let json_str: Option<String> = row.get("json");
+                let id: usize = row.get::<Option<usize>, _>("id").flatten().unwrap_or(0);
+                let catalog: usize = row.get::<Option<usize>, _>("catalog").flatten().unwrap_or(0);
+                let action: String = row.get::<Option<String>, _>("action").flatten().unwrap_or_default();
+                let status: String = row.get::<Option<String>, _>("status").flatten().unwrap_or_default();
+                let last_ts: String = row.get::<Option<String>, _>("last_ts").flatten().unwrap_or_default();
+                let next_ts: String = row.get::<Option<String>, _>("next_ts").flatten().unwrap_or_default();
+                let repeat_after_sec: Option<usize> = row.get::<Option<usize>, _>("repeat_after_sec").flatten();
+                let depends_on: Option<usize> = row.get::<Option<usize>, _>("depends_on").flatten();
+                let user_id: Option<usize> = row.get::<Option<usize>, _>("user_id").flatten();
+                let user_name: Option<String> = row.get::<Option<String>, _>("user_name").flatten();
+                let catalog_name: Option<String> = row.get::<Option<String>, _>("catalog_name").flatten();
+                let note: Option<String> = row.get::<Option<String>, _>("note").flatten();
+                let json_str: Option<String> = row.get::<Option<String>, _>("json").flatten();
                 json!({
-                    "id": id, "catalog": catalog, "action": action, "status": status,
-                    "last_ts": last_ts, "next_ts": next_ts, "depends_on": depends_on,
+                    "id": id, "catalog": catalog, "catalog_name": catalog_name,
+                    "action": action, "status": status,
+                    "last_ts": last_ts, "next_ts": next_ts,
+                    "repeat_after_sec": repeat_after_sec, "depends_on": depends_on,
                     "user_id": user_id, "user_name": user_name, "note": note, "json": json_str
                 })
             })
             .await?;
 
-        Ok((job_stats, jobs))
+        Ok((job_stats, jobs, total))
     }
 
     async fn api_get_issues_count(&self, issue_type: &str, catalogs: &str) -> Result<usize> {
@@ -3234,16 +3256,17 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                let id: usize = row.get("id").unwrap_or(0);
-                let entry_id: usize = row.get("entry_id").unwrap_or(0);
-                let row_issue_type: String = row.get("type").unwrap_or_default();
-                let json_str: String = row.get("json").unwrap_or_default();
-                let status: String = row.get("status").unwrap_or_default();
-                let catalog: usize = row.get("catalog").unwrap_or(0);
-                let random: f64 = row.get("random").unwrap_or(0.0);
+                let id: usize = row.get::<Option<usize>, _>("id").flatten().unwrap_or(0);
+                let entry_id: usize = row.get::<Option<usize>, _>("entry_id").flatten().unwrap_or(0);
+                let row_issue_type: String = row.get::<Option<String>, _>("type").flatten().unwrap_or_default();
+                let json_str: String = row.get::<Option<String>, _>("json").flatten().unwrap_or_default();
+                let json_val: serde_json::Value = serde_json::from_str(&json_str).unwrap_or(serde_json::Value::Null);
+                let status: String = row.get::<Option<String>, _>("status").flatten().unwrap_or_default();
+                let catalog: usize = row.get::<Option<usize>, _>("catalog").flatten().unwrap_or(0);
+                let random: f64 = row.get::<Option<f64>, _>("random").flatten().unwrap_or(0.0);
                 json!({
                     "id": id, "entry_id": entry_id, "type": row_issue_type,
-                    "json": json_str, "status": status, "catalog": catalog, "random": random
+                    "json": json_val, "status": status, "catalog": catalog, "random": random
                 })
             })
             .await?;
@@ -3263,15 +3286,7 @@ impl Storage for StorageMySQL {
         let rows = conn
             .exec_iter(sql, ())
             .await?
-            .map_and_drop(|row: Row| {
-                let mut obj = serde_json::Map::new();
-                for col in row.columns_ref() {
-                    let col_name = col.name_str().to_string();
-                    let val: Option<String> = row.get(&col_name as &str);
-                    obj.insert(col_name, json!(val));
-                }
-                serde_json::Value::Object(obj)
-            })
+            .map_and_drop(row_to_json)
             .await?;
         Ok(rows)
     }
@@ -3280,7 +3295,8 @@ impl Storage for StorageMySQL {
         if words.is_empty() {
             return Ok(vec![]);
         }
-        let ft_words = words.iter().map(|w| format!("+{w}")).collect::<Vec<String>>().join(",");
+        // Boolean-mode MATCH terms are space-separated (not comma-separated; that was a PHP bug).
+        let ft_words = words.iter().map(|w| format!("+{w}")).collect::<Vec<String>>().join(" ");
         let mut conditions = Vec::new();
         if !no_label_search {
             conditions.push(format!("MATCH(`ext_name`) AGAINST('{ft_words}' IN BOOLEAN MODE)"));
@@ -3314,8 +3330,16 @@ impl Storage for StorageMySQL {
         Ok(rows)
     }
 
-    async fn api_search_by_q(&self, q: isize) -> Result<Vec<Entry>> {
-        let sql = format!("{} WHERE `q`={q}", Self::entry_sql_select());
+    async fn api_search_by_q(&self, q: isize, exclude_catalogs: &[usize]) -> Result<Vec<Entry>> {
+        let mut sql = format!("{} WHERE `q`={q}", Self::entry_sql_select());
+        if !exclude_catalogs.is_empty() {
+            let list = exclude_catalogs
+                .iter()
+                .map(|c| c.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            sql += &format!(" AND `catalog` NOT IN ({list})");
+        }
         let mut conn = self.get_conn_ro().await?;
         let rows = conn
             .exec_iter(sql, ())
@@ -3331,56 +3355,106 @@ impl Storage for StorageMySQL {
     async fn api_get_recent_changes(&self, ts: &str, catalog_id: usize, limit: usize) -> Result<(Vec<serde_json::Value>, Vec<serde_json::Value>)> {
         let mut conn = self.get_conn_ro().await?;
 
-        // Events from entry table (entries matched/changed after timestamp)
+        // Events from entry table — human-matched entries only (user!=0,3,4), with
+        // a non-null timestamp. Rows here represent current matches.
+        let ts_filter = if ts.is_empty() {
+            String::new()
+        } else {
+            format!(" AND `timestamp` >= '{}'", ts.replace('\'', "''"))
+        };
         let catalog_filter = if catalog_id > 0 {
             format!(" AND `catalog`={catalog_id}")
         } else {
             String::new()
         };
         let entry_sql = format!(
-            "SELECT `id`,`catalog`,`ext_id`,`ext_name`,`q`,`user`,`timestamp` FROM `entry` WHERE `timestamp`>='{ts}' AND `user`>0{catalog_filter} ORDER BY `timestamp` DESC LIMIT {limit}"
+            "SELECT * FROM `entry` WHERE `user`!=0 AND `user`!=3 AND `user`!=4 AND `timestamp` IS NOT NULL{ts_filter}{catalog_filter} ORDER BY `timestamp` DESC LIMIT {limit}"
         );
         let entry_events = conn
             .exec_iter(entry_sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                let id: usize = row.get("id").unwrap_or(0);
-                let catalog: usize = row.get("catalog").unwrap_or(0);
-                let ext_id: String = row.get("ext_id").unwrap_or_default();
-                let ext_name: String = row.get("ext_name").unwrap_or_default();
-                let q: Option<isize> = row.get("q");
-                let user: Option<usize> = row.get("user");
-                let timestamp: String = row.get("timestamp").unwrap_or_default();
+                // Nullable columns (q, user, timestamp, ext_*) must be pulled
+                // through Option<T> explicitly — `row.get::<T, _>` panics on NULL.
+                let id: usize = row.get::<Option<usize>, _>("id").flatten().unwrap_or(0);
+                let catalog: usize = row.get::<Option<usize>, _>("catalog").flatten().unwrap_or(0);
+                let ext_id: String =
+                    row.get::<Option<String>, _>("ext_id").flatten().unwrap_or_default();
+                let ext_url: String =
+                    row.get::<Option<String>, _>("ext_url").flatten().unwrap_or_default();
+                let ext_name: String =
+                    row.get::<Option<String>, _>("ext_name").flatten().unwrap_or_default();
+                let ext_desc: String =
+                    row.get::<Option<String>, _>("ext_desc").flatten().unwrap_or_default();
+                let q: Option<isize> = row.get::<Option<isize>, _>("q").flatten();
+                let user: Option<usize> = row.get::<Option<usize>, _>("user").flatten();
+                let timestamp: String =
+                    row.get::<Option<String>, _>("timestamp").flatten().unwrap_or_default();
                 json!({
-                    "id": id, "catalog": catalog, "ext_id": ext_id, "ext_name": ext_name,
-                    "q": q, "user": user, "timestamp": timestamp
+                    "id": id, "catalog": catalog,
+                    "ext_id": ext_id, "ext_url": ext_url, "ext_name": ext_name, "ext_desc": ext_desc,
+                    "q": q, "user": user, "timestamp": timestamp,
+                    "event_type": "match"
                 })
             })
             .await?;
 
-        // Events from log table
+        // PHP mirrors: if the entry query returned no rows, don't look at `log`.
+        // Otherwise bound the log query to [max_ts, min_ts] — the same window
+        // covered by the entry query.
+        if entry_events.is_empty() {
+            return Ok((entry_events, vec![]));
+        }
+        let min_ts = entry_events
+            .first()
+            .and_then(|e| e.get("timestamp").and_then(|v| v.as_str()))
+            .unwrap_or("")
+            .to_string();
+        let max_ts = entry_events
+            .last()
+            .and_then(|e| e.get("timestamp").and_then(|v| v.as_str()))
+            .unwrap_or("")
+            .to_string();
+
         let log_catalog_filter = if catalog_id > 0 {
-            format!(" AND `entry`.`catalog`={catalog_id}")
+            format!(" AND entry.catalog={catalog_id}")
         } else {
             String::new()
         };
+        let min_ts_safe = min_ts.replace('\'', "''");
+        let max_ts_safe = max_ts.replace('\'', "''");
         let log_sql = format!(
-            "SELECT `log`.*,`entry`.`catalog` FROM `log`,`entry` WHERE `entry`.`id`=`log`.`entry_id` AND `log`.`timestamp`>='{ts}'{log_catalog_filter} ORDER BY `log`.`timestamp` DESC LIMIT {limit}"
+            "SELECT entry.id AS id, catalog, ext_id, ext_url, ext_name, ext_desc, entry.q, \
+                    log.action AS event_type, log.user AS user, log.timestamp AS timestamp \
+             FROM log, entry \
+             WHERE log.entry_id=entry.id \
+               AND log.timestamp BETWEEN '{max_ts_safe}' AND '{min_ts_safe}'{log_catalog_filter}"
         );
         let log_events = conn
             .exec_iter(log_sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                let id: usize = row.get("id").unwrap_or(0);
-                let entry_id: usize = row.get("entry_id").unwrap_or(0);
-                let user_id: usize = row.get("user_id").unwrap_or(0);
-                let action: String = row.get("action").unwrap_or_default();
-                let timestamp: String = row.get("timestamp").unwrap_or_default();
-                let catalog: usize = row.get("catalog").unwrap_or(0);
-                let json_str: Option<String> = row.get("json");
+                let id: usize = row.get::<Option<usize>, _>("id").flatten().unwrap_or(0);
+                let catalog: usize = row.get::<Option<usize>, _>("catalog").flatten().unwrap_or(0);
+                let ext_id: String =
+                    row.get::<Option<String>, _>("ext_id").flatten().unwrap_or_default();
+                let ext_url: String =
+                    row.get::<Option<String>, _>("ext_url").flatten().unwrap_or_default();
+                let ext_name: String =
+                    row.get::<Option<String>, _>("ext_name").flatten().unwrap_or_default();
+                let ext_desc: String =
+                    row.get::<Option<String>, _>("ext_desc").flatten().unwrap_or_default();
+                let q: Option<isize> = row.get::<Option<isize>, _>("q").flatten();
+                let event_type: String =
+                    row.get::<Option<String>, _>("event_type").flatten().unwrap_or_default();
+                let user: Option<usize> = row.get::<Option<usize>, _>("user").flatten();
+                let timestamp: String =
+                    row.get::<Option<String>, _>("timestamp").flatten().unwrap_or_default();
                 json!({
-                    "id": id, "entry_id": entry_id, "user_id": user_id, "action": action,
-                    "timestamp": timestamp, "catalog": catalog, "json": json_str
+                    "id": id, "catalog": catalog,
+                    "ext_id": ext_id, "ext_url": ext_url, "ext_name": ext_name, "ext_desc": ext_desc,
+                    "q": q, "user": user, "timestamp": timestamp,
+                    "event_type": event_type
                 })
             })
             .await?;
@@ -3401,6 +3475,20 @@ impl Storage for StorageMySQL {
         Ok(rows)
     }
 
+    async fn api_get_catalog_entries_count(&self, where_clause: &str) -> Result<usize> {
+        let sql = format!("SELECT COUNT(*) AS cnt FROM entry WHERE {where_clause}");
+        let mut conn = self.get_conn_ro().await?;
+        let cnt = conn
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(from_row::<usize>)
+            .await?
+            .into_iter()
+            .next()
+            .unwrap_or(0);
+        Ok(cnt)
+    }
+
     async fn api_get_existing_job_actions(&self) -> Result<Vec<String>> {
         let sql = "SELECT DISTINCT `action` FROM `jobs` UNION SELECT DISTINCT `action` FROM `job_sizes`";
         let mut conn = self.get_conn_ro().await?;
@@ -3412,33 +3500,70 @@ impl Storage for StorageMySQL {
         Ok(rows)
     }
 
-    async fn api_get_random_entry(&self, catalog_id: usize, submode: &str, entry_type: &str, random: f64, active_catalogs: &[usize]) -> Result<Option<Entry>> {
-        let mut sql = format!("{} FORCE INDEX (`random_2`) WHERE `random`>={random}", Self::entry_sql_select());
-        if submode == "no_q" || submode.is_empty() {
-            sql += " AND `q` IS NULL";
-        }
-        if catalog_id > 0 {
-            sql += &format!(" AND `catalog`={catalog_id}");
-        }
-        if !entry_type.is_empty() {
-            sql += &format!(" AND `type`='{}'", entry_type.replace('\'', "''"));
-        }
-        sql += " ORDER BY `random` LIMIT 1";
+    async fn api_get_random_entry(
+        &self,
+        catalog_id: usize,
+        submode: &str,
+        entry_type: &str,
+        active_catalogs: &[usize],
+    ) -> Result<Option<Entry>> {
+        let where_clause: &str = match submode {
+            "prematched" => "user=0",
+            "no_manual" => "(user=0 OR q IS NULL)",
+            _ => "q IS NULL",
+        };
+        let type_filter = if entry_type.is_empty() {
+            String::new()
+        } else {
+            format!(" AND `type`='{}'", entry_type.replace('\'', "''"))
+        };
 
         let mut conn = self.get_conn_ro().await?;
-        let rows = conn
-            .exec_iter(sql, ())
-            .await?
-            .map_and_drop(|row| Self::entry_from_row(&row))
-            .await?
-            .into_iter()
-            .flatten()
-            .collect::<Vec<Entry>>();
 
-        // Only return if the entry's catalog is in active_catalogs
-        if let Some(entry) = rows.into_iter().next() {
-            if active_catalogs.contains(&entry.catalog) {
-                return Ok(Some(entry));
+        if catalog_id > 0 {
+            // Catalog-specific: FORCE INDEX (catalog_q_random). Two attempts —
+            // first with a random threshold, then wrap to threshold 0.
+            let base = format!(
+                "{} FORCE INDEX (`catalog_q_random`) WHERE `random`>=%R% AND `catalog`={catalog_id} AND {where_clause}{type_filter} ORDER BY `random` LIMIT 1",
+                Self::entry_sql_select()
+            );
+            for threshold in [rand::random::<f64>(), 0.0] {
+                let sql = base.replace("%R%", &format!("{threshold}"));
+                let rows = conn
+                    .exec_iter(sql, ())
+                    .await?
+                    .map_and_drop(|row| Self::entry_from_row(&row))
+                    .await?
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<Entry>>();
+                if let Some(entry) = rows.into_iter().next() {
+                    return Ok(Some(entry));
+                }
+            }
+            return Ok(None);
+        }
+
+        // Global: FORCE INDEX (random_2), 11 attempts, filter by active_catalogs.
+        let base = format!(
+            "{} FORCE INDEX (`random_2`) WHERE `random`>=%R% AND {where_clause}{type_filter} ORDER BY `random` LIMIT 10",
+            Self::entry_sql_select()
+        );
+        for attempt in 0..=10 {
+            let threshold = if attempt >= 10 { 0.0 } else { rand::random::<f64>() };
+            let sql = base.replace("%R%", &format!("{threshold}"));
+            let rows = conn
+                .exec_iter(sql, ())
+                .await?
+                .map_and_drop(|row| Self::entry_from_row(&row))
+                .await?
+                .into_iter()
+                .flatten()
+                .collect::<Vec<Entry>>();
+            for entry in rows {
+                if active_catalogs.contains(&entry.catalog) {
+                    return Ok(Some(entry));
+                }
             }
         }
         Ok(None)
@@ -3446,6 +3571,17 @@ impl Storage for StorageMySQL {
 
     async fn api_get_active_catalog_ids(&self) -> Result<Vec<usize>> {
         let sql = "SELECT `id` FROM `catalog` WHERE `active`=1";
+        let mut conn = self.get_conn_ro().await?;
+        let rows = conn
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(from_row::<usize>)
+            .await?;
+        Ok(rows)
+    }
+
+    async fn api_get_inactive_catalog_ids(&self) -> Result<Vec<usize>> {
+        let sql = "SELECT `id` FROM `catalog` WHERE `active`!=1";
         let mut conn = self.get_conn_ro().await?;
         let rows = conn
             .exec_iter(sql, ())
@@ -3478,8 +3614,8 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                let ext_name: String = row.get("ext_name").unwrap_or_default();
-                let cnt: usize = row.get("cnt").unwrap_or(0);
+                let ext_name: String = row.get::<Option<String>, _>("ext_name").flatten().unwrap_or_default();
+                let cnt: usize = row.get::<Option<usize>, _>("cnt").flatten().unwrap_or(0);
                 json!({"ext_name": ext_name, "cnt": cnt})
             })
             .await?;
@@ -3501,7 +3637,7 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                let cnt: usize = row.get("cnt").unwrap_or(0);
+                let cnt: usize = row.get::<Option<usize>, _>("cnt").flatten().unwrap_or(0);
                 let entry = Self::entry_from_row(&row);
                 (cnt, entry)
             })
@@ -3536,8 +3672,8 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                let lat: f64 = row.get("lat").unwrap_or(0.0);
-                let lon: f64 = row.get("lon").unwrap_or(0.0);
+                let lat: f64 = row.get::<Option<f64>, _>("lat").flatten().unwrap_or(0.0);
+                let lon: f64 = row.get::<Option<f64>, _>("lon").flatten().unwrap_or(0.0);
                 let entry = Self::entry_from_row(&row);
                 (lat, lon, entry)
             })
@@ -3570,15 +3706,7 @@ impl Storage for StorageMySQL {
         let rows = conn
             .exec_iter(sql, ())
             .await?
-            .map_and_drop(|row: Row| {
-                let mut obj = serde_json::Map::new();
-                for col in row.columns_ref() {
-                    let col_name = col.name_str().to_string();
-                    let val: Option<String> = row.get(&col_name as &str);
-                    obj.insert(col_name, json!(val));
-                }
-                serde_json::Value::Object(obj)
-            })
+            .map_and_drop(row_to_json)
             .await?;
         Ok(rows)
     }
@@ -3592,11 +3720,11 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                let q: isize = row.get("q").unwrap_or(0);
-                let ext_id: String = row.get("ext_id").unwrap_or_default();
-                let ext_url: String = row.get("ext_url").unwrap_or_default();
-                let ext_name: String = row.get("ext_name").unwrap_or_default();
-                let user: Option<usize> = row.get("user");
+                let q: isize = row.get::<Option<isize>, _>("q").flatten().unwrap_or(0);
+                let ext_id: String = row.get::<Option<String>, _>("ext_id").flatten().unwrap_or_default();
+                let ext_url: String = row.get::<Option<String>, _>("ext_url").flatten().unwrap_or_default();
+                let ext_name: String = row.get::<Option<String>, _>("ext_name").flatten().unwrap_or_default();
+                let user: Option<usize> = row.get::<Option<usize>, _>("user").flatten();
                 (q, ext_id, ext_url, ext_name, user)
             })
             .await?;
@@ -3609,11 +3737,24 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, ())
             .await?
             .map_and_drop(|row: Row| {
+                // Pull every column as a string regardless of its DB type —
+                // reading non-string columns as String panics, so dispatch on
+                // the underlying mysql value.
                 let mut map = HashMap::new();
-                for col in row.columns_ref() {
+                for (i, col) in row.columns_ref().iter().enumerate() {
                     let col_name = col.name_str().to_string();
-                    let val: Option<String> = row.get(&col_name as &str);
-                    map.insert(col_name, val.unwrap_or_default());
+                    let s = match &row[i] {
+                        mysql_async::Value::NULL => String::new(),
+                        mysql_async::Value::Int(n) => n.to_string(),
+                        mysql_async::Value::UInt(n) => n.to_string(),
+                        mysql_async::Value::Float(n) => n.to_string(),
+                        mysql_async::Value::Double(n) => n.to_string(),
+                        mysql_async::Value::Bytes(b) => {
+                            String::from_utf8_lossy(b).to_string()
+                        }
+                        other => format!("{other:?}"),
+                    };
+                    map.insert(col_name, s);
                 }
                 map
             })
@@ -3630,13 +3771,9 @@ impl Storage for StorageMySQL {
     }
 
     async fn api_get_catalog_overview_for_ids(&self, catalog_ids: &[usize]) -> Result<Vec<serde_json::Value>> {
-        let mut results = Vec::new();
-        for &catalog_id in catalog_ids {
-            if let Ok(val) = self.api_get_single_catalog_overview(catalog_id).await {
-                results.push(val); // Skip catalogs that are not found
-            }
-        }
-        Ok(results)
+        // Push the id filter into SQL — batch_catalogs with 5 ids used to
+        // re-run four large unfiltered joins per catalog (~50s total).
+        self.api_get_catalog_overview_impl(Some(catalog_ids)).await
     }
 
     async fn api_match_q_multi(&self, catalog_id: usize, ext_id: &str, q: isize, user_id: usize) -> Result<bool> {
@@ -3706,7 +3843,7 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                let ext_name: String = row.get("ext_name").unwrap_or_default();
+                let ext_name: String = row.get::<Option<String>, _>("ext_name").flatten().unwrap_or_default();
                 ext_name
             })
             .await?;
@@ -3753,7 +3890,7 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                let name_count: usize = row.get("name_count").unwrap_or(0);
+                let name_count: usize = row.get::<Option<usize>, _>("name_count").flatten().unwrap_or(0);
                 let entry = Self::entry_from_row(&row);
                 (name_count, entry)
             })
@@ -3786,9 +3923,9 @@ impl Storage for StorageMySQL {
             .exec_iter(sql1, ())
             .await?
             .map_and_drop(|row: Row| {
-                let prop_group: String = row.get("prop_group").unwrap_or_default();
-                let property: usize = row.get("property").unwrap_or(0);
-                let item: usize = row.get("item").unwrap_or(0);
+                let prop_group: String = row.get::<Option<String>, _>("prop_group").flatten().unwrap_or_default();
+                let property: usize = row.get::<Option<usize>, _>("property").flatten().unwrap_or(0);
+                let item: usize = row.get::<Option<usize>, _>("item").flatten().unwrap_or(0);
                 (prop_group, property, item)
             })
             .await?;
@@ -3802,8 +3939,8 @@ impl Storage for StorageMySQL {
             .exec_iter(sql2, ())
             .await?
             .map_and_drop(|row: Row| {
-                let item: usize = row.get("item").unwrap_or(0);
-                let label: String = row.get("label").unwrap_or_default();
+                let item: usize = row.get::<Option<usize>, _>("item").flatten().unwrap_or(0);
+                let label: String = row.get::<Option<String>, _>("label").flatten().unwrap_or_default();
                 (format!("{item}"), label)
             })
             .await?;
@@ -3818,15 +3955,7 @@ impl Storage for StorageMySQL {
         let rows = conn
             .exec_iter(sql, ())
             .await?
-            .map_and_drop(|row: Row| {
-                let mut obj = serde_json::Map::new();
-                for col in row.columns_ref() {
-                    let col_name = col.name_str().to_string();
-                    let val: Option<String> = row.get(&col_name as &str);
-                    obj.insert(col_name, json!(val));
-                }
-                serde_json::Value::Object(obj)
-            })
+            .map_and_drop(row_to_json)
             .await?;
         Ok(rows)
     }
@@ -3845,8 +3974,8 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                let id: usize = row.get("id").unwrap_or(0);
-                let cnt: usize = row.get("cnt").unwrap_or(0);
+                let id: usize = row.get::<Option<usize>, _>("id").flatten().unwrap_or(0);
+                let cnt: usize = row.get::<Option<usize>, _>("cnt").flatten().unwrap_or(0);
                 (id, cnt)
             })
             .await?;
@@ -3875,15 +4004,7 @@ impl Storage for StorageMySQL {
         let rows = conn
             .exec_iter(sql, ())
             .await?
-            .map_and_drop(|row: Row| {
-                let mut obj = serde_json::Map::new();
-                for col in row.columns_ref() {
-                    let col_name = col.name_str().to_string();
-                    let val: Option<String> = row.get(&col_name as &str);
-                    obj.insert(col_name, json!(val));
-                }
-                serde_json::Value::Object(obj)
-            })
+            .map_and_drop(row_to_json)
             .await?;
         Ok(rows)
     }
@@ -3962,8 +4083,8 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                let id: usize = row.get("id").unwrap_or(0);
-                let wd_prop: usize = row.get("wd_prop").unwrap_or(0);
+                let id: usize = row.get::<Option<usize>, _>("id").flatten().unwrap_or(0);
+                let wd_prop: usize = row.get::<Option<usize>, _>("wd_prop").flatten().unwrap_or(0);
                 (wd_prop, id)
             })
             .await?;
@@ -3980,15 +4101,7 @@ impl Storage for StorageMySQL {
         let rows = conn
             .exec_iter(sql, ())
             .await?
-            .map_and_drop(|row: Row| {
-                let mut obj = serde_json::Map::new();
-                for col in row.columns_ref() {
-                    let col_name = col.name_str().to_string();
-                    let val: Option<String> = row.get(&col_name as &str);
-                    obj.insert(col_name, json!(val));
-                }
-                serde_json::Value::Object(obj)
-            })
+            .map_and_drop(row_to_json)
             .await?;
         Ok(rows)
     }
@@ -4007,15 +4120,15 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                let id: usize = row.get("id").unwrap_or(0);
-                let catalog: usize = row.get("catalog").unwrap_or(0);
-                let ext_id: String = row.get("ext_id").unwrap_or_default();
-                let ext_url: String = row.get("ext_url").unwrap_or_default();
-                let ext_name: String = row.get("ext_name").unwrap_or_default();
-                let ext_desc: String = row.get("ext_desc").unwrap_or_default();
-                let event_type: String = row.get("event_type").unwrap_or_default();
-                let user: usize = row.get("user").unwrap_or(0);
-                let timestamp: String = row.get("timestamp").unwrap_or_default();
+                let id: usize = row.get::<Option<usize>, _>("id").flatten().unwrap_or(0);
+                let catalog: usize = row.get::<Option<usize>, _>("catalog").flatten().unwrap_or(0);
+                let ext_id: String = row.get::<Option<String>, _>("ext_id").flatten().unwrap_or_default();
+                let ext_url: String = row.get::<Option<String>, _>("ext_url").flatten().unwrap_or_default();
+                let ext_name: String = row.get::<Option<String>, _>("ext_name").flatten().unwrap_or_default();
+                let ext_desc: String = row.get::<Option<String>, _>("ext_desc").flatten().unwrap_or_default();
+                let event_type: String = row.get::<Option<String>, _>("event_type").flatten().unwrap_or_default();
+                let user: usize = row.get::<Option<usize>, _>("user").flatten().unwrap_or(0);
+                let timestamp: String = row.get::<Option<String>, _>("timestamp").flatten().unwrap_or_default();
                 json!({
                     "id": id, "catalog": catalog, "ext_id": ext_id, "ext_url": ext_url,
                     "ext_name": ext_name, "ext_desc": ext_desc, "event_type": event_type,
@@ -4174,8 +4287,8 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, params! { catalog_id })
             .await?
             .map_and_drop(|row: Row| {
-                let wd_prop: usize = row.get("wd_prop").unwrap_or(0);
-                let wd_qual: usize = row.get("wd_qual").unwrap_or(0);
+                let wd_prop: usize = row.get::<Option<usize>, _>("wd_prop").flatten().unwrap_or(0);
+                let wd_qual: usize = row.get::<Option<usize>, _>("wd_qual").flatten().unwrap_or(0);
                 let wd_prop = if wd_prop == 0 { None } else { Some(wd_prop) };
                 let wd_qual = if wd_qual == 0 { None } else { Some(wd_qual) };
                 (wd_prop, wd_qual)
@@ -4193,8 +4306,8 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, params! { catalog_id })
             .await?
             .map_and_drop(|row: Row| {
-                let q: isize = row.get("q").unwrap_or(0);
-                let ext_id: String = row.get("ext_id").unwrap_or_default();
+                let q: isize = row.get::<Option<isize>, _>("q").flatten().unwrap_or(0);
+                let ext_id: String = row.get::<Option<String>, _>("ext_id").flatten().unwrap_or_default();
                 (q, ext_id)
             })
             .await?;
@@ -4208,8 +4321,8 @@ impl Storage for StorageMySQL {
             .exec_iter(sql, params! { catalog_id })
             .await?
             .map_and_drop(|row: Row| {
-                let q: isize = row.get("q").unwrap_or(0);
-                let ext_id: String = row.get("ext_id").unwrap_or_default();
+                let q: isize = row.get::<Option<isize>, _>("q").flatten().unwrap_or(0);
+                let ext_id: String = row.get::<Option<String>, _>("ext_id").flatten().unwrap_or_default();
                 (q, ext_id)
             })
             .await?;
@@ -4386,6 +4499,776 @@ impl Storage for StorageMySQL {
             .await?;
         Ok(rows)
     }
+
+    // ─── Lightweight catalog endpoints ────────────────────────────────────
+
+    async fn api_search_catalogs(&self, q: &str, limit: usize) -> Result<Vec<Value>> {
+        let q_like = format!("%{q}%");
+        let sql = "SELECT c.id, c.name, c.`desc`, c.type, IFNULL(o.total,0) AS total, IFNULL(o.manual,0) AS manual
+            FROM catalog c LEFT JOIN overview o ON o.catalog = c.id
+            WHERE c.active = 1 AND (c.name LIKE :q_like OR c.`desc` LIKE :q_like)
+            ORDER BY IFNULL(o.total,0) DESC LIMIT :limit";
+        let mut conn = self.get_conn_ro().await?;
+        let rows: Vec<Value> = conn
+            .exec_iter(sql, params! { "q_like" => q_like, "limit" => limit })
+            .await?
+            .map_and_drop(row_to_json)
+            .await?;
+        Ok(rows)
+    }
+
+    async fn api_catalog_type_counts(&self) -> Result<Vec<Value>> {
+        let sql = "SELECT `type`, COUNT(*) AS cnt FROM catalog WHERE active = 1 AND `type` != '' GROUP BY `type` ORDER BY cnt DESC";
+        let mut conn = self.get_conn_ro().await?;
+        let rows: Vec<Value> = conn
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(row_to_json)
+            .await?;
+        Ok(rows)
+    }
+
+    async fn api_latest_catalogs(&self, limit: usize) -> Result<Vec<Value>> {
+        let sql = "SELECT c.id, c.name, c.`desc`, c.type, IFNULL(o.total,0) AS total, IFNULL(o.manual,0) AS manual
+            FROM catalog c LEFT JOIN overview o ON o.catalog = c.id
+            WHERE c.active = 1 ORDER BY c.id DESC LIMIT :limit";
+        let mut conn = self.get_conn_ro().await?;
+        let rows: Vec<Value> = conn
+            .exec_iter(sql, params! { limit })
+            .await?
+            .map_and_drop(row_to_json)
+            .await?;
+        Ok(rows)
+    }
+
+    async fn api_catalogs_with_locations(&self) -> Result<Vec<Value>> {
+        let sql = "SELECT c.id, c.name, c.`desc`, c.type, IFNULL(o.total,0) AS total, IFNULL(o.manual,0) AS manual
+            FROM catalog c INNER JOIN kv_catalog kv ON kv.catalog_id = c.id
+            LEFT JOIN overview o ON o.catalog = c.id
+            WHERE c.active = 1 AND kv.kv_key = 'has_locations' AND kv.kv_value = 'yes'
+            ORDER BY c.name";
+        let mut conn = self.get_conn_ro().await?;
+        let rows: Vec<Value> = conn
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(row_to_json)
+            .await?;
+        Ok(rows)
+    }
+
+    async fn api_catalog_property_groups(&self) -> Result<Value> {
+        let mut conn = self.get_conn_ro().await?;
+        // 1. Map active catalogs to their wd_prop (or "no property")
+        let rows: Vec<(usize, Option<usize>)> = conn
+            .exec_iter(
+                "SELECT id, wd_prop FROM catalog WHERE active = 1",
+                (),
+            )
+            .await?
+            .map_and_drop(from_row::<(usize, Option<usize>)>)
+            .await?;
+        let mut prop2cats: HashMap<usize, Vec<usize>> = HashMap::new();
+        let mut no_prop_ids: Vec<usize> = vec![];
+        for (id, wd_prop) in rows {
+            match wd_prop {
+                Some(p) if p > 0 => prop2cats.entry(p).or_default().push(id),
+                _ => no_prop_ids.push(id),
+            }
+        }
+
+        let mut groups = serde_json::Map::new();
+        groups.insert(
+            "ig_no_property".to_string(),
+            json!({
+                "label": "Catalogs without Wikidata property",
+                "catalogs": no_prop_ids,
+            }),
+        );
+
+        if !prop2cats.is_empty() {
+            let keys: Vec<String> = prop2cats.keys().map(|k| k.to_string()).collect();
+            let in_list = keys.join(",");
+            let sql_groups = format!(
+                "SELECT pc.prop_group, pc.property, pc.item, pc.label FROM property_cache pc WHERE pc.property IN ({in_list})"
+            );
+            // `prop_group` is the numeric property id the group is keyed to
+            // (31 = "instance of" meaning top-level group; anything else is a
+            // country/subgroup). Stored as INT on the server; mysql_async
+            // would panic if we asked for String.
+            let prop_rows: Vec<(usize, usize, usize, String)> = conn
+                .exec_iter(sql_groups, ())
+                .await?
+                .map_and_drop(from_row::<(usize, usize, usize, String)>)
+                .await?;
+            for (prop_group, property, item, label) in prop_rows {
+                let prefix = if prop_group == 31 { "ig_" } else { "country_" };
+                let key = format!(
+                    "{prefix}{}",
+                    label.to_lowercase().split_whitespace().collect::<Vec<_>>().join("_")
+                );
+                let catalogs = prop2cats.get(&property).cloned().unwrap_or_default();
+                let entry = groups.entry(key.clone()).or_insert_with(|| {
+                    json!({"label": label, "catalogs": [], "q": format!("Q{item}")})
+                });
+                if let Some(arr) = entry.get_mut("catalogs").and_then(|v| v.as_array_mut()) {
+                    for c in catalogs {
+                        if !arr.iter().any(|v| v.as_u64() == Some(c as u64)) {
+                            arr.push(json!(c));
+                        }
+                    }
+                }
+            }
+        }
+
+        for (_, v) in groups.iter_mut() {
+            if let Some(arr) = v.get("catalogs").and_then(|c| c.as_array()) {
+                let cnt = arr.len();
+                if let Some(obj) = v.as_object_mut() {
+                    obj.insert("count".to_string(), json!(cnt));
+                }
+            }
+        }
+        Ok(Value::Object(groups))
+    }
+
+    async fn api_check_wd_prop_usage(
+        &self,
+        wd_prop: usize,
+        exclude_catalog: usize,
+    ) -> Result<Value> {
+        let mut sql = String::from(
+            "SELECT id, name FROM catalog WHERE active = 1 AND wd_prop = :wd_prop AND wd_qual IS NULL",
+        );
+        if exclude_catalog > 0 {
+            sql.push_str(&format!(" AND id != {exclude_catalog}"));
+        }
+        sql.push_str(" LIMIT 1");
+        let mut conn = self.get_conn_ro().await?;
+        let row: Option<(usize, String)> = conn
+            .exec_iter(sql, params! { wd_prop })
+            .await?
+            .map_and_drop(from_row::<(usize, String)>)
+            .await?
+            .into_iter()
+            .next();
+        Ok(match row {
+            Some((id, name)) => json!({"used": true, "catalog_id": id, "catalog_name": name}),
+            None => json!({"used": false}),
+        })
+    }
+
+    async fn api_catalog_by_group(&self, group: &str) -> Result<Value> {
+        let mut conn = self.get_conn_ro().await?;
+        // Build the WHERE clause based on the group token
+        let group_safe = group.replace('\'', "''");
+        let where_clause: String = if group == "all" {
+            "c.active = 1".into()
+        } else if group == "ig_no_property" {
+            "c.active = 1 AND (c.wd_prop IS NULL OR c.wd_prop = 0)".into()
+        } else if group.starts_with("ig_") || group.starts_with("country_") {
+            let prop_group = if group.starts_with("ig_") { 31 } else { 17 };
+            let label_raw = if let Some(rest) = group.strip_prefix("ig_") {
+                rest
+            } else {
+                group.strip_prefix("country_").unwrap_or("")
+            };
+            let label = label_raw.replace('_', " ").replace('\'', "''");
+            let sql = format!(
+                "SELECT DISTINCT property FROM property_cache WHERE prop_group = {prop_group} AND LOWER(label) = LOWER('{label}')"
+            );
+            let props: Vec<usize> = conn
+                .exec_iter(sql, ())
+                .await?
+                .map_and_drop(from_row::<usize>)
+                .await?;
+            if props.is_empty() {
+                return Ok(json!({}));
+            }
+            format!(
+                "c.active = 1 AND c.wd_qual IS NULL AND c.wd_prop IN ({})",
+                props.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(",")
+            )
+        } else {
+            // Type group
+            format!("c.active = 1 AND c.type = '{group_safe}'")
+        };
+
+        let sql = format!(
+            "SELECT c.*, o.total, o.noq, o.autoq, o.na, o.manual, o.nowd, o.multi_match, o.types, u.name AS username
+                FROM catalog c LEFT JOIN overview o ON o.catalog = c.id LEFT JOIN user u ON u.id = c.owner
+                WHERE {where_clause} ORDER BY c.name"
+        );
+        let rows: Vec<Value> = conn
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(row_to_json)
+            .await?;
+
+        let mut map = serde_json::Map::new();
+        let mut catalog_ids: Vec<usize> = vec![];
+        for row in rows {
+            if let Some(id) = row.get("id").and_then(|v| v.as_u64()) {
+                catalog_ids.push(id as usize);
+                map.insert(id.to_string(), row);
+            }
+        }
+
+        if !catalog_ids.is_empty() {
+            let in_list = catalog_ids
+                .iter()
+                .map(|i| i.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            let sql_kv = format!("SELECT * FROM kv_catalog WHERE catalog_id IN ({in_list})");
+            let kv_rows: Vec<(usize, String, String)> = conn
+                .exec_iter(sql_kv, ())
+                .await?
+                .map_and_drop(from_row::<(usize, String, String)>)
+                .await?;
+            for (catalog_id, kv_key, kv_value) in kv_rows {
+                if kv_key.starts_with("wdrc_") {
+                    continue;
+                }
+                if let Some(entry) = map.get_mut(&catalog_id.to_string()) {
+                    let existing = entry.get(&kv_key).cloned();
+                    let new_val = match existing {
+                        None => json!(kv_value),
+                        Some(Value::Array(mut arr)) => {
+                            arr.push(json!(kv_value));
+                            Value::Array(arr)
+                        }
+                        Some(other) => json!([other, kv_value]),
+                    };
+                    if let Some(obj) = entry.as_object_mut() {
+                        obj.insert(kv_key, new_val);
+                    }
+                }
+            }
+        }
+
+        Ok(Value::Object(map))
+    }
+
+    // ─── Other newly ported endpoints ─────────────────────────────────────
+
+    async fn api_create_list(&self, catalog_id: usize) -> Result<Vec<Value>> {
+        let sql = "SELECT ext_id, ext_name, ext_desc, ext_url, type FROM entry WHERE q=-1 AND user>0 AND catalog=:catalog_id ORDER BY ext_name";
+        let mut conn = self.get_conn_ro().await?;
+        let rows: Vec<Value> = conn
+            .exec_iter(sql, params! { catalog_id })
+            .await?
+            .map_and_drop(row_to_json)
+            .await?;
+        Ok(rows)
+    }
+
+    async fn api_user_edits(
+        &self,
+        user_id: usize,
+        catalog: usize,
+        limit: usize,
+        offset: usize,
+    ) -> Result<(Vec<Value>, Value, usize, Option<Value>)> {
+        let mut conn = self.get_conn_ro().await?;
+        let cat_cond = if catalog > 0 {
+            format!(" AND catalog={catalog}")
+        } else {
+            String::new()
+        };
+        let cat_cond2 = if catalog > 0 {
+            format!(" AND entry.catalog={catalog}")
+        } else {
+            String::new()
+        };
+
+        // Matches from entry
+        let sql_matches = format!(
+            "SELECT entry.* FROM entry WHERE user={user_id}{cat_cond} ORDER BY timestamp DESC LIMIT {limit} OFFSET {offset}"
+        );
+        let current_rows: Vec<Value> = conn
+            .exec_iter(sql_matches, ())
+            .await?
+            .map_and_drop(row_to_json)
+            .await?;
+
+        // Historical edits
+        let sql_log = format!(
+            "SELECT entry.id AS id, entry.catalog, entry.ext_id, entry.ext_url, entry.ext_name, entry.ext_desc,
+                log.action AS event_type, log.user AS user, log.timestamp AS timestamp, log.q AS q
+                FROM log INNER JOIN entry ON log.entry_id = entry.id
+                WHERE log.user={user_id}{cat_cond2} ORDER BY log.timestamp DESC LIMIT {limit} OFFSET {offset}"
+        );
+        let log_rows: Vec<Value> = conn
+            .exec_iter(sql_log, ())
+            .await?
+            .map_and_drop(row_to_json)
+            .await?;
+
+        // Merge and sort
+        let mut events: Vec<Value> = current_rows
+            .into_iter()
+            .map(|mut v| {
+                if let Some(obj) = v.as_object_mut() {
+                    obj.insert("event_type".to_string(), json!("match"));
+                }
+                v
+            })
+            .chain(log_rows)
+            .collect();
+        events.sort_by(|a, b| {
+            let ta = a.get("timestamp").and_then(|v| v.as_str()).unwrap_or("");
+            let tb = b.get("timestamp").and_then(|v| v.as_str()).unwrap_or("");
+            tb.cmp(ta)
+        });
+        events.truncate(limit);
+
+        // Total count
+        let sql_total = format!(
+            "SELECT COUNT(*) AS cnt FROM entry WHERE user={user_id}{cat_cond}"
+        );
+        let total: usize = conn
+            .exec_iter(sql_total, ())
+            .await?
+            .map_and_drop(from_row::<usize>)
+            .await?
+            .into_iter()
+            .next()
+            .unwrap_or(0);
+
+        // User info
+        let sql_user = format!("SELECT * FROM user WHERE id={user_id} LIMIT 1");
+        let user_info: Option<Value> = conn
+            .exec_iter(sql_user, ())
+            .await?
+            .map_and_drop(row_to_json)
+            .await?
+            .into_iter()
+            .next();
+
+        // Collect user ids
+        let mut uids: std::collections::HashSet<usize> = events
+            .iter()
+            .filter_map(|e| e.get("user").and_then(|v| v.as_u64()).map(|v| v as usize))
+            .collect();
+        uids.insert(user_id);
+        let uid_vec: Vec<usize> = uids.into_iter().collect();
+        let users = self.get_users_by_ids(&uid_vec).await.unwrap_or_default();
+        let mut users_map = serde_json::Map::new();
+        for (id, v) in users {
+            users_map.insert(id.to_string(), v);
+        }
+
+        Ok((events, Value::Object(users_map), total, user_info))
+    }
+
+    async fn api_get_statement_text_groups(
+        &self,
+        catalog_id: usize,
+        property: usize,
+        limit: usize,
+        offset: usize,
+    ) -> Result<(Vec<Value>, Vec<Value>)> {
+        let mut conn = self.get_conn_ro().await?;
+        // Unmatched entry IDs for this catalog
+        let sql_ids = "SELECT id FROM entry WHERE catalog=:catalog_id AND q IS NULL";
+        let entry_ids: Vec<usize> = conn
+            .exec_iter(sql_ids, params! { catalog_id })
+            .await?
+            .map_and_drop(from_row::<usize>)
+            .await?;
+        if entry_ids.is_empty() {
+            return Ok((vec![], vec![]));
+        }
+        let in_list = entry_ids
+            .iter()
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+
+        // Available properties
+        let sql_props = format!(
+            "SELECT property, COUNT(DISTINCT text) AS group_count FROM statement_text WHERE entry_id IN ({in_list}) AND q IS NULL GROUP BY property ORDER BY group_count DESC"
+        );
+        let properties: Vec<Value> = conn
+            .exec_iter(sql_props, ())
+            .await?
+            .map_and_drop(row_to_json)
+            .await?;
+
+        // Groups
+        let prop_filter = if property > 0 {
+            format!(" AND property = {property}")
+        } else {
+            String::new()
+        };
+        let sql_groups = format!(
+            "SELECT property, text, COUNT(*) AS cnt FROM statement_text WHERE entry_id IN ({in_list}) AND q IS NULL{prop_filter} GROUP BY property, text ORDER BY cnt DESC LIMIT {limit} OFFSET {offset}"
+        );
+        let mut groups: Vec<Value> = conn
+            .exec_iter(sql_groups, ())
+            .await?
+            .map_and_drop(row_to_json)
+            .await?;
+
+        // Add up to 5 samples per group
+        for group in groups.iter_mut() {
+            let text = group
+                .get("text")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .replace('\'', "''");
+            let prop = group.get("property").and_then(|v| v.as_u64()).unwrap_or(0);
+            let sql_samples = format!(
+                "SELECT e.id, e.ext_id, e.ext_name, e.ext_url FROM statement_text st INNER JOIN entry e ON st.entry_id=e.id WHERE st.entry_id IN ({in_list}) AND st.property={prop} AND st.text='{text}' AND st.q IS NULL LIMIT 5"
+            );
+            let samples: Vec<Value> = conn
+                .exec_iter(sql_samples, ())
+                .await?
+                .map_and_drop(row_to_json)
+                .await?;
+            if let Some(obj) = group.as_object_mut() {
+                obj.insert("samples".to_string(), json!(samples));
+            }
+        }
+
+        Ok((properties, groups))
+    }
+
+    async fn api_set_statement_text_q(
+        &self,
+        catalog_id: usize,
+        property: usize,
+        text: &str,
+        q: usize,
+        user_id: usize,
+    ) -> Result<(usize, usize)> {
+        let text_safe = text.replace('\'', "''");
+        let mut conn = self.get_conn().await?;
+        let sql_update = format!(
+            "UPDATE statement_text st INNER JOIN entry e ON st.entry_id=e.id
+                SET st.q={q}, st.user_id={user_id}
+                WHERE e.catalog={catalog_id} AND st.property={property} AND st.text='{text_safe}' AND st.q IS NULL"
+        );
+        conn.exec_drop(sql_update, ()).await?;
+        let rows_updated = conn.affected_rows() as usize;
+
+        let q_str = format!("Q{q}");
+        let sql_aux = format!(
+            "INSERT IGNORE INTO auxiliary (entry_id, aux_p, aux_name)
+                SELECT st.entry_id, {property}, '{q_str}'
+                FROM statement_text st INNER JOIN entry e ON st.entry_id=e.id
+                WHERE e.catalog={catalog_id} AND st.property={property} AND st.text='{text_safe}' AND st.q={q}"
+        );
+        conn.exec_drop(sql_aux, ()).await?;
+        let aux_rows_added = conn.affected_rows() as usize;
+        Ok((rows_updated, aux_rows_added))
+    }
+
+    async fn api_missingpages(
+        &self,
+        catalog_id: usize,
+        site: &str,
+    ) -> Result<(Value, Value)> {
+        // NOTE: the Wikidata DB replica lookup from the PHP version is omitted here —
+        // the Rust build has no Wikidata item-per-site access at this layer. We return
+        // all human-matched entries for the catalog; the frontend can still render them.
+        let mut conn = self.get_conn_ro().await?;
+        let sql = "SELECT * FROM entry WHERE user>0 AND catalog=:catalog_id AND q>0 AND q IS NOT NULL";
+        let entries: Vec<Value> = conn
+            .exec_iter(sql, params! { catalog_id })
+            .await?
+            .map_and_drop(row_to_json)
+            .await?;
+        let _ = site; // Currently unused; listed in signature for API parity.
+        let mut entries_map = serde_json::Map::new();
+        let mut uids: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        for e in entries {
+            if let Some(id) = e.get("id").and_then(|v| v.as_u64()) {
+                if let Some(u) = e.get("user").and_then(|v| v.as_u64()) {
+                    uids.insert(u as usize);
+                }
+                entries_map.insert(id.to_string(), e);
+            }
+        }
+        let uid_vec: Vec<usize> = uids.into_iter().collect();
+        let users = self.get_users_by_ids(&uid_vec).await.unwrap_or_default();
+        let mut users_map = serde_json::Map::new();
+        for (id, v) in users {
+            users_map.insert(id.to_string(), v);
+        }
+        Ok((Value::Object(entries_map), Value::Object(users_map)))
+    }
+
+    async fn api_sitestats(&self, catalog: Option<usize>) -> Result<Value> {
+        // PHP version queries the Wikidata DB replica (wb_items_per_site) which the
+        // Rust build does not access here. Return an empty object as a safe fallback.
+        let _ = catalog;
+        Ok(json!({}))
+    }
+
+    async fn api_dg_tiles(
+        &self,
+        num: usize,
+        type_filter: &str,
+    ) -> Result<Vec<Value>> {
+        let mut conn = self.get_conn_ro().await?;
+        // Load eligible catalogs once
+        let sql_cats = "SELECT * FROM catalog WHERE wd_prop IS NOT NULL AND wd_qual IS NULL AND `active`=1 AND id NOT IN (80,150)";
+        let catalogs_list: Vec<Value> = conn
+            .exec_iter(sql_cats, ())
+            .await?
+            .map_and_drop(row_to_json)
+            .await?;
+        let mut catalogs: HashMap<usize, Value> = HashMap::new();
+        let mut catalog_ids: Vec<usize> = vec![];
+        for c in catalogs_list {
+            if let Some(id) = c.get("id").and_then(|v| v.as_u64()) {
+                catalog_ids.push(id as usize);
+                catalogs.insert(id as usize, c);
+            }
+        }
+        if catalog_ids.is_empty() {
+            return Ok(vec![]);
+        }
+        let cat_in = catalog_ids
+            .iter()
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+
+        let type_clause = match type_filter {
+            "person" => " AND entry.type='Q5'".to_string(),
+            "not_person" => " AND entry.type!='Q5'".to_string(),
+            _ => String::new(),
+        };
+
+        let mut tiles = Vec::with_capacity(num);
+        for _ in 0..num {
+            let r: f64 = rand::random();
+            let sql_tile = format!(
+                "SELECT * FROM entry WHERE user=0 AND ext_url!='' AND random>={r} AND catalog IN ({cat_in}) AND ext_desc IS NOT NULL AND ext_desc!=''{type_clause} ORDER BY random LIMIT 1"
+            );
+            let entry: Option<Value> = conn
+                .exec_iter(sql_tile, ())
+                .await?
+                .map_and_drop(row_to_json)
+                .await?
+                .into_iter()
+                .next();
+            let Some(mut entry) = entry else { continue };
+            let entry_catalog_id = entry.get("catalog").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            let cat_meta = match catalogs.get(&entry_catalog_id) {
+                Some(c) => c,
+                None => continue,
+            };
+            let wd_prop = cat_meta.get("wd_prop").and_then(|v| v.as_u64()).unwrap_or(0);
+            let name = cat_meta.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            if let Some(obj) = entry.as_object_mut() {
+                obj.insert("wd_prop".to_string(), json!(wd_prop));
+                obj.insert("name".to_string(), json!(name));
+            }
+            let q = entry.get("q").and_then(|v| v.as_i64()).unwrap_or(0);
+            let q_str = format!("Q{q}");
+            let p_str = format!("P{wd_prop}");
+            let entry_id = entry.get("id").and_then(|v| v.as_u64()).unwrap_or(0);
+            let ext_name = entry.get("ext_name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let ext_url = entry.get("ext_url").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let ext_desc = entry.get("ext_desc").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let ext_id = entry.get("ext_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let tile = json!({
+                "id": entry_id,
+                "sections": [
+                    {"type": "text", "title": ext_name, "url": ext_url, "text": format!("{ext_desc}\n[from {name} catalog]")},
+                    {"type": "item", "q": q_str},
+                ],
+                "controls": [{
+                    "type": "buttons",
+                    "entries": [
+                        {"type": "green", "decision": "yes", "label": "Yes", "api_action": {"action": "wbcreateclaim", "entity": q_str, "property": p_str, "snaktype": "value", "value": serde_json::to_string(&ext_id).unwrap_or_default()}},
+                        {"type": "white", "decision": "skip", "label": "Skip"},
+                        {"type": "yellow", "decision": "n_a", "label": "N/A", "shortcut": "n"},
+                        {"type": "blue", "decision": "no", "label": "No"},
+                    ],
+                }],
+            });
+            tiles.push(tile);
+        }
+        Ok(tiles)
+    }
+}
+
+// Inherent helpers that are not part of the Storage trait.
+impl StorageMySQL {
+    /// Shared body for `api_get_catalog_overview`,
+    /// `api_get_single_catalog_overview`, and `api_get_catalog_overview_for_ids`.
+    /// When `id_filter` is Some, pushes the filter into SQL so that "fetch one
+    /// (or a few) catalog(s)" doesn't scan the whole active catalog set — that
+    /// used to make single_catalog take ~10s and batch_catalogs with 5 ids
+    /// take ~50s.
+    async fn api_get_catalog_overview_impl(
+        &self,
+        id_filter: Option<&[usize]>,
+    ) -> Result<Vec<serde_json::Value>> {
+        if matches!(id_filter, Some(ids) if ids.is_empty()) {
+            return Ok(vec![]);
+        }
+        let id_list = id_filter
+            .map(|ids| {
+                ids.iter()
+                    .map(usize::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            })
+            .unwrap_or_default();
+        let f_overview = if id_filter.is_some() {
+            format!(" AND `overview`.`catalog` IN ({id_list})")
+        } else {
+            String::new()
+        };
+        let f_catalog_id = if id_filter.is_some() {
+            format!(" AND `id` IN ({id_list})")
+        } else {
+            String::new()
+        };
+        let f_catalog_dot_id = if id_filter.is_some() {
+            format!(" AND `catalog`.`id` IN ({id_list})")
+        } else {
+            String::new()
+        };
+
+        let mut conn = self.get_conn_ro().await?;
+
+        // Query 1: overview data
+        let overview_sql = format!("SELECT `overview`.* FROM `overview`,`catalog` WHERE `catalog`.`id`=`overview`.`catalog` AND `catalog`.`active`>=1{f_overview}");
+        let overview_rows = conn
+            .exec_iter(overview_sql, ())
+            .await?
+            .map_and_drop(|row: Row| {
+                let catalog_id: usize = row.get::<Option<usize>, _>("catalog").flatten().unwrap_or(0);
+                let total: isize = row.get::<Option<isize>, _>("total").flatten().unwrap_or(0);
+                let noq: isize = row.get::<Option<isize>, _>("noq").flatten().unwrap_or(0);
+                let autoq: isize = row.get::<Option<isize>, _>("autoq").flatten().unwrap_or(0);
+                let na: isize = row.get::<Option<isize>, _>("na").flatten().unwrap_or(0);
+                let manual: isize = row.get::<Option<isize>, _>("manual").flatten().unwrap_or(0);
+                let nowd: isize = row.get::<Option<isize>, _>("nowd").flatten().unwrap_or(0);
+                let multi_match: isize = row.get::<Option<isize>, _>("multi_match").flatten().unwrap_or(0);
+                let types: String = row.get::<Option<String>, _>("types").flatten().unwrap_or_default();
+                (catalog_id, json!({
+                    "total": total, "noq": noq, "autoq": autoq, "na": na,
+                    "manual": manual, "nowd": nowd, "multi_match": multi_match, "types": types
+                }))
+            })
+            .await?;
+        let mut overview_map: HashMap<usize, serde_json::Value> = overview_rows.into_iter().collect();
+
+        // Query 2: catalog data
+        let catalog_sql = format!("SELECT * FROM `catalog` WHERE `active`>=1{f_catalog_id}");
+        let catalog_rows = conn
+            .exec_iter(catalog_sql, ())
+            .await?
+            .map_and_drop(|row: Row| {
+                // All optional columns are wrapped in Option to survive NULLs.
+                let id: usize = row.get::<Option<usize>, _>("id").flatten().unwrap_or(0);
+                let name: String = row.get::<Option<String>, _>("name").flatten().unwrap_or_default();
+                let url: String = row.get::<Option<String>, _>("url").flatten().unwrap_or_default();
+                let desc: String = row.get::<Option<String>, _>("desc").flatten().unwrap_or_default();
+                let type_name: String = row.get::<Option<String>, _>("type").flatten().unwrap_or_default();
+                let wd_prop: Option<usize> = row.get::<Option<usize>, _>("wd_prop").flatten();
+                let wd_qual: Option<usize> = row.get::<Option<usize>, _>("wd_qual").flatten();
+                let search_wp: String = row.get::<Option<String>, _>("search_wp").flatten().unwrap_or_default();
+                let active: u8 = row.get::<Option<u8>, _>("active").flatten().unwrap_or(0);
+                let owner: Option<usize> = row.get::<Option<usize>, _>("owner").flatten();
+                let note: String = row.get::<Option<String>, _>("note").flatten().unwrap_or_default();
+                let source_item: Option<usize> = row.get::<Option<usize>, _>("source_item").flatten();
+                let has_person_date: String = row.get::<Option<String>, _>("has_person_date").flatten().unwrap_or_default();
+                let taxon_run: u8 = row.get::<Option<u8>, _>("taxon_run").flatten().unwrap_or(0);
+                (id, json!({
+                    "id": id, "name": name, "url": url, "desc": desc, "type": type_name,
+                    "wd_prop": wd_prop, "wd_qual": wd_qual, "search_wp": search_wp,
+                    "active": active, "owner": owner, "note": note,
+                    "source_item": source_item, "has_person_date": has_person_date,
+                    "taxon_run": taxon_run
+                }))
+            })
+            .await?;
+        let catalog_map: HashMap<usize, serde_json::Value> = catalog_rows.into_iter().collect();
+
+        // Query 3: usernames
+        let user_sql = format!("SELECT `user`.`name` AS `username`,`catalog`.`id` FROM `catalog`,`user` WHERE `owner`=`user`.`id` AND `active`>=1{f_catalog_dot_id}");
+        let user_rows = conn
+            .exec_iter(user_sql, ())
+            .await?
+            .map_and_drop(|row: Row| {
+                let id: usize = row.get::<Option<usize>, _>("id").flatten().unwrap_or(0);
+                let username: String = row.get::<Option<String>, _>("username").flatten().unwrap_or_default();
+                (id, username)
+            })
+            .await?;
+        let user_map: HashMap<usize, String> = user_rows.into_iter().collect();
+
+        // Query 4: autoscrape data
+        let autoscrape_sql = format!("SELECT `catalog`.`id` AS `id`,`last_update`,`do_auto_update`,`autoscrape`.`json` AS `json` FROM `catalog`,`autoscrape` WHERE `active`>=1 AND `catalog`.`id`=`autoscrape`.`catalog`{f_catalog_dot_id}");
+        let autoscrape_rows = conn
+            .exec_iter(autoscrape_sql, ())
+            .await?
+            .map_and_drop(|row: Row| {
+                let id: usize = row.get::<Option<usize>, _>("id").flatten().unwrap_or(0);
+                let last_update: String = row.get::<Option<String>, _>("last_update").flatten().unwrap_or_default();
+                let do_auto_update: u8 = row.get::<Option<u8>, _>("do_auto_update").flatten().unwrap_or(0);
+                let json_str: String = row.get::<Option<String>, _>("json").flatten().unwrap_or_default();
+                (id, json!({
+                    "last_update": last_update,
+                    "do_auto_update": do_auto_update,
+                    "autoscrape_json": json_str
+                }))
+            })
+            .await?;
+        let autoscrape_map: HashMap<usize, serde_json::Value> = autoscrape_rows.into_iter().collect();
+
+        // Merge all data by catalog_id
+        let mut results = Vec::new();
+        for (catalog_id, catalog_val) in &catalog_map {
+            let mut merged = catalog_val.clone();
+            if let Some(ov) = overview_map.remove(catalog_id) {
+                if let Some(obj) = ov.as_object() {
+                    for (k, v) in obj {
+                        merged[k] = v.clone();
+                    }
+                }
+            }
+            if let Some(username) = user_map.get(catalog_id) {
+                merged["username"] = json!(username);
+            }
+            if let Some(auto) = autoscrape_map.get(catalog_id) {
+                if let Some(obj) = auto.as_object() {
+                    for (k, v) in obj {
+                        merged[k] = v.clone();
+                    }
+                }
+            }
+            results.push(merged);
+        }
+        Ok(results)
+    }
+}
+
+/// Convert a MySQL Row to a JSON object, preserving column names and basic types.
+fn row_to_json(row: Row) -> Value {
+    let mut obj = serde_json::Map::new();
+    for (i, col) in row.columns_ref().iter().enumerate() {
+        let name = col.name_str().to_string();
+        let val = match &row[i] {
+            mysql_async::Value::NULL => Value::Null,
+            mysql_async::Value::Int(n) => json!(*n),
+            mysql_async::Value::UInt(n) => json!(*n),
+            mysql_async::Value::Float(n) => json!(*n),
+            mysql_async::Value::Double(n) => json!(*n),
+            mysql_async::Value::Bytes(b) => json!(String::from_utf8_lossy(b).to_string()),
+            other => json!(format!("{other:?}")),
+        };
+        obj.insert(name, val);
+    }
+    Value::Object(obj)
 }
 
 #[cfg(test)]

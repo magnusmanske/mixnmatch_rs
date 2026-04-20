@@ -115,6 +115,27 @@ enum Commands {
         port: u16,
     },
 
+    /// Run the public web server: serves /api.php (the Rust port of the PHP API)
+    /// and static files from the `html/` directory.
+    Webserver {
+        #[arg(short, long, value_name = "FILE")]
+        config: Option<PathBuf>,
+
+        /// Port to listen on
+        #[arg(short, long, env = "MNM_PORT", default_value = "8000")]
+        port: u16,
+
+        /// Path to the static HTML directory (defaults to ./html)
+        #[arg(long, default_value = "html")]
+        html_dir: PathBuf,
+
+        /// Serve HTTPS with a self-signed certificate (for local dev only —
+        /// browsers will show a warning on first visit). Toolforge terminates
+        /// TLS upstream, so leave this off in production.
+        #[arg(long)]
+        tls: bool,
+    },
+
     /// test
     Test {
         #[arg(short, long, value_name = "FILE")]
@@ -136,6 +157,107 @@ impl ShellCommands {
         let config_file = Self::path2str(path);
         let app = AppState::from_config_file(&config_file)?;
         Ok(app)
+    }
+
+    /// Start the public web server.
+    /// Routes:
+    ///   GET/POST /api.php       -> Rust replacement for the PHP API
+    ///   POST     /api/v1/import_catalog
+    ///   GET      everything else -> static files from `html_dir`
+    #[allow(clippy::print_stdout)]
+    async fn run_webserver(
+        app: AppState,
+        port: u16,
+        html_dir: &PathBuf,
+        tls: bool,
+    ) -> Result<()> {
+        use axum::Router;
+        use tower_http::services::ServeDir;
+        use tower_sessions::{Expiry, SessionManagerLayer, cookie::SameSite};
+
+        if !html_dir.exists() {
+            return Err(anyhow!("html directory not found: {}", html_dir.display()));
+        }
+
+        let oauth_cfg = app
+            .oauth_config()
+            .ok_or_else(|| anyhow!("config.oauth is required for the webserver"))?
+            .clone();
+
+        // Persistent session store: one JSON file per session under
+        // `oauth.session_dir`. Users stay logged in across restarts up to the
+        // configured `session_lifetime_days` (default 90 days, matching the
+        // PHP Widar cookie lifetime).
+        let session_store = crate::auth::file_store::FileSessionStore::new(
+            PathBuf::from(&oauth_cfg.session_dir),
+        )
+        .map_err(|e| anyhow!("cannot open session_dir '{}': {e}", oauth_cfg.session_dir))?;
+
+        let lifetime = tower_sessions::cookie::time::Duration::days(
+            oauth_cfg.session_lifetime_days,
+        );
+        // Over TLS the cookie must be Secure; over plain HTTP it can't be.
+        let cookie_secure = oauth_cfg.cookie_secure || tls;
+        let session_layer = SessionManagerLayer::new(session_store)
+            .with_name(oauth_cfg.cookie_name.clone())
+            .with_secure(cookie_secure)
+            .with_http_only(true)
+            .with_same_site(SameSite::Lax)
+            .with_expiry(Expiry::OnInactivity(lifetime));
+
+        let api_router = crate::api::router(app);
+        let static_service = ServeDir::new(html_dir).append_index_html_on_directories(true);
+
+        let router: Router = api_router
+            .fallback_service(static_service)
+            .layer(session_layer);
+
+        let scheme = if tls { "https" } else { "http" };
+        let addr: std::net::SocketAddr = format!("0.0.0.0:{port}").parse()?;
+        let url = format!("{scheme}://127.0.0.1:{port}");
+        println!("webserver: listening on {url}");
+        log::info!("webserver: listening on {url}");
+        if !AppState::is_on_toolforge() {
+            let warning =
+                "webserver: OAuth is BYPASSED (not running on toolforge) — all requests are attributed to Magnus Manske / uid 2";
+            println!("{warning}");
+            log::warn!("{warning}");
+        }
+
+        if tls {
+            let tls_config = Self::build_self_signed_tls().await?;
+            axum_server::bind_rustls(addr, tls_config)
+                .serve(router.into_make_service())
+                .await?;
+        } else {
+            let listener = tokio::net::TcpListener::bind(&addr).await?;
+            axum::serve(listener, router).await?;
+        }
+        Ok(())
+    }
+
+    /// Build an in-memory self-signed TLS config covering `localhost` /
+    /// `127.0.0.1`. Strictly for local dev — browsers show a warning page
+    /// the first time you visit, which you have to accept manually.
+    async fn build_self_signed_tls() -> Result<axum_server::tls_rustls::RustlsConfig> {
+        use rcgen::{CertificateParams, KeyPair};
+
+        let subject_alt_names = vec![
+            "localhost".to_string(),
+            "127.0.0.1".to_string(),
+            "::1".to_string(),
+        ];
+        let params = CertificateParams::new(subject_alt_names)
+            .map_err(|e| anyhow!("rcgen params: {e}"))?;
+        let key_pair = KeyPair::generate().map_err(|e| anyhow!("rcgen keygen: {e}"))?;
+        let cert = params
+            .self_signed(&key_pair)
+            .map_err(|e| anyhow!("rcgen self-sign: {e}"))?;
+        let cert_pem = cert.pem().into_bytes();
+        let key_pem = key_pair.serialize_pem().into_bytes();
+        let tls_config =
+            axum_server::tls_rustls::RustlsConfig::from_pem(cert_pem, key_pem).await?;
+        Ok(tls_config)
     }
 
     #[allow(clippy::print_stdout, clippy::print_stderr)]
@@ -245,6 +367,15 @@ impl ShellCommands {
             Some(Commands::MicroApi { config, port }) => {
                 let app = Self::path2app(config)?;
                 crate::micro_api::serve(app, *port).await;
+            }
+            Some(Commands::Webserver {
+                config,
+                port,
+                html_dir,
+                tls,
+            }) => {
+                let app = Self::path2app(config)?;
+                Self::run_webserver(app, *port, html_dir, *tls).await?;
             }
             Some(Commands::Test { config }) => {
                 let app = Self::path2app(config)?;

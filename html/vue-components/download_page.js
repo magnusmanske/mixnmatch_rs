@@ -22,7 +22,7 @@ export default Vue.extend({
 			Object.keys(me.columns).forEach(function (k) { me.columns[k] = me.columns[k] ? 1 : 0; });
 			Object.keys(me.hidden).forEach(function (k) { me.hidden[k] = me.hidden[k] ? 1 : 0; });
 			Object.keys(me.ext_ids).forEach(function (k) { me.ext_ids[k] = me.ext_ids[k] ? 1 : 0; });
-			var url = 'https://mix-n-match.toolforge.org/api.php?query=download2';
+			var url = '/api.php?query=download2';
 			url += '&catalogs=' + me.catalogs.replace(/[^0-9,]/g, '');
 			url += '&columns=' + encodeURIComponent(JSON.stringify(me.columns));
 			url += '&hidden=' + encodeURIComponent(JSON.stringify(me.hidden));

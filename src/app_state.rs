@@ -1,3 +1,4 @@
+use crate::auth::config::OauthConfig;
 use crate::job::Job;
 use crate::job_status::JobStatus;
 use crate::mysql_misc::MySQLMisc;
@@ -58,6 +59,7 @@ pub struct AppState {
     task_specific_usize: Arc<HashMap<String, usize>>,
     max_concurrent_jobs: usize,
     toolforge_php_command: String,
+    oauth_config: Option<Arc<OauthConfig>>,
 }
 
 impl AppState {
@@ -103,6 +105,13 @@ impl AppState {
             .unwrap_or("php8.3")
             .to_string();
         let large_catalogs = crate::large_catalogs::LargeCatalogs::from_config(&config["mixnmatch"])?;
+        // OAuth is optional at construction: CLI jobs / bot runs don't need it.
+        // The webserver entrypoint checks separately that it's present.
+        let oauth_config = if config.get("oauth").is_some() {
+            Some(Arc::new(OauthConfig::from_app_config(config)?))
+        } else {
+            None
+        };
         Ok(Self {
             wikidata: Wikidata::new(&config["wikidata"], bot_name.clone(), bot_password.clone()),
             wdt: Wikidata::new(&config["wdt"], bot_name, bot_password),
@@ -116,7 +125,12 @@ impl AppState {
             task_specific_usize,
             max_concurrent_jobs,
             toolforge_php_command,
+            oauth_config,
         })
+    }
+
+    pub fn oauth_config(&self) -> Option<&Arc<OauthConfig>> {
+        self.oauth_config.as_ref()
     }
 
     pub async fn get_wikibase_from_config(&self, config: &Value) -> Result<WikiBase> {
