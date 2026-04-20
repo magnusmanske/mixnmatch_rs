@@ -5,8 +5,9 @@
 
 use crate::api::common::{ApiError, Params};
 use crate::api::{
-    admin, catalog, data, delegated, dg, download, entry, import, issues, jobs, large_catalogs,
-    locations, matching, misc, navigation, proxy, rc, upload, widar,
+    admin, catalog, code_fragments, data, dg, download, entry, import, issues, jobs,
+    large_catalogs, locations, lua, matching, misc, navigation, proxy, quick_compare, rc,
+    sparql, sync, upload, widar,
 };
 use crate::app_state::AppState;
 use axum::Router;
@@ -232,13 +233,13 @@ async fn dispatch(
         "quick_compare_list" => admin::query_quick_compare_list(app).await,
         "get_flickr_key" => admin::query_get_flickr_key().await,
 
-        // Delegated to micro-API internally (no HTTP round-trip)
-        "get_sync" => delegated::query_get_sync(app, params).await,
-        "sparql_list" => delegated::query_sparql_list(app, params).await,
-        "quick_compare" => delegated::query_quick_compare(app, params).await,
-        "get_code_fragments" => delegated::query_get_code_fragments(app, params).await,
-        "save_code_fragment" => delegated::query_save_code_fragment(app, session, params).await,
-        "test_code_fragment" => delegated::query_test_code_fragment(app, session, params).await,
+        // Per-feature endpoints, formerly all in `delegated.rs`.
+        "get_sync" => sync::query_get_sync(app, params).await,
+        "sparql_list" => sparql::query_sparql_list(app, params).await,
+        "quick_compare" => quick_compare::query_quick_compare(app, params).await,
+        "get_code_fragments" => code_fragments::query_get_code_fragments(app, params).await,
+        "save_code_fragment" => code_fragments::query_save_code_fragment(app, session, params).await,
+        "test_code_fragment" => lua::query_test_code_fragment(app, session, params).await,
 
         // Large-catalogs endpoints (backed by the large_catalogs DB)
         "lc_catalogs" => large_catalogs::query_lc_catalogs(app).await,

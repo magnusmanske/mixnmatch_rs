@@ -6,6 +6,7 @@ use lazy_static::lazy_static;
 use log::warn;
 use mlua::{Lua, LuaOptions, StdLib, Value, VmState};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 lazy_static! {
     static ref RE_WHITESPACE: regex::Regex = regex::Regex::new(r"\s+").unwrap();
@@ -127,6 +128,66 @@ pub enum LuaCommand {
         property: usize,
         value: String,
     },
+}
+
+impl LuaCommand {
+    /// JSON shape consumed by the frontend's "preview commands" view. The
+    /// `type` discriminator must stay in sync with the JS side; everything
+    /// else is the command's payload flattened in.
+    pub fn to_json(&self) -> serde_json::Value {
+        match self {
+            Self::SetPersonDates { entry_id, born, died } => json!({
+                "type": "set_person_dates",
+                "entry_id": entry_id,
+                "born": born,
+                "died": died,
+            }),
+            Self::SetAux { entry_id, property, value } => json!({
+                "type": "set_aux",
+                "entry_id": entry_id,
+                "property": property,
+                "value": value,
+            }),
+            Self::SetMatch { entry_id, q } => json!({
+                "type": "set_match",
+                "entry_id": entry_id,
+                "q": q,
+            }),
+            Self::SetLocation { entry_id, lat, lon } => json!({
+                "type": "set_location",
+                "entry_id": entry_id,
+                "lat": lat,
+                "lon": lon,
+            }),
+            Self::SetDescription { entry_id, value } => json!({
+                "type": "set_description",
+                "entry_id": entry_id,
+                "value": value,
+            }),
+            Self::SetEntryName { entry_id, value } => json!({
+                "type": "set_entry_name",
+                "entry_id": entry_id,
+                "value": value,
+            }),
+            Self::SetEntryType { entry_id, value } => json!({
+                "type": "set_entry_type",
+                "entry_id": entry_id,
+                "value": value,
+            }),
+            Self::AddAlias { entry_id, label, language } => json!({
+                "type": "add_alias",
+                "entry_id": entry_id,
+                "label": label,
+                "language": language,
+            }),
+            Self::AddLocationText { entry_id, property, value } => json!({
+                "type": "add_location_text",
+                "entry_id": entry_id,
+                "property": property,
+                "value": value,
+            }),
+        }
+    }
 }
 
 /// Result from running a PERSON_DATE code fragment.
@@ -699,7 +760,7 @@ fn regex_match<'a>(pattern: &str, text: &'a str) -> Option<regex::Captures<'a>> 
 // ================================
 
 /// Convert an Entry into a LuaEntry for use in Lua code.
-fn entry_to_lua_entry(entry: &Entry) -> LuaEntry {
+pub fn entry_to_lua_entry(entry: &Entry) -> LuaEntry {
     LuaEntry {
         id: entry.id.unwrap_or(0),
         catalog: entry.catalog,
@@ -1109,6 +1170,109 @@ mod tests {
             user: None,
             type_name: Some("Q5".into()),
         }
+    }
+
+    // ---- LuaCommand::to_json tests ----
+
+    #[test]
+    fn test_lua_command_to_json_set_aux() {
+        let j = LuaCommand::SetAux {
+            entry_id: 1,
+            property: "214".into(),
+            value: "12345".into(),
+        }
+        .to_json();
+        assert_eq!(j["type"], "set_aux");
+        assert_eq!(j["entry_id"], 1);
+        assert_eq!(j["property"], "214");
+        assert_eq!(j["value"], "12345");
+    }
+
+    #[test]
+    fn test_lua_command_to_json_set_match() {
+        let j = LuaCommand::SetMatch { entry_id: 2, q: "Q42".into() }.to_json();
+        assert_eq!(j["type"], "set_match");
+        assert_eq!(j["q"], "Q42");
+    }
+
+    #[test]
+    fn test_lua_command_to_json_set_location() {
+        let j = LuaCommand::SetLocation { entry_id: 3, lat: 52.5, lon: 13.4 }.to_json();
+        assert_eq!(j["type"], "set_location");
+        assert_eq!(j["lat"], 52.5);
+        assert_eq!(j["lon"], 13.4);
+    }
+
+    #[test]
+    fn test_lua_command_to_json_set_person_dates() {
+        let j = LuaCommand::SetPersonDates {
+            entry_id: 4,
+            born: "1920".into(),
+            died: "2000".into(),
+        }
+        .to_json();
+        assert_eq!(j["type"], "set_person_dates");
+        assert_eq!(j["born"], "1920");
+        assert_eq!(j["died"], "2000");
+    }
+
+    #[test]
+    fn test_lua_command_to_json_set_description() {
+        let j = LuaCommand::SetDescription {
+            entry_id: 5,
+            value: "A person".into(),
+        }
+        .to_json();
+        assert_eq!(j["type"], "set_description");
+        assert_eq!(j["value"], "A person");
+    }
+
+    #[test]
+    fn test_lua_command_to_json_set_entry_name() {
+        let j = LuaCommand::SetEntryName {
+            entry_id: 6,
+            value: "John Doe".into(),
+        }
+        .to_json();
+        assert_eq!(j["type"], "set_entry_name");
+        assert_eq!(j["value"], "John Doe");
+    }
+
+    #[test]
+    fn test_lua_command_to_json_set_entry_type() {
+        let j = LuaCommand::SetEntryType {
+            entry_id: 7,
+            value: "Q5".into(),
+        }
+        .to_json();
+        assert_eq!(j["type"], "set_entry_type");
+        assert_eq!(j["value"], "Q5");
+    }
+
+    #[test]
+    fn test_lua_command_to_json_add_alias() {
+        let j = LuaCommand::AddAlias {
+            entry_id: 8,
+            label: "JD".into(),
+            language: "en".into(),
+        }
+        .to_json();
+        assert_eq!(j["type"], "add_alias");
+        assert_eq!(j["label"], "JD");
+        assert_eq!(j["language"], "en");
+    }
+
+    #[test]
+    fn test_lua_command_to_json_add_location_text() {
+        let j = LuaCommand::AddLocationText {
+            entry_id: 9,
+            property: 131,
+            value: "London".into(),
+        }
+        .to_json();
+        assert_eq!(j["type"], "add_location_text");
+        assert_eq!(j["property"], 131);
+        assert_eq!(j["value"], "London");
     }
 
     // ---- parse_date tests ----

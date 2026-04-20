@@ -103,10 +103,5 @@ pub async fn query_creation_candidates(
     app: &AppState,
     params: &Params,
 ) -> Result<Response, ApiError> {
-    // Delegate to the micro-API handler (in-process, no HTTP round-trip),
-    // which implements the full PHP `query_creation_candidates` logic.
-    let data = crate::micro_api::data_creation_candidates(app, params)
-        .await
-        .map_err(ApiError)?;
-    Ok(ok(data))
+    Ok(ok(crate::api::creation_candidates::run(app, params).await?))
 }
