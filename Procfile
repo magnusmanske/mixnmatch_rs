@@ -1,0 +1,1 @@
+web: MNM_PORT=$PORT ./target/release/
