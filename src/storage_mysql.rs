@@ -3338,8 +3338,8 @@ impl Storage for StorageMySQL {
         let jobs_sql = format!(
             "SELECT `jobs`.*,\
             (SELECT `user`.`name` FROM `user` WHERE `user`.`id`=`jobs`.`user_id`) AS `user_name`,\
-            (SELECT `catalog`.`name` FROM `catalog` WHERE `catalog`.`id`=`jobs`.`catalog`) AS `catalog_name`\
-            FROM `jobs` WHERE {where_clause}\
+            (SELECT `catalog`.`name` FROM `catalog` WHERE `catalog`.`id`=`jobs`.`catalog`) AS `catalog_name` \
+            FROM `jobs` WHERE {where_clause} \
             ORDER BY FIELD(`status`,'RUNNING','FAILED','TODO','LOW_PRIORITY','PAUSED','DONE'),\
             `last_ts` DESC,`next_ts` DESC LIMIT {max} OFFSET {start}"
         );
