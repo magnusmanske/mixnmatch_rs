@@ -1,0 +1,256 @@
+//! Frontend import wizard endpoints: discovery, preview, full import,
+//! plus the scraper builder (`autoscrape_test`, `save_scraper`).
+
+use crate::api::common::{self, ApiError, Params, json_resp, ok};
+use crate::app_state::AppState;
+use axum::response::Response;
+use tower_sessions::Session;
+
+fn parse_update_info(params: &Params) -> Result<serde_json::Value, ApiError> {
+    let raw = common::get_param(params, "update_info", "");
+    if raw.is_empty() {
+        return Err(ApiError("missing 'update_info' parameter".into()));
+    }
+    serde_json::from_str(&raw)
+        .map_err(|e| ApiError(format!("invalid update_info JSON: {e}")))
+}
+
+pub async fn query_get_source_headers(
+    app: &AppState,
+    params: &Params,
+) -> Result<Response, ApiError> {
+    let update_info = parse_update_info(params)?;
+    let (headers, _preview) =
+        crate::datasource::DataSource::read_headers_and_preview(app, &update_info, 0)
+            .await
+            .map_err(|e| ApiError(e.to_string()))?;
+    Ok(ok(serde_json::json!(headers)))
+}
+
+pub async fn query_test_import_source(
+    app: &AppState,
+    params: &Params,
+) -> Result<Response, ApiError> {
+    let update_info = parse_update_info(params)?;
+    let max_rows = update_info
+        .get("read_max_rows")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(1000) as usize;
+
+    // Both calls are independent (each opens its own datasource read), so run
+    // them concurrently — the count_rows pass scans the whole file, while
+    // the preview only reads the first 10. Serial ran them back-to-back.
+    let (preview_res, counts_res) = tokio::join!(
+        crate::datasource::DataSource::read_headers_and_preview(app, &update_info, 10),
+        crate::datasource::DataSource::count_rows(app, &update_info, max_rows),
+    );
+    let (headers, preview) = preview_res.map_err(|e| ApiError(e.to_string()))?;
+    let (total, with_id, row_errors) = counts_res.map_err(|e| ApiError(e.to_string()))?;
+
+    // Frontend reads counters from `data` (summary cards) and preview rows
+    // from the top-level `rows` array (used by `load_preview_rows`).
+    Ok(json_resp(serde_json::json!({
+        "status": "OK",
+        "data": {
+            "rows_scanned": total,
+            "rows_with_id": with_id,
+            "errors": row_errors,
+            "headers": headers,
+        },
+        "rows": preview,
+    })))
+}
+
+pub async fn query_import_source(
+    app: &AppState,
+    _session: &Session,
+    params: &Params,
+) -> Result<Response, ApiError> {
+    let update_info = parse_update_info(params)?;
+    let meta_raw = common::get_param(params, "meta", "{}");
+    let meta: serde_json::Value =
+        serde_json::from_str(&meta_raw).unwrap_or(serde_json::Value::Null);
+    let catalog_id = common::get_param_int(params, "catalog", 0) as usize;
+    let _seconds = common::get_param_int(params, "seconds", 0) as u64;
+    let username = common::get_param(params, "username", "").replace('_', " ");
+
+    // Resolve the user id — required for anything that writes to the DB.
+    let user_id = match app.storage().get_user_by_name(&username).await? {
+        Some((id, _, _)) => id,
+        None => return Err(ApiError(format!("unknown user '{username}'"))),
+    };
+
+    // Two modes:
+    //  (a) file_uuid pointing at a json/jsonl upload → reuse import_catalog
+    //  (b) CSV/TSV/SSV via source_url or file_uuid → reuse UpdateCatalog
+    //
+    // Mode (a) is the "JSON import" flow from the frontend; it requires a
+    // catalog_id that already exists. Mode (b) is the tabbed-file flow.
+    let uuid = update_info
+        .get("file_uuid")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let data_format = update_info
+        .get("data_format")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    if let Some(uuid) = &uuid {
+        if data_format == "json" || data_format == "jsonl" {
+            let cid = if catalog_id > 0 {
+                catalog_id
+            } else {
+                meta.get("catalog_id")
+                    .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                    .unwrap_or(0) as usize
+            };
+            if cid == 0 {
+                return Err(ApiError(
+                    "catalog_id required for JSON/JSONL import".into(),
+                ));
+            }
+            let result = crate::import_catalog::import_from_import_file(
+                app,
+                cid,
+                uuid,
+                crate::import_catalog::ImportMode::AddReplace,
+            )
+            .await
+            .map_err(|e| ApiError(e.to_string()))?;
+            return Ok(ok(serde_json::json!({
+                "catalog_id": cid,
+                "created": result.created,
+                "updated": result.updated,
+                "skipped_fully_matched": result.skipped_fully_matched,
+                "deleted": result.deleted,
+                "errors": result.errors,
+            })));
+        }
+    }
+
+    // Tabbed-file path. For an existing catalog, persist the update_info
+    // JSON and run the shared updater. A "new catalog" wizard path needs a
+    // catalog-creation step that doesn't exist yet at the trait level —
+    // surface that clearly rather than silently no-oping.
+    if catalog_id == 0 {
+        return Err(ApiError(
+            "creating a new catalog from the wizard is not yet supported; please create the catalog first and re-run in 'update' mode".into(),
+        ));
+    }
+
+    let update_info_json = serde_json::to_string(&update_info)
+        .map_err(|e| ApiError(format!("serialize update_info: {e}")))?;
+    app.storage()
+        .update_catalog_set_update_info(catalog_id, &update_info_json, user_id)
+        .await
+        .map_err(|e| ApiError(format!("persist update_info: {e}")))?;
+
+    let mut uc = crate::update_catalog::UpdateCatalog::new(app);
+    uc.update_from_tabbed_file(catalog_id)
+        .await
+        .map_err(|e| ApiError(e.to_string()))?;
+
+    Ok(ok(serde_json::json!({ "catalog_id": catalog_id })))
+}
+
+pub async fn query_autoscrape_test(
+    app: &AppState,
+    params: &Params,
+) -> Result<Response, ApiError> {
+    let json_str = common::get_param(params, "json", "");
+    if json_str.is_empty() {
+        return Err(ApiError("missing 'json' parameter".into()));
+    }
+    let json: serde_json::Value = serde_json::from_str(&json_str)
+        .map_err(|e| ApiError(format!("invalid scraper JSON: {e}")))?;
+    let (url, html, results) = crate::autoscrape::Autoscrape::test_fetch(app, &json)
+        .await
+        .map_err(|e| ApiError(e.to_string()))?;
+    // The client uses `data.html` for regex testing, `data.url` for display,
+    // and `data.results` for the "entries found" table + the save-button gate.
+    Ok(ok(serde_json::json!({ "url": url, "html": html, "results": results })))
+}
+
+pub async fn query_save_scraper(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let scraper_str = common::get_param(params, "scraper", "");
+    let options_str = common::get_param(params, "options", "{}");
+    let levels_str = common::get_param(params, "levels", "[]");
+    let meta_str = common::get_param(params, "meta", "{}");
+    let username = common::get_param(params, "tusc_user", "").replace('_', " ");
+
+    if scraper_str.is_empty() {
+        return Err(ApiError("missing 'scraper' parameter".into()));
+    }
+    if username.is_empty() {
+        return Err(ApiError("missing 'tusc_user' parameter".into()));
+    }
+
+    let scraper: serde_json::Value = serde_json::from_str(&scraper_str)
+        .map_err(|e| ApiError(format!("invalid 'scraper' JSON: {e}")))?;
+    let options: serde_json::Value = serde_json::from_str(&options_str)
+        .map_err(|e| ApiError(format!("invalid 'options' JSON: {e}")))?;
+    let levels: serde_json::Value = serde_json::from_str(&levels_str)
+        .map_err(|e| ApiError(format!("invalid 'levels' JSON: {e}")))?;
+    let meta: serde_json::Value = serde_json::from_str(&meta_str)
+        .map_err(|e| ApiError(format!("invalid 'meta' JSON: {e}")))?;
+
+    // Resolve user — fail loudly if the Widar-supplied username is unknown,
+    // so the scraper doesn't get attributed to owner 0.
+    let user_id = match app.storage().get_user_by_name(&username).await? {
+        Some((id, _, _)) => id,
+        None => return Err(ApiError(format!("unknown user '{username}'"))),
+    };
+
+    // Resolve target catalog_id. If the wizard left `meta.catalog_id` blank,
+    // we create the catalog first so the autoscrape row has something to FK to.
+    let meta_cid = meta
+        .get("catalog_id")
+        .and_then(|v| {
+            v.as_u64()
+                .map(|n| n as usize)
+                .or_else(|| v.as_str().and_then(|s| s.parse::<usize>().ok()))
+        })
+        .unwrap_or(0);
+
+    let catalog_id = if meta_cid > 0 {
+        meta_cid
+    } else {
+        let name = meta
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+        let desc = meta.get("desc").and_then(|v| v.as_str()).unwrap_or("");
+        let url = meta.get("url").and_then(|v| v.as_str()).unwrap_or("");
+        let type_name = meta.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        let wd_prop: Option<usize> = meta
+            .get("property")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim_start_matches(['P', 'p']))
+            .and_then(|s| s.parse::<usize>().ok());
+        if name.is_empty() {
+            return Err(ApiError("meta.name is required when creating a new catalog".into()));
+        }
+        app.storage()
+            .create_catalog_from_meta(name, desc, url, type_name, wd_prop, user_id)
+            .await
+            .map_err(|e| ApiError(format!("create catalog: {e}")))?
+    };
+
+    // Bundle scraper + options + levels into the single JSON column that
+    // `Autoscrape::new` parses when a live scraper is later run.
+    let combined = serde_json::json!({
+        "scraper": scraper,
+        "options": options,
+        "levels": levels,
+    });
+    let combined_str = serde_json::to_string(&combined)
+        .map_err(|e| ApiError(format!("serialize scraper JSON: {e}")))?;
+    app.storage()
+        .save_scraper(catalog_id, &combined_str, user_id)
+        .await
+        .map_err(|e| ApiError(format!("save scraper: {e}")))?;
+
+    Ok(ok(serde_json::json!({ "catalog": catalog_id })))
+}
