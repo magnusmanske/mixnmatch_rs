@@ -4908,7 +4908,12 @@ impl Storage for StorageMySQL {
                 .map(|i| i.to_string())
                 .collect::<Vec<_>>()
                 .join(",");
-            let sql_kv = format!("SELECT * FROM kv_catalog WHERE catalog_id IN ({in_list})");
+            // `SELECT *` returned the `id` PK column too, which broke the 3-tuple
+            // FromRow conversion. List the columns explicitly to keep the
+            // shape stable against schema additions.
+            let sql_kv = format!(
+                "SELECT catalog_id, kv_key, kv_value FROM kv_catalog WHERE catalog_id IN ({in_list})"
+            );
             let kv_rows: Vec<(usize, String, String)> = conn
                 .exec_iter(sql_kv, ())
                 .await?
