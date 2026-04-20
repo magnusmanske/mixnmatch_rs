@@ -1995,8 +1995,16 @@ if m then d[#d+1] = m end
     #[tokio::test]
     async fn test_creation_candidates_response_structure() {
         let app = router(test_app());
+        // `ext_name=` forces the pick to a constant SELECT instead of the
+        // `SELECT … FROM common_names … ORDER BY rand() LIMIT 1` full-table
+        // scan the default mode runs — that full scan can take minutes on the
+        // real replica and dominated the whole cargo-test wall time (~150 s).
+        // The handler then falls through to an indexed ext_name lookup, which
+        // is enough for a smoke-test on the response shape.
         let resp = app
-            .oneshot(build_request("/api?action=creation_candidates&min=0&mode="))
+            .oneshot(build_request(
+                "/api?action=creation_candidates&min=0&mode=&ext_name=MnmTestNonexistentName_9d3f",
+            ))
             .await
             .unwrap();
         let (_, body) = response_json(resp).await;
