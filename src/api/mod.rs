@@ -76,7 +76,9 @@ fn build_resource_response(entry: &CachedResource) -> Response {
     }
     builder
         .body(axum::body::Body::from(entry.body.clone()))
-        .unwrap_or_else(|_| ApiError("resources proxy: cannot build response".into()).into_response())
+        .unwrap_or_else(|_| {
+            ApiError("resources proxy: cannot build response".into()).into_response()
+        })
 }
 
 /// Transparently proxy `GET /resources/<path>` to magnustools. Responses are
@@ -208,8 +210,7 @@ async fn dispatcher_common(app: &AppState, session: &Session, params: Params) ->
     // error response instead of killing the connection mid-flight — the
     // latter would surface in the browser as a NetworkError.
     use futures::FutureExt;
-    let dispatch_fut =
-        std::panic::AssertUnwindSafe(dispatch(&query, app, session, &params));
+    let dispatch_fut = std::panic::AssertUnwindSafe(dispatch(&query, app, session, &params));
     let result = dispatch_fut.catch_unwind().await;
     let resp = match result {
         Ok(Ok(r)) => r,
@@ -374,17 +375,18 @@ async fn handle_oauth_callback(app: &AppState, session: &Session, params: &Param
             request_token_secret,
         } => (request_token_key, request_token_secret),
         _ => {
-            return ApiError(
-                "No pending OAuth login — start over from the authorize link".into(),
-            )
-            .into_response();
+            return ApiError("No pending OAuth login — start over from the authorize link".into())
+                .into_response();
         }
     };
     // Session fixation guard: the verifier must match the token we stashed.
     if incoming_token != rk {
         return ApiError("OAuth token mismatch".into()).into_response();
     }
-    let pair = auth::flow::TokenPair { key: rk, secret: rs };
+    let pair = auth::flow::TokenPair {
+        key: rk,
+        secret: rs,
+    };
     let access = match auth::flow::exchange_verifier(&cfg, &pair, &verifier).await {
         Ok(a) => a,
         Err(e) => return ApiError(format!("OAuth exchange failed: {e}")).into_response(),
@@ -722,7 +724,9 @@ async fn query_catalog(app: &AppState, params: &Params) -> Result<Response, ApiE
     }
     if !keyword.is_empty() {
         let kw = keyword.replace('\'', "''");
-        conds.push(format!("(`ext_name` LIKE '%{kw}%' OR `ext_desc` LIKE '%{kw}%')"));
+        conds.push(format!(
+            "(`ext_name` LIKE '%{kw}%' OR `ext_desc` LIKE '%{kw}%')"
+        ));
     }
     if !user_id_raw.is_empty() {
         // Parse as signed so "0" (auto-matched) is distinguished from a missing param.
@@ -736,9 +740,7 @@ async fn query_catalog(app: &AppState, params: &Params) -> Result<Response, ApiE
     }
 
     let where_clause = conds.join(" AND ");
-    let sql = format!(
-        "SELECT * FROM entry WHERE {where_clause} LIMIT {per_page} OFFSET {offset}"
-    );
+    let sql = format!("SELECT * FROM entry WHERE {where_clause} LIMIT {per_page} OFFSET {offset}");
     // Count and page query are independent SELECTs — run them in parallel.
     let s = app.storage();
     let (total_filtered, entries) = tokio::join!(
@@ -1438,10 +1440,7 @@ async fn query_mnm_unmatched_relations(
     Ok(ok(data))
 }
 
-async fn query_creation_candidates(
-    app: &AppState,
-    params: &Params,
-) -> Result<Response, ApiError> {
+async fn query_creation_candidates(app: &AppState, params: &Params) -> Result<Response, ApiError> {
     // Delegate to the micro-API handler (in-process, no HTTP round-trip),
     // which implements the full PHP `query_creation_candidates` logic.
     let data = crate::micro_api::data_creation_candidates(app, params)
@@ -1641,7 +1640,9 @@ async fn query_download2(app: &AppState, params: &Params) -> Result<Response, Ap
         sql.push_str(" AND entry.q IS NOT NULL");
     }
     if hb("no_multiple") {
-        sql.push_str(" AND NOT EXISTS (SELECT 1 FROM multi_match WHERE entry.id=multi_match.entry_id)");
+        sql.push_str(
+            " AND NOT EXISTS (SELECT 1 FROM multi_match WHERE entry.id=multi_match.entry_id)",
+        );
     }
     if hb("name_date_matched") {
         sql.push_str(" AND entry.user!=3");
@@ -1739,7 +1740,7 @@ async fn query_cersei_forward(app: &AppState, params: &Params) -> Result<Respons
     let sid = common::get_param_int(params, "scraper", 0) as usize;
     match app.storage().api_get_cersei_catalog(sid).await? {
         Some(cid) => {
-            let url = format!("https://mix-n-match.toolforge.org/#/catalog/{cid}");
+            let url = format!("/#/catalog/{cid}");
             Ok((
                 axum::http::StatusCode::FOUND,
                 [(axum::http::header::LOCATION, url.as_str())],
@@ -2061,8 +2062,8 @@ async fn query_test_code_fragment(
     }
     // Extract the fragment's "function" field and forward it to the Lua runner.
     let fragment_str = common::get_param(params, "fragment", "{}");
-    let fragment: serde_json::Value = serde_json::from_str(&fragment_str)
-        .map_err(|_| ApiError("Bad fragment".into()))?;
+    let fragment: serde_json::Value =
+        serde_json::from_str(&fragment_str).map_err(|_| ApiError("Bad fragment".into()))?;
     let function = fragment
         .get("function")
         .and_then(|v| v.as_str())
@@ -2336,10 +2337,7 @@ async fn query_sitestats(app: &AppState, params: &Params) -> Result<Response, Ap
 async fn query_dg_desc(params: &Params) -> Result<Response, ApiError> {
     let mode = common::get_param(params, "mode", "");
     let (title, sub) = if mode == "person" {
-        (
-            "Mix'n'match people game",
-            "of a person in",
-        )
+        ("Mix'n'match people game", "of a person in")
     } else {
         ("Mix'n'match game", "in")
     };
@@ -2358,10 +2356,7 @@ async fn query_dg_desc(params: &Params) -> Result<Response, ApiError> {
 async fn query_dg_tiles(app: &AppState, params: &Params) -> Result<Response, ApiError> {
     let num = common::get_param_int(params, "num", 5).clamp(1, 20) as usize;
     let type_filter = common::get_param(params, "type", "");
-    let tiles = app
-        .storage()
-        .api_dg_tiles(num, &type_filter)
-        .await?;
+    let tiles = app.storage().api_dg_tiles(num, &type_filter).await?;
     Ok(json_resp(serde_json::json!(tiles)))
 }
 
