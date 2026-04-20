@@ -668,7 +668,7 @@ async fn query_catalog_details(app: &AppState, params: &Params) -> Result<Respon
 
 async fn query_get_catalog_info(app: &AppState, params: &Params) -> Result<Response, ApiError> {
     let cid = common::get_catalog(params)?;
-    let data = app.storage().api_get_single_catalog_overview(cid).await?;
+    let data = app.storage().api_get_catalog_info(cid).await?;
     Ok(ok(serde_json::json!([data])))
 }
 
