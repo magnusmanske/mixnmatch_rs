@@ -512,6 +512,56 @@ impl Storage for StorageMySQL {
         Ok(())
     }
 
+    async fn save_scraper(&self, catalog_id: usize, json: &str, owner: usize) -> Result<()> {
+        // `autoscrape.catalog` is UNIQUE, so a straight INSERT ... ON DUPLICATE KEY UPDATE
+        // gives us upsert semantics without a separate round-trip. Using
+        // VALUES(col) in the UPDATE clause avoids binding the same named
+        // parameter twice.
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop(
+            "INSERT INTO `autoscrape` (`catalog`,`json`,`status`,`owner`,`notes`) VALUES (:catalog_id,:json,'',:owner,'') \
+             ON DUPLICATE KEY UPDATE `json`=VALUES(`json`), `owner`=VALUES(`owner`)",
+            params! {catalog_id, json, owner},
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn create_catalog_from_meta(
+        &self,
+        name: &str,
+        desc: &str,
+        url: &str,
+        type_name: &str,
+        wd_prop: Option<usize>,
+        owner: usize,
+    ) -> Result<usize> {
+        let mut conn = self.get_conn().await?;
+        // `name` is UNIQUE in the catalog table, so a duplicate wizard submission
+        // would silently return the existing id rather than erroring.
+        let wd_prop_val: usize = wd_prop.unwrap_or(0);
+        conn.exec_drop(
+            "INSERT INTO `catalog` (`name`,`url`,`desc`,`type`,`wd_prop`,`active`,`owner`,`note`,`has_person_date`) \
+             VALUES (:name,:url,:desc,:type_name,:wd_prop,1,:owner,'','no')",
+            params! {name, url, desc, type_name, "wd_prop" => wd_prop_val, owner},
+        )
+        .await?;
+        let id: Option<u64> = conn.last_insert_id();
+        let id = id.unwrap_or(0) as usize;
+        if id > 0 {
+            return Ok(id);
+        }
+        // Already existed — look it up by name.
+        let rows: Vec<usize> = conn
+            .exec_iter("SELECT `id` FROM `catalog` WHERE `name`=:name LIMIT 1", params! {name})
+            .await?
+            .map_and_drop(from_row::<usize>)
+            .await?;
+        rows.into_iter()
+            .next()
+            .ok_or_else(|| anyhow!("catalog insert returned no id and no existing row found"))
+    }
+
     async fn get_existing_ext_ids(
         &self,
         catalog_id: usize,

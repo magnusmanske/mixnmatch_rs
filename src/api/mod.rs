@@ -693,8 +693,8 @@ async fn dispatch(
         "get_entry_reader_view" => Err(ApiError(
             "get_entry_reader_view requires Readability library (not yet ported to Rust)".into(),
         )),
-        "autoscrape_test" => Err(ApiError("autoscrape_test not yet ported to Rust".into())),
-        "save_scraper" => Err(ApiError("save_scraper not yet ported to Rust".into())),
+        "autoscrape_test" => query_autoscrape_test(app, params).await,
+        "save_scraper" => query_save_scraper(app, params).await,
         "upload_import_file" => Err(ApiError(
             "upload_import_file must be POSTed as multipart/form-data".into(),
         )),
@@ -848,6 +848,106 @@ async fn query_import_source(
         .map_err(|e| ApiError(e.to_string()))?;
 
     Ok(ok(serde_json::json!({ "catalog_id": catalog_id })))
+}
+
+// ─── Scraper builder (autoscrape_test + save_scraper) ──────────────────────
+
+async fn query_autoscrape_test(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let json_str = common::get_param(params, "json", "");
+    if json_str.is_empty() {
+        return Err(ApiError("missing 'json' parameter".into()));
+    }
+    let json: serde_json::Value = serde_json::from_str(&json_str)
+        .map_err(|e| ApiError(format!("invalid scraper JSON: {e}")))?;
+    let (url, html, results) = crate::autoscrape::Autoscrape::test_fetch(app, &json)
+        .await
+        .map_err(|e| ApiError(e.to_string()))?;
+    // The client uses `data.html` for regex testing, `data.url` for display,
+    // and `data.results` for the "entries found" table + the save-button gate.
+    Ok(ok(serde_json::json!({ "url": url, "html": html, "results": results })))
+}
+
+async fn query_save_scraper(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let scraper_str = common::get_param(params, "scraper", "");
+    let options_str = common::get_param(params, "options", "{}");
+    let levels_str = common::get_param(params, "levels", "[]");
+    let meta_str = common::get_param(params, "meta", "{}");
+    let username = common::get_param(params, "tusc_user", "").replace('_', " ");
+
+    if scraper_str.is_empty() {
+        return Err(ApiError("missing 'scraper' parameter".into()));
+    }
+    if username.is_empty() {
+        return Err(ApiError("missing 'tusc_user' parameter".into()));
+    }
+
+    let scraper: serde_json::Value = serde_json::from_str(&scraper_str)
+        .map_err(|e| ApiError(format!("invalid 'scraper' JSON: {e}")))?;
+    let options: serde_json::Value = serde_json::from_str(&options_str)
+        .map_err(|e| ApiError(format!("invalid 'options' JSON: {e}")))?;
+    let levels: serde_json::Value = serde_json::from_str(&levels_str)
+        .map_err(|e| ApiError(format!("invalid 'levels' JSON: {e}")))?;
+    let meta: serde_json::Value = serde_json::from_str(&meta_str)
+        .map_err(|e| ApiError(format!("invalid 'meta' JSON: {e}")))?;
+
+    // Resolve user — fail loudly if the Widar-supplied username is unknown,
+    // so the scraper doesn't get attributed to owner 0.
+    let user_id = match app.storage().get_user_by_name(&username).await? {
+        Some((id, _, _)) => id,
+        None => return Err(ApiError(format!("unknown user '{username}'"))),
+    };
+
+    // Resolve target catalog_id. If the wizard left `meta.catalog_id` blank,
+    // we create the catalog first so the autoscrape row has something to FK to.
+    let meta_cid = meta
+        .get("catalog_id")
+        .and_then(|v| {
+            v.as_u64()
+                .map(|n| n as usize)
+                .or_else(|| v.as_str().and_then(|s| s.parse::<usize>().ok()))
+        })
+        .unwrap_or(0);
+
+    let catalog_id = if meta_cid > 0 {
+        meta_cid
+    } else {
+        let name = meta
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+        let desc = meta.get("desc").and_then(|v| v.as_str()).unwrap_or("");
+        let url = meta.get("url").and_then(|v| v.as_str()).unwrap_or("");
+        let type_name = meta.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        let wd_prop: Option<usize> = meta
+            .get("property")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim_start_matches(['P', 'p']))
+            .and_then(|s| s.parse::<usize>().ok());
+        if name.is_empty() {
+            return Err(ApiError("meta.name is required when creating a new catalog".into()));
+        }
+        app.storage()
+            .create_catalog_from_meta(name, desc, url, type_name, wd_prop, user_id)
+            .await
+            .map_err(|e| ApiError(format!("create catalog: {e}")))?
+    };
+
+    // Bundle scraper + options + levels into the single JSON column that
+    // `Autoscrape::new` parses when a live scraper is later run.
+    let combined = serde_json::json!({
+        "scraper": scraper,
+        "options": options,
+        "levels": levels,
+    });
+    let combined_str = serde_json::to_string(&combined)
+        .map_err(|e| ApiError(format!("serialize scraper JSON: {e}")))?;
+    app.storage()
+        .save_scraper(catalog_id, &combined_str, user_id)
+        .await
+        .map_err(|e| ApiError(format!("save scraper: {e}")))?;
+
+    Ok(ok(serde_json::json!({ "catalog": catalog_id })))
 }
 
 // ─── Import catalog endpoint ────────────────────────────────────────────────

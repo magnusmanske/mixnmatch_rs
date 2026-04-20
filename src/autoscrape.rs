@@ -398,6 +398,50 @@ impl Autoscrape {
         Ok(ret)
     }
 
+    /// One-shot test for the scraper-builder UI: construct an in-memory
+    /// Autoscrape from a JSON blob (no DB lookup), initialize the levels to
+    /// their starting values, fetch the resulting URL, run the scraper's
+    /// regex pass once, and return `(url, html, entries)` where entries have
+    /// shape `{id, name, desc, url, type}` matching the frontend template.
+    /// No state is persisted.
+    pub async fn test_fetch(
+        app: &AppState,
+        json: &Value,
+    ) -> Result<(String, String, Vec<Value>)> {
+        let mut autoscrape = Self::new_basic(&0, 0, app, json)?;
+        Self::initialize_with_options(json.clone(), &mut autoscrape)?;
+        autoscrape.init().await;
+        let url = autoscrape.get_current_url().await;
+        let raw = autoscrape
+            .load_url(&url)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Failed to fetch URL '{url}'"))?;
+        let html = if autoscrape.simple_space {
+            RE_SIMPLE_SPACE.replace_all(&raw, " ").to_string()
+        } else {
+            raw
+        };
+        // Re-run the regex match server-side so the UI's result table has
+        // something to show. Client regex behaviour and server regex behaviour
+        // won't disagree on the test round-trip because we're using the same
+        // source text for both.
+        let entries = autoscrape.scraper.process_html_page(&html, &autoscrape);
+        let results: Vec<Value> = entries
+            .into_iter()
+            .map(|ex| {
+                let e = &ex.entry;
+                serde_json::json!({
+                    "id": e.ext_id,
+                    "name": e.ext_name,
+                    "desc": e.ext_desc,
+                    "url": e.ext_url,
+                    "type": e.type_name.clone().unwrap_or_default(),
+                })
+            })
+            .collect();
+        Ok((url, html, results))
+    }
+
     fn initialize_with_options(json: Value, ret: &mut Autoscrape) -> Result<()> {
         if let Some(options) = json.get("options") {
             // Options in main JSON
