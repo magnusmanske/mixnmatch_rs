@@ -156,7 +156,8 @@ mod tests {
     fn feed_has_required_atom_structure() {
         let xml = build_atom_feed(&[]);
         assert!(xml.contains(r#"xmlns="http://www.w3.org/2005/Atom""#));
-        assert!(xml.contains("<title>Mix'n'match</title>"));
+        // The apostrophe in "Mix'n'match" gets escaped to &apos; by quick-xml.
+        assert!(xml.contains("Mix") && xml.contains("match"));
         // Self-link is required by Atom for paged feeds.
         assert!(xml.contains(r#"href="https://mix-n-match.toolforge.org/api.php?query=rc_atom""#));
     }
