@@ -3814,8 +3814,8 @@ impl Storage for StorageMySQL {
             .await?
             .map_and_drop(|row: Row| {
                 let prop_group: String = row.get("prop_group").unwrap_or_default();
-                let property: usize = row.get("property").unwrap_or(0);
-                let item: usize = row.get("item").unwrap_or(0);
+                let property: usize = row.get::<Option<usize>, _>("property").flatten().unwrap_or(0);
+                let item: usize = row.get::<Option<usize>, _>("item").flatten().unwrap_or(0);
                 (prop_group, property, item)
             })
             .await?;
@@ -3829,7 +3829,7 @@ impl Storage for StorageMySQL {
             .exec_iter(sql2, ())
             .await?
             .map_and_drop(|row: Row| {
-                let item: usize = row.get("item").unwrap_or(0);
+                let item: usize = row.get::<Option<usize>, _>("item").flatten().unwrap_or(0);
                 let label: String = row.get("label").unwrap_or_default();
                 (format!("{item}"), label)
             })
@@ -4017,7 +4017,7 @@ impl Storage for StorageMySQL {
                 let ext_name: String = row.get("ext_name").unwrap_or_default();
                 let ext_desc: String = row.get("ext_desc").unwrap_or_default();
                 let event_type: String = row.get("event_type").unwrap_or_default();
-                let user: usize = row.get("user").unwrap_or(0);
+                let user: usize = row.get::<Option<usize>, _>("user").flatten().unwrap_or(0);
                 let timestamp: String = row.get("timestamp").unwrap_or_default();
                 json!({
                     "id": id, "catalog": catalog, "ext_id": ext_id, "ext_url": ext_url,
