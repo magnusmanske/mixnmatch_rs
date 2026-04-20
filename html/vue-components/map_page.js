@@ -18,7 +18,7 @@ export default Vue.extend({
 	props: ['id', 'entry_id'],
 	data: function () {
 		return {
-			loaded: false, selected_entry: {}, selected_item: {}, mapdata: {
+			loaded: false, catalog: null, selected_entry: {}, selected_item: {}, mapdata: {
 				layers: [],
 				sources: {}
 			}, entry_focus: {}, flickr_key: ''
@@ -120,7 +120,7 @@ export default Vue.extend({
 		}
 	},
 	template: `<div class='mt-2'>
-    <mnm-breadcrumb v-if='typeof catalog != "undefined" && catalog.id' :crumbs="[
+		<mnm-breadcrumb v-if='typeof catalog != "undefined" && catalog && catalog.id' :crumbs="[
         {text: catalog.name, to: '/catalog/'+catalog.id},
         {text: 'Map'}
     ]"></mnm-breadcrumb>

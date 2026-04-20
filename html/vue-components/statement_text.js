@@ -1,6 +1,6 @@
 (function () {
-    const s = document.createElement('style');
-    s.textContent = `
+	const s = document.createElement('style');
+	s.textContent = `
 	.st-group-card {
 		border: 1px solid #dee2e6;
 		border-radius: 6px;
@@ -87,243 +87,243 @@
 		margin-bottom: 0.5rem;
 	}
 `;
-    document.head.appendChild(s);
+	document.head.appendChild(s);
 })();
 
 import { mnm_api, mnm_fetch_json, ensure_catalog, get_specific_catalog, tt_update_interface, widar, tt } from './store.js';
 
 export default Vue.extend({
-    props: ['id'],
+	props: ['id'],
 
-    data: function () {
-        return {
-            catalog: {},
-            loading: true,
-            groups: [],       // [{property, text, cnt, samples:[]}]
-            properties: [],   // [{property, group_count}] for the dropdown
-            prop_labels: {},  // {property_num: 'English label'}
-            selected_property: 0, // 0 = all properties
-            current_index: 0,
-            done_count: 0,
-            search_query: '',
-            search_results: [],
-            searching: false,
-            searched: false,
-            manual_q: '',
-            saving: false,
-            error_msg: ''
-        };
-    },
+	data: function () {
+		return {
+			catalog: {},
+			loading: true,
+			groups: [],       // [{property, text, cnt, samples:[]}]
+			properties: [],   // [{property, group_count}] for the dropdown
+			prop_labels: {},  // {property_num: 'English label'}
+			selected_property: 0, // 0 = all properties
+			current_index: 0,
+			done_count: 0,
+			search_query: '',
+			search_results: [],
+			searching: false,
+			searched: false,
+			manual_q: '',
+			saving: false,
+			error_msg: ''
+		};
+	},
 
-    computed: {
-        current: function () {
-            if (!this.groups.length) return null;
-            return this.groups[this.current_index] || null;
-        },
-        progress_pct: function () {
-            let total = this.done_count + this.groups.length;
-            if (!total) return 0;
-            return Math.round(100 * this.done_count / total);
-        }
-    },
+	computed: {
+		current: function () {
+			if (!this.groups.length) return null;
+			return this.groups[this.current_index] || null;
+		},
+		progress_pct: function () {
+			let total = this.done_count + this.groups.length;
+			if (!total) return 0;
+			return Math.round(100 * this.done_count / total);
+		}
+	},
 
-    created: async function () {
-        await ensure_catalog(this.id);
-        this.catalog = get_specific_catalog(this.id);
-        this.load_groups();
-    },
+	created: async function () {
+		await ensure_catalog(this.id);
+		this.catalog = get_specific_catalog(this.id);
+		this.load_groups();
+	},
 
-    updated: function () { tt_update_interface(); },
-    mounted: function () { tt_update_interface(); },
+	updated: function () { tt_update_interface(); },
+	mounted: function () { tt_update_interface(); },
 
-    methods: {
+	methods: {
 
-        load_groups: async function () {
-            let me = this;
-            me.loading = true;
-            me.current_index = 0;
-            let params = {
-                catalog: me.id,
-                limit: 50,
-                offset: 0
-            };
-            if (me.selected_property > 0) params.property = me.selected_property;
-            try {
-                let d = await mnm_api('get_statement_text_groups', params);
-                me.groups = (d.data && d.data.groups) ? d.data.groups : [];
-                if (d.data && d.data.properties) {
-                    me.properties = d.data.properties.map(function (p) {
-                        return {
-                            property: parseInt(p.property, 10),
-                            group_count: parseInt(p.group_count, 10)
-                        };
-                    });
-                    me.fetch_prop_labels();
-                }
-                me.loading = false;
-                if (me.current) me.on_group_change();
-            } catch (e) {
-                me.loading = false;
-            }
-        },
+		load_groups: async function () {
+			let me = this;
+			me.loading = true;
+			me.current_index = 0;
+			let params = {
+				catalog: me.id,
+				limit: 50,
+				offset: 0
+			};
+			if (me.selected_property > 0) params.property = me.selected_property;
+			try {
+				let d = await mnm_api('get_statement_text_groups', params);
+				me.groups = (d.data && d.data.groups) ? d.data.groups : [];
+				if (d.data && d.data.properties) {
+					me.properties = d.data.properties.map(function (p) {
+						return {
+							property: parseInt(p.property, 10),
+							group_count: parseInt(p.group_count, 10)
+						};
+					});
+					me.fetch_prop_labels();
+				}
+				me.loading = false;
+				if (me.current) me.on_group_change();
+			} catch (e) {
+				me.loading = false;
+			}
+		},
 
-        reload: function () {
-            this.done_count = 0;
-            this.selected_property = 0;
-            this.properties = [];
-            this.load_groups();
-        },
+		reload: function () {
+			this.done_count = 0;
+			this.selected_property = 0;
+			this.properties = [];
+			this.load_groups();
+		},
 
-        on_property_change: function () {
-            this.done_count = 0;
-            this.groups = [];
-            this.load_groups();
-        },
+		on_property_change: function () {
+			this.done_count = 0;
+			this.groups = [];
+			this.load_groups();
+		},
 
-        // Fetch English labels from Wikidata for any properties not yet in prop_labels.
-        fetch_prop_labels: async function () {
-            let me = this;
-            if (!me.properties.length) return;
-            let to_fetch = me.properties
-                .map(function (p) { return p.property; })
-                .filter(function (num) { return !me.prop_labels[num]; });
-            if (!to_fetch.length) return;
-            let ids = to_fetch.map(function (num) { return 'P' + num; }).join('|');
-            let d = await mnm_fetch_json('https://www.wikidata.org/w/api.php', {
-                action: 'wbgetentities',
-                ids: ids,
-                props: 'labels',
-                languages: 'en',
-                format: 'json',
-                origin: '*'
-            });
-            if (!d.entities) return;
-            let labels = Object.assign({}, me.prop_labels);
-            Object.entries(d.entities).forEach(function ([pid, entity]) {
-                let num = parseInt(pid.replace(/\D/g, ''), 10);
-                if (entity.labels && entity.labels.en) {
-                    labels[num] = entity.labels.en.value;
-                }
-            });
-            me.prop_labels = labels;
-        },
+		// Fetch English labels from Wikidata for any properties not yet in prop_labels.
+		fetch_prop_labels: async function () {
+			let me = this;
+			if (!me.properties.length) return;
+			let to_fetch = me.properties
+				.map(function (p) { return p.property; })
+				.filter(function (num) { return !me.prop_labels[num]; });
+			if (!to_fetch.length) return;
+			let ids = to_fetch.map(function (num) { return 'P' + num; }).join('|');
+			let d = await mnm_fetch_json('https://www.wikidata.org/w/api.php', {
+				action: 'wbgetentities',
+				ids: ids,
+				props: 'labels',
+				languages: 'en',
+				format: 'json',
+				origin: '*'
+			});
+			if (!d.entities) return;
+			let labels = Object.assign({}, me.prop_labels);
+			Object.entries(d.entities).forEach(function ([pid, entity]) {
+				let num = parseInt(pid.replace(/\D/g, ''), 10);
+				if (entity.labels && entity.labels.en) {
+					labels[num] = entity.labels.en.value;
+				}
+			});
+			me.prop_labels = labels;
+		},
 
-        // Returns the display string for a property number in the dropdown.
-        prop_label: function (property_num) {
-            let label = this.prop_labels[property_num];
-            return label ? label + ' (P' + property_num + ')' : 'P' + property_num;
-        },
+		// Returns the display string for a property number in the dropdown.
+		prop_label: function (property_num) {
+			let label = this.prop_labels[property_num];
+			return label ? label + ' (P' + property_num + ')' : 'P' + property_num;
+		},
 
-        on_group_change: function () {
-            this.search_results = [];
-            this.searched = false;
-            this.manual_q = '';
-            this.error_msg = '';
-            if (this.current) {
-                this.search_query = this.current.text;
-                this.search_wikidata();
-            }
-        },
+		on_group_change: function () {
+			this.search_results = [];
+			this.searched = false;
+			this.manual_q = '';
+			this.error_msg = '';
+			if (this.current) {
+				this.search_query = this.current.text;
+				this.search_wikidata();
+			}
+		},
 
-        skip: function () {
-            let me = this;
-            if (me.current_index < me.groups.length - 1) {
-                me.current_index++;
-            } else {
-                me.current_index = 0;
-            }
-            me.on_group_change();
-        },
+		skip: function () {
+			let me = this;
+			if (me.current_index < me.groups.length - 1) {
+				me.current_index++;
+			} else {
+				me.current_index = 0;
+			}
+			me.on_group_change();
+		},
 
-        search_wikidata: async function () {
-            let me = this;
-            let q = me.search_query.trim();
-            if (!q) return;
-            me.searching = true;
-            me.searched = false;
-            me.search_results = [];
-            try {
-                let d = await mnm_fetch_json('https://www.wikidata.org/w/api.php', {
-                    action: 'wbsearchentities',
-                    search: q,
-                    language: 'en',
-                    limit: 10,
-                    type: 'item',
-                    format: 'json',
-                    origin: '*'
-                });
-                me.search_results = (d.search || []).map(function (r) {
-                    return {
-                        id: r.id,
-                        label: r.label || r.id,
-                        description: r.description || ''
-                    };
-                });
-                me.searched = true;
-            } finally {
-                me.searching = false;
-            }
-        },
+		search_wikidata: async function () {
+			let me = this;
+			let q = me.search_query.trim();
+			if (!q) return;
+			me.searching = true;
+			me.searched = false;
+			me.search_results = [];
+			try {
+				let d = await mnm_fetch_json('https://www.wikidata.org/w/api.php', {
+					action: 'wbsearchentities',
+					search: q,
+					language: 'en',
+					limit: 10,
+					type: 'item',
+					format: 'json',
+					origin: '*'
+				});
+				me.search_results = (d.search || []).map(function (r) {
+					return {
+						id: r.id,
+						label: r.label || r.id,
+						description: r.description || ''
+					};
+				});
+				me.searched = true;
+			} finally {
+				me.searching = false;
+			}
+		},
 
-        set_q: function (q_str) {
-            let q = parseInt(('' + q_str).replace(/\D/g, ''), 10);
-            if (!q || q <= 0) {
-                this.error_msg = tt.t('st_invalid_qid') + ' ' + q_str;
-                return;
-            }
-            this.save_q(q);
-        },
+		set_q: function (q_str) {
+			let q = parseInt(('' + q_str).replace(/\D/g, ''), 10);
+			if (!q || q <= 0) {
+				this.error_msg = tt.t('st_invalid_qid') + ' ' + q_str;
+				return;
+			}
+			this.save_q(q);
+		},
 
-        set_manual_q: function () {
-            let raw = this.manual_q.trim();
-            if (!raw) return;
-            let q = parseInt(raw.replace(/\D/g, ''), 10);
-            if (!q || q <= 0) {
-                this.error_msg = tt.t('st_valid_qid_hint');
-                return;
-            }
-            this.save_q(q);
-        },
+		set_manual_q: function () {
+			let raw = this.manual_q.trim();
+			if (!raw) return;
+			let q = parseInt(raw.replace(/\D/g, ''), 10);
+			if (!q || q <= 0) {
+				this.error_msg = tt.t('st_valid_qid_hint');
+				return;
+			}
+			this.save_q(q);
+		},
 
-        save_q: async function (q) {
-            let me = this;
-            if (!me.current) return;
-            me.saving = true;
-            me.error_msg = '';
+		save_q: async function (q) {
+			let me = this;
+			if (!me.current) return;
+			me.saving = true;
+			me.error_msg = '';
 
-            let property = me.current.property;
-            let text = me.current.text;
+			let property = me.current.property;
+			let text = me.current.text;
 
-            try {
-                await mnm_api('set_statement_text_q', {
-                    tusc_user: widar.getUserName(),
-                    catalog: me.id,
-                    property: property,
-                    text: text,
-                    q: q
-                }, { method: 'POST' });
-                me.done_count++;
-                me.groups.splice(me.current_index, 1);
-                if (me.groups.length === 0) {
-                    me.saving = false;
-                    return;
-                }
-                if (me.current_index >= me.groups.length) {
-                    me.current_index = 0;
-                }
-                me.saving = false;
-                me.on_group_change();
-            } catch (e) {
-                me.error_msg = e.message || tt.t('st_network_error');
-                me.saving = false;
-            }
-        }
+			try {
+				await mnm_api('set_statement_text_q', {
+					tusc_user: widar.getUserName(),
+					catalog: me.id,
+					property: property,
+					text: text,
+					q: q
+				}, { method: 'POST' });
+				me.done_count++;
+				me.groups.splice(me.current_index, 1);
+				if (me.groups.length === 0) {
+					me.saving = false;
+					return;
+				}
+				if (me.current_index >= me.groups.length) {
+					me.current_index = 0;
+				}
+				me.saving = false;
+				me.on_group_change();
+			} catch (e) {
+				me.error_msg = e.message || tt.t('st_network_error');
+				me.saving = false;
+			}
+		}
 
-    },
+	},
 
-    template: `
+	template: `
 	<div class='mt-2'>
-		<mnm-breadcrumb v-if='catalog && catalog.id' :crumbs="[
+		<mnm-breadcrumb v-if='typeof catalog != "undefined" && catalog && catalog.id' :crumbs="[
 			{text: catalog.name, to: '/catalog/'+catalog.id},
 			{text: 'Statement text'}
 		]"></mnm-breadcrumb>

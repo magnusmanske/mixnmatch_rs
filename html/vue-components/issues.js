@@ -1,73 +1,74 @@
 import { mnm_api, mnm_notify, ensure_catalogs, get_specific_catalog, tt_update_interface, widar } from './store.js';
 
 export default Vue.extend({
-    props : ['type','initial_catalogs'] ,
-    data : function () { return { limit:10 , issues:[] , num_issues:0 , start:0 , available_types:['WD_DUPLICATE','MISMATCH','MISMATCH_DATES','MULTIPLE'] , total:-1 , catalogs:'' , loading:false } } ,
-    created : function () {
-    	if ( typeof this.initial_catalogs != 'undefined' ) this.catalogs = this.initial_catalogs ;
-    	this.load();
-    },
-	updated : function () { tt_update_interface() } ,
-	mounted : function () { tt_update_interface() } ,
-    methods : {
-    	load : async function () {
-    		let me = this ;
-    		me.issues = [] ;
-    		me.loading = true ;
-    		let the_type = (me.type||'') ;
-    		if ( the_type == 'ALL' ) the_type = '' ;
-    		let d = await mnm_api('get_issues', {
-    			type : the_type,
-    			limit : me.limit ,
-    			offset : (me.start||0) ,
-    			catalogs : me.catalogs
-    		}) ;
-    		//console.log(JSON.parse(JSON.stringify(d)));
-    		let path = '/issues' ;
-    		if ( the_type!='' || me.catalogs!='' ) path += '/'+(the_type||'ALL')+me.get_catalog_slash() ;
-    		//me.$router.replace ( path );
-			Object.entries ( d.data.entries ).forEach ( function ( [k , v] ) {
-				if ( typeof d.data.users[v.user] == 'undefined' ) return ;
-				d.data.entries[k].username = d.data.users[v.user].name ;
-			} ) ;
+	props: ['type', 'initial_catalogs'],
+	data: function () { return { limit: 10, issues: [], num_issues: 0, start: 0, available_types: ['WD_DUPLICATE', 'MISMATCH', 'MISMATCH_DATES', 'MULTIPLE'], total: -1, catalogs: '', loading: false } },
+	created: function () {
+		if (typeof this.initial_catalogs != 'undefined') this.catalogs = this.initial_catalogs;
+		this.load();
+	},
+	updated: function () { tt_update_interface() },
+	mounted: function () { tt_update_interface() },
+	methods: {
+		load: async function () {
+			let me = this;
+			me.issues = [];
+			me.loading = true;
+			let the_type = (me.type || '');
+			if (the_type == 'ALL') the_type = '';
+			let d = await mnm_api('get_issues', {
+				type: the_type,
+				limit: me.limit,
+				offset: (me.start || 0),
+				catalogs: me.catalogs
+			});
+			//console.log(JSON.parse(JSON.stringify(d)));
+			let path = '/issues';
+			if (the_type != '' || me.catalogs != '') path += '/' + (the_type || 'ALL') + me.get_catalog_slash();
+			//me.$router.replace ( path );
+			Object.entries(d.data.entries).forEach(function ([k, v]) {
+				if (typeof d.data.users[v.user] == 'undefined') return;
+				d.data.entries[k].username = d.data.users[v.user].name;
+			});
 			// Ensure all referenced catalogs are cached
 			var catalog_ids = [...new Set(Object.values(d.data.entries).map(function (e) { return e.catalog; }))];
 			await ensure_catalogs(catalog_ids);
-			me.total = d.data.open_issues*1 ;
-    		me.entries = d.data.entries ;
-    		me.issues = Array.isArray(d.data.issues) ? d.data.issues : Object.values(d.data.issues || {}) ;
-    		me.num_issues = 0 ;
-    		me.issues.forEach ( function ( v , k ) {
-    			Vue.set ( me.issues[k] , 'is_resolved' , false ) ;
-    			me.num_issues++ ;
-    		} ) ;
-    		me.loading = false ;
-    	} ,
-    	canResolve : function () {
-    		return typeof widar.getUserName() != 'undefined'
-    	} ,
-    	get_catalog : function ( catalog_id ) {
-    		return get_specific_catalog(catalog_id);
-    	} ,
-    	get_catalog_slash : function () {
-    		if ( this.catalogs == '' ) return '' ;
-    		return '/'+this.catalogs ;
-    	} ,
-    	resolve : async function ( issue_id ) {
-    		let me = this ;
-    		try {
-    			await mnm_api('resolve_issue', {
-    				issue_id : issue_id ,
-    				username : widar.getUserName()
-    			}) ;
-    			Vue.set ( me.issues[issue_id] , 'is_resolved' , true ) ;
-    			me.total-- ;
-    		} catch (e) {
-    			mnm_notify(e.message, 'danger') ;
-    		}
-    	}
-    },
-    template: `
+			me.total = d.data.open_issues * 1;
+			me.entries = d.data.entries;
+			me.issues = Array.isArray(d.data.issues) ? d.data.issues : Object.values(d.data.issues || {});
+			me.num_issues = 0;
+			me.issues.forEach(function (v, k) {
+				Vue.set(me.issues[k], 'is_resolved', false);
+				me.num_issues++;
+			});
+			me.loading = false;
+		},
+		canResolve: function () {
+			return typeof widar.getUserName() != 'undefined'
+		},
+		get_catalog: function (catalog_id) {
+			return get_specific_catalog(catalog_id);
+		},
+		get_catalog_slash: function () {
+			if (this.catalogs == '') return '';
+			return '/' + this.catalogs;
+		},
+		resolve: async function (issue_id) {
+			let me = this;
+			try {
+				await mnm_api('resolve_issue', {
+					issue_id: issue_id,
+					username: widar.getUserName()
+				});
+				let idx = me.issues.findIndex(function (i) { return i.id === issue_id; });
+				if (idx >= 0) Vue.set(me.issues[idx], 'is_resolved', true);
+				me.total--;
+			} catch (e) {
+				mnm_notify(e.message, 'danger');
+			}
+		}
+	},
+	template: `
 <div class='mt-2'>
 	<mnm-breadcrumb :crumbs="[{tt: 'issues'}]"></mnm-breadcrumb>
 	<h1 tt='issues'></h1>

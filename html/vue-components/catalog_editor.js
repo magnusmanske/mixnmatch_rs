@@ -1,65 +1,65 @@
 import { mnm_api, mnm_fetch_json, mnm_notify, ensure_catalog, get_specific_catalog, tt_update_interface, widar } from './store.js';
 
 export default Vue.extend({
-    props: ['id'],
-    data: function () { return { catalog: {} } },
-    created: async function () {
-        let me = this;
-        await ensure_catalog(me.id);
-        me.catalog = get_specific_catalog(me.id);
-    },
-    updated: function () { tt_update_interface() },
-    mounted: function () { tt_update_interface() },
-    methods: {
-        update_ext_urls: async function () {
-            let me = this;
-            let prop = 'P' + me.catalog.wd_prop;
-            try {
-                let d = await mnm_fetch_json('https://www.wikidata.org/w/api.php', {
-                    action: 'wbgetentities', format: 'json', origin: '*', ids: prop
-                });
-                let x = d.entities[prop].claims || {};
-                if (typeof x.P1630 == "undefined") {
-                    mnm_notify(prop + ' has no formatter URL', 'danger');
-                    return;
-                }
-                let url = '';
-                x.P1630.forEach(claim => {
-                    if (claim.rank == 'preferred' || (url == '' && claim.rank == 'normal')) url = claim.mainsnak.datavalue.value;
-                });
-                if (url == '') {
-                    mnm_notify(prop + ' has no suitable formatter URL (maybe deprecated only?', 'danger');
-                    return;
-                }
-                await mnm_api('update_ext_urls', {
-                    username: widar.getUserName(),
-                    url: url,
-                    catalog: me.id
-                });
-                mnm_notify("Done", 'success');
-            } catch (e) {
-                mnm_notify(e.message, 'danger');
-            }
-        },
-        onSave: async function () {
-            const me = this;
-            try {
-                await mnm_api('edit_catalog', {
-                    username: widar.getUserName(),
-                    catalog: me.id,
-                    data: JSON.stringify(me.catalog)
-                }, { method: 'POST' });
-                await ensure_catalog(me.id, true);
-                mnm_notify('Catalog saved', 'success');
-                router.push('/catalog/' + me.id);
-            } catch (e) {
-                mnm_notify('Save failed: ' + e.message, 'danger');
-            }
-        }
-    },
-    template: `
+	props: ['id'],
+	data: function () { return { catalog: {} } },
+	created: async function () {
+		let me = this;
+		await ensure_catalog(me.id);
+		me.catalog = get_specific_catalog(me.id);
+	},
+	updated: function () { tt_update_interface() },
+	mounted: function () { tt_update_interface() },
+	methods: {
+		update_ext_urls: async function () {
+			let me = this;
+			let prop = 'P' + me.catalog.wd_prop;
+			try {
+				let d = await mnm_fetch_json('https://www.wikidata.org/w/api.php', {
+					action: 'wbgetentities', format: 'json', origin: '*', ids: prop
+				});
+				let x = d.entities[prop].claims || {};
+				if (typeof x.P1630 == "undefined") {
+					mnm_notify(prop + ' has no formatter URL', 'danger');
+					return;
+				}
+				let url = '';
+				x.P1630.forEach(claim => {
+					if (claim.rank == 'preferred' || (url == '' && claim.rank == 'normal')) url = claim.mainsnak.datavalue.value;
+				});
+				if (url == '') {
+					mnm_notify(prop + ' has no suitable formatter URL (maybe deprecated only?', 'danger');
+					return;
+				}
+				await mnm_api('update_ext_urls', {
+					username: widar.getUserName(),
+					url: url,
+					catalog: me.id
+				});
+				mnm_notify("Done", 'success');
+			} catch (e) {
+				mnm_notify(e.message, 'danger');
+			}
+		},
+		onSave: async function () {
+			const me = this;
+			try {
+				await mnm_api('edit_catalog', {
+					username: widar.getUserName(),
+					catalog: me.id,
+					data: JSON.stringify(me.catalog)
+				}, { method: 'POST' });
+				await ensure_catalog(me.id, true);
+				mnm_notify('Catalog saved', 'success');
+				router.push('/catalog/' + me.id);
+			} catch (e) {
+				mnm_notify('Save failed: ' + e.message, 'danger');
+			}
+		}
+	},
+	template: `
 <div class='mt-2'>
-	<mnm-breadcrumb v-if='catalog && catalog.id' :crumbs="[
+<mnm-breadcrumb v-if='typeof catalog != "undefined" && catalog && catalog.id' :crumbs="[
 		{text: catalog.name, to: '/catalog/'+catalog.id},
 		{tt: 'catalog_editor'}
 	]"></mnm-breadcrumb>
