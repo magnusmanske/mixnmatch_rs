@@ -342,4 +342,40 @@ mod tests {
         assert_eq!(envelope["status"], "OK");
         assert_eq!(envelope["data"]["count"], 3);
     }
+
+    /// Pin the wire format for `entries_to_json_data` — the function
+    /// behind every `query=catalog`-shaped response. The frontend reads
+    /// `entry.type` everywhere (entry_list_item's Initial-search button,
+    /// entry_details' type row, …) so the key has to be `type`, not the
+    /// Rust field name `type_name`.
+    #[test]
+    fn entries_to_json_data_uses_type_not_type_name() {
+        let entry = Entry {
+            id: Some(42),
+            catalog: 1,
+            ext_id: "x".into(),
+            ext_name: "H.M.Manske".into(),
+            type_name: Some("Q5".into()),
+            ..Default::default()
+        };
+        // `entries_to_json_data` is async and takes &AppState only to
+        // resolve user names; for a single entry with user=None the
+        // user lookup is skipped, so we can test the serialisation
+        // shape without a DB by mirroring the map-building step.
+        let mut entries_map = serde_json::Map::new();
+        entries_map.insert(
+            entry.id.unwrap().to_string(),
+            serde_json::to_value(&entry).unwrap(),
+        );
+        let data = json!({"entries": Value::Object(entries_map), "users": json!({})});
+        let entry_json = &data["entries"]["42"];
+        assert_eq!(
+            entry_json["type"], json!("Q5"),
+            "must serialise as `type` (frontend contract)"
+        );
+        assert!(
+            entry_json.get("type_name").is_none(),
+            "must not also emit the Rust field name `type_name`: {entry_json}"
+        );
+    }
 }
