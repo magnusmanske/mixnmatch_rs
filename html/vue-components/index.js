@@ -48,6 +48,9 @@ Vue.component('catalog-list-item', CatalogListItem);
 import Pagination from '../resources/vue_es6/pagination.js';
 Vue.component('pagination', Pagination);
 
+import RcEventsList from './rc_events_list.js';
+Vue.component('rc-events-list', RcEventsList);
+
 import CatalogActionsDropdown from './catalog_actions_dropdown.js';
 Vue.component('catalog-actions-dropdown', CatalogActionsDropdown);
 

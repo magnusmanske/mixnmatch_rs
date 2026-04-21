@@ -588,7 +588,20 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     async fn api_search_by_q(&self, q: isize, exclude_catalogs: &[usize]) -> Result<Vec<Entry>>;
 
     // Recent changes
-    async fn api_get_recent_changes(&self, ts: &str, catalog_id: usize, limit: usize) -> Result<(Vec<serde_json::Value>, Vec<serde_json::Value>)>; // (events from entry, events from log)
+    /// Paginated, pre-merged recent-changes feed.
+    ///
+    /// Returns a single ordered list of events (matches from `entry` plus
+    /// historical edits from `log`) and the total number of rows that
+    /// would be visible under the same `ts` / `catalog_id` filters.
+    /// `offset`/`limit` apply to the already-merged stream so each UI
+    /// page shows the correct slice.
+    async fn api_get_recent_changes(
+        &self,
+        ts: &str,
+        catalog_id: usize,
+        limit: usize,
+        offset: usize,
+    ) -> Result<(Vec<serde_json::Value>, usize)>;
 
     // Catalog entry listing (query=catalog)
     /// Fetch a page of entries matching `filter` plus the total filtered count.
