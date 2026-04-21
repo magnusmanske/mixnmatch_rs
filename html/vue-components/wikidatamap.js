@@ -81,18 +81,27 @@ MapSourceMnM.prototype.action_remove_match = async function (data, callback) {
 		callback(false);
 	}
 };
-MapSourceMnM.prototype.action_match_to_item = function (data, callback) {
+// Shared by `action_match_to_item` and `action_confirm_match`: write a
+// claim on behalf of the logged-in user, then update MnM to record the
+// match. Posts to Widar with `action: 'set_string'`; the backend
+// (`api/widar.rs` handle_set_string) signs `wbcreateclaim` with the
+// session's OAuth token.
+MapSourceMnM.prototype._match_entry_to_q = function (data, q_norm, callback) {
 	let self = this;
-	let q = prompt(tt.t("enter_q_number"));
-	if (q == null) return callback(false);
-	q = "Q" + q.replace(/\D/, '');
-	if (q == "Q") return callback(false);
+	if (!self.catalog) {
+		mnm_notify('Catalog is still loading, try again in a moment', 'warning');
+		return callback(false);
+	}
 	let entry = data.entry.aux.entry;
 	let value = entry.ext_id;
 	let prop;
-	if (self.catalog.wd_prop != null && self.catalog.wd_qual == null) prop = 'P' + self.catalog.wd_prop;
-	else {
-		prop = "P973";
+	// Catalogs with a wd_prop and no wd_qual get the canonical external-id
+	// claim; everything else falls back to P973 'described at URL' so the
+	// link still lands on the Wikidata item in some form.
+	if (self.catalog.wd_prop != null && self.catalog.wd_qual == null) {
+		prop = 'P' + self.catalog.wd_prop;
+	} else {
+		prop = 'P973';
 		value = entry.ext_url;
 		if (value == null || value == '') {
 			mnm_notify('Catalog has no property, and entry has no URL', 'danger');
@@ -100,18 +109,41 @@ MapSourceMnM.prototype.action_match_to_item = function (data, callback) {
 		}
 	}
 	let summary = 'Matched to [[:toollabs:mix-n-match/#/entry/' + entry.id + '|' + entry.ext_name + ' (#' + entry.id + ')]]';
-	let params = { botmode: 1, action: 'set_string', id: q, prop: prop, text: value, summary: summary };
+	let params = { botmode: 1, action: 'set_string', id: q_norm, prop: prop, text: value, summary: summary };
 	widar.run(params, function (d) {
 		if (d.error != 'OK') {
 			mnm_notify(d.error, 'danger');
 			return callback(false);
 		}
 		data.entry.aux.status = 'fullmatch';
-		data.entry.desc = entry.ext_desc + "\nMatched to [[" + q + "]]";
+		data.entry.desc = entry.ext_desc + "\nMatched to [[" + q_norm + "]]";
 		data.entry.actions = [];
 		data.entry.actions.push({ label: "Remove match", action: 'remove_match', type: 'outline-danger' });
-		self.edit_mixin.methods.setEntryQ(entry, q, true, function (q) { callback(true); }, function () { callback(false); });
+		// skip_wikidata_edit=true because we just did it above; setEntryQ
+		// only needs to update the MnM side.
+		self.edit_mixin.methods.setEntryQ(entry, q_norm, true, function () { callback(true); }, function () { callback(false); });
 	});
+};
+
+MapSourceMnM.prototype.action_match_to_item = function (data, callback) {
+	let input = prompt(tt.t("enter_q_number"));
+	if (input == null) return callback(false);
+	// Strip ALL non-digits, not just the first — /\D/ without /g only
+	// replaced one character, so 'Q 12' (with a space) slipped through
+	// as 'Q 12' and the backend rejected it.
+	let q = 'Q' + input.replace(/\D/g, '');
+	if (q === 'Q') return callback(false);
+	this._match_entry_to_q(data, q, callback);
+};
+
+MapSourceMnM.prototype.action_confirm_match = function (data, callback) {
+	let entry = data.entry.aux.entry;
+	let q_num = ('' + (entry.q || '')).replace(/\D/g, '');
+	if (q_num === '' || q_num === '0') {
+		mnm_notify('No Wikidata item to confirm for this entry', 'warning');
+		return callback(false);
+	}
+	this._match_entry_to_q(data, 'Q' + q_num, callback);
 };
 MapSourceMnM.prototype.action_create_new_item = async function (data, callback) {
 	let self = this;
