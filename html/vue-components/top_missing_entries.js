@@ -43,15 +43,20 @@ export default Vue.extend({
         let me = this;
         let catalog_ids = (me.catalogs || '').split(',').filter(c => c !== '');
         await ensure_catalogs(catalog_ids);
-        catalog_ids.forEach(function (cid) {
-            let cat = get_specific_catalog(cid * 1);
-            if (cat) me.selected_catalogs.push({ id: cid * 1, name: cat.name });
-        });
-        me.require_catalogs_string = me.selected_catalogs.map(c => c.id).join(',');
+        // Build a fresh array and assign by reference so the picker's
+        // deep watch on :value fires even though the prop name is the
+        // same — pushing into the existing array would be slower to
+        // propagate through the prop boundary.
+        let resolved = catalog_ids
+            .map(cid => get_specific_catalog(cid * 1))
+            .filter(cat => cat && cat.id)
+            .map(cat => ({ id: cat.id * 1, name: cat.name }));
+        me.selected_catalogs = resolved;
+        me.require_catalogs_string = resolved.map(c => c.id).join(',');
         // Auto-run only when the user arrived with a valid multi-catalog URL.
         // Manual adds after that require the explicit Search button so adding
         // a catalog doesn't silently trigger a slow query each time.
-        if (me.selected_catalogs.length >= 2) me.loadData();
+        if (resolved.length >= 2) me.loadData();
         tt_update_interface();
     },
     updated: function () { tt_update_interface() },
