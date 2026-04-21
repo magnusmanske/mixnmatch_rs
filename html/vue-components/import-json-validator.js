@@ -44,8 +44,10 @@ export function validate_meta_entry(obj, index) {
 		warnings.push(prefix + ': entry.ext_name is empty');
 	}
 
-	// Optional entry string fields
-	var opt_str_fields = ['ext_url', 'ext_desc', 'type_name'];
+	// Optional entry string fields. `type` is the canonical key (matches
+	// the PHP API and display code); `type_name` is accepted as a legacy
+	// alias of the same field.
+	var opt_str_fields = ['ext_url', 'ext_desc', 'type', 'type_name'];
 	for (var si = 0; si < opt_str_fields.length; si++) {
 		var sf = opt_str_fields[si];
 		if (typeof ent[sf] !== 'undefined' && ent[sf] !== null && typeof ent[sf] !== 'string') {
@@ -64,7 +66,7 @@ export function validate_meta_entry(obj, index) {
 	}
 
 	// Warn about unknown entry fields
-	var known_entry = { catalog: 1, ext_id: 1, ext_name: 1, ext_url: 1, ext_desc: 1, type_name: 1, q: 1, user: 1, id: 1, timestamp: 1, random: 1 };
+	var known_entry = { catalog: 1, ext_id: 1, ext_name: 1, ext_url: 1, ext_desc: 1, type: 1, type_name: 1, q: 1, user: 1, id: 1, timestamp: 1, random: 1 };
 	for (var ek in ent) {
 		if (!known_entry[ek]) warnings.push(prefix + ': unknown entry field "' + ek + '"');
 	}

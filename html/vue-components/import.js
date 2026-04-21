@@ -493,7 +493,7 @@ export default Vue.extend({
       "ext_name": "Jane Doe",
       "ext_desc": "American physicist, 1920-2005",
       "ext_url": "https://example.org/record/n2014191777",
-      "type_name": "Q5"
+      "type": "Q5"
     },
     "auxiliary": [
       { "prop_numeric": 214, "value": "113084680" }
@@ -505,11 +505,11 @@ export default Vue.extend({
   }
 ]</pre>
 							<div class="mb-1"><strong>JSONL</strong> &mdash; one MetaEntry object per line:</div>
-							<pre class="p-3 bg-white border rounded mb-2" style="font-size:12px; max-height:120px; overflow:auto">{"entry":{"catalog":1234,"ext_id":"abc","ext_name":"Jane Doe","type_name":"Q5"}}
-{"entry":{"catalog":1234,"ext_id":"def","ext_name":"Kew Gardens","type_name":"Q167346"},"coordinate":{"lat":51.47,"lon":-0.29}}</pre>
+							<pre class="p-3 bg-white border rounded mb-2" style="font-size:12px; max-height:120px; overflow:auto">{"entry":{"catalog":1234,"ext_id":"abc","ext_name":"Jane Doe","type":"Q5"}}
+{"entry":{"catalog":1234,"ext_id":"def","ext_name":"Kew Gardens","type":"Q167346"},"coordinate":{"lat":51.47,"lon":-0.29}}</pre>
 							<div class="mb-1"><small class="text-muted">
 								Only <code>entry.catalog</code>, <code>entry.ext_id</code>, and <code>entry.ext_name</code> are required.
-								Optional fields: <code>ext_url</code>, <code>ext_desc</code>, <code>type_name</code>, <code>q</code>, <code>user</code>.
+								Optional fields: <code>ext_url</code>, <code>ext_desc</code>, <code>type</code>, <code>q</code>, <code>user</code>.
 								Optional sections: <code>auxiliary</code>, <code>coordinate</code>, <code>person_dates</code>, <code>descriptions</code>, <code>aliases</code>, <code>mnm_relations</code>, <code>kv_entries</code>.
 							</small></div>
 						</div>
@@ -782,7 +782,7 @@ export default Vue.extend({
 										<th>ext_id</th>
 										<th>ext_name</th>
 										<th>ext_desc</th>
-										<th>type_name</th>
+										<th>type</th>
 										<th>Extras</th>
 									</tr>
 								</thead>
@@ -791,7 +791,7 @@ export default Vue.extend({
 										<td><code>{{row.entry.ext_id}}</code></td>
 										<td>{{row.entry.ext_name}}</td>
 										<td class="text-muted">{{truncate(row.entry.ext_desc || '', 50)}}</td>
-										<td><code>{{row.entry.type_name || ''}}</code></td>
+										<td><code>{{row.entry.type || row.entry.type_name || ''}}</code></td>
 										<td>
 											<span v-if="row.auxiliary && row.auxiliary.length" class="badge text-bg-light me-1" :title="row.auxiliary.length + ' auxiliary properties'">aux:{{row.auxiliary.length}}</span>
 											<span v-if="row.coordinate" class="badge text-bg-light me-1" title="Has coordinates">coord</span>
