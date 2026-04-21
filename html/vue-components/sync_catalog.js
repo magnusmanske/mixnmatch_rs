@@ -1,4 +1,4 @@
-import { mnm_api, mnm_fetch_json, mnm_loading, ensure_catalog, get_specific_catalog, tt_update_interface, widar } from './store.js';
+import { mnm_api, mnm_fetch_json, mnm_loading, ensure_catalog, get_specific_catalog, tt_update_interface, wd, widar } from './store.js';
 
 export default Vue.extend({
 	props: ["id"],
@@ -96,6 +96,28 @@ export default Vue.extend({
 						if (typeof d2.data.users[v.user] == 'undefined') return;
 						d2.data.entries[k].username = d2.data.users[v.user].name;
 					});
+				}
+
+				// Prefetch every Wikidata item that the sync report will
+				// render in one wbgetentities batch — otherwise each
+				// <wd-link>/<wd-desc> inside a long wd_duplicates or
+				// mm_double list fires its own request. Catalogs with
+				// "Multiple uses of external IDs on Wikidata" can have
+				// hundreds of them.
+				var wd_qs = {};
+				(me.wd_duplicates || []).forEach(function (x) {
+					(x.qs || []).forEach(function (q) {
+						if (q) wd_qs[q.replace(/\D/g, '')] = true;
+					});
+				});
+				Object.keys(me.data.mm_double || {}).forEach(function (q) {
+					if (q) wd_qs[q.replace(/\D/g, '')] = true;
+				});
+				var qs_to_load = Object.keys(wd_qs)
+					.filter(function (num) { return num.length > 0; })
+					.map(function (num) { return 'Q' + num; });
+				if (qs_to_load.length > 0 && typeof wd !== 'undefined' && wd && wd.getItemBatch) {
+					await wd.getItemBatch(qs_to_load);
 				}
 
 				me.loaded = true;
