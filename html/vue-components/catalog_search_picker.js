@@ -1,5 +1,13 @@
 import { mnm_api } from './store.js';
 
+function sameIdList(a, b) {
+	if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+	for (var i = 0; i < a.length; i++) {
+		if ((a[i] && a[i].id) !== (b[i] && b[i].id)) return false;
+	}
+	return true;
+}
+
 (function() {
   const s = document.createElement('style');
   s.textContent = `
@@ -46,6 +54,30 @@ export default {
 		if (this.multi && Array.isArray(this.value)) {
 			this.selected_list = this.value.slice();
 		}
+	},
+	watch: {
+		// The parent may populate `value` after we've already mounted
+		// (typical: it resolves catalog info asynchronously in its own
+		// `created`, then mutates the array). Without this watch, the
+		// picker's pill list is a stale copy taken at mount time.
+		// Deep is needed because the parent usually pushes into the
+		// same reference rather than assigning a fresh array.
+		value: {
+			deep: true,
+			handler: function (newVal) {
+				if (!this.multi) return;
+				if (!Array.isArray(newVal)) {
+					this.selected_list = [];
+					return;
+				}
+				// Skip the self-echo: after `selectResult` pushes into
+				// `selected_list` and emits, the parent re-binds the
+				// same content back — syncing when content already
+				// matches avoids an extra render.
+				if (sameIdList(this.selected_list, newVal)) return;
+				this.selected_list = newVal.slice();
+			},
+		},
 	},
 	methods: {
 		onInput: function () {
