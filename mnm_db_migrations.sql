@@ -42,18 +42,23 @@ ALTER TABLE `entry`
 -- deployment matches the checked-in DDL.
 
 -- ---------------------------------------------------------------
--- 4) entry.type legacy 'person' → 'Q5'
+-- 4) entry.type canonicalisation
 --
 -- Pre-Rust PHP imports stored the literal label 'person' in
--- entry.type as a synonym for 'Q5'. The Rust write paths now
--- normalise on INSERT/UPDATE (entry::normalize_entry_type), and the
--- frontend/display code no longer special-cases 'person'. Clean up
--- the rows that still carry the legacy label so Q5-gated features
--- (Initial-search button, creation_candidates person grouping,
+-- entry.type as a synonym for 'Q5', and some rows also carried
+-- lower-case `q…` QIDs depending on the source parser. The Rust
+-- write paths now normalise on INSERT/UPDATE (via
+-- entry::normalize_entry_type), and the frontend/display code no
+-- longer special-cases either form. Clean up the rows that still
+-- carry a legacy spelling so Q5-gated features (Initial-search
+-- button, creation_candidates person grouping,
 -- mobile_match.doWikipediaSearch's date extraction, Q5-only filter
 -- in dg_tiles, etc.) see a consistent value.
 -- ---------------------------------------------------------------
-UPDATE `entry` SET `type` = 'Q5' WHERE `type` = 'person';
+UPDATE `entry` SET `type` = 'Q5'
+ WHERE LOWER(`type`) = 'person';
+UPDATE `entry` SET `type` = CONCAT('Q', SUBSTRING(`type`, 2))
+ WHERE `type` REGEXP '^q[0-9]+$' COLLATE utf8mb3_bin;
 
 -- ---------------------------------------------------------------
 -- Notes on what was deliberately NOT added:
