@@ -62,7 +62,18 @@ pub struct Entry {
     pub timestamp: Option<String>,
     #[serde(default)]
     pub random: f64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    // `type` on the wire — matches the PHP API contract and every
+    // frontend read site (`entry.type`, `entry_details.js:104`,
+    // `entry_list_item.js`, etc.). The Rust field keeps the `type_name`
+    // name because `type` is a reserved word. `alias = "type_name"`
+    // accepts older import files that were written against the Rust
+    // port's earlier (ad-hoc) field name.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "type",
+        alias = "type_name"
+    )]
     pub type_name: Option<String>,
     #[serde(skip)]
     pub app: Option<AppState>,
@@ -1299,6 +1310,34 @@ mod tests {
         assert!(!entry.is_unmatched());
         assert!(!entry.is_partially_matched());
         assert!(entry.is_fully_matched());
+    }
+
+    // ----- Serde field-name contract for `entry.type` -----
+
+    #[test]
+    fn entry_serializes_type_field_as_type() {
+        // Frontend reads `entry.type` (matches PHP API). The struct field
+        // is `type_name` because `type` is a reserved word in Rust; serde
+        // renames it on the wire.
+        let e = Entry {
+            type_name: Some("Q5".into()),
+            ..Default::default()
+        };
+        let v: serde_json::Value = serde_json::to_value(&e).unwrap();
+        assert_eq!(v["type"], serde_json::json!("Q5"));
+        assert!(v.get("type_name").is_none(), "must not also emit type_name");
+    }
+
+    #[test]
+    fn entry_deserializes_either_type_or_type_name() {
+        // Canonical key.
+        let canonical: Entry =
+            serde_json::from_str(r#"{"catalog":1,"ext_id":"x","ext_name":"n","type":"Q5"}"#).unwrap();
+        assert_eq!(canonical.type_name.as_deref(), Some("Q5"));
+        // Legacy alias for older import files produced before the rename.
+        let legacy: Entry =
+            serde_json::from_str(r#"{"catalog":1,"ext_id":"x","ext_name":"n","type_name":"Q5"}"#).unwrap();
+        assert_eq!(legacy.type_name.as_deref(), Some("Q5"));
     }
 
     // ----- Claim/reference dedup (no DB, no network) -----

@@ -107,7 +107,7 @@ All other fields are optional and can be omitted.
     "ext_url": "https://example.org/record/n2014191777",
     "ext_name": "Jane Doe",
     "ext_desc": "American physicist, 1920-2005",
-    "type_name": "Q5"
+    "type": "Q5"
   }
 }
 ```
@@ -121,7 +121,7 @@ All other fields are optional and can be omitted.
 | `ext_desc` | string | no | Short description. Defaults to `""`. |
 | `q` | integer | no | Wikidata item number (numeric, without the `Q` prefix). Omit for unmatched entries. See [Fully-matched entry protection](#fully-matched-entry-protection). |
 | `user` | integer | no | The user ID who confirmed the match. `0` = automatic/preliminary match. When importing via `import_file`, this must be either omitted, `0`, or the uploading user's ID. Omit for unmatched entries. |
-| `type_name` | string | no | Wikidata item ID (e.g. `"Q5"`) representing the entity type (Q5 = human, Q16521 = taxon, etc.). |
+| `type` | string | no | Wikidata item ID (e.g. `"Q5"`) representing the entity type (Q5 = human, Q16521 = taxon, etc.). `type_name` is accepted as a legacy alias of the same field. |
 
 **Ignored entry fields:** The following fields are accepted in the JSON but
 **ignored by the importer** -- they are managed automatically by the system:
@@ -436,7 +436,7 @@ referencing it by UUID, rather than sending all entries inline.
   `person_dates`, `auxiliary`, `aliases`, etc.  Only `entry` with its three
   required fields (`catalog`, `ext_id`, `ext_name`) is needed.
 
-- **Use `type_name` when possible.** Setting `type_name` to a Wikidata class
+- **Use `type` when possible.** Setting `type` to a Wikidata class
   (e.g. `"Q5"` for humans, `"Q16521"` for taxa) greatly improves automatic
   matching quality.
 
@@ -470,7 +470,7 @@ A file with two entries -- one human and one location:
       "ext_url": "https://example.org/people/00042",
       "ext_name": "Jane Doe",
       "ext_desc": "American physicist, 1920-2005",
-      "type_name": "Q5"
+      "type": "Q5"
     },
     "auxiliary": [
       { "prop_numeric": 214, "value": "113084680" }
