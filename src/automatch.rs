@@ -456,17 +456,19 @@ impl AutoMatch {
         &mut self,
         search_results: &mut Vec<(usize, String)>,
     ) {
-        let mut no_meta_items = search_results
+        let mut no_meta_items: Vec<String> = search_results
             .iter()
-            .map(|(_entry_id, q)| q)
-            .cloned()
-            .collect_vec();
+            .map(|(_entry_id, q)| q.clone())
+            .collect();
         let _ = self
             .app
             .wikidata()
             .remove_meta_items(&mut no_meta_items)
             .await;
-        search_results.retain(|(_entry_id, q)| no_meta_items.contains(q));
+        // Avoid an O(N·M) scan across the candidate list for every search
+        // result — batches routinely run into the thousands.
+        let keep: std::collections::HashSet<String> = no_meta_items.into_iter().collect();
+        search_results.retain(|(_entry_id, q)| keep.contains(q));
     }
 
     pub async fn automatch_creations(&mut self, catalog_id: usize) -> Result<()> {
