@@ -638,6 +638,7 @@ mod tests {
     const _TEST_ENTRY_ID: usize = 143962196;
 
     #[tokio::test]
+    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_set_from_id() {
         let app = get_test_app();
         let mut job = Job::new(&app);

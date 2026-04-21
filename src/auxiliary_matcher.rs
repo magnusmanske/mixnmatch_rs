@@ -756,6 +756,7 @@ mod tests {
     const TEST_ITEM_ID: usize = 13520818; // Q13520818
 
     #[tokio::test]
+    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_is_statement_in_entity() {
         let app = get_test_app();
         let mw_api = app.wikidata().get_mw_api().await.unwrap();
@@ -773,6 +774,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_entity_already_has_property() {
         let app = get_test_app();
         let mw_api = app.wikidata().get_mw_api().await.unwrap();
@@ -843,6 +845,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_get_source_for_entry() {
         let app = get_test_app();
         let mut am = AuxiliaryMatcher::new(&app);

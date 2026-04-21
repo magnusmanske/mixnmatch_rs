@@ -478,6 +478,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_autoscrape() {
         let mnm = get_test_app();
         let mut autoscrape = Autoscrape::new(TEST_CATALOG_ID, &mnm).await.unwrap();

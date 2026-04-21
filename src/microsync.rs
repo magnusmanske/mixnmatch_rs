@@ -623,6 +623,7 @@ mod tests {
     const TEST_ENTRY_ID: usize = 143962196;
 
     #[tokio::test]
+    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_get_multiple_extid_in_wikidata() {
         let app = get_test_app();
         let ms = Microsync::new(&app);
@@ -631,6 +632,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_get_multiple_q_in_mnm() {
         // Smoke-test: the GROUP BY on a populated catalog (`TEST_CATALOG_ID`)
         // scans every matched entry in that catalog and dominated the whole
@@ -662,6 +664,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_load_entry_names() {
         let app = get_test_app();
         let result = app
@@ -696,6 +699,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_check_catalog() {
         let app = get_test_app();
         let mut ms = Microsync::new(&app);

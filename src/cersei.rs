@@ -549,6 +549,7 @@ mod tests {
     use crate::app_state::get_test_app;
 
     #[tokio::test]
+    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_get_cersei_scrapers() {
         let app = get_test_app();
         let cs = CerseiSync::new(&app).unwrap();

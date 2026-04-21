@@ -314,6 +314,7 @@ mod tests {
     const TEST_ENTRY_ID: DbId = 157175552;
 
     #[tokio::test]
+    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_match_by_coordinates() {
         let app = get_test_app();
         let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
