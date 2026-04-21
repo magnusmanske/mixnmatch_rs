@@ -122,11 +122,22 @@ fn build_mnm_maps(
     (mnm_ext2q, mm_dupes)
 }
 
+/// Strip the leading "Q" from a QID and return the numeric part. Returns 0 if
+/// the input doesn't parse — the callers upstream only ever hand us values
+/// that already matched `Q\d+`, so this is a belt-and-braces fallback.
+fn q_to_num(q: &str) -> u64 {
+    q.trim_start_matches('Q').parse().unwrap_or(0)
+}
+
 fn compare_maps(
     wd_ext2q: &HashMap<String, String>,
     mnm_ext2q: &HashMap<String, String>,
 ) -> (Vec<Value>, Vec<Value>, Vec<Value>) {
     let mut different: Vec<Value> = Vec::new();
+    // `wd_no_mm` is consumed by `match_q_multi`, which reads each row as
+    // `[q_numeric, ext_id]`; `mm_no_wd` is fed to the QuickStatements form
+    // which reads the same shape. Keep the tuple layout the JS expects —
+    // objects would silently produce "Qundefined / undefined" output.
     let mut wd_no_mm: Vec<Value> = Vec::new();
     let mut mm_no_wd: Vec<Value> = Vec::new();
 
@@ -136,7 +147,7 @@ fn compare_maps(
                 different.push(json!({"ext_id": ext_id, "wd_q": wd_q, "mnm_q": mnm_q}));
             }
             None => {
-                wd_no_mm.push(json!({"ext_id": ext_id, "q": wd_q}));
+                wd_no_mm.push(json!([q_to_num(wd_q), ext_id]));
             }
             Some(_) => {} // matching → nothing to report
         }
@@ -144,8 +155,57 @@ fn compare_maps(
 
     for (ext_id, mnm_q) in mnm_ext2q {
         if !wd_ext2q.contains_key(ext_id) {
-            mm_no_wd.push(json!({"ext_id": ext_id, "q": mnm_q}));
+            mm_no_wd.push(json!([q_to_num(mnm_q), ext_id]));
         }
     }
     (different, wd_no_mm, mm_no_wd)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_q_to_num() {
+        assert_eq!(q_to_num("Q42"), 42);
+        assert_eq!(q_to_num("Q1"), 1);
+        assert_eq!(q_to_num("Q0"), 0);
+        assert_eq!(q_to_num(""), 0);
+        assert_eq!(q_to_num("not-a-qid"), 0);
+    }
+
+    #[test]
+    fn test_compare_maps_emits_tuple_rows() {
+        // The JS frontend reads both mm_no_wd and wd_no_mm as [q_num, ext_id]
+        // tuples — match_q_multi and the QuickStatements form both break if
+        // these arrive as objects.
+        let mut wd: HashMap<String, String> = HashMap::new();
+        wd.insert("wd-only".into(), "Q10".into());
+        wd.insert("shared".into(), "Q1".into());
+        let mut mnm: HashMap<String, String> = HashMap::new();
+        mnm.insert("mm-only".into(), "Q20".into());
+        mnm.insert("shared".into(), "Q1".into());
+
+        let (different, wd_no_mm, mm_no_wd) = compare_maps(&wd, &mnm);
+        assert!(different.is_empty());
+        assert_eq!(wd_no_mm, vec![json!([10_u64, "wd-only"])]);
+        assert_eq!(mm_no_wd, vec![json!([20_u64, "mm-only"])]);
+    }
+
+    #[test]
+    fn test_compare_maps_different_reports_object() {
+        // `different` is not consumed by the tuple-eating call sites, so the
+        // richer object shape is preserved for future consumers.
+        let mut wd: HashMap<String, String> = HashMap::new();
+        wd.insert("x".into(), "Q10".into());
+        let mut mnm: HashMap<String, String> = HashMap::new();
+        mnm.insert("x".into(), "Q20".into());
+        let (different, wd_no_mm, mm_no_wd) = compare_maps(&wd, &mnm);
+        assert_eq!(
+            different,
+            vec![json!({"ext_id": "x", "wd_q": "Q10", "mnm_q": "Q20"})]
+        );
+        assert!(wd_no_mm.is_empty());
+        assert!(mm_no_wd.is_empty());
+    }
 }
