@@ -147,6 +147,22 @@ export default {
             var lang = this.catalog.search_wp;
             return "https://" + lang + ".wikipedia.org/w/index.php?title=Special%3ASearch&search=" + this.getSearchString(false);
         },
+        wikidataSearch: function () {
+            return "https://www.wikidata.org/w/index.php?button=&title=Special%3ASearch&search=" + encodeURIComponent(this.entry.ext_name || '');
+        },
+        // Offer the infernal initial-search when the entry is a Q5 whose
+        // ext_name contains at least one initial — matches the same gating
+        // used by the unmatched entry row in entry_list_item.js.
+        hasInitials: function () {
+            if (!this.entry || this.entry.type !== 'Q5') return false;
+            let name = this.entry.ext_name || '';
+            return /\b[A-Z]\./.test(name);
+        },
+        initialSearchUrl: function () {
+            return 'https://wd-infernal.toolforge.org/initial_search/'
+                + encodeURIComponent(this.entry.ext_name || '')
+                + '?format=html';
+        },
         qWasSet: function () {
             var btn = document.querySelector('button.load-random-entry');
             if (btn) btn.click(); // Load next entry
@@ -217,20 +233,24 @@ export default {
 					<div class="card-body">
 						<h4 class="card-title" tt='search'></h4>
 						<div class="card-text">
-							<a target='_blank' class='wikidata'
-								:href='"https://www.wikidata.org/w/index.php?button=&title=Special%3ASearch&search="+encodeURIComponent(entry.ext_name)'
-								tt='search_wd'></a> |
-							<a target='_blank' class='external' :href='wikipediaSearch()' tt='search_wikipedia'
-								:tt1='catalog.search_wp'></a> |
-							<a target='_blank' class='external'
-								:href='"https://www.google.com/search?q="+getSearchString()+"+site%3Awikipedia.org"'
-								tt='google_wikipedia'></a> |
-							<a target='_blank' class='external'
-								:href='"https://www.google.com/search?q="+getSearchString()+"+site%3Awikisource.org"'
-								tt='google_wikisource'></a> |
-							<a target='_blank' class='external'
-								:href='"https://www.google.com/search?q="+getSearchString()+"+site%3Awikidata.org"'
-								tt='google_wikidata'></a>
+							<div class='btn-group btn-group-sm flex-wrap'>
+								<a target='_blank' class='btn btn-outline-secondary mnm-action-btn'
+									:href='wikidataSearch()' tt='search_wd'></a>
+								<a target='_blank' class='btn btn-outline-secondary mnm-action-btn'
+									:href='wikipediaSearch()' tt='search_wikipedia' :tt1='catalog.search_wp'></a>
+								<a target='_blank' class='btn btn-outline-secondary mnm-action-btn'
+									:href='"https://www.google.com/search?q="+getSearchString()+"+site%3Awikipedia.org"'
+									tt='google_wikipedia'></a>
+								<a target='_blank' class='btn btn-outline-secondary mnm-action-btn'
+									:href='"https://www.google.com/search?q="+getSearchString()+"+site%3Awikisource.org"'
+									tt='google_wikisource'></a>
+								<a target='_blank' class='btn btn-outline-secondary mnm-action-btn'
+									:href='"https://www.google.com/search?q="+getSearchString()+"+site%3Awikidata.org"'
+									tt='google_wikidata'></a>
+								<a v-if='hasInitials()' target='_blank' class='btn btn-outline-secondary mnm-action-btn'
+									:href='initialSearchUrl()'
+									title='Search Wikidata for people whose names expand to these initials'>Initial search</a>
+							</div>
 						</div>
 					</div>
 				</div>
