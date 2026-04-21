@@ -48,6 +48,39 @@ pub fn normalize_entry_type(type_name: Option<&str>) -> String {
     String::new()
 }
 
+/// Default precision (1 arcsecond ≈ 31 m) used when we need to emit a
+/// `P625` globe-coordinate claim but the source didn't record a precision.
+/// `wbeditentity` rejects coordinates with a `null`/missing precision, so
+/// we must always hand it a concrete number. 1/3600 is Wikidata's own
+/// default when picking a point from the map UI, so it matches the fidelity
+/// of hand-entered coordinates at city/landmark level.
+const DEFAULT_COORDINATE_PRECISION: f64 = 1.0 / 3600.0;
+
+/// Build a `P625` snak. `Snak::new_coordinate` from wikibase sets precision
+/// to `None`, which `wbeditentity` rejects — so construct the snak
+/// ourselves and fill in a concrete precision (the stored value if we have
+/// one, otherwise the arcsecond default).
+fn build_p625_snak(lat: f64, lon: f64, precision: Option<f64>) -> Snak {
+    use wikimisc::wikibase::{
+        Coordinate, DataValue, DataValueType, SnakDataType, SnakType,
+    };
+    Snak::new(
+        SnakDataType::GlobeCoordinate,
+        "P625",
+        SnakType::Value,
+        Some(DataValue::new(
+            DataValueType::GlobeCoordinate,
+            wikimisc::wikibase::Value::Coordinate(Coordinate::new(
+                None,
+                "http://www.wikidata.org/entity/Q2".to_string(),
+                lat,
+                lon,
+                Some(precision.unwrap_or(DEFAULT_COORDINATE_PRECISION)),
+            )),
+        )),
+    )
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum EntryError {
     TryingToUpdateNewEntry,
@@ -338,7 +371,7 @@ impl Entry {
         item: &mut ItemEntity,
     ) -> Result<()> {
         if let Some(coord) = self.get_coordinate_location().await? {
-            let snak = Snak::new_coordinate("P625", coord.lat(), coord.lon());
+            let snak = build_p625_snak(coord.lat(), coord.lon(), coord.precision());
             let claim = Statement::new_normal(snak, vec![], references.to_owned());
             Self::add_claim_or_references(item, claim);
         }
@@ -1421,6 +1454,41 @@ mod tests {
         let legacy: Entry =
             serde_json::from_str(r#"{"catalog":1,"ext_id":"x","ext_name":"n","type_name":"Q5"}"#).unwrap();
         assert_eq!(legacy.type_name.as_deref(), Some("Q5"));
+    }
+
+    // ----- P625 snak precision -----
+
+    fn snak_precision(snak: &Snak) -> Option<f64> {
+        let dv = snak.data_value().as_ref()?;
+        match dv.value() {
+            wikimisc::wikibase::Value::Coordinate(c) => *c.precision(),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn build_p625_snak_applies_stored_precision() {
+        let snak = build_p625_snak(51.5, -0.1, Some(0.001));
+        assert_eq!(snak_precision(&snak), Some(0.001));
+    }
+
+    #[test]
+    fn build_p625_snak_falls_back_to_arcsecond_default() {
+        // Missing precision is what was triggering "Missing required field
+        // 'precision'" in wbeditentity — make sure we always emit a number.
+        let snak = build_p625_snak(51.5, -0.1, None);
+        let prec = snak_precision(&snak).expect("precision must be set");
+        assert!((prec - 1.0 / 3600.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn build_p625_snak_serializes_precision_as_number() {
+        let snak = build_p625_snak(51.5, -0.1, None);
+        let json = serde_json::to_value(&snak).unwrap();
+        let precision = json
+            .pointer("/datavalue/value/precision")
+            .expect("precision key must be present in JSON");
+        assert!(precision.is_number(), "precision must serialize as a number, got {precision:?}");
     }
 
     // ----- Claim/reference dedup (no DB, no network) -----
