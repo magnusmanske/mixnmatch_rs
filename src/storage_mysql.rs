@@ -187,7 +187,14 @@ impl StorageMySQL {
     }
 
     fn entry_sql_select() -> String {
-        r"SELECT id,catalog,ext_id,ext_url,ext_name,ext_desc,q,user,timestamp,if(isnull(random),rand(),random) as random,`type` FROM `entry`".into()
+        // The `random` column is sometimes NULL (older rows). For ordering
+        // purposes we coalesce to a fresh `rand()` so NULL entries don't all
+        // sort to the same spot. Earlier this was aliased back to `random`,
+        // but that name shadows the column and made the optimiser evaluate
+        // the IF for every row in `WHERE random>=…` queries — defeating
+        // the `random_2` index and turning the global random pick into a
+        // 30s+ scan. Use a different alias and read it back explicitly.
+        r"SELECT id,catalog,ext_id,ext_url,ext_name,ext_desc,q,user,timestamp,if(isnull(random),rand(),random) as random_v,`type` FROM `entry`".into()
     }
 
     // #lizard forgives
@@ -206,9 +213,14 @@ impl StorageMySQL {
             user: Entry::value2opt_usize(row.get("user")?).ok()?,
             timestamp: Entry::value2opt_string(row.get("timestamp")?).ok()?,
             // `random` is nullable in the entry table; reading it as f64
-            // panics on Null, so pull through Option<f64> first.
+            // panics on Null, so pull through Option<f64> first. The SELECT
+            // exposes the coalesced value as `random_v` to avoid shadowing
+            // the column name in WHERE clauses; fall back to `random` for
+            // callers that don't go through `entry_sql_select` (e.g. raw
+            // `SELECT *`).
             random: row
-                .get::<Option<f64>, _>("random")
+                .get::<Option<f64>, _>("random_v")
+                .or_else(|| row.get::<Option<f64>, _>("random"))
                 .flatten()
                 .unwrap_or(0.0),
             type_name: Entry::value2opt_string(row.get("type")?).ok()?,
@@ -3670,11 +3682,12 @@ impl Storage for StorageMySQL {
         catalog_id: usize,
         submode: &str,
         entry_type: &str,
+        active_catalogs: &[usize],
     ) -> Result<Option<Entry>> {
         let where_clause: &str = match submode {
-            "prematched" => "`user`=0",
-            "no_manual" => "(`user`=0 OR `q` IS NULL)",
-            _ => "`q` IS NULL",
+            "prematched" => "user=0",
+            "no_manual" => "(user=0 OR q IS NULL)",
+            _ => "q IS NULL",
         };
         let type_filter = if entry_type.is_empty() {
             String::new()
@@ -3708,25 +3721,20 @@ impl Storage for StorageMySQL {
             return Ok(None);
         }
 
-        // Global pick across active catalogs.
+        // Global: FORCE INDEX (random_2), 11 attempts, filter by active_catalogs.
         //
-        // Was: prefetch the active-catalog ID list, then loop up to 11 SQL
-        // roundtrips returning 10 random rows each, filtering in Rust. That's
-        // 1 + (1..=11) RTTs in the worst case.
-        //
-        // Now: filter by `catalog.active=1` directly in SQL via an EXISTS
-        // join against the (small) catalog table. With LIMIT 1 the planner
-        // walks the random_2 index in order until it finds one matching row,
-        // so the response is normally a single roundtrip — and the prefetch
-        // of `active_catalogs` from the caller becomes unnecessary.
+        // We tried collapsing the retry loop into one query that filtered by
+        // `catalog.active=1` via an EXISTS subquery — the EXPLAIN looked clean
+        // (range scan + eq_ref to catalog.PRIMARY, est. 1 row from `c`) but the
+        // optimiser walked massive numbers of `random_2` rows in practice, so
+        // the response hung past 30s. Stick with the multi-attempt + Rust-side
+        // filter approach which performs reliably on the live replica.
         let base = format!(
-            "{} FORCE INDEX (`random_2`) \
-             WHERE `random`>=%R% AND {where_clause}{type_filter} \
-               AND EXISTS (SELECT 1 FROM `catalog` `c` WHERE `c`.`id`=`entry`.`catalog` AND `c`.`active`=1) \
-             ORDER BY `random` LIMIT 1",
+            "{} FORCE INDEX (`random_2`) WHERE `random`>=%R% AND {where_clause}{type_filter} ORDER BY `random` LIMIT 10",
             Self::entry_sql_select()
         );
-        for threshold in [rand::random::<f64>(), 0.0] {
+        for attempt in 0..=10 {
+            let threshold = if attempt >= 10 { 0.0 } else { rand::random::<f64>() };
             let sql = base.replace("%R%", &format!("{threshold}"));
             let rows = conn
                 .exec_iter(sql, ())
@@ -3736,8 +3744,10 @@ impl Storage for StorageMySQL {
                 .into_iter()
                 .flatten()
                 .collect::<Vec<Entry>>();
-            if let Some(entry) = rows.into_iter().next() {
-                return Ok(Some(entry));
+            for entry in rows {
+                if active_catalogs.contains(&entry.catalog) {
+                    return Ok(Some(entry));
+                }
             }
         }
         Ok(None)
