@@ -128,7 +128,7 @@ export default Vue.extend({
         <catalog-header :catalog="catalog"></catalog-header>
         <div class='mnm-map-container'><wikidata-map :mapdata='mapdata' :entry="entry_focus" @open-marker="onOpenMarker($event)" @double-click-marker="onDoubleClickMarker($event)" style='width:100%'></wikidata-map></div>
         <div class='mb-2 row'>
-            <button class='btn btn-outline-info' tt='random_unmatched_entry' @click.prevent='showRandomUnmatchedEntry'></button>
+            <button class='btn btn-outline-primary' tt='random_unmatched_entry' @click.prevent='showRandomUnmatchedEntry'></button>
         </div>
         <div v-if="typeof selected_item.id!='undefined'" class='mb-2 row' :key="'selected_item_'+selected_item.id">
             <div class="col-12"><span>{{selected_item.id}}</span>: <wd-link :item="selected_item.id"></wd-link></div>
