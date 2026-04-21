@@ -175,6 +175,14 @@ async fn handle_set_string(
         _ => return Ok(widar_error("Not logged in")),
     };
 
+    // Skip the edit if the item already carries this exact property=value
+    // statement, to avoid introducing duplicates. On lookup failure we fall
+    // through and let the edit attempt run — the API still rejects true
+    // duplicates server-side in most cases.
+    if let Ok(true) = wikidata_string_claim_exists(&entity_id, &property_id, &value).await {
+        return Ok(widar_ok());
+    }
+
     match auth::flow::wikidata_create_string_claim(
         &cfg,
         &access,
@@ -353,6 +361,46 @@ fn read_set_string_params(
         format!("{summary} #{tool_hashtag}")
     };
     Ok((id, prop, text, summary))
+}
+
+/// Check whether the Wikidata item already carries a statement on
+/// `property_id` with the given string-typed `value`. Uses the
+/// unauthenticated `wbgetclaims` API, which is much cheaper than fetching
+/// the full entity.
+async fn wikidata_string_claim_exists(
+    entity_id: &str,
+    property_id: &str,
+    value: &str,
+) -> anyhow::Result<bool> {
+    let url = format!(
+        "https://www.wikidata.org/w/api.php?action=wbgetclaims\
+         &entity={entity_id}&property={property_id}&format=json"
+    );
+    let client = wikimisc::wikidata::Wikidata::new().reqwest_client()?;
+    let json: serde_json::Value = client.get(&url).send().await?.json().await?;
+    Ok(claims_contain_string_value(&json, property_id, value))
+}
+
+/// Pure parser for a `wbgetclaims` response: does the claims array for
+/// `property_id` contain a main snak with the exact `value`? Rank and
+/// qualifiers are irrelevant for dedup purposes here.
+fn claims_contain_string_value(
+    json: &serde_json::Value,
+    property_id: &str,
+    value: &str,
+) -> bool {
+    let Some(claims) = json
+        .pointer(&format!("/claims/{property_id}"))
+        .and_then(|v| v.as_array())
+    else {
+        return false;
+    };
+    claims.iter().any(|claim| {
+        claim
+            .pointer("/mainsnak/datavalue/value")
+            .and_then(|v| v.as_str())
+            == Some(value)
+    })
 }
 
 /// Finish the OAuth1 handshake. Runs when the user returns from the authorize
@@ -537,5 +585,58 @@ mod tests {
         let params = p(&[("json", r#"{"action":"foo"}"#), ("summary", "plain")]);
         let (_, summary) = read_generic_params(&params).unwrap();
         assert_eq!(summary, "plain");
+    }
+
+    #[test]
+    fn claims_contain_string_value_matches_existing() {
+        let json = serde_json::json!({
+            "claims": {
+                "P7471": [
+                    {"mainsnak": {"snaktype": "value",
+                                  "datavalue": {"value": "abc", "type": "string"}}},
+                    {"mainsnak": {"snaktype": "value",
+                                  "datavalue": {"value": "xyz", "type": "string"}}}
+                ]
+            }
+        });
+        assert!(claims_contain_string_value(&json, "P7471", "xyz"));
+        assert!(claims_contain_string_value(&json, "P7471", "abc"));
+        assert!(!claims_contain_string_value(&json, "P7471", "nope"));
+    }
+
+    #[test]
+    fn claims_contain_string_value_missing_property_returns_false() {
+        let json = serde_json::json!({ "claims": {} });
+        assert!(!claims_contain_string_value(&json, "P7471", "abc"));
+    }
+
+    #[test]
+    fn claims_contain_string_value_novalue_snak_ignored() {
+        // `somevalue` / `novalue` snaks have no datavalue at all — treat as
+        // non-match so the caller still writes the concrete value.
+        let json = serde_json::json!({
+            "claims": {
+                "P7471": [
+                    {"mainsnak": {"snaktype": "somevalue"}}
+                ]
+            }
+        });
+        assert!(!claims_contain_string_value(&json, "P7471", "abc"));
+    }
+
+    #[test]
+    fn claims_contain_string_value_exact_match_is_case_sensitive() {
+        // External-id comparisons on Wikidata are case-sensitive by datatype;
+        // we mirror that to avoid silently masking real differences.
+        let json = serde_json::json!({
+            "claims": {
+                "P7471": [
+                    {"mainsnak": {"snaktype": "value",
+                                  "datavalue": {"value": "ABC", "type": "string"}}}
+                ]
+            }
+        });
+        assert!(claims_contain_string_value(&json, "P7471", "ABC"));
+        assert!(!claims_contain_string_value(&json, "P7471", "abc"));
     }
 }
