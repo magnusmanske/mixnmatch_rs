@@ -9,7 +9,7 @@ const STATUS_LABELS = {
 	'BROKEN': 'Broken',
 };
 const STATUS_BADGE = {
-	'NO_CATALOG': 'bg-info text-dark',
+	'NO_CATALOG': 'bg-info text-white',
 	'HAS_CATALOG': 'bg-success',
 	'NOT_SUITABLE': 'bg-warning text-dark',
 	'DIFFICULT': 'bg-secondary',
