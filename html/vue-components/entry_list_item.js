@@ -117,6 +117,19 @@ export default {
 			let ret = "https://www.wikidata.org/w/index.php?button=&title=Special%3ASearch&search=" + encodeURIComponent(query);
 			return ret;
 		},
+		// True when this is a person (Q5) whose ext_name contains at least one
+		// initial, e.g. 'H.M.Manske' or 'J. K. Rowling'. Used to decide
+		// whether to offer the infernal initial-search button.
+		hasInitials: function () {
+			if (!this.entry || this.entry.type !== 'Q5') return false;
+			let name = this.entry.ext_name || '';
+			return /\b[A-Z]\./.test(name);
+		},
+		initialSearchUrl: function () {
+			return 'https://wd-infernal.toolforge.org/initial_search/'
+				+ encodeURIComponent(this.entry.ext_name || '')
+				+ '?format=html';
+		},
 		onSetQevent: function () {
 			this.$emit('onsetq', this.entry.q);
 		},
@@ -224,6 +237,8 @@ export default {
 							<a target='_blank' class='btn btn-outline-secondary mnm-action-btn'
 								:href='"https://www.google.com/search?q="+getSearchString()+"+site%3Awikidata.org"'
 								tt='google_wikidata'></a>
+							<a v-if='hasInitials()' target='_blank' class='btn btn-outline-secondary mnm-action-btn'
+								:href='initialSearchUrl()' title='Search Wikidata for people whose names expand to these initials'>Initial search</a>
 						</div>
 					</div>
 				</div>
