@@ -498,9 +498,17 @@ export default {
 		},
 		createFromData: function () {
 			let self = this;
+			// Guard: this can run from a setTimeout after the component has
+			// been destroyed (router nav away, catalog prop change), in
+			// which case $el is undefined and dereferencing it throws.
+			if (!self.$el) return;
 			let map_element = self.$el.querySelector("div.wikidatamap_map");
 			if (!map_element) {
-				setTimeout(self.createFromData, 100);
+				// Wrap the retry in a closure so `this` stays bound to the
+				// component — passing `self.createFromData` as a bare
+				// function reference to setTimeout loses the binding and
+				// the retry itself would then throw on `self.$el`.
+				setTimeout(function () { self.createFromData(); }, 100);
 				return;
 			}
 			let container_height = self.$el.offsetHeight;
