@@ -34,6 +34,15 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use wikimisc::{timestamp::TimeStamp, wikibase::LocaleString};
 
+/// Escape a string so it's safe to embed between single quotes in a MySQL
+/// statement built with `format!` (for the narrow set of cases where the
+/// `exec_iter` interface can't take a bound parameter — e.g. arguments to
+/// MATCH AGAINST or LIKE patterns). Escapes both `'` (via doubling) and
+/// backslash (via doubling) so `\'` tricks can't slip through.
+fn escape_sql_literal(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('\'', "''")
+}
+
 pub const TABLES_WITH_ENTRY_ID_FIELDS: &[&str] = &[
     "aliases",
     "descriptions",
@@ -184,6 +193,52 @@ impl StorageMySQL {
             sql += " ORDER BY `last_ts` LIMIT 1";
         }
         sql
+    }
+
+    /// Build the SQL for `api_search_entries`. Pure so we can unit-test the
+    /// composition (including escaping of user-supplied search terms) without
+    /// a live DB. Returns `None` when nothing useful can be queried
+    /// (no words, or all search targets disabled).
+    fn build_api_search_entries_sql(
+        words: &[String],
+        description_search: bool,
+        no_label_search: bool,
+        exclude: &[usize],
+        include: &[usize],
+        max_results: usize,
+    ) -> Option<String> {
+        if words.is_empty() {
+            return None;
+        }
+        // Boolean-mode MATCH terms are space-separated (not comma-separated; that was a PHP bug).
+        // Escape single quotes and backslashes in each word so user input can't
+        // break out of the surrounding single-quoted AGAINST() literal.
+        let ft_words = words
+            .iter()
+            .map(|w| format!("+{}", escape_sql_literal(w)))
+            .join(" ");
+        let mut conditions: Vec<String> = Vec::new();
+        if !no_label_search {
+            conditions.push(format!("MATCH(`ext_name`) AGAINST('{ft_words}' IN BOOLEAN MODE)"));
+        }
+        if description_search {
+            conditions.push(format!("MATCH(`ext_desc`) AGAINST('{ft_words}' IN BOOLEAN MODE)"));
+        }
+        if conditions.is_empty() {
+            return None;
+        }
+        let match_clause = conditions.join(" OR ");
+        let mut sql = format!("{} WHERE ({match_clause})", Self::entry_sql_select());
+        if !exclude.is_empty() {
+            let excl = exclude.iter().map(usize::to_string).join(",");
+            sql += &format!(" AND `catalog` NOT IN ({excl})");
+        }
+        if !include.is_empty() {
+            let incl = include.iter().map(usize::to_string).join(",");
+            sql += &format!(" AND `catalog` IN ({incl})");
+        }
+        sql += &format!(" LIMIT {max_results}");
+        Some(sql)
     }
 
     fn entry_sql_select() -> String {
@@ -3452,32 +3507,9 @@ impl Storage for StorageMySQL {
     }
 
     async fn api_search_entries(&self, words: &[String], description_search: bool, no_label_search: bool, exclude: &[usize], include: &[usize], max_results: usize) -> Result<Vec<Entry>> {
-        if words.is_empty() {
+        let Some(sql) = Self::build_api_search_entries_sql(words, description_search, no_label_search, exclude, include, max_results) else {
             return Ok(vec![]);
-        }
-        // Boolean-mode MATCH terms are space-separated (not comma-separated; that was a PHP bug).
-        let ft_words = words.iter().map(|w| format!("+{w}")).collect::<Vec<String>>().join(" ");
-        let mut conditions = Vec::new();
-        if !no_label_search {
-            conditions.push(format!("MATCH(`ext_name`) AGAINST('{ft_words}' IN BOOLEAN MODE)"));
-        }
-        if description_search {
-            conditions.push(format!("MATCH(`ext_desc`) AGAINST('{ft_words}' IN BOOLEAN MODE)"));
-        }
-        if conditions.is_empty() {
-            return Ok(vec![]);
-        }
-        let match_clause = conditions.join(" OR ");
-        let mut sql = format!("{} WHERE ({match_clause})", Self::entry_sql_select());
-        if !exclude.is_empty() {
-            let excl = exclude.iter().map(|id| format!("{id}")).collect::<Vec<String>>().join(",");
-            sql += &format!(" AND `catalog` NOT IN ({excl})");
-        }
-        if !include.is_empty() {
-            let incl = include.iter().map(|id| format!("{id}")).collect::<Vec<String>>().join(",");
-            sql += &format!(" AND `catalog` IN ({incl})");
-        }
-        sql += &format!(" LIMIT {max_results}");
+        };
         let mut conn = self.get_conn_ro().await?;
         let rows = conn
             .exec_iter(sql, ())
@@ -5637,6 +5669,76 @@ mod tests {
             StorageMySQL::get_overview_column_name_for_user_and_q(&None, &Some(42)),
             "noq"
         );
+    }
+
+    #[test]
+    fn test_escape_sql_literal() {
+        assert_eq!(escape_sql_literal("plain"), "plain");
+        assert_eq!(escape_sql_literal("it's"), "it''s");
+        assert_eq!(escape_sql_literal(r"back\slash"), r"back\\slash");
+        // Backslash is escaped before the quote, so a literal `\'` pair
+        // (which MySQL would otherwise treat as an escaped quote) is
+        // rendered inert as `\\''`.
+        assert_eq!(escape_sql_literal(r"\'"), r"\\''");
+    }
+
+    #[test]
+    fn test_build_api_search_entries_sql_empty_words() {
+        assert!(StorageMySQL::build_api_search_entries_sql(&[], true, false, &[], &[], 10).is_none());
+    }
+
+    #[test]
+    fn test_build_api_search_entries_sql_all_disabled() {
+        let words = vec!["abc".to_string()];
+        assert!(
+            StorageMySQL::build_api_search_entries_sql(&words, false, true, &[], &[], 10).is_none()
+        );
+    }
+
+    #[test]
+    fn test_build_api_search_entries_sql_basic() {
+        let words = vec!["foo".to_string(), "bar".to_string()];
+        let sql = StorageMySQL::build_api_search_entries_sql(&words, false, false, &[], &[], 25)
+            .expect("non-empty sql");
+        assert!(sql.contains("MATCH(`ext_name`) AGAINST('+foo +bar' IN BOOLEAN MODE)"));
+        assert!(!sql.contains("MATCH(`ext_desc`)"));
+        assert!(sql.ends_with(" LIMIT 25"));
+    }
+
+    #[test]
+    fn test_build_api_search_entries_sql_with_description_and_filters() {
+        let words = vec!["foo".to_string()];
+        let sql = StorageMySQL::build_api_search_entries_sql(
+            &words, true, false, &[3, 7], &[1, 2], 10,
+        )
+        .expect("non-empty sql");
+        assert!(sql.contains("MATCH(`ext_name`)"));
+        assert!(sql.contains("MATCH(`ext_desc`)"));
+        assert!(sql.contains("`catalog` NOT IN (3,7)"));
+        assert!(sql.contains("`catalog` IN (1,2)"));
+    }
+
+    #[test]
+    fn test_build_api_search_entries_sql_escapes_quotes() {
+        // A user-supplied word containing a single quote or backslash must not
+        // be able to break out of the AGAINST() string literal.
+        let words = vec!["ev'il".to_string(), r"b\d".to_string()];
+        let sql = StorageMySQL::build_api_search_entries_sql(&words, false, false, &[], &[], 10)
+            .expect("non-empty sql");
+        // Count single quotes: should be exactly 2 (the outer delimiters of
+        // the AGAINST literal); any user-contributed quote is doubled inside.
+        let lone_quotes = sql
+            .chars()
+            .enumerate()
+            .filter(|&(i, c)| {
+                c == '\''
+                    && sql.as_bytes().get(i + 1).copied() != Some(b'\'')
+                    && (i == 0 || sql.as_bytes()[i - 1] != b'\'')
+            })
+            .count();
+        assert_eq!(lone_quotes, 2, "unescaped quote in: {sql}");
+        assert!(sql.contains("+ev''il"));
+        assert!(sql.contains(r"+b\\d"));
     }
 }
 
