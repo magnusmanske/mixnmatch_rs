@@ -6,48 +6,42 @@ use atom_syndication::{Entry, Feed, Link, Text};
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, FixedOffset, NaiveDateTime, TimeZone, Utc};
 
+/// Default page size for the JSON `rc` endpoint. The Atom feed uses the
+/// same cap so the feed doesn't balloon on active catalogs.
 const RC_LIMIT: usize = 100;
+const RC_MAX_LIMIT: usize = 500;
 const FEED_BASE_URL: &str = "https://mix-n-match.toolforge.org/";
 const FEED_SELF_URL: &str = "https://mix-n-match.toolforge.org/api.php?query=rc_atom";
-
-/// Sort the merged events by timestamp DESC and trim to `limit` items.
-/// `sort_unstable_by` is fine here — timestamp ties have no meaningful order
-/// to preserve, and unstable sort is faster on Vec<Value>.
-fn sort_and_truncate(events: &mut Vec<serde_json::Value>, limit: usize) {
-    events.sort_unstable_by(|a, b| {
-        let ta = a.get("timestamp").and_then(|v| v.as_str()).unwrap_or("");
-        let tb = b.get("timestamp").and_then(|v| v.as_str()).unwrap_or("");
-        tb.cmp(ta)
-    });
-    events.truncate(limit);
-}
 
 pub async fn query_rc(app: &AppState, params: &Params) -> Result<Response, ApiError> {
     let ts = common::get_param(params, "ts", "");
     let catalog = common::get_param_int(params, "catalog", 0) as usize;
-    let (entry_evts, log_evts) = app
+    let limit = (common::get_param_int(params, "limit", RC_LIMIT as i64) as usize)
+        .clamp(1, RC_MAX_LIMIT);
+    let offset = common::get_param_int(params, "offset", 0).max(0) as usize;
+    let (events, total) = app
         .storage()
-        .api_get_recent_changes(&ts, catalog, RC_LIMIT)
+        .api_get_recent_changes(&ts, catalog, limit, offset)
         .await?;
-    let mut events: Vec<serde_json::Value> = entry_evts.into_iter().chain(log_evts).collect();
-    sort_and_truncate(&mut events, RC_LIMIT);
     let uids: std::collections::HashSet<usize> = events
         .iter()
         .filter_map(|e| e.get("user").and_then(|v| v.as_u64()).map(|v| v as usize))
         .collect();
     let users = get_users(app, &uids).await?;
-    Ok(ok(serde_json::json!({"events": events, "users": users})))
+    Ok(ok(serde_json::json!({
+        "events": events,
+        "users": users,
+        "total": total,
+    })))
 }
 
 pub async fn query_rc_atom(app: &AppState, params: &Params) -> Result<Response, ApiError> {
     let ts = common::get_param(params, "ts", "");
     let catalog = common::get_param_int(params, "catalog", 0) as usize;
-    let (entry_evts, log_evts) = app
+    let (events, _total) = app
         .storage()
-        .api_get_recent_changes(&ts, catalog, RC_LIMIT)
+        .api_get_recent_changes(&ts, catalog, RC_LIMIT, 0)
         .await?;
-    let mut events: Vec<serde_json::Value> = entry_evts.into_iter().chain(log_evts).collect();
-    sort_and_truncate(&mut events, RC_LIMIT);
 
     let xml = build_atom_feed(&events);
 

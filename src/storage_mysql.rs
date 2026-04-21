@@ -3532,114 +3532,140 @@ impl Storage for StorageMySQL {
         Ok(rows)
     }
 
-    async fn api_get_recent_changes(&self, ts: &str, catalog_id: usize, limit: usize) -> Result<(Vec<serde_json::Value>, Vec<serde_json::Value>)> {
-        let mut conn = self.get_conn_ro().await?;
-
-        // Events from entry table — human-matched entries only (user!=0,3,4), with
-        // a non-null timestamp. Rows here represent current matches.
-        let ts_filter = if ts.is_empty() {
+    async fn api_get_recent_changes(
+        &self,
+        ts: &str,
+        catalog_id: usize,
+        limit: usize,
+        offset: usize,
+    ) -> Result<(Vec<serde_json::Value>, usize)> {
+        let ts_safe = escape_sql_literal(ts);
+        // Human-matched entries only (user!=0,3,4), with a non-null
+        // timestamp — those are the rows in `entry` we treat as "recent
+        // changes". `log` covers everything else (removals, N/A marks,
+        // historical edits).
+        let ts_entry = if ts.is_empty() {
             String::new()
         } else {
-            format!(" AND `timestamp` >= '{}'", ts.replace('\'', "''"))
+            format!(" AND `timestamp`>='{ts_safe}'")
         };
-        let catalog_filter = if catalog_id > 0 {
+        let ts_log = if ts.is_empty() {
+            String::new()
+        } else {
+            format!(" AND log.timestamp>='{ts_safe}'")
+        };
+        let entry_catalog_filter = if catalog_id > 0 {
             format!(" AND `catalog`={catalog_id}")
         } else {
             String::new()
         };
-        let entry_sql = format!(
-            "SELECT * FROM `entry` WHERE `user`!=0 AND `user`!=3 AND `user`!=4 AND `timestamp` IS NOT NULL{ts_filter}{catalog_filter} ORDER BY `timestamp` DESC LIMIT {limit}"
-        );
-        let entry_events = conn
-            .exec_iter(entry_sql, ())
-            .await?
-            .map_and_drop(|row: Row| {
-                // Nullable columns (q, user, timestamp, ext_*) must be pulled
-                // through Option<T> explicitly — `row.get::<T, _>` panics on NULL.
-                let id: usize = row.get::<Option<usize>, _>("id").flatten().unwrap_or(0);
-                let catalog: usize = row.get::<Option<usize>, _>("catalog").flatten().unwrap_or(0);
-                let ext_id: String =
-                    row.get::<Option<String>, _>("ext_id").flatten().unwrap_or_default();
-                let ext_url: String =
-                    row.get::<Option<String>, _>("ext_url").flatten().unwrap_or_default();
-                let ext_name: String =
-                    row.get::<Option<String>, _>("ext_name").flatten().unwrap_or_default();
-                let ext_desc: String =
-                    row.get::<Option<String>, _>("ext_desc").flatten().unwrap_or_default();
-                let q: Option<isize> = row.get::<Option<isize>, _>("q").flatten();
-                let user: Option<usize> = row.get::<Option<usize>, _>("user").flatten();
-                let timestamp: String =
-                    row.get::<Option<String>, _>("timestamp").flatten().unwrap_or_default();
-                json!({
-                    "id": id, "catalog": catalog,
-                    "ext_id": ext_id, "ext_url": ext_url, "ext_name": ext_name, "ext_desc": ext_desc,
-                    "q": q, "user": user, "timestamp": timestamp,
-                    "event_type": "match"
-                })
-            })
-            .await?;
-
-        // PHP mirrors: if the entry query returned no rows, don't look at `log`.
-        // Otherwise bound the log query to [max_ts, min_ts] — the same window
-        // covered by the entry query.
-        if entry_events.is_empty() {
-            return Ok((entry_events, vec![]));
-        }
-        let min_ts = entry_events
-            .first()
-            .and_then(|e| e.get("timestamp").and_then(|v| v.as_str()))
-            .unwrap_or("")
-            .to_string();
-        let max_ts = entry_events
-            .last()
-            .and_then(|e| e.get("timestamp").and_then(|v| v.as_str()))
-            .unwrap_or("")
-            .to_string();
-
         let log_catalog_filter = if catalog_id > 0 {
             format!(" AND entry.catalog={catalog_id}")
         } else {
             String::new()
         };
-        let min_ts_safe = min_ts.replace('\'', "''");
-        let max_ts_safe = max_ts.replace('\'', "''");
-        let log_sql = format!(
-            "SELECT entry.id AS id, catalog, ext_id, ext_url, ext_name, ext_desc, entry.q, \
-                    log.action AS event_type, log.user AS user, log.timestamp AS timestamp \
-             FROM log, entry \
-             WHERE log.entry_id=entry.id \
-               AND log.timestamp BETWEEN '{max_ts_safe}' AND '{min_ts_safe}'{log_catalog_filter}"
-        );
-        let log_events = conn
-            .exec_iter(log_sql, ())
-            .await?
-            .map_and_drop(|row: Row| {
-                let id: usize = row.get::<Option<usize>, _>("id").flatten().unwrap_or(0);
-                let catalog: usize = row.get::<Option<usize>, _>("catalog").flatten().unwrap_or(0);
-                let ext_id: String =
-                    row.get::<Option<String>, _>("ext_id").flatten().unwrap_or_default();
-                let ext_url: String =
-                    row.get::<Option<String>, _>("ext_url").flatten().unwrap_or_default();
-                let ext_name: String =
-                    row.get::<Option<String>, _>("ext_name").flatten().unwrap_or_default();
-                let ext_desc: String =
-                    row.get::<Option<String>, _>("ext_desc").flatten().unwrap_or_default();
-                let q: Option<isize> = row.get::<Option<isize>, _>("q").flatten();
-                let event_type: String =
-                    row.get::<Option<String>, _>("event_type").flatten().unwrap_or_default();
-                let user: Option<usize> = row.get::<Option<usize>, _>("user").flatten();
-                let timestamp: String =
-                    row.get::<Option<String>, _>("timestamp").flatten().unwrap_or_default();
-                json!({
-                    "id": id, "catalog": catalog,
-                    "ext_id": ext_id, "ext_url": ext_url, "ext_name": ext_name, "ext_desc": ext_desc,
-                    "q": q, "user": user, "timestamp": timestamp,
-                    "event_type": event_type
-                })
-            })
-            .await?;
 
-        Ok((entry_events, log_events))
+        // UNION ALL the two sources and let MySQL do ORDER BY + LIMIT +
+        // OFFSET on the merged stream, so each UI page gets the correct
+        // slice. The previous per-table LIMIT + in-Rust merge can't be
+        // paginated without over-fetching.
+        let page_sql = format!(
+            "SELECT * FROM ( \
+                (SELECT entry.id AS id, entry.catalog AS catalog, \
+                        entry.ext_id AS ext_id, entry.ext_url AS ext_url, \
+                        entry.ext_name AS ext_name, entry.ext_desc AS ext_desc, \
+                        entry.q AS q, entry.user AS user, entry.timestamp AS timestamp, \
+                        'match' AS event_type \
+                   FROM entry \
+                  WHERE entry.user!=0 AND entry.user!=3 AND entry.user!=4 \
+                    AND entry.timestamp IS NOT NULL{ts_entry}{entry_catalog_filter}) \
+                UNION ALL \
+                (SELECT entry.id AS id, entry.catalog AS catalog, \
+                        entry.ext_id AS ext_id, entry.ext_url AS ext_url, \
+                        entry.ext_name AS ext_name, entry.ext_desc AS ext_desc, \
+                        entry.q AS q, log.user AS user, log.timestamp AS timestamp, \
+                        log.action AS event_type \
+                   FROM log INNER JOIN entry ON log.entry_id=entry.id \
+                  WHERE log.timestamp IS NOT NULL{ts_log}{log_catalog_filter}) \
+            ) AS rc ORDER BY timestamp DESC LIMIT {limit} OFFSET {offset}"
+        );
+        let count_entry_sql = format!(
+            "SELECT COUNT(*) AS cnt FROM entry \
+             WHERE user!=0 AND user!=3 AND user!=4 AND timestamp IS NOT NULL{ts_entry}{entry_catalog_filter}"
+        );
+        let count_log_sql = format!(
+            "SELECT COUNT(*) AS cnt FROM log INNER JOIN entry ON log.entry_id=entry.id \
+             WHERE log.timestamp IS NOT NULL{ts_log}{log_catalog_filter}"
+        );
+
+        // Run page + the two totals concurrently. Count failures degrade to
+        // 0 so the UI can still render; a listing failure is hard-fatal.
+        let row_to_event = |row: Row| {
+            // All nullable columns pulled through Option<T> — `row.get::<T, _>`
+            // panics on NULL.
+            let id: usize = row.get::<Option<usize>, _>("id").flatten().unwrap_or(0);
+            let catalog: usize = row.get::<Option<usize>, _>("catalog").flatten().unwrap_or(0);
+            let ext_id: String =
+                row.get::<Option<String>, _>("ext_id").flatten().unwrap_or_default();
+            let ext_url: String =
+                row.get::<Option<String>, _>("ext_url").flatten().unwrap_or_default();
+            let ext_name: String =
+                row.get::<Option<String>, _>("ext_name").flatten().unwrap_or_default();
+            let ext_desc: String =
+                row.get::<Option<String>, _>("ext_desc").flatten().unwrap_or_default();
+            let q: Option<isize> = row.get::<Option<isize>, _>("q").flatten();
+            let user: Option<usize> = row.get::<Option<usize>, _>("user").flatten();
+            let timestamp: String =
+                row.get::<Option<String>, _>("timestamp").flatten().unwrap_or_default();
+            let event_type: String =
+                row.get::<Option<String>, _>("event_type").flatten().unwrap_or_default();
+            json!({
+                "id": id, "catalog": catalog,
+                "ext_id": ext_id, "ext_url": ext_url, "ext_name": ext_name, "ext_desc": ext_desc,
+                "q": q, "user": user, "timestamp": timestamp,
+                "event_type": event_type
+            })
+        };
+
+        let (events_res, count_entry_res, count_log_res) = tokio::join!(
+            async {
+                let mut conn = self.get_conn_ro().await?;
+                let rows = conn
+                    .exec_iter(page_sql, ())
+                    .await?
+                    .map_and_drop(row_to_event)
+                    .await?;
+                Ok::<Vec<Value>, anyhow::Error>(rows)
+            },
+            async {
+                let mut conn = self.get_conn_ro().await?;
+                let cnt = conn
+                    .exec_iter(count_entry_sql, ())
+                    .await?
+                    .map_and_drop(from_row::<usize>)
+                    .await?
+                    .into_iter()
+                    .next()
+                    .unwrap_or(0);
+                Ok::<usize, anyhow::Error>(cnt)
+            },
+            async {
+                let mut conn = self.get_conn_ro().await?;
+                let cnt = conn
+                    .exec_iter(count_log_sql, ())
+                    .await?
+                    .map_and_drop(from_row::<usize>)
+                    .await?
+                    .into_iter()
+                    .next()
+                    .unwrap_or(0);
+                Ok::<usize, anyhow::Error>(cnt)
+            },
+        );
+
+        let events = events_res?;
+        let total = count_entry_res.unwrap_or(0) + count_log_res.unwrap_or(0);
+        Ok((events, total))
     }
 
     async fn api_get_catalog_entries(

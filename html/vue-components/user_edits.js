@@ -1,12 +1,14 @@
-import { mnm_api, mnm_notify, mnm_loading, ensure_catalog, get_specific_catalog, tt_update_interface } from './store.js';
+import { mnm_api, mnm_notify, mnm_loading, ensure_catalog, ensure_catalogs, get_specific_catalog, tt_update_interface } from './store.js';
+
+const PER_PAGE = 50;
 
 export default Vue.extend({
 	props: ['user_id', 'catalog_id'],
 	data: function () {
 		return {
-			events: {}, user_info: null, catalog: null,
-			loaded: false, loading_more: false,
-			offset: 0, per_page: 50, total: 0
+			events: [], user_info: null, catalog: null,
+			loaded: false, loading: false,
+			offset: 0, per_page: PER_PAGE, total: 0,
 		};
 	},
 	created: function () {
@@ -15,9 +17,6 @@ export default Vue.extend({
 	updated: function () { tt_update_interface(); },
 	mounted: function () { tt_update_interface(); },
 	computed: {
-		has_more: function () {
-			return this.offset + this.per_page < this.total;
-		},
 		user_display_name: function () {
 			if (!this.user_info) return 'User #' + this.user_id;
 			return this.user_info.name || ('User #' + this.user_id);
@@ -32,14 +31,13 @@ export default Vue.extend({
 			if (id === 3) return 'Automatic name/date matcher';
 			if (id === 4) return 'Auxiliary data matcher';
 			return '';
-		}
+		},
 	},
 	methods: {
 		loadData: async function () {
 			let me = this;
 			me.loaded = false;
-			me.offset = 0;
-			me.events = {};
+			me.loading = true;
 			mnm_loading(true);
 			try {
 				if (me.catalog_id) {
@@ -50,51 +48,48 @@ export default Vue.extend({
 					user_id: me.user_id,
 					catalog: me.catalog_id || 0,
 					limit: me.per_page,
-					offset: 0
+					offset: me.offset,
 				});
-				me.events = d.data.events || {};
+				let events = d.data.events || [];
+				// user_edits used to key events by some id, so fall back to
+				// Object.values() to keep the shared component happy.
+				if (!Array.isArray(events)) events = Object.values(events);
+				events.forEach(function (v) {
+					if (d.data.users && d.data.users[v.user]) {
+						v.username = d.data.users[v.user].name;
+					}
+				});
+				// Prefetch catalog info for the name+link column — when the
+				// user's edits span catalogs, we need names to render.
+				const catalog_ids = [...new Set(
+					events.map(e => e.catalog).filter(Boolean)
+				)];
+				if (catalog_ids.length > 0) await ensure_catalogs(catalog_ids);
+				me.events = events;
 				me.user_info = d.data.user_info;
 				me.total = d.total || 0;
-				// Attach usernames
-				Object.entries(me.events).forEach(function ([k, v]) {
-					if (d.data.users[v.user]) me.events[k].username = d.data.users[v.user].name;
-				});
 				me.loaded = true;
 			} catch (e) {
 				mnm_notify('Failed to load user edits: ' + e.message, 'danger');
 				me.loaded = true;
 			}
+			me.loading = false;
 			mnm_loading(false);
 		},
-		loadMore: async function () {
-			let me = this;
-			me.loading_more = true;
-			me.offset += me.per_page;
-			try {
-				let d = await mnm_api('user_edits', {
-					user_id: me.user_id,
-					catalog: me.catalog_id || 0,
-					limit: me.per_page,
-					offset: me.offset
-				});
-				Object.entries(d.data.events || {}).forEach(function ([k, v]) {
-					if (d.data.users[v.user]) v.username = d.data.users[v.user].name;
-					Vue.set(me.events, k, v);
-				});
-			} catch (e) {
-				mnm_notify('Failed to load more: ' + e.message, 'danger');
-				me.offset -= me.per_page;
-			}
-			me.loading_more = false;
+		goToPage: function (newOffset) {
+			this.offset = newOffset;
+			this.loadData();
+			if (typeof window !== 'undefined' && window.scrollTo) window.scrollTo(0, 0);
 		},
 		get_catalog: function (catalog_id) {
 			return get_specific_catalog(catalog_id);
-		}
+		},
 	},
 	watch: {
 		'$route'(to) {
+			this.offset = 0;
 			this.loadData();
-		}
+		},
 	},
 	template: `
 <div class='mt-2'>
@@ -127,22 +122,17 @@ export default Vue.extend({
 			</div>
 		</div>
 
+		<pagination v-if='total > per_page' :offset='offset' :items-per-page='per_page' :total='total'
+			:show-first-last='true' @go-to-page='goToPage'></pagination>
+
 		<!-- Events -->
-		<div v-if='Object.keys(events).length === 0' class='mnm-empty-state'>
+		<div v-if='events.length === 0' class='mnm-empty-state'>
 			<p tt='no_results'></p>
 		</div>
-		<div v-else>
-			<entry-list-item v-for='(e, k) in events' :entry='e' :rc='true'
-				:show_catalog='!catalog_id' :show_permalink='true' :key='k'></entry-list-item>
-		</div>
+		<rc-events-list v-else :events='events' :show-catalog='!catalog_id'></rc-events-list>
 
-		<!-- Load more -->
-		<div v-if='has_more' class='text-center py-3'>
-			<button class='btn btn-outline-primary' @click.prevent='loadMore' :disabled='loading_more'>
-				<span v-if='loading_more' class='spinner-border spinner-border-sm me-1' role='status'></span>
-				<span tt='load_more'></span>
-			</button>
-		</div>
+		<pagination v-if='total > per_page' :offset='offset' :items-per-page='per_page' :total='total'
+			:show-first-last='true' @go-to-page='goToPage'></pagination>
 	</div>
 </div>
 `
