@@ -11,7 +11,7 @@ export default {
 	<div class='slice mb-4' :id='section'>
 		<div class='d-flex justify-content-between align-items-center mb-2'>
 			<h4 class='mb-0'>{{title}}</h4>
-			<small>[<router-link :to="getTopMissingURL()" tt='top_missing'></router-link>]</small>
+			<router-link :to="getTopMissingURL()" class='btn btn-outline-primary btn-sm' tt='top_missing'></router-link>
 		</div>
 		<div class='progress-legend mb-1'>
 			<span class='pl-manual' tt='manually_matched'></span>
