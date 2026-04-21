@@ -61,6 +61,10 @@ pub struct AppState {
     max_concurrent_jobs: usize,
     toolforge_php_command: String,
     oauth_config: Option<Arc<OauthConfig>>,
+    /// Off by default: `forever_loop` only spawns the legacy thin-wrapper
+    /// micro-API when explicitly opted in via `config.json`. The CLI
+    /// `MicroApi` subcommand is unaffected (it always serves).
+    micro_api_enabled: bool,
 }
 
 impl AppState {
@@ -76,6 +80,10 @@ impl AppState {
 
     pub fn flickr_key_path(&self) -> &str {
         &self.flickr_key_path
+    }
+
+    pub const fn micro_api_enabled(&self) -> bool {
+        self.micro_api_enabled
     }
 
     pub fn task_specific_usize(&self) -> &HashMap<String, usize> {
@@ -118,6 +126,11 @@ impl AppState {
             .as_str()
             .unwrap_or("php8.3")
             .to_string();
+        // Off by default — the legacy micro-API duplicates the main API
+        // surface and most deployments don't want both bound. Set
+        // `"micro_api_enabled": true` in config.json to bring it up
+        // alongside `forever_loop`.
+        let micro_api_enabled = config["micro_api_enabled"].as_bool().unwrap_or(false);
         let large_catalogs = crate::large_catalogs::LargeCatalogs::from_config(&config["mixnmatch"])?;
         // OAuth is optional at construction: CLI jobs / bot runs don't need it.
         // The webserver entrypoint checks separately that it's present.
@@ -141,6 +154,7 @@ impl AppState {
             max_concurrent_jobs,
             toolforge_php_command,
             oauth_config,
+            micro_api_enabled,
         })
     }
 
@@ -255,15 +269,22 @@ impl AppState {
     }
 
     pub async fn forever_loop(&self) -> Result<()> {
-        // Start the micro-API server
-        let port = std::env::var("PORT")
-            .ok()
-            .and_then(|s| s.parse::<u16>().ok())
-            .unwrap_or(MICRO_API_PORT);
-        let app_clone = self.clone();
-        tokio::spawn(async move {
-            crate::micro_api::serve(app_clone, port).await;
-        });
+        // The legacy micro-API is opt-in. Most deployments serve the
+        // full API elsewhere and don't want a second listener; the CLI
+        // `MicroApi` subcommand still serves unconditionally for
+        // operators who need the thin-wrapper surface on demand.
+        if self.micro_api_enabled {
+            let port = std::env::var("PORT")
+                .ok()
+                .and_then(|s| s.parse::<u16>().ok())
+                .unwrap_or(MICRO_API_PORT);
+            let app_clone = self.clone();
+            tokio::spawn(async move {
+                crate::micro_api::serve(app_clone, port).await;
+            });
+        } else {
+            info!("micro_api disabled (set 'micro_api_enabled': true in config.json to enable)");
+        }
 
         let current_jobs = self.forever_loop_initalize().await?;
         let threshold_job_size = TaskSize::Medium;
