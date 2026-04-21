@@ -53,10 +53,9 @@ export default Vue.extend({
             .map(cat => ({ id: cat.id * 1, name: cat.name }));
         me.selected_catalogs = resolved;
         me.require_catalogs_string = resolved.map(c => c.id).join(',');
-        // Auto-run only when the user arrived with a valid multi-catalog URL.
-        // Manual adds after that require the explicit Search button so adding
-        // a catalog doesn't silently trigger a slow query each time.
-        if (resolved.length >= 2) me.loadData();
+        // No auto-search, even on deep-link arrival: the user asked
+        // for an explicit "Search entries" step in every case, so the
+        // button-press-to-run contract is consistent.
         tt_update_interface();
     },
     updated: function () { tt_update_interface() },
@@ -122,9 +121,27 @@ export default Vue.extend({
             }
         },
         updatePermalink: function () {
+            // Update the URL bar directly instead of going through
+            // $router.replace. The app's <router-view :key="$route.path">
+            // re-keys on every path change, which would tear down this
+            // component (and its picker, filter state, results) on every
+            // catalog add/remove. history.replaceState doesn't fire
+            // hashchange in any modern browser — only user-initiated
+            // nav does — so vue-router stays oblivious and no re-mount
+            // happens. Browser back/forward still works because the
+            // entry sits in the browser's own history stack.
             const me = this;
-            var path = '/top_missing/' + me.require_catalogs_string;
-            if (me.$route.path !== path) me.$router.replace(path);
+            var hash = '#/top_missing/' + me.require_catalogs_string;
+            if (typeof window !== 'undefined' && window.history && window.history.replaceState) {
+                try {
+                    window.history.replaceState(null, '', hash);
+                } catch (_e) {
+                    // Very old browsers / unusual contexts: fall back to
+                    // the route-based update even though it re-mounts.
+                    var path = '/top_missing/' + me.require_catalogs_string;
+                    if (me.$route.path !== path) me.$router.replace(path);
+                }
+            }
         },
         markVisited: function (name) {
             Vue.set(this.visited, name, true);
