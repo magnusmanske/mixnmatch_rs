@@ -46,9 +46,10 @@ bytes = "1"
 atom_syndication = "0.12.7"
 
 [profile.release]
-lto = 'thin'
+lto = 'fat'
 panic = 'abort'
 codegen-units = 1
+strip = 'symbols'
 
 [profile.bench]
 lto = 'thin'
