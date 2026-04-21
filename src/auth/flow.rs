@@ -89,6 +89,59 @@ pub async fn exchange_verifier(
     parse_token_response(&body)
 }
 
+/// Fetch a CSRF token for the logged-in user. Required before any mutating
+/// MediaWiki API call (`wbcreateclaim`, `wbsetclaim`, …). OAuth1-signed.
+pub async fn fetch_csrf_token(cfg: &OauthConfig, access: &TokenPair) -> Result<String> {
+    let post = vec![
+        ("format".to_string(), "json".to_string()),
+        ("action".to_string(), "query".to_string()),
+        ("meta".to_string(), "tokens".to_string()),
+        ("type".to_string(), "csrf".to_string()),
+    ];
+    let body = signed_api_post(cfg, MW_API_URL, post, &access.key, &access.secret).await?;
+    let v: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| anyhow!("CSRF token JSON parse failed: {e}. Body: {}", truncate_for_log(&body)))?;
+    if let Some(err) = v.get("error") {
+        return Err(anyhow!("CSRF token error: {err}"));
+    }
+    v.pointer("/query/tokens/csrftoken")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| anyhow!("CSRF response missing /query/tokens/csrftoken: {}", truncate_for_log(&body)))
+}
+
+/// Issue a `wbcreateclaim` with snaktype=value and a string-typed value on
+/// behalf of the OAuth-authenticated user. Returns the raw API JSON so the
+/// caller can surface the MediaWiki error code verbatim to the client.
+pub async fn wikidata_create_string_claim(
+    cfg: &OauthConfig,
+    access: &TokenPair,
+    entity_id: &str,
+    property_id: &str,
+    value: &str,
+    summary: &str,
+) -> Result<serde_json::Value> {
+    let csrf = fetch_csrf_token(cfg, access).await?;
+    // `wbcreateclaim` expects the value as a JSON-encoded string for
+    // string-typed properties, i.e. include the surrounding quotes.
+    let value_json =
+        serde_json::to_string(value).map_err(|e| anyhow!("value JSON encode failed: {e}"))?;
+    let post = vec![
+        ("format".to_string(), "json".to_string()),
+        ("action".to_string(), "wbcreateclaim".to_string()),
+        ("entity".to_string(), entity_id.to_string()),
+        ("property".to_string(), property_id.to_string()),
+        ("snaktype".to_string(), "value".to_string()),
+        ("value".to_string(), value_json),
+        ("summary".to_string(), summary.to_string()),
+        ("bot".to_string(), "1".to_string()),
+        ("token".to_string(), csrf),
+    ];
+    let body = signed_api_post(cfg, MW_API_URL, post, &access.key, &access.secret).await?;
+    serde_json::from_str(&body)
+        .map_err(|e| anyhow!("wbcreateclaim JSON parse failed: {e}. Body: {}", truncate_for_log(&body)))
+}
+
 /// Fetch `meta=userinfo` on the editing wiki, signed with the access token.
 /// PHP equivalent: `MW_OAuth::doApiQuery(['action'=>'query','meta'=>'userinfo'])`,
 /// which is how `Widar::get_username` resolves the logged-in user.
@@ -116,7 +169,10 @@ pub async fn fetch_userinfo(cfg: &OauthConfig, access: &TokenPair) -> Result<Wik
 /// `Authorization: OAuth ...` header. Mirrors PHP `doApiQuery` for the non-upload
 /// path: the signature is computed over the union of POST params and OAuth
 /// header params (minus `oauth_signature` itself).
-async fn signed_api_post(
+///
+/// Pub within the crate so the widar handler can issue authenticated
+/// MediaWiki API calls (CSRF token fetch, `wbcreateclaim`, …).
+pub(crate) async fn signed_api_post(
     cfg: &OauthConfig,
     url: &str,
     post: Vec<(String, String)>,
