@@ -150,6 +150,7 @@ mod tests {
     use wikimisc::wikibase::{EntityTrait, LocaleString};
 
     #[tokio::test]
+    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_generate_item() {
         let app = get_test_app();
         let mut ic = ItemCreator::new(&app);

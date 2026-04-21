@@ -5554,6 +5554,7 @@ mod tests {
     use crate::app_state::get_test_app;
 
     #[tokio::test]
+    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_get_all_external_ids() {
         let app = get_test_app();
         let results = app.storage().get_all_external_ids(1).await.unwrap();
@@ -5562,6 +5563,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_get_overview_table() {
         let app = get_test_app();
         let results = app.storage().get_overview_table().await.unwrap();

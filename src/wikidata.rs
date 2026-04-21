@@ -538,6 +538,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_search_db_with_type() {
         let app = crate::app_state::get_test_app();
         let wdt = app.wdt();

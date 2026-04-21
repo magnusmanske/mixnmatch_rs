@@ -317,6 +317,7 @@ mod tests {
     const TEST_CATALOG_ID: usize = 5526; // was 4175
 
     #[tokio::test]
+    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_get_source_location() {
         let app = get_test_app();
 
@@ -344,6 +345,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_get_update_info() {
         let app = get_test_app();
         let uc = UpdateCatalog::new(&app);
@@ -415,6 +417,7 @@ mod tests {
 
     // #lizard forgives
     #[tokio::test]
+    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_update_from_tabbed_file() {
         let _test_lock = TEST_MUTEX.lock();
         let app = get_test_app();
