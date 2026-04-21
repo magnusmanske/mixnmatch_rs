@@ -272,14 +272,7 @@ async fn dispatch(
         "dg_tiles" => dg::query_dg_tiles(app, params).await,
         "dg_log_action" => dg::query_dg_log_action(app, params).await,
 
-        // Stubs: require external services that are not yet ported
-        "disambig" => Err(ApiError(
-            "disambig requires Wikidata DB replica access (not yet ported to Rust)".into(),
-        )),
         "prep_new_item" => data::query_prep_new_item(app, params).await,
-        "get_entry_reader_view" => Err(ApiError(
-            "get_entry_reader_view requires Readability library (not yet ported to Rust)".into(),
-        )),
         "autoscrape_test" => import::query_autoscrape_test(app, params).await,
         "save_scraper" => import::query_save_scraper(app, params).await,
         "upload_import_file" => Err(ApiError(
