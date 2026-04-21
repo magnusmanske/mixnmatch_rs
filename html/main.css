@@ -61,6 +61,24 @@ a.n_a {
 	color: #00af89;
 }
 
+/* ========== Button contrast overrides ========== */
+
+/*
+ * wikimedia.css applies `.btn-success { color:#14866d !important }` (and
+ * the same for .btn-danger / .btn-primary) so that the outline variants
+ * render in the brand colour. For the solid variants that rule backfires:
+ * the button keeps its green/red/blue background and the label becomes
+ * the same colour as the fill, so the text disappears. Restore
+ * Bootstrap's white foreground on the solid variants only; the
+ * `btn-outline-*` classes don't match these selectors and keep their
+ * coloured text.
+ */
+.btn-success,
+.btn-danger,
+.btn-primary {
+	color: #fff !important;
+}
+
 /* ========== Typography ========== */
 
 .entry_cell_desc,
