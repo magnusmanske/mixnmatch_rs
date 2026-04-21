@@ -58,7 +58,6 @@ export default {
 		<router-link :to='"/rc/"+catalog.id' class="dropdown-item" style="padding:2px"
 			tt="rc_for_catalog"></router-link>
 		<router-link :to='"/aliases/"+catalog.id' class="dropdown-item" style="padding:2px" tt="aliases"></router-link>
-		<!--<a style="padding:2px" class="alert-danger dropdown-item" href="#" @click.prevent="click('disambig')" tt="disambig"></a>-->
 		<router-link v-if='widar.is_logged_in' :to='"/jobs/"+catalog.id' class="dropdown-item" style="padding:2px"
 			tt="jobs"></router-link>
 		<router-link :to='getSearchCatalogPath()' class="dropdown-item" style="padding:2px"
