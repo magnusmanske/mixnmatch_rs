@@ -105,3 +105,67 @@ pub async fn query_creation_candidates(
 ) -> Result<Response, ApiError> {
     Ok(ok(crate::api::creation_candidates::run(app, params).await?))
 }
+
+/// `prep_new_item`: fetch a list of MnM entries, build a single Wikibase
+/// item JSON suitable for `action=wbeditentity&new=item`, and hand it back
+/// to the frontend. The frontend then signs that body via Widar so the
+/// edit is attributed to the user — we only build the payload here.
+///
+/// Mirrors the PHP `query_prep_new_item` shape: returns the entity JSON
+/// under the standard `data` envelope key. The caller does the
+/// `wbeditentity` POST itself.
+pub async fn query_prep_new_item(
+    app: &AppState,
+    params: &Params,
+) -> Result<Response, ApiError> {
+    let entry_ids = parse_entry_ids(common::get_param(params, "entry_ids", ""));
+    if entry_ids.is_empty() {
+        return Err(ApiError("missing or empty 'entry_ids' parameter".into()));
+    }
+    let mut ic = crate::item_creator::ItemCreator::new(app);
+    ic.add_entries_by_id(&entry_ids)
+        .await
+        .map_err(|e| ApiError(format!("failed to load entries: {e}")))?;
+    let item = ic
+        .generate_item()
+        .await
+        .map_err(|e| ApiError(format!("failed to build item: {e}")))?;
+    use wikimisc::wikibase::EntityTrait;
+    Ok(ok(item.to_json()))
+}
+
+/// Parse the `entry_ids=1,2,3` query parameter, dropping anything that
+/// isn't a positive integer. Pure so it's covered by unit tests.
+fn parse_entry_ids(s: String) -> Vec<usize> {
+    s.split(',')
+        .filter_map(|p| p.trim().parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_entry_ids_csv() {
+        assert_eq!(parse_entry_ids("1,2,3".into()), vec![1, 2, 3]);
+        assert_eq!(parse_entry_ids("42".into()), vec![42]);
+    }
+
+    #[test]
+    fn parse_entry_ids_filters_non_numeric_and_zero() {
+        assert_eq!(parse_entry_ids("1,foo,2,,0,3".into()), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn parse_entry_ids_empty_input() {
+        assert!(parse_entry_ids("".into()).is_empty());
+        assert!(parse_entry_ids(",,,".into()).is_empty());
+    }
+
+    #[test]
+    fn parse_entry_ids_trims_whitespace() {
+        assert_eq!(parse_entry_ids(" 1 , 2 ".into()), vec![1, 2]);
+    }
+}

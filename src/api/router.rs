@@ -276,9 +276,7 @@ async fn dispatch(
         "disambig" => Err(ApiError(
             "disambig requires Wikidata DB replica access (not yet ported to Rust)".into(),
         )),
-        "prep_new_item" => Err(ApiError(
-            "prep_new_item requires QuickStatements integration (not yet ported to Rust)".into(),
-        )),
+        "prep_new_item" => data::query_prep_new_item(app, params).await,
         "get_entry_reader_view" => Err(ApiError(
             "get_entry_reader_view requires Readability library (not yet ported to Rust)".into(),
         )),

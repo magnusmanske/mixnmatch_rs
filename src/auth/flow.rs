@@ -142,6 +142,36 @@ pub async fn wikidata_create_string_claim(
         .map_err(|e| anyhow!("wbcreateclaim JSON parse failed: {e}. Body: {}", truncate_for_log(&body)))
 }
 
+/// Run an arbitrary mutating MediaWiki API call on behalf of the
+/// OAuth-authenticated user. Used by Widar's `action=generic` route, which
+/// is how the frontend currently fires `wbeditentity`/`wbsetclaim` calls
+/// where building a parameter list field-by-field doesn't make sense.
+///
+/// `params` are the raw API form params (already serialised — non-string
+/// values must be JSON-stringified by the caller, since e.g. `wbeditentity
+/// data` is itself a JSON string). We add `format=json`, `bot=1`, the
+/// summary (with optional `#hashtag` appended), and the CSRF token.
+pub async fn wikidata_generic_edit(
+    cfg: &OauthConfig,
+    access: &TokenPair,
+    mut params: Vec<(String, String)>,
+    summary: &str,
+) -> Result<serde_json::Value> {
+    let csrf = fetch_csrf_token(cfg, access).await?;
+    // Don't let the caller smuggle in a stale token, format, or summary —
+    // those are ours to set.
+    params.retain(|(k, _)| k != "token" && k != "format" && k != "summary" && k != "bot");
+    params.push(("format".to_string(), "json".to_string()));
+    params.push(("bot".to_string(), "1".to_string()));
+    if !summary.is_empty() {
+        params.push(("summary".to_string(), summary.to_string()));
+    }
+    params.push(("token".to_string(), csrf));
+    let body = signed_api_post(cfg, MW_API_URL, params, &access.key, &access.secret).await?;
+    serde_json::from_str(&body)
+        .map_err(|e| anyhow!("API JSON parse failed: {e}. Body: {}", truncate_for_log(&body)))
+}
+
 /// Fetch `meta=userinfo` on the editing wiki, signed with the access token.
 /// PHP equivalent: `MW_OAuth::doApiQuery(['action'=>'query','meta'=>'userinfo'])`,
 /// which is how `Widar::get_username` resolves the logged-in user.

@@ -35,6 +35,10 @@ pub async fn query_widar(
         // is what the mnm-mixins `setEntryQ` flow calls when a catalog has
         // a wd_prop set.
         "set_string" => handle_set_string(app, session, params).await,
+        // Free-form mutating call: the frontend builds the full MediaWiki
+        // API payload (e.g. `wbeditentity new=item` for new-item creation
+        // from prep_new_item, or `wbsetclaim`) and we sign + POST it.
+        "generic" => handle_generic(app, session, params).await,
         "authorize" => {
             // Off-toolforge the bypass pretends we're already logged in —
             // just redirect home instead of triggering a real OAuth dance.
@@ -193,6 +197,115 @@ async fn handle_set_string(
         }
         Err(e) => Ok(widar_error(format!("Wikidata edit failed: {e}"))),
     }
+}
+
+/// Entry-point for `action=generic`. Reads the `json` form field — which
+/// the frontend builds as `JSON.stringify({action:'wbeditentity', ...})`
+/// — and forwards each top-level key as a MediaWiki API form param,
+/// signed with the user's OAuth token. Wraps the response under `res` so
+/// the JS callback can read `d.res.entity.id` for new-item creation.
+async fn handle_generic(
+    app: &AppState,
+    session: &Session,
+    params: &Params,
+) -> Result<Response, ApiError> {
+    if auth::guard::dev_bypass_user().is_some() {
+        // Dev bypass: pretend the API echoed back a placeholder item so the
+        // frontend's success path keeps working without a real edit.
+        return Ok(json_resp(serde_json::json!({
+            "status": "OK",
+            "error": "OK",
+            "data": [],
+            "res": {"entity": {"id": "Q0"}, "success": 1},
+        })));
+    }
+    let cfg = app
+        .oauth_config()
+        .ok_or_else(|| ApiError("OAuth is not configured on this server".into()))?
+        .clone();
+
+    let (api_params, summary) = match read_generic_params(params) {
+        Ok(v) => v,
+        Err(msg) => return Ok(widar_error(msg)),
+    };
+
+    let access = match auth::session::load(session).await.state {
+        auth::session::SessionState::Authenticated {
+            access_token_key,
+            access_token_secret,
+            ..
+        } => auth::flow::TokenPair {
+            key: access_token_key,
+            secret: access_token_secret,
+        },
+        _ => return Ok(widar_error("Not logged in")),
+    };
+
+    match auth::flow::wikidata_generic_edit(&cfg, &access, api_params, &summary).await {
+        Ok(v) => {
+            if let Some(err) = v.get("error") {
+                let info = err
+                    .get("info")
+                    .and_then(|i| i.as_str())
+                    .unwrap_or("Wikidata API error");
+                return Ok(widar_error(info.to_string()));
+            }
+            Ok(json_resp(serde_json::json!({
+                "status": "OK",
+                "error": "OK",
+                "data": [],
+                "res": v,
+            })))
+        }
+        Err(e) => Ok(widar_error(format!("Wikidata edit failed: {e}"))),
+    }
+}
+
+/// Translate the `generic` request body into the (form-param-list, summary)
+/// pair we hand to `wikidata_generic_edit`. Pure so it's unit-testable.
+///
+/// The `json` field is the JSON-stringified MediaWiki API call; nested
+/// object/array values are re-serialised because MediaWiki form parameters
+/// are scalars (e.g. `wbeditentity data` must be a JSON string).
+fn read_generic_params(params: &Params) -> Result<(Vec<(String, String)>, String), String> {
+    let json_str = params.get("json").cloned().unwrap_or_default();
+    if json_str.is_empty() {
+        return Err("missing 'json' for generic action".into());
+    }
+    let v: serde_json::Value = serde_json::from_str(&json_str)
+        .map_err(|e| format!("invalid 'json' payload: {e}"))?;
+    let obj = v
+        .as_object()
+        .ok_or_else(|| "'json' payload must be an object".to_string())?;
+
+    let summary = params.get("summary").cloned().unwrap_or_default();
+    let tool_hashtag = params
+        .get("tool_hashtag")
+        .map(String::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let summary = if tool_hashtag.is_empty() {
+        summary
+    } else if summary.is_empty() {
+        format!("#{tool_hashtag}")
+    } else {
+        format!("{summary} #{tool_hashtag}")
+    };
+
+    let mut api_params: Vec<(String, String)> = Vec::with_capacity(obj.len());
+    for (k, val) in obj {
+        // Strings come through verbatim (don't double-encode); everything
+        // else is JSON-stringified — that's what the API expects for
+        // structured params like `wbeditentity data`.
+        let s = match val {
+            serde_json::Value::String(s) => s.clone(),
+            other => serde_json::to_string(other)
+                .map_err(|e| format!("re-encoding '{k}' failed: {e}"))?,
+        };
+        api_params.push((k.clone(), s));
+    }
+    Ok((api_params, summary))
 }
 
 /// Pull the `set_string` params out of the form body and normalise them into
@@ -379,5 +492,50 @@ mod tests {
         let params = p(&[("id", "Q1"), ("prop", "P7471")]);
         let err = read_set_string_params(&params).unwrap_err();
         assert!(err.contains("text"), "got: {err}");
+    }
+
+    #[test]
+    fn read_generic_params_extracts_form_params_and_serialises_objects() {
+        // The frontend's `widar.run({action:'generic', json: JSON.stringify({...})})`
+        // posts a stringified JSON body. Object/array values inside the body
+        // (e.g. wbeditentity's `data` field) must be re-stringified because
+        // MediaWiki form params are scalars.
+        let payload = serde_json::json!({
+            "action": "wbeditentity",
+            "new": "item",
+            "data": {"labels": {"en": {"language": "en", "value": "Foo"}}}
+        });
+        let params = p(&[
+            ("json", &payload.to_string()),
+            ("summary", "New item from MnM"),
+            ("tool_hashtag", "mix'n'match"),
+        ]);
+        let (api_params, summary) = read_generic_params(&params).unwrap();
+        let map: std::collections::HashMap<&str, &str> = api_params
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        assert_eq!(map.get("action"), Some(&"wbeditentity"));
+        assert_eq!(map.get("new"), Some(&"item"));
+        let data_val: serde_json::Value =
+            serde_json::from_str(map.get("data").unwrap()).unwrap();
+        assert_eq!(data_val["labels"]["en"]["value"], "Foo");
+        assert_eq!(summary, "New item from MnM #mix'n'match");
+    }
+
+    #[test]
+    fn read_generic_params_rejects_empty_or_invalid_json() {
+        assert!(read_generic_params(&p(&[])).is_err());
+        assert!(read_generic_params(&p(&[("json", "")])).is_err());
+        assert!(read_generic_params(&p(&[("json", "not json")])).is_err());
+        // Top-level non-object: not allowed (form params come from object keys).
+        assert!(read_generic_params(&p(&[("json", "[1,2,3]")])).is_err());
+    }
+
+    #[test]
+    fn read_generic_params_summary_without_hashtag() {
+        let params = p(&[("json", r#"{"action":"foo"}"#), ("summary", "plain")]);
+        let (_, summary) = read_generic_params(&params).unwrap();
+        assert_eq!(summary, "plain");
     }
 }
