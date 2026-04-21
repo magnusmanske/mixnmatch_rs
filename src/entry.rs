@@ -19,6 +19,30 @@ use wikimisc::wikibase::{EntityTrait, ItemEntity, Reference, Snak, Statement};
 
 pub const WESTERN_LANGUAGES: &[&str] = &["en", "de", "fr", "es", "nl", "it", "pt"];
 
+/// Normalise an `entry.type` value to the storage contract: either an
+/// empty string or the form `Q\d+`. Legacy PHP-era imports sometimes
+/// wrote the literal label `"person"` here — translate that to `"Q5"`
+/// at write time so downstream readers don't have to carry a compat
+/// check. Anything that doesn't match either form becomes `""` — the
+/// column is NOT NULL, so we always return a string.
+pub fn normalize_entry_type(type_name: Option<&str>) -> String {
+    let s = type_name.unwrap_or("").trim();
+    if s.is_empty() {
+        return String::new();
+    }
+    if s == "person" {
+        return "Q5".to_string();
+    }
+    let bytes = s.as_bytes();
+    if bytes.first() == Some(&b'Q')
+        && bytes.len() > 1
+        && bytes[1..].iter().all(u8::is_ascii_digit)
+    {
+        return s.to_string();
+    }
+    String::new()
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum EntryError {
     TryingToUpdateNewEntry,
@@ -1310,6 +1334,39 @@ mod tests {
         assert!(!entry.is_unmatched());
         assert!(!entry.is_partially_matched());
         assert!(entry.is_fully_matched());
+    }
+
+    // ----- normalize_entry_type -----
+
+    #[test]
+    fn normalize_entry_type_empty_cases() {
+        assert_eq!(normalize_entry_type(None), "");
+        assert_eq!(normalize_entry_type(Some("")), "");
+        assert_eq!(normalize_entry_type(Some("   ")), "");
+    }
+
+    #[test]
+    fn normalize_entry_type_legacy_person_maps_to_q5() {
+        assert_eq!(normalize_entry_type(Some("person")), "Q5");
+    }
+
+    #[test]
+    fn normalize_entry_type_accepts_qids() {
+        assert_eq!(normalize_entry_type(Some("Q5")), "Q5");
+        assert_eq!(normalize_entry_type(Some("Q16521")), "Q16521");
+        assert_eq!(normalize_entry_type(Some("Q1")), "Q1");
+    }
+
+    #[test]
+    fn normalize_entry_type_rejects_garbage() {
+        // Lone Q, lowercase, non-digits after Q, human-readable labels
+        // all resolve to "" — the column is NOT NULL so we never
+        // propagate a bad value.
+        assert_eq!(normalize_entry_type(Some("Q")), "");
+        assert_eq!(normalize_entry_type(Some("q5")), "");
+        assert_eq!(normalize_entry_type(Some("Q5a")), "");
+        assert_eq!(normalize_entry_type(Some("human")), "");
+        assert_eq!(normalize_entry_type(Some("not_person")), "");
     }
 
     // ----- Serde field-name contract for `entry.type` -----

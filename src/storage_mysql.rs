@@ -2363,6 +2363,7 @@ impl Storage for StorageMySQL {
 
     async fn entry_insert_as_new(&self, entry: &Entry) -> Result<Option<usize>> {
         let sql = "INSERT IGNORE INTO `entry` (`catalog`,`ext_id`,`ext_url`,`ext_name`,`ext_desc`,`q`,`user`,`timestamp`,`random`,`type`) VALUES (:catalog,:ext_id,:ext_url,:ext_name,:ext_desc,:q,:user,:timestamp,:random,:type_name)";
+        let type_name = crate::entry::normalize_entry_type(entry.type_name.as_deref());
         let params = params! {
             "catalog" => entry.catalog,
             "ext_id" => entry.ext_id.to_owned(),
@@ -2373,7 +2374,7 @@ impl Storage for StorageMySQL {
             "user" => entry.user,
             "timestamp" => entry.timestamp.to_owned(),
             "random" => entry.random,
-            "type_name" => entry.type_name.to_owned(),
+            "type_name" => type_name,
         };
         let mut conn = self.get_conn().await?;
         conn.exec_drop(sql, params).await?;
@@ -2448,6 +2449,10 @@ impl Storage for StorageMySQL {
 
     async fn entry_set_type_name(&self, type_name: Option<String>, entry_id: usize) -> Result<()> {
         let sql = "UPDATE `entry` SET `type`=:type_name WHERE `id`=:entry_id";
+        // Enforce the storage contract: either "" or Qxxx. The legacy
+        // label "person" is translated to "Q5" for back-compat with
+        // pre-Rust imports that may still hand it in.
+        let type_name = crate::entry::normalize_entry_type(type_name.as_deref());
         let mut conn = self.get_conn().await?;
         conn.exec_drop(sql, params! {type_name,entry_id}).await?;
         Ok(())
