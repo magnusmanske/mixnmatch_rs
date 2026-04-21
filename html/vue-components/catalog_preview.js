@@ -29,6 +29,7 @@ export default {
         <span v-if='catalog.type'>{{catalog.type}}</span>
         <span v-if='catalog.total*1>0'> &middot; {{Number(catalog.total).toLocaleString()}} entries</span>
         <span v-if='catalog.total*1>0'> &middot; {{Math.round(100*catalog.manual/catalog.total)}}% matched</span>
+        <span v-if='catalog.wd_prop*1>0'> &middot; <wd-link :item='"P"+catalog.wd_prop'></wd-link></span>
         <span> &middot; #{{catalog.id}}</span>
     </div>
 </div>
