@@ -520,6 +520,14 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     async fn get_cersei_scrapers(&self) -> Result<HashMap<usize, CurrentScraper>>;
     async fn add_cersei_catalog(&self, catalog_id: usize, scraper_id: usize) -> Result<()>;
     async fn update_cersei_last_update(&self, scraper_id: usize, last_sync: &str) -> Result<()>;
+    async fn entry_update_cersei(
+        &self,
+        entry_id: usize,
+        ext_name: &str,
+        ext_desc: &str,
+        type_name: &str,
+        ext_url: &str,
+    ) -> Result<()>;
 
     // MetaEntry support
     async fn meta_entry_get_mnm_relations(

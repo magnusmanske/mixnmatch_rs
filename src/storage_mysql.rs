@@ -2811,9 +2811,31 @@ impl Storage for StorageMySQL {
         self.get_conn()
             .await?
             .exec_drop(
-                "UPDATE `cersei` SET `last_sync`=:last_update WHERE `cersei_scraper_id`=:scraper_id",
+                "UPDATE `cersei` SET `last_sync`=:last_sync WHERE `cersei_scraper_id`=:scraper_id",
                 params!{last_sync, scraper_id},
             )
+            .await?;
+        Ok(())
+    }
+
+    async fn entry_update_cersei(
+        &self,
+        entry_id: usize,
+        ext_name: &str,
+        ext_desc: &str,
+        type_name: &str,
+        ext_url: &str,
+    ) -> Result<()> {
+        let type_name = crate::entry::normalize_entry_type(Some(type_name));
+        let sql = "UPDATE `entry` \
+            SET `ext_name`=SUBSTR(:ext_name,1,127), `ext_desc`=SUBSTR(:ext_desc,1,254), \
+                `type`=:type_name, `ext_url`=:ext_url \
+            WHERE `id`=:entry_id \
+            AND (`ext_name`!=SUBSTR(:ext_name,1,127) OR `ext_desc`!=SUBSTR(:ext_desc,1,254) \
+                 OR `type`!=:type_name OR `ext_url`!=:ext_url)";
+        self.get_conn()
+            .await?
+            .exec_drop(sql, params! {ext_name, ext_desc, type_name, ext_url, entry_id})
             .await?;
         Ok(())
     }
