@@ -24,98 +24,42 @@ pub async fn handle_multipart_upload(
             Err(e) => return ApiError(format!("multipart parse error: {e}")).into_response(),
         };
 
-    let mut query = String::new();
-    let mut data_format = String::new();
-    let mut username = String::new();
-    let mut uuid: Option<String> = None;
-    let mut file_bytes_written: u64 = 0;
+    let form = match collect_upload_fields(&mut multipart, app).await {
+        Ok(f) => f,
+        Err(resp) => return resp,
+    };
 
-    loop {
-        let field = match multipart.next_field().await {
-            Ok(Some(f)) => f,
-            Ok(None) => break,
-            Err(e) => return ApiError(format!("multipart field error: {e}")).into_response(),
-        };
-        let name = field.name().unwrap_or("").to_string();
-        match name.as_str() {
-            "query" => query = field.text().await.unwrap_or_default(),
-            "data_format" => data_format = field.text().await.unwrap_or_default(),
-            "username" => username = field.text().await.unwrap_or_default(),
-            "import_file" => {
-                // Stream the file to disk chunk by chunk — never buffer the
-                // whole thing in memory; uploaded catalogs can be 100s of MB.
-                let new_uuid = uuid::Uuid::new_v4().to_string();
-                let path = format!("{}/{}", app.import_file_path(), &new_uuid);
-                let file = match tokio::fs::File::create(&path).await {
-                    Ok(f) => f,
-                    Err(e) => {
-                        return ApiError(format!("cannot create upload file: {e}"))
-                            .into_response();
-                    }
-                };
-                let mut writer = tokio::io::BufWriter::new(file);
-                let mut field = field;
-                use tokio::io::AsyncWriteExt;
-                loop {
-                    match field.chunk().await {
-                        Ok(Some(chunk)) => {
-                            file_bytes_written += chunk.len() as u64;
-                            if let Err(e) = writer.write_all(&chunk).await {
-                                let _ = tokio::fs::remove_file(&path).await;
-                                return ApiError(format!("write failed: {e}")).into_response();
-                            }
-                        }
-                        Ok(None) => break,
-                        Err(e) => {
-                            let _ = tokio::fs::remove_file(&path).await;
-                            return ApiError(format!("upload chunk error: {e}")).into_response();
-                        }
-                    }
-                }
-                if let Err(e) = writer.flush().await {
-                    let _ = tokio::fs::remove_file(&path).await;
-                    return ApiError(format!("flush failed: {e}")).into_response();
-                }
-                uuid = Some(new_uuid);
-            }
-            _ => {
-                // Drain unknown fields so the stream advances.
-                let _ = field.text().await;
-            }
-        }
-    }
-
-    if query != "upload_import_file" {
+    if form.query != "upload_import_file" {
         return ApiError(format!(
-            "multipart POST only supported for query=upload_import_file (got '{query}')"
+            "multipart POST only supported for query=upload_import_file (got '{}')",
+            form.query
         ))
         .into_response();
     }
-
-    if username.is_empty() {
+    if form.username.is_empty() {
         return ApiError("missing 'username' field".into()).into_response();
     }
-    if data_format.is_empty() {
+    if form.data_format.is_empty() {
         return ApiError("missing 'data_format' field".into()).into_response();
     }
-    let uuid = match uuid {
-        Some(u) if file_bytes_written > 0 => u,
+    let uuid = match form.uuid {
+        Some(u) if form.file_bytes_written > 0 => u,
         _ => return ApiError("missing or empty 'import_file' field".into()).into_response(),
     };
 
     let user_id = match app
         .storage()
-        .get_user_by_name(&username.replace('_', " "))
+        .get_user_by_name(&form.username.replace('_', " "))
         .await
     {
         Ok(Some((id, _, _))) => id,
-        Ok(None) => return ApiError(format!("unknown user '{username}'")).into_response(),
+        Ok(None) => return ApiError(format!("unknown user '{}'", form.username)).into_response(),
         Err(e) => return ApiError(e.to_string()).into_response(),
     };
 
     if let Err(e) = app
         .storage()
-        .save_import_file(&uuid, &data_format, user_id)
+        .save_import_file(&uuid, &form.data_format, user_id)
         .await
     {
         // Roll back the file on DB failure so we don't orphan on-disk bytes.
@@ -125,8 +69,95 @@ pub async fn handle_multipart_upload(
 
     ok(serde_json::json!({
         "uuid": uuid,
-        "bytes": file_bytes_written,
+        "bytes": form.file_bytes_written,
     }))
+}
+
+struct UploadForm {
+    query: String,
+    data_format: String,
+    username: String,
+    uuid: Option<String>,
+    file_bytes_written: u64,
+}
+
+/// Drain a multipart body into the fields this endpoint expects. Returns an
+/// `ApiError`-shaped `Response` in `Err` so callers can early-return without
+/// a second layer of match arms.
+async fn collect_upload_fields(
+    multipart: &mut axum::extract::Multipart,
+    app: &AppState,
+) -> Result<UploadForm, Response> {
+    let mut form = UploadForm {
+        query: String::new(),
+        data_format: String::new(),
+        username: String::new(),
+        uuid: None,
+        file_bytes_written: 0,
+    };
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(f)) => f,
+            Ok(None) => break,
+            Err(e) => return Err(ApiError(format!("multipart field error: {e}")).into_response()),
+        };
+        let name = field.name().unwrap_or("").to_string();
+        match name.as_str() {
+            "query" => form.query = field.text().await.unwrap_or_default(),
+            "data_format" => form.data_format = field.text().await.unwrap_or_default(),
+            "username" => form.username = field.text().await.unwrap_or_default(),
+            "import_file" => {
+                let (new_uuid, bytes) = stream_import_file(field, app).await?;
+                form.uuid = Some(new_uuid);
+                form.file_bytes_written = bytes;
+            }
+            _ => {
+                // Drain unknown fields so the stream advances.
+                let _ = field.text().await;
+            }
+        }
+    }
+    Ok(form)
+}
+
+/// Stream a single `import_file` multipart field to disk under a fresh UUID,
+/// returning `(uuid, bytes_written)`. Removes the on-disk file and returns an
+/// error response on any I/O failure so we never leave half-written bytes.
+async fn stream_import_file(
+    mut field: axum::extract::multipart::Field<'_>,
+    app: &AppState,
+) -> Result<(String, u64), Response> {
+    use tokio::io::AsyncWriteExt;
+    // Stream the file to disk chunk by chunk — never buffer the whole thing
+    // in memory; uploaded catalogs can be 100s of MB.
+    let new_uuid = uuid::Uuid::new_v4().to_string();
+    let path = format!("{}/{}", app.import_file_path(), &new_uuid);
+    let file = tokio::fs::File::create(&path)
+        .await
+        .map_err(|e| ApiError(format!("cannot create upload file: {e}")).into_response())?;
+    let mut writer = tokio::io::BufWriter::new(file);
+    let mut bytes_written: u64 = 0;
+    loop {
+        match field.chunk().await {
+            Ok(Some(chunk)) => {
+                bytes_written += chunk.len() as u64;
+                if let Err(e) = writer.write_all(&chunk).await {
+                    let _ = tokio::fs::remove_file(&path).await;
+                    return Err(ApiError(format!("write failed: {e}")).into_response());
+                }
+            }
+            Ok(None) => break,
+            Err(e) => {
+                let _ = tokio::fs::remove_file(&path).await;
+                return Err(ApiError(format!("upload chunk error: {e}")).into_response());
+            }
+        }
+    }
+    if let Err(e) = writer.flush().await {
+        let _ = tokio::fs::remove_file(&path).await;
+        return Err(ApiError(format!("flush failed: {e}")).into_response());
+    }
+    Ok((new_uuid, bytes_written))
 }
 
 /// POST body for `/api/v1/import_catalog`.
