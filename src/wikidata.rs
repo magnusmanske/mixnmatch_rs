@@ -527,6 +527,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_remove_meta_items() {
         let wd = get_test_wd();
         let mut items: Vec<String> = ["Q1", "Q3522", "Q2"]

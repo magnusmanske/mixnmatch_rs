@@ -299,6 +299,21 @@ impl StorageMySQL {
                 "EXISTS (SELECT 1 FROM multi_match WHERE entry_id=entry.id) AND (user<=0 OR user is null)"
                     .into(),
             );
+        } else if filter.show_noq
+            && !filter.show_autoq
+            && !filter.show_userq
+            && !filter.show_nowd
+            && !filter.show_na
+        {
+            // Fast-path for the common "Unmatched only" listing —
+            // equivalent to the conjunction the general branch would
+            // build, but compact enough that the optimiser can pick an
+            // index on (catalog, q) if one is present. Without this
+            // simplification, show_noq-only requests still work but
+            // produce a 3-conjunct WHERE that's slow on large catalogs
+            // (frontend reports from catalog=6502 with show_noq=1
+            // were the motivating case).
+            conds.push("q IS NULL".into());
         } else if !filter.show_noq
             && !filter.show_autoq
             && !filter.show_userq
@@ -3561,10 +3576,19 @@ impl Storage for StorageMySQL {
             String::new()
         };
 
-        // UNION ALL the two sources and let MySQL do ORDER BY + LIMIT +
-        // OFFSET on the merged stream, so each UI page gets the correct
-        // slice. The previous per-table LIMIT + in-Rust merge can't be
-        // paginated without over-fetching.
+        // Push ORDER BY timestamp DESC LIMIT into each UNION branch so
+        // each side uses the `timestamp` index for an early-terminating
+        // reverse scan, instead of materialising the full union of both
+        // tables and sorting it. The outer LIMIT then takes the top
+        // `limit` of the merged (already-sorted) stream.
+        //
+        // Each branch gets LIMIT offset+limit so that the outer LIMIT
+        // OFFSET can still land on the correct slice when one branch
+        // dominates the other. With a tighter window (user's `ts`
+        // filter in place) this is a near-instant indexed pick; without
+        // it, it's still the difference between a full-table sort and a
+        // bounded reverse scan.
+        let branch_limit = limit.saturating_add(offset);
         let page_sql = format!(
             "SELECT * FROM ( \
                 (SELECT entry.id AS id, entry.catalog AS catalog, \
@@ -3574,7 +3598,8 @@ impl Storage for StorageMySQL {
                         'match' AS event_type \
                    FROM entry \
                   WHERE entry.user!=0 AND entry.user!=3 AND entry.user!=4 \
-                    AND entry.timestamp IS NOT NULL{ts_entry}{entry_catalog_filter}) \
+                    AND entry.timestamp IS NOT NULL{ts_entry}{entry_catalog_filter} \
+                  ORDER BY entry.timestamp DESC LIMIT {branch_limit}) \
                 UNION ALL \
                 (SELECT entry.id AS id, entry.catalog AS catalog, \
                         entry.ext_id AS ext_id, entry.ext_url AS ext_url, \
@@ -3582,9 +3607,17 @@ impl Storage for StorageMySQL {
                         entry.q AS q, log.user AS user, log.timestamp AS timestamp, \
                         log.action AS event_type \
                    FROM log INNER JOIN entry ON log.entry_id=entry.id \
-                  WHERE log.timestamp IS NOT NULL{ts_log}{log_catalog_filter}) \
+                  WHERE log.timestamp IS NOT NULL{ts_log}{log_catalog_filter} \
+                  ORDER BY log.timestamp DESC LIMIT {branch_limit}) \
             ) AS rc ORDER BY timestamp DESC LIMIT {limit} OFFSET {offset}"
         );
+        // The count queries are the actual bottleneck on the unfiltered
+        // global feed — they're full table scans / full joins. Only run
+        // them when we have a selective filter (a time bound or a
+        // specific catalog). Otherwise return a heuristic "at-least"
+        // total so the UI can still paginate forward without pretending
+        // to know the exact size of a rolling event stream.
+        let run_counts = !ts.is_empty() || catalog_id > 0;
         let count_entry_sql = format!(
             "SELECT COUNT(*) AS cnt FROM entry \
              WHERE user!=0 AND user!=3 AND user!=4 AND timestamp IS NOT NULL{ts_entry}{entry_catalog_filter}"
@@ -3623,44 +3656,53 @@ impl Storage for StorageMySQL {
             })
         };
 
-        let (events_res, count_entry_res, count_log_res) = tokio::join!(
-            async {
-                let mut conn = self.get_conn_ro().await?;
-                let rows = conn
-                    .exec_iter(page_sql, ())
-                    .await?
-                    .map_and_drop(row_to_event)
-                    .await?;
-                Ok::<Vec<Value>, anyhow::Error>(rows)
-            },
-            async {
-                let mut conn = self.get_conn_ro().await?;
-                let cnt = conn
-                    .exec_iter(count_entry_sql, ())
-                    .await?
-                    .map_and_drop(from_row::<usize>)
-                    .await?
-                    .into_iter()
-                    .next()
-                    .unwrap_or(0);
-                Ok::<usize, anyhow::Error>(cnt)
-            },
-            async {
-                let mut conn = self.get_conn_ro().await?;
-                let cnt = conn
-                    .exec_iter(count_log_sql, ())
-                    .await?
-                    .map_and_drop(from_row::<usize>)
-                    .await?
-                    .into_iter()
-                    .next()
-                    .unwrap_or(0);
-                Ok::<usize, anyhow::Error>(cnt)
-            },
-        );
+        let events = {
+            let mut conn = self.get_conn_ro().await?;
+            conn.exec_iter(page_sql, ())
+                .await?
+                .map_and_drop(row_to_event)
+                .await?
+        };
 
-        let events = events_res?;
-        let total = count_entry_res.unwrap_or(0) + count_log_res.unwrap_or(0);
+        let total = if run_counts {
+            // Selective filter (time or catalog) — counts return quickly.
+            let (count_entry_res, count_log_res) = tokio::join!(
+                async {
+                    let mut conn = self.get_conn_ro().await?;
+                    let cnt = conn
+                        .exec_iter(count_entry_sql, ())
+                        .await?
+                        .map_and_drop(from_row::<usize>)
+                        .await?
+                        .into_iter()
+                        .next()
+                        .unwrap_or(0);
+                    Ok::<usize, anyhow::Error>(cnt)
+                },
+                async {
+                    let mut conn = self.get_conn_ro().await?;
+                    let cnt = conn
+                        .exec_iter(count_log_sql, ())
+                        .await?
+                        .map_and_drop(from_row::<usize>)
+                        .await?
+                        .into_iter()
+                        .next()
+                        .unwrap_or(0);
+                    Ok::<usize, anyhow::Error>(cnt)
+                },
+            );
+            count_entry_res.unwrap_or(0) + count_log_res.unwrap_or(0)
+        } else {
+            // Unfiltered global feed: a precise total would scan the
+            // whole entry table and JOIN the whole log table. Return a
+            // forward-progressing lower bound so the UI's "load next
+            // page" button can keep working without claiming a size
+            // we refuse to compute.
+            offset
+                .saturating_add(events.len())
+                .saturating_add(if events.len() == limit { limit } else { 0 })
+        };
         Ok((events, total))
     }
 
@@ -5736,6 +5778,69 @@ mod tests {
         // (which MySQL would otherwise treat as an escaped quote) is
         // rendered inert as `\\''`.
         assert_eq!(escape_sql_literal(r"\'"), r"\\''");
+    }
+
+    #[test]
+    fn catalog_entries_where_show_noq_only_is_q_is_null() {
+        // The common "Unmatched only" listing — the slow-on-catalog=6502
+        // URL — should emit the compact `q IS NULL` form so MySQL can
+        // pick an index on (catalog, q) / (catalog_only) + q-nullness
+        // instead of evaluating a 3-conjunct disjunction per row.
+        let filter = crate::storage::CatalogEntryListFilter {
+            catalog_id: 6502,
+            show_noq: true,
+            show_autoq: false,
+            show_userq: false,
+            show_na: false,
+            show_nowd: false,
+            show_multiple: false,
+            ..Default::default()
+        };
+        let where_clause = StorageMySQL::catalog_entries_where_clause(&filter);
+        assert_eq!(where_clause, "catalog=6502 AND q IS NULL");
+    }
+
+    #[test]
+    fn catalog_entries_where_show_na_only_is_q_zero() {
+        // Regression guard for the pre-existing fast paths.
+        let filter = crate::storage::CatalogEntryListFilter {
+            catalog_id: 1,
+            show_na: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            StorageMySQL::catalog_entries_where_clause(&filter),
+            "catalog=1 AND q=0"
+        );
+    }
+
+    #[test]
+    fn catalog_entries_where_show_nowd_only_is_q_minus_one() {
+        let filter = crate::storage::CatalogEntryListFilter {
+            catalog_id: 1,
+            show_nowd: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            StorageMySQL::catalog_entries_where_clause(&filter),
+            "catalog=1 AND q=-1"
+        );
+    }
+
+    #[test]
+    fn catalog_entries_where_mixed_uses_general_branch() {
+        // Two "show_*" flags on at once must NOT hit the noq-only
+        // fast-path — otherwise autoq entries would be hidden.
+        let filter = crate::storage::CatalogEntryListFilter {
+            catalog_id: 1,
+            show_noq: true,
+            show_autoq: true,
+            ..Default::default()
+        };
+        let clause = StorageMySQL::catalog_entries_where_clause(&filter);
+        // Still filters out userq/na via the general branch.
+        assert!(clause.contains("(user<=0 OR user is null)"));
+        assert!(clause.contains("(q!=0 or q is null)"));
     }
 
     #[test]

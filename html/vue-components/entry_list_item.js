@@ -117,11 +117,16 @@ export default {
 			let ret = "https://www.wikidata.org/w/index.php?button=&title=Special%3ASearch&search=" + encodeURIComponent(query);
 			return ret;
 		},
-		// True when this is a person (Q5) whose ext_name contains at least one
-		// initial, e.g. 'H.M.Manske' or 'J. K. Rowling'. Used to decide
-		// whether to offer the infernal initial-search button.
+		// True when this is a person whose ext_name contains at least one
+		// initial, e.g. 'H.M.Manske' or 'D. S. Felix'. Used to decide
+		// whether to offer the infernal initial-search button. Accepts
+		// both the canonical Q5 type and the legacy 'person' type label
+		// that some catalogs still use (see mobile_match / creation_candidates
+		// for the same compatibility).
 		hasInitials: function () {
-			if (!this.entry || this.entry.type !== 'Q5') return false;
+			if (!this.entry) return false;
+			var t = this.entry.type;
+			if (t !== 'Q5' && t !== 'person') return false;
 			let name = this.entry.ext_name || '';
 			return /\b[A-Z]\./.test(name);
 		},
