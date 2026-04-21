@@ -5357,36 +5357,36 @@ impl StorageMySQL {
         if matches!(id_filter, Some(ids) if ids.is_empty()) {
             return Ok(vec![]);
         }
-        let id_list = id_filter
-            .map(|ids| {
-                ids.iter()
-                    .map(usize::to_string)
-                    .collect::<Vec<_>>()
-                    .join(",")
-            })
-            .unwrap_or_default();
-        let f_overview = if id_filter.is_some() {
-            format!(" AND `overview`.`catalog` IN ({id_list})")
-        } else {
-            String::new()
-        };
-        let f_catalog_id = if id_filter.is_some() {
-            format!(" AND `id` IN ({id_list})")
-        } else {
-            String::new()
-        };
-        let f_catalog_dot_id = if id_filter.is_some() {
-            format!(" AND `catalog`.`id` IN ({id_list})")
-        } else {
-            String::new()
-        };
+        let clauses = CatalogOverviewFilter::new(id_filter);
 
         let mut conn = self.get_conn_ro().await?;
+        let mut overview_map = Self::fetch_catalog_overview_rows(&mut conn, &clauses.overview).await?;
+        let catalog_map = Self::fetch_catalog_rows(&mut conn, &clauses.catalog_id).await?;
+        let user_map = Self::fetch_catalog_usernames(&mut conn, &clauses.catalog_dot_id).await?;
+        let autoscrape_map = Self::fetch_catalog_autoscrape(&mut conn, &clauses.catalog_dot_id).await?;
 
-        // Query 1: overview data
-        let overview_sql = format!("SELECT `overview`.* FROM `overview`,`catalog` WHERE `catalog`.`id`=`overview`.`catalog` AND `catalog`.`active`>=1{f_overview}");
-        let overview_rows = conn
-            .exec_iter(overview_sql, ())
+        let results = catalog_map
+            .iter()
+            .map(|(catalog_id, catalog_val)| {
+                Self::merge_catalog_overview_row(
+                    catalog_id,
+                    catalog_val,
+                    &mut overview_map,
+                    &user_map,
+                    &autoscrape_map,
+                )
+            })
+            .collect();
+        Ok(results)
+    }
+
+    async fn fetch_catalog_overview_rows(
+        conn: &mut mysql_async::Conn,
+        filter: &str,
+    ) -> Result<HashMap<usize, serde_json::Value>> {
+        let sql = format!("SELECT `overview`.* FROM `overview`,`catalog` WHERE `catalog`.`id`=`overview`.`catalog` AND `catalog`.`active`>=1{filter}");
+        let rows = conn
+            .exec_iter(sql, ())
             .await?
             .map_and_drop(|row: Row| {
                 let catalog_id: usize = row.get::<Option<usize>, _>("catalog").flatten().unwrap_or(0);
@@ -5404,12 +5404,16 @@ impl StorageMySQL {
                 }))
             })
             .await?;
-        let mut overview_map: HashMap<usize, serde_json::Value> = overview_rows.into_iter().collect();
+        Ok(rows.into_iter().collect())
+    }
 
-        // Query 2: catalog data
-        let catalog_sql = format!("SELECT * FROM `catalog` WHERE `active`>=1{f_catalog_id}");
-        let catalog_rows = conn
-            .exec_iter(catalog_sql, ())
+    async fn fetch_catalog_rows(
+        conn: &mut mysql_async::Conn,
+        filter: &str,
+    ) -> Result<HashMap<usize, serde_json::Value>> {
+        let sql = format!("SELECT * FROM `catalog` WHERE `active`>=1{filter}");
+        let rows = conn
+            .exec_iter(sql, ())
             .await?
             .map_and_drop(|row: Row| {
                 // All optional columns are wrapped in Option to survive NULLs.
@@ -5436,12 +5440,16 @@ impl StorageMySQL {
                 }))
             })
             .await?;
-        let catalog_map: HashMap<usize, serde_json::Value> = catalog_rows.into_iter().collect();
+        Ok(rows.into_iter().collect())
+    }
 
-        // Query 3: usernames
-        let user_sql = format!("SELECT `user`.`name` AS `username`,`catalog`.`id` FROM `catalog`,`user` WHERE `owner`=`user`.`id` AND `active`>=1{f_catalog_dot_id}");
-        let user_rows = conn
-            .exec_iter(user_sql, ())
+    async fn fetch_catalog_usernames(
+        conn: &mut mysql_async::Conn,
+        filter: &str,
+    ) -> Result<HashMap<usize, String>> {
+        let sql = format!("SELECT `user`.`name` AS `username`,`catalog`.`id` FROM `catalog`,`user` WHERE `owner`=`user`.`id` AND `active`>=1{filter}");
+        let rows = conn
+            .exec_iter(sql, ())
             .await?
             .map_and_drop(|row: Row| {
                 let id: usize = row.get::<Option<usize>, _>("id").flatten().unwrap_or(0);
@@ -5449,12 +5457,16 @@ impl StorageMySQL {
                 (id, username)
             })
             .await?;
-        let user_map: HashMap<usize, String> = user_rows.into_iter().collect();
+        Ok(rows.into_iter().collect())
+    }
 
-        // Query 4: autoscrape data
-        let autoscrape_sql = format!("SELECT `catalog`.`id` AS `id`,`last_update`,`do_auto_update`,`autoscrape`.`json` AS `json` FROM `catalog`,`autoscrape` WHERE `active`>=1 AND `catalog`.`id`=`autoscrape`.`catalog`{f_catalog_dot_id}");
-        let autoscrape_rows = conn
-            .exec_iter(autoscrape_sql, ())
+    async fn fetch_catalog_autoscrape(
+        conn: &mut mysql_async::Conn,
+        filter: &str,
+    ) -> Result<HashMap<usize, serde_json::Value>> {
+        let sql = format!("SELECT `catalog`.`id` AS `id`,`last_update`,`do_auto_update`,`autoscrape`.`json` AS `json` FROM `catalog`,`autoscrape` WHERE `active`>=1 AND `catalog`.`id`=`autoscrape`.`catalog`{filter}");
+        let rows = conn
+            .exec_iter(sql, ())
             .await?
             .map_and_drop(|row: Row| {
                 let id: usize = row.get::<Option<usize>, _>("id").flatten().unwrap_or(0);
@@ -5468,32 +5480,61 @@ impl StorageMySQL {
                 }))
             })
             .await?;
-        let autoscrape_map: HashMap<usize, serde_json::Value> = autoscrape_rows.into_iter().collect();
+        Ok(rows.into_iter().collect())
+    }
 
-        // Merge all data by catalog_id
-        let mut results = Vec::new();
-        for (catalog_id, catalog_val) in &catalog_map {
-            let mut merged = catalog_val.clone();
-            if let Some(ov) = overview_map.remove(catalog_id) {
-                if let Some(obj) = ov.as_object() {
-                    for (k, v) in obj {
-                        merged[k] = v.clone();
-                    }
+    fn merge_catalog_overview_row(
+        catalog_id: &usize,
+        catalog_val: &serde_json::Value,
+        overview_map: &mut HashMap<usize, serde_json::Value>,
+        user_map: &HashMap<usize, String>,
+        autoscrape_map: &HashMap<usize, serde_json::Value>,
+    ) -> serde_json::Value {
+        let mut merged = catalog_val.clone();
+        if let Some(ov) = overview_map.remove(catalog_id) {
+            if let Some(obj) = ov.as_object() {
+                for (k, v) in obj {
+                    merged[k] = v.clone();
                 }
             }
-            if let Some(username) = user_map.get(catalog_id) {
-                merged["username"] = json!(username);
-            }
-            if let Some(auto) = autoscrape_map.get(catalog_id) {
-                if let Some(obj) = auto.as_object() {
-                    for (k, v) in obj {
-                        merged[k] = v.clone();
-                    }
-                }
-            }
-            results.push(merged);
         }
-        Ok(results)
+        if let Some(username) = user_map.get(catalog_id) {
+            merged["username"] = json!(username);
+        }
+        if let Some(auto) = autoscrape_map.get(catalog_id) {
+            if let Some(obj) = auto.as_object() {
+                for (k, v) in obj {
+                    merged[k] = v.clone();
+                }
+            }
+        }
+        merged
+    }
+}
+
+/// Pre-built `IN (…)` clauses for the three join positions used by
+/// `api_get_catalog_overview_impl`. Computed once per call.
+struct CatalogOverviewFilter {
+    overview: String,
+    catalog_id: String,
+    catalog_dot_id: String,
+}
+
+impl CatalogOverviewFilter {
+    fn new(id_filter: Option<&[usize]>) -> Self {
+        let Some(ids) = id_filter else {
+            return Self {
+                overview: String::new(),
+                catalog_id: String::new(),
+                catalog_dot_id: String::new(),
+            };
+        };
+        let id_list = ids.iter().map(usize::to_string).join(",");
+        Self {
+            overview: format!(" AND `overview`.`catalog` IN ({id_list})"),
+            catalog_id: format!(" AND `id` IN ({id_list})"),
+            catalog_dot_id: format!(" AND `catalog`.`id` IN ({id_list})"),
+        }
     }
 }
 
@@ -5680,6 +5721,23 @@ mod tests {
         // (which MySQL would otherwise treat as an escaped quote) is
         // rendered inert as `\\''`.
         assert_eq!(escape_sql_literal(r"\'"), r"\\''");
+    }
+
+    #[test]
+    fn test_catalog_overview_filter_empty_when_unfiltered() {
+        let f = CatalogOverviewFilter::new(None);
+        assert!(f.overview.is_empty());
+        assert!(f.catalog_id.is_empty());
+        assert!(f.catalog_dot_id.is_empty());
+    }
+
+    #[test]
+    fn test_catalog_overview_filter_populated_when_filtered() {
+        let ids = [3_usize, 7, 11];
+        let f = CatalogOverviewFilter::new(Some(&ids));
+        assert_eq!(f.overview, " AND `overview`.`catalog` IN (3,7,11)");
+        assert_eq!(f.catalog_id, " AND `id` IN (3,7,11)");
+        assert_eq!(f.catalog_dot_id, " AND `catalog`.`id` IN (3,7,11)");
     }
 
     #[test]
