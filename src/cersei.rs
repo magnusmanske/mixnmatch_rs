@@ -1,4 +1,3 @@
-// DO NOT USE, NOT READY!
 use anyhow::{Result, anyhow};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -297,37 +296,19 @@ impl CerseiSync {
                     ne.entry.type_name = Some(format!("Q{p31}"));
                 }
 
-                if let Some(&_entry_id) = existing_ext_ids.get(&ne.entry.ext_id) {
-                    // TODO
-                    // Update existing entry
-                    // let mut conn = self.pool.get_conn().await?;
-                    // let sql = "UPDATE `entry` SET `ext_name`=?, `ext_desc`=?, `type`=?, `ext_url`=? WHERE `id`=? AND (`ext_name`!=? OR `ext_desc`!=? OR `type`!=? OR `ext_url`!=?)";
+                if let Some(&entry_id) = existing_ext_ids.get(&ne.entry.ext_id) {
+                    let type_str = ne.entry.type_name.as_deref().unwrap_or("");
+                    self.app
+                        .storage()
+                        .entry_update_cersei(
+                            entry_id,
+                            &ne.entry.ext_name,
+                            &ne.entry.ext_desc,
+                            type_str,
+                            &ne.entry.ext_url,
+                        )
+                        .await?;
 
-                    // match conn
-                    //     .exec_drop(
-                    //         sql,
-                    //         (
-                    //             &ne.name,
-                    //             &ne.desc,
-                    //             &ne.entry_type,
-                    //             &ne.url,
-                    //             entry_id,
-                    //             &ne.name,
-                    //             &ne.desc,
-                    //             &ne.entry_type,
-                    //             &ne.url,
-                    //         ),
-                    //     )
-                    //     .await
-                    // {
-                    //     Ok(_) => {}
-                    //     Err(e) => {
-                    //         eprintln!("Error updating entry {}: {}", entry_id, e);
-                    //         continue;
-                    //     }
-                    // }
-
-                    // Set person dates if available
                     if ne.born.is_some() || ne.died.is_some() {
                         ne.entry.set_person_dates(&ne.born, &ne.died).await?;
                     }
@@ -393,17 +374,30 @@ impl CerseiSync {
         Ok(())
     }
 
-    /// Sync all scrapers
+    /// Full sync: create new catalogs, sync all scrapers, import relations into aux.
+    /// This is the entry point for the `sync_from_cersei` job action.
+    pub async fn sync(&self) -> Result<()> {
+        self.create_new_catalogs().await?;
+        self.sync_all_scrapers().await?;
+        self.app.storage().import_relations_into_aux().await?;
+        Ok(())
+    }
+
+    /// Sync all scrapers; continues on per-scraper errors (mirrors PHP behaviour).
     pub async fn sync_all_scrapers(&self) -> Result<()> {
         let scrapers = self.app.storage().get_cersei_scrapers().await?;
 
         for (scraper_id, scraper_data) in scrapers {
-            self.sync_scraper(
-                scraper_id,
-                scraper_data.catalog_id,
-                scraper_data.last_sync.as_deref(),
-            )
-            .await?;
+            if let Err(e) = self
+                .sync_scraper(
+                    scraper_id,
+                    scraper_data.catalog_id,
+                    scraper_data.last_sync.as_deref(),
+                )
+                .await
+            {
+                eprintln!("cersei: scraper {scraper_id} failed: {e}");
+            }
         }
 
         Ok(())

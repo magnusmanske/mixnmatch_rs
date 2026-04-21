@@ -494,6 +494,11 @@ impl Job {
                 cm.run().await
             }
 
+            "sync_from_cersei" => {
+                let cs = crate::cersei::CerseiSync::new(&self.app)?;
+                cs.sync().await
+            }
+
             other => Err(anyhow!("Job::run_this_job: Unknown action '{}'", other)),
         }
     }
