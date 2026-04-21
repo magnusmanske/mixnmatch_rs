@@ -56,6 +56,7 @@ pub struct AppState {
     storage: Arc<Box<dyn Storage>>,
     large_catalogs: Arc<crate::large_catalogs::LargeCatalogs>,
     import_file_path: Arc<String>,
+    flickr_key_path: Arc<String>,
     task_specific_usize: Arc<HashMap<String, usize>>,
     max_concurrent_jobs: usize,
     toolforge_php_command: String,
@@ -71,6 +72,10 @@ impl AppState {
 
     pub fn import_file_path(&self) -> &str {
         &self.import_file_path
+    }
+
+    pub fn flickr_key_path(&self) -> &str {
+        &self.flickr_key_path
     }
 
     pub fn task_specific_usize(&self) -> &HashMap<String, usize> {
@@ -100,6 +105,15 @@ impl AppState {
             .ok_or_else(|| anyhow!("config.import_file_path not found, or not an object"))?
             .to_string();
         let import_file_path = Arc::new(import_file_path);
+        // `flickr_key_path` is optional; the Flickr map source is only used
+        // by one UI route, so falling back to an empty string keeps CLI
+        // deployments (where this file isn't present) from erroring.
+        let flickr_key_path = Arc::new(
+            config["flickr_key_path"]
+                .as_str()
+                .unwrap_or("")
+                .to_string(),
+        );
         let toolforge_php_command = config["toolforge_php_command"]
             .as_str()
             .unwrap_or("php8.3")
@@ -122,6 +136,7 @@ impl AppState {
             ))),
             large_catalogs: Arc::new(large_catalogs),
             import_file_path,
+            flickr_key_path,
             task_specific_usize,
             max_concurrent_jobs,
             toolforge_php_command,

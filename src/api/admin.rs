@@ -132,12 +132,18 @@ pub async fn query_quick_compare_list(app: &AppState) -> Result<Response, ApiErr
     Ok(ok(serde_json::json!(data)))
 }
 
-pub async fn query_get_flickr_key() -> Result<Response, ApiError> {
+pub async fn query_get_flickr_key(app: &AppState) -> Result<Response, ApiError> {
     // Read off the reactor — local fs reads are usually fast, but on the
     // tool host this file lives on NFS, where occasional latency spikes can
-    // stall the runtime if read inline.
-    let key = tokio::task::spawn_blocking(|| {
-        std::fs::read_to_string("/data/project/mix-n-match/flickr.key").unwrap_or_default()
+    // stall the runtime if read inline. Path is supplied via
+    // `flickr_key_path` in config.json; absent config means the feature
+    // is unconfigured and we return an empty string.
+    let path = app.flickr_key_path().to_string();
+    if path.is_empty() {
+        return Ok(ok(serde_json::json!("")));
+    }
+    let key = tokio::task::spawn_blocking(move || {
+        std::fs::read_to_string(&path).unwrap_or_default()
     })
     .await
     .unwrap_or_default();

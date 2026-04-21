@@ -231,7 +231,7 @@ async fn dispatch(
             catalog::query_remove_empty_top_group(app, session, params).await
         }
         "quick_compare_list" => admin::query_quick_compare_list(app).await,
-        "get_flickr_key" => admin::query_get_flickr_key().await,
+        "get_flickr_key" => admin::query_get_flickr_key(app).await,
 
         // Per-feature endpoints, formerly all in `delegated.rs`.
         "get_sync" => sync::query_get_sync(app, params).await,
