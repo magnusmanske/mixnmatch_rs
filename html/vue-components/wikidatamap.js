@@ -451,9 +451,15 @@ export default {
 				text += "<div><tt>" + self.escapeHTML(entry.lat) + "/" + self.escapeHTML(entry.lon) + "</tt></div>";
 
 				if (typeof entry.image != "undefined") {
-					let image = "<img src='" + entry.image.thumbnail_url + "' />";
+					// max-width:100% keeps the thumbnail inside the popup
+					// even when Commons returns a wider image than the
+					// requested thumb_size (the `width=` parameter is
+					// advisory for some file types). height:auto
+					// preserves the aspect ratio.
+					let image = "<img src='" + entry.image.thumbnail_url + "' "
+						+ "style='max-width:100%;height:auto;display:block;margin:0 auto' />";
 					text += "<div style='text-align:center'>" + image + "</div>";
-					text = "<div style='width:200px'>" + text + "</div>";
+					text = "<div style='max-width:200px'>" + text + "</div>";
 				}
 
 				if (typeof entry.actions != "undefined" && entry.actions.length > 0) {
