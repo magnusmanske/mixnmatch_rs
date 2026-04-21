@@ -206,10 +206,13 @@ impl MetaEntry {
     pub async fn create_in_storage(&self, app: &AppState) -> Result<DbId> {
         let mut entry = Entry::new_from_catalog_and_ext_id(self.entry.catalog, &self.entry.ext_id);
         entry.set_app(app);
-        entry.ext_url = self.entry.ext_url.clone();
-        entry.ext_name = self.entry.ext_name.clone();
-        entry.ext_desc = self.entry.ext_desc.clone();
-        entry.type_name = self.entry.type_name.clone();
+        // clone_from reuses the destination's existing String/Option<String>
+        // allocation when the lengths line up — cheaper than a fresh clone
+        // for the new-Entry hot path during catalog import.
+        entry.ext_url.clone_from(&self.entry.ext_url);
+        entry.ext_name.clone_from(&self.entry.ext_name);
+        entry.ext_desc.clone_from(&self.entry.ext_desc);
+        entry.type_name.clone_from(&self.entry.type_name);
         entry.random = self.entry.random;
 
         let new_id = entry.insert_as_new().await?;
