@@ -230,11 +230,11 @@ impl StorageMySQL {
         let match_clause = conditions.join(" OR ");
         let mut sql = format!("{} WHERE ({match_clause})", Self::entry_sql_select());
         if !exclude.is_empty() {
-            let excl = exclude.iter().map(usize::to_string).join(",");
+            let excl = exclude.iter().join(",");
             sql += &format!(" AND `catalog` NOT IN ({excl})");
         }
         if !include.is_empty() {
-            let incl = include.iter().map(usize::to_string).join(",");
+            let incl = include.iter().join(",");
             sql += &format!(" AND `catalog` IN ({incl})");
         }
         sql += &format!(" LIMIT {max_results}");
@@ -5520,7 +5520,7 @@ impl CatalogOverviewFilter {
                 catalog_dot_id: String::new(),
             };
         };
-        let id_list = ids.iter().map(usize::to_string).join(",");
+        let id_list = ids.iter().join(",");
         Self {
             overview: format!(" AND `overview`.`catalog` IN ({id_list})"),
             catalog_id: format!(" AND `id` IN ({id_list})"),
