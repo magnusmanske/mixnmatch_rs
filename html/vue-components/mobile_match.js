@@ -357,7 +357,7 @@ export default Vue.extend({
 
       var rk = [];
       Object.entries(me.candidates).forEach(function ([k, v]) {
-        if (me.current_entry.type == 'person' && !me.wd_local.getItem(k).hasClaimItemLink('P31', 'Q5')) return;
+        if (me.current_entry.type == 'Q5' && !me.wd_local.getItem(k).hasClaimItemLink('P31', 'Q5')) return;
         rk.push(k);
         v.points = 0;
         v.points += me.max_order - v.wd_order;
@@ -401,7 +401,7 @@ export default Vue.extend({
       const me = this;
       try {
         me.wp_query = (me.current_entry.ext_name || '').replace(/_/g, ' ').replace(/\s\(.+/, '');
-        if (me.current_entry.type == 'person' || me.current_entry.type == 'Q5') {
+        if (me.current_entry.type == 'Q5') {
           var m = (me.current_entry.ext_desc || '').match(/\b\d{3,4}\b/g);
           if (m !== null) { while (m.length > 2) m.pop(); me.wp_query += ' ' + m.join(' '); }
         }

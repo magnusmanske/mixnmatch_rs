@@ -42,6 +42,20 @@ ALTER TABLE `entry`
 -- deployment matches the checked-in DDL.
 
 -- ---------------------------------------------------------------
+-- 4) entry.type legacy 'person' → 'Q5'
+--
+-- Pre-Rust PHP imports stored the literal label 'person' in
+-- entry.type as a synonym for 'Q5'. The Rust write paths now
+-- normalise on INSERT/UPDATE (entry::normalize_entry_type), and the
+-- frontend/display code no longer special-cases 'person'. Clean up
+-- the rows that still carry the legacy label so Q5-gated features
+-- (Initial-search button, creation_candidates person grouping,
+-- mobile_match.doWikipediaSearch's date extraction, Q5-only filter
+-- in dg_tiles, etc.) see a consistent value.
+-- ---------------------------------------------------------------
+UPDATE `entry` SET `type` = 'Q5' WHERE `type` = 'person';
+
+-- ---------------------------------------------------------------
 -- Notes on what was deliberately NOT added:
 -- - `entry(catalog, user, q)` — would help a few more corner-case
 --   WHERE combinations in `catalog_entries_where_clause`'s general

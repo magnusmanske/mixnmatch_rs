@@ -99,7 +99,7 @@ export default Vue.extend({
 			me.loadData();
 		},
 		hasHumanEntries: function () {
-			return this.entries.some(function (e) { return e.type === 'Q5' || e.type === 'person'; });
+			return this.entries.some(function (e) { return e.type === 'Q5'; });
 		},
 		groupEntries: function () {
 			const me = this;
@@ -254,7 +254,7 @@ export default Vue.extend({
 				var is_checked = el ? el.checked : false;
 				if (!is_checked) return;
 				//				if ( e.wd_prop == null || e.wd_qual != null ) return ;
-				if (p31 == '' && e.type != '') p31 = e.type == 'person' ? 'Q5' : e.type;
+				if (p31 == '' && e.type != '') p31 = e.type;
 				if (born.length < ('' + (e.born || '')).length) born = e.born;
 				if (died.length < ('' + (e.died || '')).length) died = e.died;
 				if (/\bfemale\b/.test(e.ext_desc)) other_statements.P21 = 'Q6581072';
