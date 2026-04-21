@@ -175,8 +175,8 @@ export default {
 						<span v-if='show_catalog && typeof get_catalog(entry.catalog)!="undefined"'><router-link
 								:to='"/catalog/"+entry.catalog'><small>{{get_catalog(entry.catalog).name}}</small></router-link>:</span>
 						<br v-if='twoline' />
-						<span v-if='show_permalink && show_checkbox' class="permalink-hover-inline d-none d-md-inline"><router-link
-								:to='"/entry/"+entry.id' class='text-muted' style='font-size:0.8em'>#</router-link> </span>
+						<span v-if='show_permalink && show_checkbox' class="permalink-hover-inline d-none d-md-inline-block"><router-link
+								:to='"/entry/"+entry.id' class='text-muted' style='font-size:0.8em'>#</router-link></span>
 						<entry-link :entry='entry'></entry-link>
 						<span v-if='show_permalink' class="d-inline d-md-none"><router-link
 								:to='"/entry/"+entry.id' class='text-muted' style='font-size:0.8em;margin-left:4px'>#</router-link></span>
