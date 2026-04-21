@@ -139,7 +139,7 @@ impl CerseiSync {
             let mut catalog = Catalog::new(&self.app);
             catalog.set_name(Some(name.clone()));
             catalog.set_url(Some(scraper.url.clone()));
-            catalog.set_wd_prop(scraper.property.to_owned());
+            catalog.set_wd_prop(scraper.property);
             catalog.set_search_wp(&scraper.language);
             catalog.set_note(&note);
             catalog.set_owner(6);

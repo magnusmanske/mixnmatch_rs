@@ -195,7 +195,7 @@ async fn import_single_entry(
                 updated_meta.entry.id = existing.id;
                 updated_meta.entry.q = existing.q;
                 updated_meta.entry.user = existing.user;
-                updated_meta.entry.timestamp = existing.timestamp.clone();
+                updated_meta.entry.timestamp.clone_from(&existing.timestamp);
                 updated_meta.update_in_storage(app).await?;
                 Ok(EntryAction::SkippedFullyMatched)
             } else {

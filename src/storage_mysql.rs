@@ -142,8 +142,8 @@ impl StorageMySQL {
 
     /// Computes the column of the overview table that is affected, given a user ID and item ID
     fn get_overview_column_name_for_user_and_q(
-        user_id: &Option<usize>,
-        q: &Option<isize>,
+        user_id: Option<usize>,
+        q: Option<isize>,
     ) -> String {
         match (user_id, q) {
             (Some(0), _) => "autoq",
@@ -963,36 +963,35 @@ impl Storage for StorageMySQL {
     async fn get_catalog_from_id(&self, catalog_id: usize) -> Result<Catalog> {
         let sql = r"SELECT id,`name`,url,`desc`,`type`,wd_prop,wd_qual,search_wp,active,owner,note,source_item,has_person_date,taxon_run FROM `catalog` WHERE `id`=:catalog_id";
         let mut conn = self.get_conn_ro().await?;
-        let mut rows: Vec<Catalog> = conn
+        // Take ownership of the result vec and pull the first Some out
+        // directly. The previous `.iter().filter_map(|row| row.to_owned()).collect()`
+        // cloned every Catalog only to drop all but one, then `.pop().to_owned()`
+        // cloned that one a second time.
+        let row = conn
             .exec_iter(sql, params! {catalog_id})
             .await?
             .map_and_drop(|row| Self::catalog_from_row(&row))
             .await?
-            .iter()
-            .filter_map(|row| row.to_owned())
-            .collect();
+            .into_iter()
+            .flatten()
+            .next();
         drop(conn);
-        let ret = rows
-            .pop()
-            .ok_or(anyhow!("No catalog #{catalog_id}"))?
-            .to_owned();
-        Ok(ret)
+        row.ok_or_else(|| anyhow!("No catalog #{catalog_id}"))
     }
 
     async fn get_catalog_from_name(&self, name: &str) -> Result<Catalog> {
         let sql = r"SELECT id,`name`,url,`desc`,`type`,wd_prop,wd_qual,search_wp,active,owner,note,source_item,has_person_date,taxon_run FROM `catalog` WHERE `name`=:name";
         let mut conn = self.get_conn_ro().await?;
-        let mut rows: Vec<Catalog> = conn
+        let row = conn
             .exec_iter(sql, params! {name})
             .await?
             .map_and_drop(|row| Self::catalog_from_row(&row))
             .await?
-            .iter()
-            .filter_map(|row| row.to_owned())
-            .collect();
+            .into_iter()
+            .flatten()
+            .next();
         drop(conn);
-        let ret = rows.pop().ok_or(anyhow!("No catalog '{name}'"))?.to_owned();
-        Ok(ret)
+        row.ok_or_else(|| anyhow!("No catalog '{name}'"))
     }
 
     async fn get_catalog_key_value_pairs(
@@ -1130,9 +1129,9 @@ impl Storage for StorageMySQL {
         user_id: Option<usize>,
         q: Option<isize>,
     ) -> Result<()> {
-        let add_column = Self::get_overview_column_name_for_user_and_q(&user_id, &q);
+        let add_column = Self::get_overview_column_name_for_user_and_q(user_id, q);
         let reduce_column =
-            Self::get_overview_column_name_for_user_and_q(&old_entry.user, &old_entry.q);
+            Self::get_overview_column_name_for_user_and_q(old_entry.user, old_entry.q);
         let catalog_id = old_entry.catalog;
         let sql = format!(
             "UPDATE overview SET {}={}+1,{}={}-1 WHERE catalog=:catalog_id",
@@ -2288,11 +2287,10 @@ impl Storage for StorageMySQL {
             .await?
             .map_and_drop(|row| Self::entry_from_row(&row))
             .await?
-            .iter()
-            .filter_map(|row| row.to_owned())
+            .into_iter()
+            .flatten()
             .next()
-            .ok_or(anyhow!("No entry #{}", entry_id))?
-            .to_owned();
+            .ok_or_else(|| anyhow!("No entry #{}", entry_id))?;
         Ok(ret)
     }
 
@@ -2301,18 +2299,16 @@ impl Storage for StorageMySQL {
             "{} WHERE `catalog`=:catalog_id AND `ext_id`=:ext_id",
             Self::entry_sql_select()
         );
-        Ok(self
-            .get_conn_ro()
+        self.get_conn_ro()
             .await?
             .exec_iter(sql, params! {catalog_id,ext_id})
             .await?
             .map_and_drop(|row| Self::entry_from_row(&row))
             .await?
-            .iter()
-            .filter_map(|row| row.to_owned())
+            .into_iter()
+            .flatten()
             .next()
-            .ok_or(anyhow!("No ext_id '{}' in catalog #{}", ext_id, catalog_id))?
-            .to_owned())
+            .ok_or_else(|| anyhow!("No ext_id '{}' in catalog #{}", ext_id, catalog_id))
     }
 
     async fn get_entry_batch(
@@ -2621,7 +2617,7 @@ impl Storage for StorageMySQL {
         let ret = conn
             .exec_iter(r"SELECT /* rust:storage:entry_get_aux */ `id`,`aux_p`,`aux_name`,`in_wikidata`,`entry_is_matched` FROM `auxiliary` WHERE `entry_id`=:entry_id",params! {entry_id}).await?
             .map_and_drop(|row| AuxiliaryRow::from_row(&row)).await?
-            .iter().filter_map(|row|row.to_owned()).collect();
+            .into_iter().flatten().collect();
         Ok(ret)
     }
 
@@ -5684,49 +5680,49 @@ mod tests {
     fn test_get_overview_column_name_for_user_and_q() {
         // user=0 (automatch) => "autoq" regardless of q
         assert_eq!(
-            StorageMySQL::get_overview_column_name_for_user_and_q(&Some(0), &None),
+            StorageMySQL::get_overview_column_name_for_user_and_q(Some(0), None),
             "autoq"
         );
         assert_eq!(
-            StorageMySQL::get_overview_column_name_for_user_and_q(&Some(0), &Some(42)),
+            StorageMySQL::get_overview_column_name_for_user_and_q(Some(0), Some(42)),
             "autoq"
         );
         assert_eq!(
-            StorageMySQL::get_overview_column_name_for_user_and_q(&Some(0), &Some(0)),
+            StorageMySQL::get_overview_column_name_for_user_and_q(Some(0), Some(0)),
             "autoq"
         );
 
         // user>0, q=None => "noq"
         assert_eq!(
-            StorageMySQL::get_overview_column_name_for_user_and_q(&Some(5), &None),
+            StorageMySQL::get_overview_column_name_for_user_and_q(Some(5), None),
             "noq"
         );
 
         // user>0, q=0 (N/A) => "na"
         assert_eq!(
-            StorageMySQL::get_overview_column_name_for_user_and_q(&Some(5), &Some(0)),
+            StorageMySQL::get_overview_column_name_for_user_and_q(Some(5), Some(0)),
             "na"
         );
 
         // user>0, q=-1 (no Wikidata item) => "nowd"
         assert_eq!(
-            StorageMySQL::get_overview_column_name_for_user_and_q(&Some(5), &Some(-1)),
+            StorageMySQL::get_overview_column_name_for_user_and_q(Some(5), Some(-1)),
             "nowd"
         );
 
         // user>0, q>0 (manual match) => "manual"
         assert_eq!(
-            StorageMySQL::get_overview_column_name_for_user_and_q(&Some(5), &Some(42)),
+            StorageMySQL::get_overview_column_name_for_user_and_q(Some(5), Some(42)),
             "manual"
         );
 
         // user=None => "noq"
         assert_eq!(
-            StorageMySQL::get_overview_column_name_for_user_and_q(&None, &None),
+            StorageMySQL::get_overview_column_name_for_user_and_q(None, None),
             "noq"
         );
         assert_eq!(
-            StorageMySQL::get_overview_column_name_for_user_and_q(&None, &Some(42)),
+            StorageMySQL::get_overview_column_name_for_user_and_q(None, Some(42)),
             "noq"
         );
     }
@@ -5826,37 +5822,37 @@ async fn test_get_overview_column_name_for_user_and_q() {
     let mnm = get_test_mnm();
     assert_eq!(
         mnm.get_storage()
-            .get_overview_column_name_for_user_and_q(&Some(0), &None),
+            .get_overview_column_name_for_user_and_q(&Some(0), None),
         "autoq"
     );
     assert_eq!(
         mnm.get_storage()
-            .get_overview_column_name_for_user_and_q(&Some(2), &Some(1)),
+            .get_overview_column_name_for_user_and_q(&Some(2), Some(1)),
         "manual"
     );
     assert_eq!(
         mnm.get_storage()
-            .get_overview_column_name_for_user_and_q(&Some(2), &Some(0)),
+            .get_overview_column_name_for_user_and_q(&Some(2), Some(0)),
         "na"
     );
     assert_eq!(
         mnm.get_storage()
-            .get_overview_column_name_for_user_and_q(&Some(2), &Some(-1)),
+            .get_overview_column_name_for_user_and_q(&Some(2), Some(-1)),
         "nowd"
     );
     assert_eq!(
         mnm.get_storage()
-            .get_overview_column_name_for_user_and_q(&Some(2), &None),
+            .get_overview_column_name_for_user_and_q(&Some(2), None),
         "noq"
     );
     assert_eq!(
         mnm.get_storage()
-            .get_overview_column_name_for_user_and_q(&None, &None),
+            .get_overview_column_name_for_user_and_q(&None, None),
         "noq"
     );
     assert_eq!(
         mnm.get_storage()
-            .get_overview_column_name_for_user_and_q(&None, &Some(1)),
+            .get_overview_column_name_for_user_and_q(&None, Some(1)),
         "noq"
     );
 }
