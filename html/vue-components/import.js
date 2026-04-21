@@ -693,13 +693,27 @@ export default Vue.extend({
 							<input type='checkbox' class="form-check-input" id="chkAddNew" v-model='update_info.add_new_entries'>
 							<label class="form-check-label" for="chkAddNew" tt='add_new_entries'></label>
 						</div>
-						<div class="form-check">
-							<input type='checkbox' class="form-check-input" id="chkUpdateDesc" v-model='update_info.update_existing_description'>
-							<label class="form-check-label" for="chkUpdateDesc" tt='update_existing_description'></label>
+						<div class="form-check"
+							title="Only fills in a description for entries that currently have none. Existing non-empty descriptions are left untouched.">
+							<input type='checkbox' class="form-check-input" id="chkUpdateDesc"
+								v-model='update_info.update_existing_description'
+								:disabled='update_info.update_all_descriptions'>
+							<label class="form-check-label" for="chkUpdateDesc">
+								<span tt='update_existing_description'></span>
+								<small class="text-muted d-block" style="font-size:12px">
+									Fill in descriptions only where the entry currently has none &mdash; keep existing descriptions as they are.
+								</small>
+							</label>
 						</div>
-						<div class="form-check">
+						<div class="form-check"
+							title="Overwrites every entry's description with the value from the import, even if the entry already has one.">
 							<input type='checkbox' class="form-check-input" id="chkUpdateAllDesc" v-model='update_info.update_all_descriptions'>
-							<label class="form-check-label" for="chkUpdateAllDesc" tt='update_all_descriptions'></label>
+							<label class="form-check-label" for="chkUpdateAllDesc">
+								<span tt='update_all_descriptions'></span>
+								<small class="text-muted d-block" style="font-size:12px">
+									Replace the description on <strong>every</strong> updated entry, even if it already has one. Implies the option above.
+								</small>
+							</label>
 						</div>
 					</div>
 				</div>
@@ -969,7 +983,7 @@ export default Vue.extend({
 					<!-- Import button -->
 					<div class="text-center">
 						<div v-if='widar.is_logged_in'>
-							<button class='btn btn-success btn-lg px-5' style='color:#fff' @click.prevent='import_source'
+							<button class='btn btn-success btn-lg px-5' @click.prevent='import_source'
 								:disabled="importing">
 								<span v-if="importing">
 									<span class="spinner-border spinner-border-sm" role="status"></span>
