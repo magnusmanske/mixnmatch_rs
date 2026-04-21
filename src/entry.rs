@@ -30,15 +30,20 @@ pub fn normalize_entry_type(type_name: Option<&str>) -> String {
     if s.is_empty() {
         return String::new();
     }
-    if s == "person" {
+    if s.eq_ignore_ascii_case("person") {
         return "Q5".to_string();
     }
     let bytes = s.as_bytes();
-    if bytes.first() == Some(&b'Q')
+    // Accept Q\d+ or q\d+; canonicalise the leading letter to upper-case
+    // so the stored value is always `Q…`.
+    if matches!(bytes.first(), Some(&b'Q' | &b'q'))
         && bytes.len() > 1
         && bytes[1..].iter().all(u8::is_ascii_digit)
     {
-        return s.to_string();
+        let mut out = String::with_capacity(s.len());
+        out.push('Q');
+        out.push_str(&s[1..]);
+        return out;
     }
     String::new()
 }
@@ -1348,6 +1353,9 @@ mod tests {
     #[test]
     fn normalize_entry_type_legacy_person_maps_to_q5() {
         assert_eq!(normalize_entry_type(Some("person")), "Q5");
+        // Case-insensitive for the legacy label too.
+        assert_eq!(normalize_entry_type(Some("Person")), "Q5");
+        assert_eq!(normalize_entry_type(Some("PERSON")), "Q5");
     }
 
     #[test]
@@ -1358,13 +1366,31 @@ mod tests {
     }
 
     #[test]
+    fn normalize_entry_type_uppercases_lowercase_q_prefix() {
+        // Lowercase `q` is a common typo / case drift from external
+        // sources; canonicalise to `Q…` on write so the stored value
+        // is consistent and downstream equality checks don't need
+        // case folding.
+        assert_eq!(normalize_entry_type(Some("q5")), "Q5");
+        assert_eq!(normalize_entry_type(Some("q16521")), "Q16521");
+        assert_eq!(normalize_entry_type(Some("q1")), "Q1");
+    }
+
+    #[test]
+    fn normalize_entry_type_trims_surrounding_whitespace() {
+        assert_eq!(normalize_entry_type(Some("  Q5 ")), "Q5");
+        assert_eq!(normalize_entry_type(Some("\tq5\n")), "Q5");
+    }
+
+    #[test]
     fn normalize_entry_type_rejects_garbage() {
-        // Lone Q, lowercase, non-digits after Q, human-readable labels
-        // all resolve to "" — the column is NOT NULL so we never
-        // propagate a bad value.
+        // Lone Q/q, digits with non-numeric suffix, and unrelated
+        // labels all resolve to "" — the column is NOT NULL so we
+        // never propagate a bad value.
         assert_eq!(normalize_entry_type(Some("Q")), "");
-        assert_eq!(normalize_entry_type(Some("q5")), "");
+        assert_eq!(normalize_entry_type(Some("q")), "");
         assert_eq!(normalize_entry_type(Some("Q5a")), "");
+        assert_eq!(normalize_entry_type(Some("q5a")), "");
         assert_eq!(normalize_entry_type(Some("human")), "");
         assert_eq!(normalize_entry_type(Some("not_person")), "");
     }
