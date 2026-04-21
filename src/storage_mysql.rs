@@ -465,11 +465,7 @@ impl StorageMySQL {
         let r: f64 = rand::rng().random();
         let mut sql = format!("`random`>={r} ORDER BY `random` LIMIT {max_results}");
         if !bad_catalogs.is_empty() {
-            let s = bad_catalogs
-                .iter()
-                .map(|id| format!("{id}"))
-                .collect::<Vec<String>>()
-                .join(",");
+            let s = bad_catalogs.iter().join(",");
             sql += &format!("AND `catalog` NOT IN ({s})");
         }
         sql
@@ -1672,11 +1668,7 @@ impl Storage for StorageMySQL {
     // Unlink deleted Wikidata items (item IDs in `deletions`).
     // Returns the catalog ID that were affected by this.
     async fn maintenance_apply_deletions(&self, deletions: Vec<isize>) -> Result<Vec<usize>> {
-        let deletions_string = deletions
-            .iter()
-            .map(|i| format!("{}", *i))
-            .collect::<Vec<String>>()
-            .join(",");
+        let deletions_string = deletions.iter().join(",");
         let sql1 =
             format!("SELECT DISTINCT `catalog` FROM `entry` WHERE `q` IN ({deletions_string})");
         let mut conn = self.get_conn().await?;
@@ -1710,7 +1702,7 @@ impl Storage for StorageMySQL {
         catalogs: &[usize],
         ext_ids: Vec<String>,
     ) -> Result<Vec<(usize, String, Option<usize>)>> {
-        let catalogs_str: String = catalogs.iter().map(|id| format!("{id}")).join(",");
+        let catalogs_str: String = catalogs.iter().join(",");
         let qm_propvals = Self::sql_placeholders(ext_ids.len());
         let sql = format!(
             r"SELECT `id`,`ext_id`,`user` FROM `entry` WHERE `catalog` IN ({catalogs_str}) AND `ext_id` IN ({qm_propvals})"
@@ -2340,11 +2332,7 @@ impl Storage for StorageMySQL {
         if entry_ids.is_empty() {
             return Ok(HashMap::new());
         }
-        let entry_ids = entry_ids
-            .iter()
-            .map(|id| format!("{id}"))
-            .collect::<Vec<String>>()
-            .join(",");
+        let entry_ids = entry_ids.iter().join(",");
         let sql = format!("{} WHERE `id` IN ({})", Self::entry_sql_select(), entry_ids);
         let mut conn = self.get_conn_ro().await?;
         let rows: Vec<Entry> = conn
@@ -3042,7 +3030,7 @@ impl Storage for StorageMySQL {
         if user_ids.is_empty() {
             return Ok(HashMap::new());
         }
-        let ids_str = user_ids.iter().map(|id| format!("{id}")).collect::<Vec<String>>().join(",");
+        let ids_str = user_ids.iter().join(",");
         let sql = format!("SELECT * FROM `user` WHERE `id` IN ({ids_str})");
         let mut conn = self.get_conn_ro().await?;
         let rows = conn
@@ -3066,7 +3054,7 @@ impl Storage for StorageMySQL {
         if entry_ids.is_empty() {
             return Ok(HashMap::new());
         }
-        let ids_str = entry_ids.iter().map(|id| format!("{id}")).collect::<Vec<String>>().join(",");
+        let ids_str = entry_ids.iter().join(",");
         let sql = format!("SELECT * FROM `person_dates` WHERE `entry_id` IN ({ids_str})");
         let mut conn = self.get_conn_ro().await?;
         let rows = conn
@@ -3092,7 +3080,7 @@ impl Storage for StorageMySQL {
         if entry_ids.is_empty() {
             return Ok(HashMap::new());
         }
-        let ids_str = entry_ids.iter().map(|id| format!("{id}")).collect::<Vec<String>>().join(",");
+        let ids_str = entry_ids.iter().join(",");
         let sql = format!("SELECT * FROM `location` WHERE `entry_id` IN ({ids_str})");
         let mut conn = self.get_conn_ro().await?;
         let rows = conn
@@ -3112,7 +3100,7 @@ impl Storage for StorageMySQL {
         if entry_ids.is_empty() {
             return Ok(HashMap::new());
         }
-        let ids_str = entry_ids.iter().map(|id| format!("{id}")).collect::<Vec<String>>().join(",");
+        let ids_str = entry_ids.iter().join(",");
         let sql = format!("SELECT * FROM `multi_match` WHERE `entry_id` IN ({ids_str})");
         let mut conn = self.get_conn_ro().await?;
         let rows = conn
@@ -3131,7 +3119,7 @@ impl Storage for StorageMySQL {
         if entry_ids.is_empty() {
             return Ok(HashMap::new());
         }
-        let ids_str = entry_ids.iter().map(|id| format!("{id}")).collect::<Vec<String>>().join(",");
+        let ids_str = entry_ids.iter().join(",");
         let sql = format!("SELECT * FROM `auxiliary` WHERE `entry_id` IN ({ids_str})");
         let mut conn = self.get_conn_ro().await?;
         let rows = conn
@@ -3163,7 +3151,7 @@ impl Storage for StorageMySQL {
         if entry_ids.is_empty() {
             return Ok(HashMap::new());
         }
-        let ids_str = entry_ids.iter().map(|id| format!("{id}")).collect::<Vec<String>>().join(",");
+        let ids_str = entry_ids.iter().join(",");
         let sql = format!("SELECT * FROM `aliases` WHERE `entry_id` IN ({ids_str}) ORDER BY `entry_id`,`language`,`label`");
         let mut conn = self.get_conn_ro().await?;
         let rows = conn
@@ -3193,7 +3181,7 @@ impl Storage for StorageMySQL {
         if entry_ids.is_empty() {
             return Ok(HashMap::new());
         }
-        let ids_str = entry_ids.iter().map(|id| format!("{id}")).collect::<Vec<String>>().join(",");
+        let ids_str = entry_ids.iter().join(",");
         let sql = format!("SELECT * FROM `descriptions` WHERE `entry_id` IN ({ids_str}) ORDER BY `entry_id`,`language`,`label`");
         let mut conn = self.get_conn_ro().await?;
         let rows = conn
@@ -3223,7 +3211,7 @@ impl Storage for StorageMySQL {
         if entry_ids.is_empty() {
             return Ok(HashMap::new());
         }
-        let ids_str = entry_ids.iter().map(|id| format!("{id}")).collect::<Vec<String>>().join(",");
+        let ids_str = entry_ids.iter().join(",");
         let sql = format!("SELECT * FROM `kv_entry` WHERE `entry_id` IN ({ids_str})");
         let mut conn = self.get_conn_ro().await?;
         let rows = conn
@@ -3248,7 +3236,7 @@ impl Storage for StorageMySQL {
         if entry_ids.is_empty() {
             return Ok(HashMap::new());
         }
-        let ids_str = entry_ids.iter().map(|id| format!("{id}")).collect::<Vec<String>>().join(",");
+        let ids_str = entry_ids.iter().join(",");
         let sql = format!(
             "SELECT `property`,`mnm_relation`.`entry_id` AS `source_entry_id`,`entry`.* FROM `mnm_relation`,`entry` WHERE `entry`.`id`=`mnm_relation`.`target_entry_id` AND `mnm_relation`.`entry_id` IN ({ids_str})"
         );
@@ -4288,8 +4276,11 @@ impl Storage for StorageMySQL {
         for (prop, catalogs) in prop_catalog_map {
             if let Some(values) = prop_values.get(prop) {
                 if !catalogs.is_empty() && !values.is_empty() {
-                    let cats_str = catalogs.iter().map(|c| format!("{c}")).collect::<Vec<String>>().join(",");
-                    let vals_str = values.iter().map(|v| format!("'{}'", v.replace('\'', "''"))).collect::<Vec<String>>().join(",");
+                    let cats_str = catalogs.iter().join(",");
+                    let vals_str = values
+                        .iter()
+                        .map(|v| format!("'{}'", escape_sql_literal(v)))
+                        .join(",");
                     unions.push(format!("{base_select} WHERE catalog IN ({cats_str}) AND ext_id IN ({vals_str})"));
                 }
             }
@@ -4316,7 +4307,7 @@ impl Storage for StorageMySQL {
         if props.is_empty() {
             return Ok(HashMap::new());
         }
-        let props_str = props.iter().map(|p| format!("{p}")).collect::<Vec<String>>().join(",");
+        let props_str = props.iter().join(",");
         let sql = format!("SELECT id,wd_prop FROM catalog WHERE wd_qual IS NULL AND active=1 AND wd_prop IN ({props_str})");
         let mut conn = self.get_conn_ro().await?;
         let rows = conn

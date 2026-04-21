@@ -35,8 +35,7 @@ impl WDRC {
         prop2catalog_ids: &HashMap<usize, Vec<usize>>,
         last_ts: &str,
     ) -> Result<Vec<(usize, usize, String)>> {
-        let properties = prop2catalog_ids.keys().cloned().collect_vec();
-        let props_str = properties.iter().map(|p| format!("{p}")).join(",");
+        let props_str = prop2catalog_ids.keys().join(",");
         let sql = format!(
             "SELECT DISTINCT `item`,`property`,`timestamp` FROM `statements` WHERE `property` IN ({props_str}) AND `timestamp`>='{last_ts}'"
         );
