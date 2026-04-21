@@ -381,33 +381,101 @@ impl Entry {
     }
 
     fn add_claim_or_references(item: &mut ItemEntity, mut claim: Statement) {
-        // Remove self-referencing references
-        if claim
-            .references()
-            .iter()
-            .flat_map(|r| r.snaks())
-            .any(|snak| snak == claim.main_snak())
-        {
-            claim.set_references(vec![]);
-        }
+        // Normalise the incoming claim in isolation: strip self-referencing
+        // snaks per-snak (not per-block, so a 3-snak reference block keeps
+        // its two legitimate snaks if one of them happens to echo the main
+        // snak), dedupe snaks inside each reference block, drop empty
+        // blocks, and dedupe the reference blocks themselves so equivalent
+        // blocks with snaks in different orders collapse into one.
+        Self::normalise_claim(&mut claim);
 
-        // Check if the claim already exists in the item
-        for existing_claim in item.claims_mut() {
-            if existing_claim.main_snak() == claim.main_snak() {
-                // Claim exists, just add references
-                let mut references = existing_claim.references().to_owned();
-                for reference in claim.references() {
-                    if !references.contains(reference) {
-                        references.push(reference.to_owned());
+        // Merge into a structurally-equivalent existing claim (same main
+        // snak AND same multiset of qualifier snaks). Comparing on main_snak
+        // alone was lossy: qualifier-bearing claims were merged with ones
+        // that didn't share those qualifiers, silently dropping them.
+        for existing in item.claims_mut() {
+            if Self::claim_core_equivalent(existing, &claim) {
+                let mut refs = existing.references().to_vec();
+                for r in claim.references() {
+                    if !refs
+                        .iter()
+                        .any(|existing_ref| Self::reference_equivalent(existing_ref, r))
+                    {
+                        refs.push(r.clone());
                     }
                 }
-                existing_claim.set_references(references);
+                existing.set_references(refs);
                 return;
             }
         }
 
-        // Claim doesn't exist, add it
         item.add_claim(claim);
+    }
+
+    /// Clean up a claim before it enters the item: dedupe qualifiers and
+    /// references without changing the claim's meaning.
+    fn normalise_claim(claim: &mut Statement) {
+        // Qualifiers: drop exact duplicates, preserving order.
+        let mut qs: Vec<Snak> = Vec::with_capacity(claim.qualifiers().len());
+        for q in claim.qualifiers() {
+            if !qs.contains(q) {
+                qs.push(q.clone());
+            }
+        }
+        claim.set_qualifier_snaks(qs);
+
+        // References: per block, drop snaks equal to the main snak (those
+        // are circular and add no provenance value) and drop duplicate
+        // snaks. Drop blocks that end up empty. Then dedupe whole blocks.
+        let main = claim.main_snak().clone();
+        let mut new_refs: Vec<Reference> = Vec::new();
+        for r in claim.references() {
+            let mut snaks: Vec<Snak> = Vec::with_capacity(r.snaks().len());
+            for s in r.snaks() {
+                if *s == main {
+                    continue;
+                }
+                if snaks.contains(s) {
+                    continue;
+                }
+                snaks.push(s.clone());
+            }
+            if snaks.is_empty() {
+                continue;
+            }
+            let candidate = Reference::new(snaks);
+            if !new_refs
+                .iter()
+                .any(|existing| Self::reference_equivalent(existing, &candidate))
+            {
+                new_refs.push(candidate);
+            }
+        }
+        claim.set_references(new_refs);
+    }
+
+    /// Two reference blocks are equivalent if they carry the same snaks in
+    /// any order. `Reference`'s derived `PartialEq` is order-sensitive, so
+    /// callers that merge references across entries need this instead.
+    /// Both inputs are expected to be dedup'd already (via `normalise_claim`).
+    fn reference_equivalent(a: &Reference, b: &Reference) -> bool {
+        let sa = a.snaks();
+        let sb = b.snaks();
+        sa.len() == sb.len() && sa.iter().all(|s| sb.contains(s))
+    }
+
+    /// Two claims are equivalent enough to merge (i.e. same main snak and
+    /// same qualifier set, order-insensitive). Qualifier-bearing variants
+    /// are kept separate from bare claims so we don't lose qualifiers.
+    /// Ignores rank/type/id — those don't affect the claim's identity for
+    /// the new-item-creation use case.
+    fn claim_core_equivalent(a: &Statement, b: &Statement) -> bool {
+        if a.main_snak() != b.main_snak() {
+            return false;
+        }
+        let aq = a.qualifiers();
+        let bq = b.qualifiers();
+        aq.len() == bq.len() && aq.iter().all(|s| bq.contains(s))
     }
 
     /// Updates `ext_id` locally and in the database
@@ -1231,5 +1299,159 @@ mod tests {
         assert!(!entry.is_unmatched());
         assert!(!entry.is_partially_matched());
         assert!(entry.is_fully_matched());
+    }
+
+    // ----- Claim/reference dedup (no DB, no network) -----
+
+    fn stmt_item(prop: &str, q: &str) -> Statement {
+        Statement::new_normal(Snak::new_item(prop, q), vec![], vec![])
+    }
+
+    fn stmt_string(prop: &str, v: &str) -> Statement {
+        Statement::new_normal(Snak::new_string(prop, v), vec![], vec![])
+    }
+
+    fn with_refs(mut s: Statement, refs: Vec<Reference>) -> Statement {
+        s.set_references(refs);
+        s
+    }
+
+    fn with_quals(mut s: Statement, quals: Vec<Snak>) -> Statement {
+        s.set_qualifier_snaks(quals);
+        s
+    }
+
+    fn r_url(val: &str) -> Reference {
+        Reference::new(vec![Snak::new_string("P854", val)])
+    }
+
+    #[test]
+    fn dedup_merges_same_main_snak_and_unions_references() {
+        let mut item = ItemEntity::new_empty();
+        Entry::add_claim_or_references(
+            &mut item,
+            with_refs(stmt_item("P31", "Q5"), vec![r_url("https://a")]),
+        );
+        Entry::add_claim_or_references(
+            &mut item,
+            with_refs(stmt_item("P31", "Q5"), vec![r_url("https://b")]),
+        );
+        Entry::add_claim_or_references(
+            &mut item,
+            with_refs(stmt_item("P31", "Q5"), vec![r_url("https://a")]),
+        );
+        assert_eq!(item.claims().len(), 1, "same claim should merge into one");
+        let refs = item.claims()[0].references();
+        assert_eq!(refs.len(), 2, "duplicate reference blocks should collapse");
+        let urls: Vec<&str> = refs
+            .iter()
+            .flat_map(|r| r.snaks())
+            .filter_map(|snak| match snak.data_value() {
+                Some(dv) => match dv.value() {
+                    wikimisc::wikibase::Value::StringValue(v) => Some(v.as_str()),
+                    _ => None,
+                },
+                None => None,
+            })
+            .collect();
+        assert!(urls.contains(&"https://a"));
+        assert!(urls.contains(&"https://b"));
+    }
+
+    #[test]
+    fn dedup_reference_equivalence_is_order_insensitive() {
+        let block_a_then_b = Reference::new(vec![
+            Snak::new_string("P248", "Q1"),
+            Snak::new_string("P854", "https://foo"),
+        ]);
+        let block_b_then_a = Reference::new(vec![
+            Snak::new_string("P854", "https://foo"),
+            Snak::new_string("P248", "Q1"),
+        ]);
+        let mut item = ItemEntity::new_empty();
+        Entry::add_claim_or_references(
+            &mut item,
+            with_refs(stmt_item("P31", "Q5"), vec![block_a_then_b]),
+        );
+        Entry::add_claim_or_references(
+            &mut item,
+            with_refs(stmt_item("P31", "Q5"), vec![block_b_then_a]),
+        );
+        assert_eq!(item.claims()[0].references().len(), 1);
+    }
+
+    #[test]
+    fn dedup_self_referencing_ref_snak_is_dropped_per_snak_not_per_block() {
+        // A reference block that happens to carry the main snak as one of
+        // its snaks should keep its other snaks, not be emptied entirely.
+        let main = Snak::new_string("P214", "12345");
+        let stated_in = Snak::new_item("P248", "Q54919");
+        let block = Reference::new(vec![main.clone(), stated_in.clone()]);
+
+        let claim = Statement::new_normal(main, vec![], vec![block]);
+        let mut item = ItemEntity::new_empty();
+        Entry::add_claim_or_references(&mut item, claim);
+        let refs = item.claims()[0].references();
+        assert_eq!(refs.len(), 1, "the block should survive, shrunk");
+        assert_eq!(refs[0].snaks().len(), 1);
+        assert_eq!(refs[0].snaks()[0], stated_in);
+    }
+
+    #[test]
+    fn dedup_claims_with_different_qualifiers_stay_separate() {
+        // Same main snak, different qualifier sets => two distinct claims.
+        // Merging them would silently drop whichever qualifier set arrived
+        // second — the whole point of qualifiers is that they change the
+        // claim's meaning.
+        let bare = stmt_item("P106", "Q482980");
+        let with_q = with_quals(
+            stmt_item("P106", "Q482980"),
+            vec![Snak::new_item("P1686", "Q12345")],
+        );
+        let mut item = ItemEntity::new_empty();
+        Entry::add_claim_or_references(&mut item, bare);
+        Entry::add_claim_or_references(&mut item, with_q);
+        assert_eq!(item.claims().len(), 2);
+    }
+
+    #[test]
+    fn dedup_claims_with_same_qualifiers_in_different_order_merge() {
+        let q1 = Snak::new_item("P580", "Q1");
+        let q2 = Snak::new_item("P582", "Q2");
+        let a = with_quals(stmt_item("P39", "Q11696"), vec![q1.clone(), q2.clone()]);
+        let b = with_quals(stmt_item("P39", "Q11696"), vec![q2, q1]);
+        let mut item = ItemEntity::new_empty();
+        Entry::add_claim_or_references(&mut item, a);
+        Entry::add_claim_or_references(&mut item, b);
+        assert_eq!(item.claims().len(), 1);
+    }
+
+    #[test]
+    fn dedup_removes_duplicate_snaks_within_one_reference_block() {
+        let dup = Reference::new(vec![
+            Snak::new_string("P854", "https://example"),
+            Snak::new_string("P854", "https://example"),
+        ]);
+        let claim = Statement::new_normal(Snak::new_item("P31", "Q5"), vec![], vec![dup]);
+        let mut item = ItemEntity::new_empty();
+        Entry::add_claim_or_references(&mut item, claim);
+        assert_eq!(item.claims()[0].references()[0].snaks().len(), 1);
+    }
+
+    #[test]
+    fn dedup_qualifiers_are_deduplicated_on_insert() {
+        let q = Snak::new_item("P580", "Q1");
+        let claim = with_quals(stmt_string("P214", "123"), vec![q.clone(), q.clone(), q]);
+        let mut item = ItemEntity::new_empty();
+        Entry::add_claim_or_references(&mut item, claim);
+        assert_eq!(item.claims()[0].qualifiers().len(), 1);
+    }
+
+    #[test]
+    fn dedup_does_not_conflate_different_main_snaks() {
+        let mut item = ItemEntity::new_empty();
+        Entry::add_claim_or_references(&mut item, stmt_item("P31", "Q5"));
+        Entry::add_claim_or_references(&mut item, stmt_item("P31", "Q16521"));
+        assert_eq!(item.claims().len(), 2);
     }
 }
