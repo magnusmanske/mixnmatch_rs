@@ -38,6 +38,11 @@ export default Vue.extend({
                 me.valid_actions.push('match_on_deathdate');
             }
             if ( me.catalog.has_autoscrape == 1 ) me.valid_actions.push('autoscrape');
+            // Offer the SPARQL-driven automatch only when a catalog admin
+            // has actually configured a query via kv_catalog.
+            if ( me.catalog.kv_pairs && typeof me.catalog.kv_pairs.automatch_sparql != 'undefined' ) {
+                me.valid_actions.push('automatch_sparql');
+            }
         }
         me.load();
     },
@@ -164,7 +169,13 @@ export default Vue.extend({
                         <span v-if='typeof active[action]!="undefined"'>{{action.replace(/_/g,' ')}}</span>
                         <a v-else href='#' @click.prevent='start_new_job(action)'>{{action.replace(/_/g,' ')}}</a>
                     </td>
-                    <td><span :tt='"snj_"+action'></span></td>
+                    <td>
+                        <span v-if='action=="automatch_sparql"'>
+                            Runs the catalog's configured SPARQL query against Wikidata and matches entries by the returned IDs.
+                            Recommended: run <em>purge automatches</em> first so re-runs aren't blocked by stale preliminary matches.
+                        </span>
+                        <span v-else :tt='"snj_"+action'></span>
+                    </td>
                 </tr>
             </tbody>
         </table>

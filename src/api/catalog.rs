@@ -25,7 +25,19 @@ pub async fn query_catalogs(app: &AppState) -> Result<Response, ApiError> {
 
 pub async fn query_single_catalog(app: &AppState, params: &Params) -> Result<Response, ApiError> {
     let cid = common::get_param_int(params, "catalog_id", 0) as usize;
-    let data = app.storage().api_get_single_catalog_overview(cid).await?;
+    let s = app.storage();
+    // Fetch overview + kv_catalog in parallel. kv_catalog is cheap and lets
+    // the jobs page know which optional actions (e.g. automatch_sparql)
+    // are available for this catalog without a second round-trip.
+    let (data, kvs) = tokio::join!(
+        s.api_get_single_catalog_overview(cid),
+        s.get_catalog_key_value_pairs(cid),
+    );
+    let mut data = data?;
+    if let Some(obj) = data.as_object_mut() {
+        let kvs = kvs.unwrap_or_default();
+        obj.insert("kv_pairs".into(), serde_json::to_value(&kvs).unwrap_or_default());
+    }
     let mut map = serde_json::Map::new();
     map.insert(cid.to_string(), data);
     Ok(ok(serde_json::Value::Object(map)))
