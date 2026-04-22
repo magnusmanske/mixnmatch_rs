@@ -499,6 +499,15 @@ impl Job {
                 cs.sync().await
             }
 
+            "reference_fixer" => {
+                // Rewrites free-form reference-URL references into typed
+                // external-id references on Wikidata. Drains the
+                // `reference_fixer` queue populated by every successful
+                // `entry.set_match`. Catalog id is 0 (not catalog-scoped).
+                let mut rf = crate::reference_fixer::ReferenceFixer::new(&self.app)?;
+                rf.run().await.map(|_| ())
+            }
+
             other => Err(anyhow!("Job::run_this_job: Unknown action '{}'", other)),
         }
     }

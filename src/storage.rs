@@ -229,6 +229,11 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     ) -> Result<()>;
     async fn get_overview_table(&self) -> Result<Vec<OverviewTableRow>>;
     async fn queue_reference_fixer(&self, q_numeric: isize) -> Result<()>;
+    /// Pull up to `limit` pending rows off the `reference_fixer` queue,
+    /// newest QIDs first (matches PHP's `ORDER BY q DESC`).
+    async fn reference_fixer_pending(&self, limit: usize) -> Result<Vec<usize>>;
+    /// Mark a row `done=1` once the reference-fix pass has run on it.
+    async fn reference_fixer_mark_done(&self, q: usize) -> Result<()>;
     async fn avoid_auto_match(&self, entry_id: usize, q_numeric: Option<isize>) -> Result<bool>;
     async fn get_random_active_catalog_id_with_property(&self) -> Option<usize>;
     async fn get_kv_value(&self, key: &str) -> Result<Option<String>>;

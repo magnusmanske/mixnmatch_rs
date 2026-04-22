@@ -1242,6 +1242,27 @@ impl Storage for StorageMySQL {
         Ok(())
     }
 
+    async fn reference_fixer_pending(&self, limit: usize) -> Result<Vec<usize>> {
+        let sql = "SELECT `q` FROM `reference_fixer` WHERE `done`=0 ORDER BY `q` DESC LIMIT :limit";
+        let qs: Vec<usize> = self
+            .get_conn_ro()
+            .await?
+            .exec_iter(sql, params! {limit})
+            .await?
+            .map_and_drop(from_row::<usize>)
+            .await?;
+        Ok(qs)
+    }
+
+    async fn reference_fixer_mark_done(&self, q: usize) -> Result<()> {
+        let sql = "UPDATE `reference_fixer` SET `done`=1 WHERE `q`=:q";
+        self.get_conn()
+            .await?
+            .exec_drop(sql, params! {q})
+            .await?;
+        Ok(())
+    }
+
     /// Checks if the log already has a removed match for this entry.
     /// If a q_numeric item is given, and a specific one is in the log entry, it will only trigger on this combination.
     async fn avoid_auto_match(&self, entry_id: usize, q_numeric: Option<isize>) -> Result<bool> {
