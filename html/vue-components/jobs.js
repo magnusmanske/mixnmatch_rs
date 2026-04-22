@@ -43,6 +43,10 @@ export default Vue.extend({
             if ( me.catalog.kv_pairs && typeof me.catalog.kv_pairs.automatch_sparql != 'undefined' ) {
                 me.valid_actions.push('automatch_sparql');
             }
+            // Same for the property-root-driven automatch_complex.
+            if ( me.catalog.kv_pairs && typeof me.catalog.kv_pairs.automatch_complex != 'undefined' ) {
+                me.valid_actions.push('automatch_complex');
+            }
         }
         me.load();
     },
@@ -172,6 +176,10 @@ export default Vue.extend({
                     <td>
                         <span v-if='action=="automatch_sparql"'>
                             Runs the catalog's configured SPARQL query against Wikidata and matches entries by the returned IDs.
+                            Recommended: run <em>purge automatches</em> first so re-runs aren't blocked by stale preliminary matches.
+                        </span>
+                        <span v-else-if='action=="automatch_complex"'>
+                            Runs a multi-property SPARQL match using the catalog's configured property roots, then confirms candidates via Wikidata search.
                             Recommended: run <em>purge automatches</em> first so re-runs aren't blocked by stale preliminary matches.
                         </span>
                         <span v-else :tt='"snj_"+action'></span>
