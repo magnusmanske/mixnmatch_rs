@@ -5,6 +5,11 @@
 	<META NAME="ROBOTS" CONTENT="NOINDEX, NOFOLLOW" />
 	<meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
 	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<!-- Anchor every relative URL to the site root. Protects against stale
+	     bookmarks like `host//#/entry/X` where the page's base URL would
+	     otherwise be `host//` and make `./resources/…` imports resolve to
+	     `//resources/…` (no Content-Type, JS modules blocked). -->
+	<base href="/" />
 	<link rel="icon" href="favicon.png" type="image/png" />
 	<title tt="toolname"></title>
 	<link rel="stylesheet"
