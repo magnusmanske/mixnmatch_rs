@@ -510,8 +510,14 @@ export default Vue.extend({
 			const me = this;
 			var prop = (me.meta.property || '').replace(/\D/g, '');
 			if (prop == '') return;
+			// Exclude the catalog we're currently editing from the lookup —
+			// otherwise "Load existing settings" for a catalog that owns
+			// its own property instantly triggers the warning on itself.
+			var params = { wd_prop: prop };
+			var selfId = parseInt(me.meta.catalog_id, 10);
+			if (selfId > 0) params.exclude_catalog = selfId;
 			try {
-				var d = await mnm_api('check_wd_prop_usage', { wd_prop: prop });
+				var d = await mnm_api('check_wd_prop_usage', params);
 				me.property_already_used = d.data && d.data.used;
 				me.property_used_by = me.property_already_used ? d.data.catalog_name + ' (#' + d.data.catalog_id + ')' : '';
 			} catch (e) { /* ignore */ }
