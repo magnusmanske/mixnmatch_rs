@@ -275,6 +275,7 @@ async fn dispatch(
         "prep_new_item" => data::query_prep_new_item(app, params).await,
         "autoscrape_test" => import::query_autoscrape_test(app, params).await,
         "save_scraper" => import::query_save_scraper(app, params).await,
+        "get_scraper" => import::query_get_scraper(app, params).await,
         "upload_import_file" => Err(ApiError(
             "upload_import_file must be POSTed as multipart/form-data".into(),
         )),

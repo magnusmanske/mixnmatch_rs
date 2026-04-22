@@ -264,3 +264,86 @@ pub async fn query_save_scraper(app: &AppState, params: &Params) -> Result<Respo
 
     Ok(ok(serde_json::json!({ "catalog": catalog_id })))
 }
+
+/// Dedicated loader for the scraper wizard. Given `catalog=<id>`, returns
+/// the stored scraper/options/levels (parsed — not as a JSON string) plus
+/// a `meta` block reconstructed from the catalog row so the wizard can
+/// round-trip every visible form field.
+///
+/// Replaces the previous frontend approach of piggybacking on
+/// `catalog_overview`, which returned a JSON array that the frontend then
+/// tried to index by catalog id as if it were a map.
+pub async fn query_get_scraper(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+    let catalog_id = common::get_param_int(params, "catalog", 0);
+    if catalog_id <= 0 {
+        return Err(ApiError("missing or invalid 'catalog' parameter".into()));
+    }
+    let catalog_id = catalog_id as usize;
+
+    // Autoscrape row first — if missing, return 404-ish so the frontend
+    // can show a helpful "no settings yet" message rather than a stack
+    // trace.
+    let rows = app
+        .storage()
+        .autoscrape_get_for_catalog(catalog_id)
+        .await
+        .map_err(|e| ApiError(format!("autoscrape lookup: {e}")))?;
+    let (_autoscrape_id, raw) = match rows.into_iter().next() {
+        Some(r) => r,
+        None => {
+            return Ok(ok(serde_json::json!({
+                "found": false,
+                "catalog": catalog_id,
+            })));
+        }
+    };
+    let stored: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| ApiError(format!("stored autoscrape JSON is malformed: {e}")))?;
+
+    // Rebuild the `meta` block from the catalog row so the wizard form
+    // fills every field it displays. `meta` is intentionally NOT part of
+    // the stored autoscrape JSON (it lives on the catalog row itself),
+    // so we read it fresh here — anything the user edited via the catalog
+    // editor in the meantime shows up.
+    let catalog = crate::catalog::Catalog::from_id(catalog_id, app)
+        .await
+        .map_err(|e| ApiError(format!("catalog lookup: {e}")))?;
+    let meta = serde_json::json!({
+        "catalog_id": catalog_id,
+        "name": catalog.name().cloned().unwrap_or_default(),
+        "desc": catalog.desc(),
+        "url": catalog.url().cloned().unwrap_or_default(),
+        "property": catalog
+            .wd_prop()
+            .map(|p| format!("P{p}"))
+            .unwrap_or_default(),
+        "lang": catalog.search_wp(),
+        "type": catalog.type_name(),
+    });
+
+    // Keep scraper/options/levels exactly as they were stored so the
+    // "load, then save unedited" round-trip is a no-op. `options` and
+    // `levels` default to sensible empties if missing; `scraper` is
+    // required (a row without one is effectively corrupted).
+    let scraper = stored
+        .get("scraper")
+        .cloned()
+        .ok_or_else(|| ApiError("stored autoscrape row has no `scraper` block".into()))?;
+    let options = stored
+        .get("options")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    let levels = stored
+        .get("levels")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!([]));
+
+    Ok(ok(serde_json::json!({
+        "found": true,
+        "catalog": catalog_id,
+        "scraper": scraper,
+        "options": options,
+        "levels": levels,
+        "meta": meta,
+    })))
+}

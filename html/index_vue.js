@@ -86,6 +86,7 @@ document.addEventListener('DOMContentLoaded', function () {
 			{ path: '/random/:id/:mode', component: mnm.RandomEntry, props: true },
 			{ path: '/sync/:id', component: mnm.SyncCatalog, props: true },
 			{ path: '/scraper/new', component: mnm.Scraper, props: true },
+			{ path: '/scraper/new/:catalog_id', component: mnm.Scraper, props: true },
 			{ path: '/sparql', component: mnm.SparqlList, props: true },
 			{ path: '/sparql/:sparql', component: mnm.SparqlList, props: true },
 			{ path: '/top_missing/', component: mnm.TopMissingEntries, props: true },

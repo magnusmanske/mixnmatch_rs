@@ -73,6 +73,15 @@ export default {
 		<router-link v-if='widar.is_catalog_admin || (widar.mnm_user_id && catalog.owner && widar.mnm_user_id==catalog.owner)'
 			:to='"/catalog_editor/"+catalog.id' class="dropdown-item"
 			style="padding:2px" tt="catalog_editor"></router-link>
+		<!--
+			Deep-link into the scraper wizard pre-loaded with this
+			catalog's existing settings. Only shown when catalog_overview
+			attached an autoscrape_json to the catalog object — i.e. the
+			autoscrape row actually exists.
+		-->
+		<router-link v-if='catalog.autoscrape_json'
+			:to='"/scraper/new/"+catalog.id' class="dropdown-item"
+			style="padding:2px">Edit scraper</router-link>
 		<router-link :to="'/mobile_match/'+catalog.id" class="dropdown-item" style="padding:2px"
 			tt="mobile_game"></router-link>
 		<router-link style="padding:2px" class="dropdown-item"

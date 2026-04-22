@@ -387,6 +387,14 @@ export default Vue.extend({
 			if (typeof me.$route.query[k] == 'undefined') return;
 			me.meta[k] = me.$route.query[k];
 		});
+		// Deep-link from the catalog Action menu: /scraper/new/:catalog_id
+		// pre-fills the id and auto-loads the existing scraper settings so
+		// the user lands on a populated form rather than an empty one.
+		var routeCid = (me.$route.params && me.$route.params.catalog_id) || '';
+		if (routeCid) {
+			me.meta.catalog_id = routeCid;
+			me.loadExistingSettings();
+		}
 		if (me.meta['property'] != '') me.onPropertyChanged();
 	},
 	updated: function () { tt_update_interface(); },
@@ -397,25 +405,47 @@ export default Vue.extend({
 			const me = this;
 			me.load_settings_status = '';
 			me.load_settings_message = '';
+			if (!me.meta.catalog_id) {
+				me.load_settings_status = 'error';
+				me.load_settings_message = 'Enter a catalog ID first.';
+				return;
+			}
 			try {
-				var d = await mnm_api('catalog_overview', { catalogs: me.meta.catalog_id });
-				var cat = d.data[me.meta.catalog_id];
-				if (!cat || !cat.autoscrape_json) {
+				// get_scraper is a dedicated endpoint that returns the
+				// stored scraper/options/levels already parsed, plus a
+				// freshly-reconstructed meta block from the catalog row.
+				// The previous implementation piggybacked on
+				// catalog_overview (which returns an array) and indexed
+				// it as a map — so it never found anything.
+				var d = await mnm_api('get_scraper', { catalog: me.meta.catalog_id });
+				var j = d.data || {};
+				if (!j.found) {
 					me.load_settings_status = 'error';
 					me.load_settings_message = 'No autoscrape settings found for this catalog.';
 					return;
 				}
-				var j = JSON.parse(cat.autoscrape_json);
 				if (j.scraper) me.scraper = j.scraper;
-				if (j.levels) me.levels = j.levels;
+				if (Array.isArray(j.levels)) me.levels = j.levels;
+				// Options come back as a plain object; fill every key of
+				// the form model (truthy → checked, missing → unchecked).
 				if (j.options) {
 					Object.keys(me.options).forEach(function (k) { me.options[k] = !!j.options[k]; });
 				}
+				// Meta is rebuilt server-side from the catalog row so the
+				// form's name/desc/property/lang/type/url fields reflect
+				// current state. Preserve the catalog_id we asked for so
+				// toggling between "load" / "save" doesn't drop it.
+				if (j.meta) {
+					Object.keys(me.meta).forEach(function (k) {
+						if (typeof j.meta[k] != 'undefined') me.meta[k] = j.meta[k];
+					});
+				}
 				me.load_settings_status = 'ok';
 				me.load_settings_message = 'Settings loaded.';
+				if (me.meta.property != '') me.onPropertyChanged();
 			} catch (e) {
 				me.load_settings_status = 'error';
-				me.load_settings_message = 'Failed to load settings: ' + e.message;
+				me.load_settings_message = 'Failed to load settings: ' + (e.message || e);
 			}
 		},
 		ucFirst: function (s) { return s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, ' '); },
