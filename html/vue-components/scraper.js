@@ -1,212 +1,274 @@
 import { mnm_api, mnm_fetch_json, mnm_notify, tt_update_interface, widar } from './store.js';
 
+// Shared inline reference for the $n / $Ln notation used in both the
+// Scraper and Resolve cards.
+const DOLLAR_REF_HELP =
+	"Use $1, $2, … for capture groups from the entry regex, and $L1, $L2, … for the current value of each level.";
+
 const scraperTemplate = `<div>
 		<mnm-breadcrumb :crumbs="[{text: 'Scraper'}]"></mnm-breadcrumb>
 
-		<p>This page helps to create an automated web page scraper, to generate and update Mix'n'match catalogs.<br />
-			The goal is to create a list of URLs, iterate through them, and scrape the respective pages to generate
-			Mix'n'match entries.<br />
-			<span>[<a href='#' @click.prevent='loadExample()'>See example</a>]</span>
-		</p>
+		<!-- ── Intro + quick-action toolbar ── -->
+		<div class='d-flex justify-content-between align-items-start flex-wrap gap-2 mb-3'>
+			<div>
+				<h2 class='mb-1'>Scraper wizard</h2>
+				<p class='text-muted mb-0' style='max-width:56rem'>
+					Build an automated scraper for a web-based catalog. The scraper generates
+					a list of URLs, fetches each page, and extracts Mix'n'match entries using
+					regular expressions.
+				</p>
+			</div>
+			<div class='d-flex gap-2 align-items-start mt-1'>
+				<button class='btn btn-sm btn-outline-info' @click.prevent='loadExample'>Load example</button>
+			</div>
+		</div>
 
-		<div class="card mb-2">
-			<div class="card-body">
-				<h4 class="card-title">Catalog</h4>
-				<h6 class="card-subtitle mb-2 text-muted">Add a scraper to an existing catalog (give ID), or create a
-					new catalog (leave ID empty).<br />
-					<i>Note: only the original catalog creator can save to an existing catalog, but everyone can add a
-						new one.</i><br />
-					<i>Note: if you enter the property first and then click another field, some information will be
-						filled in automatically.</i>
-				</h6>
-				<div class="card-text">
 
-					<form>
+		<!-- ── 1. Catalog metadata ── -->
+		<div class='card mb-3'>
+			<div class='card-body'>
+				<h4 class='card-title mb-1'>Catalog</h4>
+				<div class='text-muted mb-3' style='font-size:0.9em'>
+					Add a scraper to an existing catalog (enter its ID) or create a new one
+					(leave the ID blank).
+					<br />Only the original creator of an existing catalog can overwrite its
+					scraper; anyone can add a new catalog. Entering a Wikidata property and
+					leaving the field auto-fills name, description and URL.
+				</div>
 
-						<div class="mb-3 row align-items-center">
-							<label class="col-sm-2 col-form-label">Catalog ID</label>
-							<div class="col-sm-2"><input type="number" class="form-control" v-model="meta.catalog_id">
+				<form>
+					<!-- Catalog ID + Load existing settings -->
+					<div class='row g-3 align-items-end mb-3'>
+						<div class='col-md-5' style='max-width:24rem'>
+							<label class='form-label'>Catalog ID</label>
+							<div class='input-group'>
+								<span class='input-group-text'>#</span>
+								<input type='number' class='form-control' v-model='meta.catalog_id' placeholder='leave empty to create new'>
+								<button v-if='meta.catalog_id' class='btn btn-outline-secondary' type='button' @click.prevent='loadExistingSettings'>Load settings</button>
 							</div>
-							<div class="col-sm">
-								<button v-if='meta.catalog_id' class='btn btn-sm btn-outline-secondary me-2' @click.prevent='loadExistingSettings'>Load existing settings</button>
-								<span v-if='load_settings_status' :class='load_settings_status=="error"?"text-danger":"text-success"'>{{load_settings_message}}</span>
-								<small v-if='!meta.catalog_id'>Leave empty to create a new catalog. If given, other data in this section will be ignored.</small>
+							<div class='form-text' v-if='!meta.catalog_id'>Leave empty to create a new catalog; when set, the metadata below is ignored on save.</div>
+						</div>
+						<div class='col-md' v-if='load_settings_status'>
+							<div :class='"alert py-2 mb-0 " + (load_settings_status=="error" ? "alert-warning" : "alert-success")' style='font-size:0.9em'>
+								{{load_settings_message}}
 							</div>
 						</div>
-						<div class="mb-3 row align-items-center">
-							<label class="col-sm-2 col-form-label">Catalog name</label>
-							<div class="col-sm-10"><input type="text" class="form-control" v-model="meta.name"></div>
-						</div>
-						<div class="mb-3 row align-items-center">
-							<label class="col-sm-2 col-form-label">Description</label>
-							<div class="col-sm-10"><input type="text" class="form-control" v-model="meta.desc"></div>
-						</div>
-						<div class="mb-3 row align-items-center">
-							<label class="col-sm-2 col-form-label">URL</label>
-							<div class="col-sm-8"><input type="text" class="form-control" v-model="meta.url"></div>
-							<div class="col-sm-2"><small>optional</small></div>
-						</div>
-						<div class="mb-3 row align-items-center">
-							<label class="col-sm-2 col-form-label">WD property</label>
-							<div class="col-sm-2"><input type="text" class="form-control" v-model="meta.property"
-									@blur="onPropertyChanged"></div>
-							<div class="col-sm-2"><small>optional</small></div>
-							<div class="col-sm-2" tt='type'></div>
-							<div class="col-sm-2">
-								<select class="form-select" v-model='meta.type'>
-									<option v-for='group in types' :value='group' :selected='group==meta.type'>
-										{{ucFirst(group)}}</option>
-								</select>
+					</div>
+
+					<div class='mb-3'>
+						<label class='form-label'>Catalog name</label>
+						<input type='text' class='form-control' v-model='meta.name'>
+					</div>
+
+					<div class='mb-3'>
+						<label class='form-label'>Description</label>
+						<input type='text' class='form-control' v-model='meta.desc'>
+					</div>
+
+					<div class='mb-3'>
+						<label class='form-label'>URL <small class='text-muted'>(optional)</small></label>
+						<input type='text' class='form-control' v-model='meta.url'>
+					</div>
+
+					<div class='row g-3'>
+						<div class='col-md-4' style='max-width:18rem'>
+							<label class='form-label'>Wikidata property <small class='text-muted'>(optional)</small></label>
+							<div class='input-group'>
+								<span class='input-group-text'>P</span>
+								<input type='text' class='form-control' v-model='meta.property' @blur='onPropertyChanged' placeholder='e.g. 7471'>
 							</div>
-							<div class="col-sm text-warning" v-if='property_already_used'>&#x26A0; Property already used by {{property_used_by}}</div>
+							<div class='form-text text-warning' v-if='property_already_used'>
+								&#x26A0; Property already used by {{property_used_by}}
+							</div>
 						</div>
-						<div class="mb-3 row align-items-center">
-							<label class="col-sm-2 col-form-label">Primary language</label>
-							<div class="col-sm-2"><input type="text" class="form-control" v-model="meta.lang"></div>
+						<div class='col-md-4'>
+							<label class='form-label' tt='type'></label>
+							<select class='form-select' v-model='meta.type'>
+								<option v-for='group in types' :value='group' :selected='group==meta.type'>{{ucFirst(group)}}</option>
+							</select>
 						</div>
+						<div class='col-md-3' style='max-width:12rem'>
+							<label class='form-label'>Primary language</label>
+							<input type='text' class='form-control' v-model='meta.lang' placeholder='en'>
+						</div>
+					</div>
+				</form>
+			</div>
+		</div>
 
 
-					</form>
+		<!-- ── 2. Levels ── -->
+		<div class='card mb-3'>
+			<div class='card-body'>
+				<div class='d-flex justify-content-between align-items-start flex-wrap gap-2 mb-2'>
+					<div>
+						<h4 class='card-title mb-1'>Levels</h4>
+						<div class='text-muted' style='font-size:0.9em;max-width:56rem'>
+							A URL is built from a static part plus one or more variables ("levels").
+							Each level is a list of keys (e.g. letters), a numeric range, a page to
+							follow, or a MediaWiki instance. The last level advances first; when it
+							finishes, the one above it ticks forward and the last level restarts.
+						</div>
+					</div>
+					<div class='dropdown flex-shrink-0'>
+						<button type='button' class='btn btn-outline-success dropdown-toggle'
+							data-bs-toggle='dropdown' aria-expanded='false'>+ Add level</button>
+						<ul class='dropdown-menu dropdown-menu-end'>
+							<li><a class='dropdown-item' href='#' @click.prevent='addLevel("keys")'>Keys <small class='text-muted'>(A–Z, custom list)</small></a></li>
+							<li><a class='dropdown-item' href='#' @click.prevent='addLevel("range")'>Range <small class='text-muted'>(numeric from/to)</small></a></li>
+							<li><a class='dropdown-item' href='#' @click.prevent='addLevel("follow")'>Follow <small class='text-muted'>(links on a page)</small></a></li>
+							<li><a class='dropdown-item' href='#' @click.prevent='addLevel("mediawiki")'>MediaWiki <small class='text-muted'>(article namespace)</small></a></li>
+						</ul>
+					</div>
+				</div>
 
+				<div v-if='levels.length==0' class='alert alert-warning mt-2 mb-0' style='font-size:0.9em'>
+					At least one level is required. Use the <strong>+ Add level</strong> button above to begin.
+				</div>
+
+				<div v-for='(l,level_id) in levels' class='border rounded p-3 mt-3' style='background:rgba(0,0,0,.02)'>
+					<div class='d-flex justify-content-between align-items-center mb-3'>
+						<div>
+							<span class='badge text-bg-secondary me-2'>Level {{level_id+1}}</span>
+							<span class='badge text-bg-light text-dark border' style='text-transform:uppercase;letter-spacing:.05em'>{{l.mode}}</span>
+						</div>
+						<div class='btn-group btn-group-sm'>
+							<button type='button' class='btn btn-outline-secondary' v-if='level_id>0' @click.prevent='moveLevelUp(level_id)' title='Move up'>&uarr;</button>
+							<button type='button' class='btn btn-outline-secondary' v-if='level_id+1<levels.length' @click.prevent='moveLevelDown(level_id)' title='Move down'>&darr;</button>
+							<button type='button' class='btn btn-outline-danger' @click.prevent='deleteLevel(level_id)'>Delete</button>
+						</div>
+					</div>
+
+					<div v-if='l.mode=="keys"' class='col'>
+						<div class='mb-2 d-flex gap-2 align-items-center' style='font-size:0.9em'>
+							<span class='text-muted'>Quick-fill:</span>
+							<button type='button' class='btn btn-sm btn-outline-secondary' @click.prevent='setUcAZ'>A–Z</button>
+							<button type='button' class='btn btn-sm btn-outline-secondary' @click.prevent='setLcAZ'>a–z</button>
+						</div>
+						<textarea class='form-control font-monospace' rows='5' @keyup='keysChanged' :level='level_id'
+							placeholder='One key per line (e.g. A, B, C, …)'>{{l.keys.join("\\n")}}</textarea>
+					</div>
+
+					<div v-if='l.mode=="range"' class='col'>
+						<div class='row g-3'>
+							<div class='col-sm-3'>
+								<label class='form-label'>Start</label>
+								<input type='number' class='form-control' v-model='l.start'>
+							</div>
+							<div class='col-sm-3'>
+								<label class='form-label'>End</label>
+								<input type='number' class='form-control' v-model='l.end'>
+							</div>
+							<div class='col-sm-3'>
+								<label class='form-label'>Step</label>
+								<input type='number' class='form-control' v-model='l.step'>
+							</div>
+							<div class='col-sm-3'>
+								<label class='form-label'>Zero-pad to</label>
+								<input type='number' class='form-control' v-model='l.pad' min='0'>
+								<div class='form-text'>E.g. 5 turns 42 into 00042. Use 0 for no padding.</div>
+							</div>
+						</div>
+					</div>
+
+					<div v-if='l.mode=="follow"' class='col'>
+						<div class='mb-3'>
+							<label class='form-label'>URL</label>
+							<input type='text' class='form-control font-monospace' v-model='l.url'>
+							<div class='form-text'>A URL pattern with <code>\$1</code> as a placeholder for a partial URL match from the regex below.</div>
+						</div>
+						<div class='mb-0'>
+							<label class='form-label'>Regex</label>
+							<input type='text' class='form-control font-monospace' v-model='l.rx'>
+							<div class='form-text'>Regular expression matching (partial) URLs on a page built from lower levels — the first capture group feeds <code>\$1</code>.</div>
+						</div>
+					</div>
+
+					<div v-if='l.mode=="mediawiki"' class='col'>
+						<div class='mb-0'>
+							<label class='form-label'>API URL</label>
+							<input type='text' class='form-control font-monospace' v-model='l.url'>
+							<div class='form-text'>URL of the MediaWiki API. Scrapes every article-namespace entry; <code>\$1</code> receives the article title.</div>
+						</div>
+					</div>
+				</div>
+
+				<div v-if='levels.length>0' class='alert alert-info mt-3 mb-0' style='font-size:0.9em'>
+					{{getURLestimate()}}
 				</div>
 			</div>
 		</div>
 
 
-		<div class="card mb-2">
-			<div class="card-body">
-				<h4 class="card-title">Levels</h4>
-				<div class="card-text">
-					<p>A URL can be constructed from a static part, and one or more variables, here called
-						<i>levels</i>. Each level can be a defined list of keys (e.g., letters), a range (numeric
-						from-to, plus step size),
-						or follow (get URLs listed on a page and follow them). The last level with be run through,
-						before the level above it (next lower level) ticks ahead, and the higher level resets.<br />
-						So, if the first level is keys A-Z, and the second is range 1-100 (step size 1), URLs will use
-						A/1, A/2,... A/100, B/1, B/2,... Z/100.
-					</p>
-					<div>
-						<div v-for='(l,level_id) in levels' class='row'>
-							<div class='col-2' style='text-align:right;font-family:Lato,Arial,Courier'>Level
-								{{level_id+1}}<br />{{l.mode}}</div>
-							<div v-if='l.mode=="keys"' class='col'>
-								<div><textarea style='width:100%' rows='5' @keyup='keysChanged' :level='level_id'
-										placeholder='Keys (e.g., A-Z, one per row)'>{{l.keys.join("\\n")}}</textarea>
-								</div>
-								<div>
-									Set keys to:
-									<a href='#' @click.prevent='setUcAZ'>A-Z</a> |
-									<a href='#' @click.prevent='setLcAZ'>a-z</a>
-								</div>
-							</div>
-							<div v-if='l.mode=="range"' class='col'>
-								<form>
-									<div class="mb-3 row">
-										<label class="col-sm-2 col-form-label">Start</label>
-										<div class="col-sm-10"><input type="number" class="form-control"
-												v-model="l.start"></div>
-									</div>
-									<div class="mb-3 row">
-										<label class="col-sm-2 col-form-label">End</label>
-										<div class="col-sm-10"><input type="number" class="form-control"
-												v-model="l.end"></div>
-									</div>
-									<div class="mb-3 row">
-										<label class="col-sm-2 col-form-label">Step</label>
-										<div class="col-sm-10"><input type="number" class="form-control"
-												v-model="l.step"></div>
-									</div>
-									<div class="mb-3 row">
-										<label class="col-sm-2 col-form-label">Zero-pad to</label>
-										<div class="col-sm-10 input-with-note"><input type="number" class="form-control"
-												v-model="l.pad" min="0"><small>Minimum number of digits (e.g. 5 turns 42 into 00042). Leave 0 for no padding.</small></div>
-									</div>
-								</form>
-							</div>
-							<div v-if='l.mode=="follow"' class='col'>
-								<form>
-									<div class="mb-3 row">
-										<label class="col-sm-2 col-form-label">URL</label>
-										<div class="col-sm-10 input-with-note"><input type="text" class="form-control"
-												v-model="l.url"><small>A URL pattern with \$1 as a placeholder for a
-												partial URL match from the RegEx</small></div>
-									</div>
-									<div class="mb-3 row">
-										<label class="col-sm-2 col-form-label">Regex</label>
-										<div class="col-sm-10 input-with-note"><input type="text" class="form-control"
-												v-model="l.rx"><small>Regular expression matching (partial) URLs on a
-												page from the lower levels, as first parameter</small></div>
-									</div>
-								</form>
-							</div>
-							<div v-if='l.mode=="mediawiki"' class='col'>
-								<form>
-									<div class="mb-3 row">
-										<label class="col-sm-2 col-form-label">URL</label>
-										<div class="col-sm-10 input-with-note"><input type="text" class="form-control"
-												v-model="l.url"><small>The URL of the API of the MediaWiki installation.
-												Will scrape all entries in article namespace. \$1 will have the article
-												title.</small></div>
-									</div>
-								</form>
-							</div>
-							<div class='col-4'>
-								<button class='btn btn-outline-danger' @click='deleteLevel(level_id)'>Delete
-									level</button>
-								<button v-if='level_id>0' class='btn btn-light'
-									@click='moveLevelUp(level_id)'>&uArr;</button>
-								<button v-if='level_id+1<levels.length' class='btn btn-light'
-									@click='moveLevelDown(level_id)'>&dArr;</button>
-							</div>
-						</div>
-					</div>
-					<div>
-						<button class='btn btn-outline-success' @click='addLevel("keys")'>Add keys level</button>
-						<button class='btn btn-outline-success' @click='addLevel("range")'>Add range level</button>
-						<button class='btn btn-outline-success' @click='addLevel("follow")'>Add follow level</button>
-						<button class='btn btn-outline-success' @click='addLevel("mediawiki")'>Add MediaWiki
-							level</button>
-					</div>
-					<div>{{getURLestimate()}}</div>
-					<div v-if='levels.length==0' class='text-danger'>At least one level is required</div>
-				</div>
-			</div>
-		</div>
-
-
+		<!-- ── Remaining cards only make sense once at least one level exists ── -->
 		<div v-if='levels.length>0'>
-			<div class="card mb-2">
-				<div class="card-body">
-					<h4 class="card-title">Scraper</h4>
-					<h6 class="card-subtitle mb-2 text-muted">Now use the level values to construct the URLs to be
-						scraped, then define block/entry-level regular expressions to get the data</h6>
-					<div class='card-text'>
-						<form>
-							<div class="mb-3 row">
-								<label class="col-sm-2 col-form-label">URL pattern</label>
-								<div class="col-sm-10 input-with-note"><input type="text" class="form-control"
-										v-model="scraper.url"><small>A URL pattern, with \$1 for the value of level 1, \$2
-										for level 2 etc.</small></div>
+
+			<!-- ── 3. Scraper ── -->
+			<div class='card mb-3'>
+				<div class='card-body'>
+					<h4 class='card-title mb-1'>Scraper</h4>
+					<div class='text-muted mb-3' style='font-size:0.9em'>
+						Build the URL from the level values, then extract entries from the fetched
+						HTML with regular expressions.
+					</div>
+					<form>
+						<div class='mb-3'>
+							<label class='form-label'>URL pattern</label>
+							<input type='text' class='form-control font-monospace' v-model='scraper.url'>
+							<div class='form-text'>Use <code>\$1</code> for the value of level 1, <code>\$2</code> for level 2, …</div>
+						</div>
+						<div class='mb-3'>
+							<label class='form-label'>Block regex <small class='text-muted'>(optional)</small></label>
+							<input type='text' class='form-control font-monospace' v-model='scraper.rx_block'>
+							<div class='form-text'>Regex wrapping a block of entries; its <code>\$1</code> feeds into the entry regex. Useful for large/complex pages.</div>
+							<div class='text-info' v-if='test_results.status=="OK" && scraper.rx_block!=""' style='font-size:0.9em'>
+								Matches <strong>{{block_matches}}</strong> block(s) in the test HTML below.
 							</div>
-							<div class="mb-3 row">
-								<label class="col-sm-2 col-form-label">RegEx block</label>
-								<div class="col-sm-10 input-with-note">
-									<input type="text" class="form-control" v-model="scraper.rx_block">
-									<small>Regular expression for blocks of entries, useful for scraping large pages;
-										every part \$1 will be used for the entry RegEx below. Optional</small>
-									<div class='text-info' v-if='test_results.status=="OK" && scraper.rx_block!=""'>This
-										regular expression matches {{block_matches}} blocks in the HTML below</div>
+						</div>
+						<div class='mb-0'>
+							<label class='form-label'>Entry regex</label>
+							<input type='text' class='form-control font-monospace' v-model='scraper.rx_entry'>
+							<div class='form-text'>Regex matching a single entry. Capture groups <code>\$1</code>, <code>\$2</code>, … are referenced in <em>Resolve</em> below.</div>
+							<div class='text-info' v-if='test_results.status=="OK" && scraper.rx_entry!=""' style='font-size:0.9em'>
+								Matches <strong>{{internal_results.length}}</strong> entries in the test HTML below.
+							</div>
+						</div>
+					</form>
+				</div>
+			</div>
+
+
+			<!-- ── 4. Resolve ── -->
+			<div class='card mb-3'>
+				<div class='card-body'>
+					<h4 class='card-title mb-1'>Resolve</h4>
+					<div class='text-muted mb-3' style='font-size:0.9em'>${DOLLAR_REF_HELP}</div>
+					<div v-for='(r,rid) in scraper.resolve' class='border-bottom pb-3 mb-3'>
+						<form>
+							<div class='row g-3 align-items-center'>
+								<div class='col-md-2'>
+									<label class='form-label fw-semibold text-uppercase mb-0' style='letter-spacing:.05em'>{{rid}}</label>
+								</div>
+								<div class='col-md-10'>
+									<input type='text' class='form-control font-monospace' v-model='r.use'>
+									<div class='form-text' v-if='note[rid]'>{{note[rid]}}</div>
 								</div>
 							</div>
-							<div class="mb-3 row">
-								<label class="col-sm-2 col-form-label">RegEx entry</label>
-								<div class="col-sm-10 input-with-note">
-									<input type="text" class="form-control" v-model="scraper.rx_entry">
-									<small>Regular expression to match one single entry. You can use the matching parts
-										() as \$1, \$2,... to resolve the Mix'n'match values</small>
-									<div class='text-info' v-if='test_results.status=="OK" && scraper.rx_entry!=""'>This
-										regular expression matches {{internal_results.length}} entries in the HTML below
+							<div v-if='typeof r.rx!="undefined"' class='row g-3 mt-1'>
+								<div class='col-md-2'></div>
+								<div class='col-md-10'>
+									<div class='text-muted mb-2' style='font-size:0.85em'>
+										Optional regex replacements: <em>match &rarr; replace with</em>.
 									</div>
+									<div v-for='(rx,rxid) in r.rx' class='row g-2 mb-2 align-items-center'>
+										<div class='col-auto' style='font-family:monospace;color:#888'>{{rxid+1}}.</div>
+										<div class='col-sm-5'><input type='text' class='form-control form-control-sm font-monospace' v-model='rx[0]' placeholder='pattern' /></div>
+										<div class='col-sm-5'><input type='text' class='form-control form-control-sm font-monospace' v-model='rx[1]' placeholder='replacement' /></div>
+										<div class='col-sm-auto'>
+											<button class='btn btn-sm btn-outline-danger' @click.prevent='removeRegex' :rid='rid' :rxid='rxid'>Delete</button>
+										</div>
+									</div>
+									<button class='btn btn-sm btn-outline-success' @click.prevent='addRegex' :rid='rid'>+ Add regex replacement</button>
 								</div>
 							</div>
 						</form>
@@ -215,146 +277,108 @@ const scraperTemplate = `<div>
 			</div>
 
 
-			<div class="card mb-2">
-				<div class="card-body">
-					<h4 class="card-title">Resolve</h4>
-					<h6 class="card-subtitle mb-2 text-muted">Use \$1, \$2,... for the parts of RegEx entry, and \$L1,
-						\$L2,... for the current values of the levels</h6>
-					<div class='card-text'>
-						<div v-for='(r,rid) in scraper.resolve'>
-							<form>
-								<div class="mb-3">
-									<div class="row">
-										<label class="col-sm-2 col-form-label">{{rid}}</label>
-										<div class="col-sm-10 input-with-note"><input type="text" class="form-control"
-												v-model="r.use"><small>{{note[rid]}}</small></div>
-									</div>
-									<div v-if='typeof r.rx!="undefined"' class='row'>
-										<div class='col-sm-2'></div>
-										<div class='col-sm-10'>
-											<div><small class='text-muted'>Optional: Use one or more regular expressions
-													to "fix up" values; match => replace with</small></div>
-											<div v-for='(rx,rxid) in r.rx' class='row align-items-center'>
-												<div class='col-sm-1' style='text-align:right;font-family:Courier;'>
-													{{rxid+1}}</div>
-												<div class='col-sm-4'><input type='text' class='form-control'
-														v-model='rx[0]' placeholder='The matching pattern' /></div>
-												<div class='col-sm-4'><input type='text' class='form-control'
-														v-model='rx[1]' placeholder='The replacement' /></div>
-												<div class='col-sm-2'>
-													<button class='btn btn-outline-danger' @click.prevent='removeRegex'
-														:rid='rid' :rxid='rxid'>Delete</button>
-												</div>
-											</div>
-											<div><button class='btn btn-outline-success' @click.prevent='addRegex'
-													:rid='rid'>Add regular expression replacement</button></div>
-										</div>
-									</div>
-								</div>
-							</form>
+			<!-- ── 5. Options ── -->
+			<div class='card mb-3'>
+				<div class='card-body'>
+					<h4 class='card-title mb-3'>Options</h4>
+					<div class='form-check mb-2'>
+						<input class='form-check-input' type='checkbox' id='opt_simple_space' v-model='options.simple_space'>
+						<label class='form-check-label' for='opt_simple_space'>
+							Compress whitespace (spaces, tabs, newlines) to a single space before processing
+							<small class='text-muted'>— recommended, simplifies regex</small>
+						</label>
+					</div>
+					<div class='form-check mb-2'>
+						<input class='form-check-input' type='checkbox' id='opt_utf8_encode' v-model='options.utf8_encode'>
+						<label class='form-check-label' for='opt_utf8_encode'>
+							UTF-8 encode <small class='text-muted'>— usually not needed</small>
+						</label>
+					</div>
+					<div class='form-check mb-0'>
+						<input class='form-check-input' type='checkbox' id='opt_skip_failed' v-model='options.skip_failed'>
+						<label class='form-check-label' for='opt_skip_failed'>
+							Ignore pages that fail to load (403, timeouts, …) instead of aborting
+							<small class='text-muted'>— good for slow/unreliable servers</small>
+						</label>
+					</div>
+				</div>
+			</div>
+
+
+			<!-- ── 6. Test & save ── -->
+			<div class='card mb-4'>
+				<div class='card-body'>
+					<h4 class='card-title mb-1'>Test &amp; save</h4>
+					<div class='text-muted mb-3' style='font-size:0.9em'>
+						Run a test to fetch the first URL and preview the entries your regex finds.
+						Saving is only enabled once a test returns at least one entry.
+					</div>
+
+					<div class='d-flex gap-2 flex-wrap align-items-center mb-3'>
+						<button class='btn btn-outline-success' @click.prevent='testScraper' :disabled='test_results.status=="RUNNING"'>
+							<span v-if='test_results.status=="RUNNING"'>
+								<span class='spinner-border spinner-border-sm me-1' role='status' aria-hidden='true'></span>
+								Testing…
+							</span>
+							<span v-else>Test this scraper</span>
+						</button>
+						<button id='save_scraper_button' class='btn btn-primary'
+							:disabled='can_save_message!="OK"'
+							@click.prevent='saveScraper'>Save scraper / catalog</button>
+						<span v-if='can_save_message && can_save_message!="OK"' class='text-muted' style='font-size:0.9em'>
+							&mdash; {{can_save_message}}
+						</span>
+					</div>
+
+					<div v-if='catalog_from_save!=0' class='alert alert-success'>
+						Scraper saved. Monitor progress at
+						<a :href='"https://mix-n-match.toolforge.org/#/catalog/"+catalog_from_save'>catalog #{{catalog_from_save}}</a>;
+						the first run may take minutes to hours (rarely days).
+					</div>
+
+					<div v-if='test_results.status!="" && test_results.status!="OK" && test_results.status!="RUNNING"'
+						class='alert alert-danger'>
+						<strong>Test failed:</strong> {{test_results.status}}
+					</div>
+
+					<div v-if='test_results.status=="OK"'>
+						<div v-if='typeof test_results.last_url!="undefined"' class='mb-2'>
+							<span class='text-muted me-1' style='font-size:0.9em'>URL fetched:</span>
+							<a :href='test_results.last_url' class='external' target='_blank'>{{test_results.last_url}}</a>
 						</div>
-					</div>
-				</div>
-			</div>
-
-			<div class="card mb-2">
-				<div class="card-body">
-					<h4 class="card-title">Options</h4>
-					<div class="card-text">
-						<div class="form-check"><label class="form-check-label"><input class="form-check-input"
-									type="checkbox" v-model="options.simple_space">Compress whitespace (spaces, tabs,
-								newlines) to single space before processing <i>(recommended, makes for easier
-									regex)</i></label></div>
-						<div class="form-check"><label class="form-check-label"><input class="form-check-input"
-									type="checkbox" v-model="options.utf8_encode">UTF8-encode <i>(usually not
-									needed)</i></label></div>
-						<div class="form-check"><label class="form-check-label"><input class="form-check-input"
-									type="checkbox" v-model="options.skip_failed">Ignore pages that fail to load (403, timeouts, etc.) instead of aborting <i>(good for slow/problematic servers)</i></label></div>
-					</div>
-				</div>
-			</div>
-
-
-			<div class="card mb-2">
-				<div class="card-body">
-					<h4 class="card-title">Testing and saving</h4>
-					<div class="card-text">
+						<details class='mb-3'>
+							<summary class='text-muted' style='font-size:0.9em;cursor:pointer'>Raw HTML response ({{(test_results.html||'').length}} chars)</summary>
+							<textarea style='width:100%;font-family:monospace;font-size:8pt;' rows='5' readonly>{{test_results.html}}</textarea>
+						</details>
 						<div class='mb-2'>
-							<button class='btn btn-outline-success' @click.prevent='testScraper'>Test this
-								scraper</button>
-							<span v-if='can_save_message=="OK"'><button id='save_scraper_button'
-									class='btn btn-outline-primary' @click.prevent='saveScraper'>Save
-									scraper/catalog</button></span>
-							<span v-else>{{can_save_message}}</span>
+							<span class='badge text-bg-primary'>{{test_results.results.length}} entries found</span>
 						</div>
-
-						<div v-if='test_results.status==""'></div>
-						<div v-else-if='test_results.status=="RUNNING"'><i>Test is running...</i></div>
-						<div v-else-if='test_results.status=="OK"'>
-
-							<div v-if='catalog_from_save!=0'>
-								The scraper for <a
-									:href='"https://mix-n-match.toolforge.org/#/catalog/"+catalog_from_save'>this
-									catalog</a> was successfully saved, run can take minutes/hours (days in rare cases).
-							</div>
-
-							<div>
-								<h6 class="card-title">Test results</h6>
-								<div v-if='typeof test_results.last_url!="undefined"'>
-									<h7>URL used</h7>
-									<a :href='test_results.last_url' class='external'
-										target='_blank'>{{test_results.last_url}}</a>
-								</div>
-								<div>
-									<h7>HTML of page</h7>
-									<textarea style='width:100%;font-family:Courier;font-size:8pt;' rows=5
-										readonly>{{test_results.html}}</textarea>
-								</div>
-								<div>
-									<h7>Scraped entries</h7>
-									<div>{{test_results.results.length}} entries found on page</div>
-									<div v-if='test_results.results.length>0'>
-										<table class='table table-sm table-sm table-striped'>
-											<thead>
-												<tr>
-													<th>ID</th>
-													<th>Name</th>
-													<th>Description</th>
-													<th>Type</th>
-												</tr>
-											</thead>
-											<tbody>
-												<tr v-for='(r,rid) in test_results.results'>
-													<td>
-														<span v-if='r.url==""'>{{r.id}}</span>
-														<span v-else><a :href='r.url' target='_blank'
-																class='external'>{{r.id}}</a></span>
-													</td>
-													<td>{{r.name}}</td>
-													<td>{{r.desc}}</td>
-													<td>{{r.type}}</td>
-												</tr>
-											</tbody>
-										</table>
-									</div>
-								</div>
-							</div>
-
-
+						<div v-if='test_results.results.length>0' class='table-responsive'>
+							<table class='table table-sm table-striped align-middle'>
+								<thead>
+									<tr>
+										<th>ID</th>
+										<th>Name</th>
+										<th>Description</th>
+										<th>Type</th>
+									</tr>
+								</thead>
+								<tbody>
+									<tr v-for='(r,rid) in test_results.results'>
+										<td>
+											<span v-if='r.url==""'>{{r.id}}</span>
+											<span v-else><a :href='r.url' target='_blank' class='external'>{{r.id}}</a></span>
+										</td>
+										<td>{{r.name}}</td>
+										<td>{{r.desc}}</td>
+										<td>{{r.type}}</td>
+									</tr>
+								</tbody>
+							</table>
 						</div>
-						<div v-else style='color:red'>ERROR: {{test_results.status}}</div>
 					</div>
 				</div>
 			</div>
-
-			<!--
-<div>
-<h4>JSON [debugging info]</h4>
-<textarea rows='10' style='width:100%'>{{generateJSON()}}</textarea>
-</div>
-</div>
--->
-
 		</div>
 </div>`;
 
