@@ -334,6 +334,12 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     async fn jobs_get_tasks(&self) -> Result<HashMap<String, TaskSize>>;
     async fn reset_running_jobs(&self) -> Result<()>;
     async fn reset_failed_jobs(&self) -> Result<()>;
+    /// Send KILL QUERY to every connection under the current DB user whose
+    /// current query has been running for at least `threshold_secs`. Returns
+    /// the killed connection IDs. Used on bot startup to drop orphaned
+    /// long-runners left behind by a prior instance that didn't exit cleanly,
+    /// which would otherwise race with the new instance on the same jobs.
+    async fn kill_long_running_queries(&self, threshold_secs: u64) -> Result<Vec<u64>>;
     async fn jobs_queue_simple_job(
         &self,
         catalog_id: usize,

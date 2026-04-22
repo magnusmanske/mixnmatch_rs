@@ -316,6 +316,28 @@ impl AppState {
 
     async fn forever_loop_initalize(&self) -> Result<Arc<DashMap<usize, TaskSize>>> {
         let current_jobs: Arc<DashMap<usize, TaskSize>> = Arc::new(DashMap::new());
+        // Cut any query still in flight from a previous instance BEFORE the
+        // reset flips those jobs to TODO. If the old process is still alive,
+        // killing its query unblocks the connection and its `set_status(Done)`
+        // either fails or targets a row we've already re-queued — whichever
+        // wins, the job isn't simultaneously running in two places.
+        const ORPHAN_QUERY_THRESHOLD_SECS: u64 = 120;
+        match self
+            .storage()
+            .kill_long_running_queries(ORPHAN_QUERY_THRESHOLD_SECS)
+            .await
+        {
+            Ok(ids) if !ids.is_empty() => {
+                info!(
+                    "forever_loop: killed {} long-running queries (>{}s): {:?}",
+                    ids.len(),
+                    ORPHAN_QUERY_THRESHOLD_SECS,
+                    ids
+                );
+            }
+            Ok(_) => {}
+            Err(e) => error!("forever_loop: kill_long_running_queries failed: {e}"),
+        }
         self.storage().reset_running_jobs().await?;
         self.storage().reset_failed_jobs().await?;
         info!("Old jobs reset, starting bot");

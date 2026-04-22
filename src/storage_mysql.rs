@@ -147,7 +147,7 @@ impl StorageMySQL {
         next_ts: Option<String>,
     ) -> String {
         let mut sql = format!(
-            "SELECT `id` FROM `jobs` WHERE `status`='{}'",
+            "SELECT /* jobs_get_next_job */ `id` FROM `jobs` WHERE `status`='{}'",
             status.as_str()
         );
         sql += r#" AND NOT EXISTS (SELECT * FROM catalog WHERE catalog.id=jobs.catalog AND active!=1)"#; // No inactive catalogs
@@ -1528,7 +1528,7 @@ impl Storage for StorageMySQL {
         let sqls = [
             r#"DROP TEMPORARY TABLE IF EXISTS tmp_cnd"#,
             r#"CREATE TEMPORARY TABLE tmp_cnd AS
-                SELECT
+                SELECT /* maintenance_common_names_dates */
                     ext_name AS `name`,
                     count(DISTINCT catalog) AS cnt,
                     group_concat(entry_id) AS entry_ids,
@@ -1556,7 +1556,7 @@ impl Storage for StorageMySQL {
         let sqls = [
             r#"DROP TABLE IF EXISTS common_aux_tmp"#,
             r#"CREATE TABLE common_aux_tmp
-			    SELECT aux_p,aux_name,group_concat(id) AS entry_ids,count(*) as cnt,sum(q is null or user=0) as unmatched,
+			    SELECT /* maintenance_common_aux */ aux_p,aux_name,group_concat(id) AS entry_ids,count(*) as cnt,sum(q is null or user=0) as unmatched,
 			    group_concat(DISTINCT IF(q is not null AND user is not null and user>0,q,null)) as fully_matched_qs
 			    FROM vw_aux WHERE aux_p IN (214,227,1207,1273,244)
 			    GROUP BY aux_p,aux_name HAVING cnt>=3 AND unmatched>0"#,
@@ -1574,7 +1574,7 @@ impl Storage for StorageMySQL {
             r#"SET SESSION group_concat_max_len = 1000000000"#,
             r#"TRUNCATE common_names_birth_year_tmp"#,
             r#"REPLACE INTO common_names_birth_year_tmp (name,cnt,entry_ids,dates)
-	        SELECT SQL_NO_CACHE (SELECT ext_name FROM entry WHERE entry.id=entry_id AND q IS NULL AND catalog NOT IN (4837,5580,6094,3247,7480)) AS name,count(DISTINCT entry_id) AS cnt,group_concat(entry_id) AS entry_ids, concat(year_born,'-') as dates
+	        SELECT /* maintenance_common_names_birth_year */ SQL_NO_CACHE (SELECT ext_name FROM entry WHERE entry.id=entry_id AND q IS NULL AND catalog NOT IN (4837,5580,6094,3247,7480)) AS name,count(DISTINCT entry_id) AS cnt,group_concat(entry_id) AS entry_ids, concat(year_born,'-') as dates
 	        FROM person_dates WHERE is_matched=0 AND year_born!='' AND year_born<1960
 	        GROUP BY name,year_born HAVING name IS NOT NULL AND name NOT RLIKE "^\\S*$" AND cnt>=3"#,
             r#"TRUNCATE common_names_birth_year"#,
@@ -1592,7 +1592,7 @@ impl Storage for StorageMySQL {
         let sqls = [
             r#"DROP TABLE IF EXISTS tmp_taxa"#,
             r#"CREATE TABLE tmp_taxa AS
-		        SELECT ext_name,count(distinct catalog) AS cnt FROM entry
+		        SELECT /* maintenance_taxa */ ext_name,count(distinct catalog) AS cnt FROM entry
 		        WHERE `type`="Q16521"
 		        AND catalog IN (select id from catalog WHERE active=1 and taxon_run=1)
 		        AND q is null
@@ -1613,7 +1613,7 @@ impl Storage for StorageMySQL {
         let sqls = [
             r#"TRUNCATE common_names_artwork"#,
             r#"INSERT IGNORE INTO common_names_artwork (`name`,entry_ids,cnt)
-            SELECT artwork.ext_name,group_concat(artwork.id),count(DISTINCT artwork.catalog) as cnt
+            SELECT /* maintenance_artwork */ artwork.ext_name,group_concat(artwork.id),count(DISTINCT artwork.catalog) as cnt
             FROM entry artwork,entry creator,mnm_relation
             WHERE artwork.id=mnm_relation.entry_id AND creator.id=mnm_relation.target_entry_id AND mnm_relation.property=170
             AND (artwork.q is null or artwork.user=0)
@@ -1875,7 +1875,7 @@ impl Storage for StorageMySQL {
     /// and uses it as an auto-match
     async fn maintenance_automatch(&self) -> Result<()> {
         let mut conn = self.get_conn().await?;
-        let sql1 = "SELECT e1.id,e2.q FROM entry e1,entry e2
+        let sql1 = "SELECT /* maintenance_automatch */ e1.id,e2.q FROM entry e1,entry e2
             WHERE e1.ext_name=e2.ext_name AND e1.id!=e2.id
             AND e1.type='Q5' AND e2.type='Q5'
             AND e1.q IS NULL
@@ -1910,7 +1910,7 @@ impl Storage for StorageMySQL {
         // catalog lets it be evaluated once as a semi-join or hash join.
         // Also fixes d2.died=d2.died (always true) → pd2.died=pd1.died.
         let sql = format!(
-            "SELECT e1.id AS entry_id, e2.q
+            "SELECT /* maintenance_match_people_via_name_and_full_dates */ e1.id AS entry_id, e2.q
             FROM person_dates pd1
             JOIN entry e1 ON e1.id = pd1.entry_id
                           AND (e1.user = 0 OR e1.user IS NULL)
@@ -2007,13 +2007,36 @@ impl Storage for StorageMySQL {
     //TODO test
     async fn reset_running_jobs(&self) -> Result<()> {
         let sql = format!(
-            "UPDATE `jobs` SET `status`='{}' WHERE `status`='{}'",
+            "UPDATE /* reset_running_jobs */ `jobs` SET `status`='{}' WHERE `status`='{}'",
             JobStatus::Todo.as_str(),
             JobStatus::Running.as_str()
         );
         let mut conn = self.get_conn().await?;
         conn.exec_drop(sql, ()).await?;
         Ok(())
+    }
+
+    async fn kill_long_running_queries(&self, threshold_secs: u64) -> Result<Vec<u64>> {
+        // Toolforge ToolsDB only exposes the caller's own connections via
+        // information_schema.processlist, but filter by CURRENT_USER() anyway
+        // for defence in depth in case the DB user ever gains PROCESS privilege.
+        let select_sql = "SELECT /* kill_long_running_queries */ ID \
+             FROM information_schema.processlist \
+             WHERE USER=SUBSTRING_INDEX(CURRENT_USER(),'@',1) \
+               AND COMMAND='Query' \
+               AND TIME >= :t \
+               AND ID != CONNECTION_ID()";
+        let mut conn = self.get_conn().await?;
+        let ids: Vec<u64> = conn
+            .exec_iter(select_sql, params! { "t" => threshold_secs })
+            .await?
+            .map_and_drop(from_row::<u64>)
+            .await?;
+        for id in &ids {
+            // KILL doesn't accept parameters; the id came from the server so it's trusted.
+            let _ = conn.exec_drop(format!("KILL QUERY {id}"), ()).await;
+        }
+        Ok(ids)
     }
 
     /// Resets all FAILED jobs of certain types to TODO. Used when bot restarts.
@@ -2150,7 +2173,7 @@ impl Storage for StorageMySQL {
         // person_dates.  Direct table joins replace vw_dates to avoid the hidden
         // per-row `catalog IN (SELECT … active=1)` subquery inside the view.
         let sql_select = r#"
-            SELECT entry_id, group_concat(DISTINCT q) AS q
+            SELECT /* automatch_people_with_birth_year */ entry_id, group_concat(DISTINCT q) AS q
             FROM (
                 SELECT e0.id AS entry_id, e1.q
                 FROM entry e0
@@ -4068,7 +4091,7 @@ impl Storage for StorageMySQL {
             String::new()
         };
         let sql = format!(
-            "SELECT (SELECT count(*) FROM entry e2 WHERE e1.ext_name=e2.ext_name{cond1}) AS cnt,e1.* FROM entry e1 WHERE catalog={catalog_id} AND q IS NULL AND ext_name NOT LIKE '_. %' AND ext_name NOT LIKE '%?%' AND ext_name NOT LIKE '_ %'{type_filter} HAVING cnt>{min} AND cnt<{max} LIMIT {limit} OFFSET {offset}"
+            "SELECT /* api_get_common_names */ (SELECT count(*) FROM entry e2 WHERE e1.ext_name=e2.ext_name{cond1}) AS cnt,e1.* FROM entry e1 WHERE catalog={catalog_id} AND q IS NULL AND ext_name NOT LIKE '_. %' AND ext_name NOT LIKE '%?%' AND ext_name NOT LIKE '_ %'{type_filter} HAVING cnt>{min} AND cnt<{max} LIMIT {limit} OFFSET {offset}"
         );
         let mut conn = self.get_conn_ro().await?;
         let rows = conn
@@ -5778,7 +5801,7 @@ mod tests {
         let sql1 =
             StorageMySQL::jobs_get_next_job_construct_sql(JobStatus::HighPriority, None, &[], None);
         let expected = format!(
-            "SELECT `id` FROM `jobs` WHERE `status`='{}' {catalog_filter} AND `depends_on` IS NULL ORDER BY `last_ts` LIMIT 1",
+            "SELECT /* jobs_get_next_job */ `id` FROM `jobs` WHERE `status`='{}' {catalog_filter} AND `depends_on` IS NULL ORDER BY `last_ts` LIMIT 1",
             JobStatus::HighPriority.as_str()
         );
         assert_eq!(sql1, expected);
@@ -5787,7 +5810,7 @@ mod tests {
         let sql2 =
             StorageMySQL::jobs_get_next_job_construct_sql(JobStatus::LowPriority, None, &[], None);
         let expected2 = format!(
-            "SELECT `id` FROM `jobs` WHERE `status`='{}' {catalog_filter} AND `depends_on` IS NULL ORDER BY `last_ts` LIMIT 1",
+            "SELECT /* jobs_get_next_job */ `id` FROM `jobs` WHERE `status`='{}' {catalog_filter} AND `depends_on` IS NULL ORDER BY `last_ts` LIMIT 1",
             JobStatus::LowPriority.as_str()
         );
         assert_eq!(sql2, expected2);
@@ -5800,7 +5823,7 @@ mod tests {
             None,
         );
         let expected2a = format!(
-            "SELECT `id` FROM `jobs` WHERE `status`='{}' {catalog_filter} AND `depends_on` IS NOT NULL AND `depends_on` IN (SELECT `id` FROM `jobs` WHERE `status`='{}') ORDER BY `last_ts` LIMIT 1",
+            "SELECT /* jobs_get_next_job */ `id` FROM `jobs` WHERE `status`='{}' {catalog_filter} AND `depends_on` IS NOT NULL AND `depends_on` IN (SELECT `id` FROM `jobs` WHERE `status`='{}') ORDER BY `last_ts` LIMIT 1",
             JobStatus::Todo.as_str(),
             JobStatus::Done.as_str()
         );
@@ -5812,7 +5835,7 @@ mod tests {
             StorageMySQL::jobs_get_next_job_construct_sql(JobStatus::Todo, None, &avoid, None);
         let not_in = avoid.join("','");
         let expected3 = format!(
-            "SELECT `id` FROM `jobs` WHERE `status`='{}' {catalog_filter} AND `depends_on` IS NULL AND `action` NOT IN ('{}') ORDER BY `last_ts` LIMIT 1",
+            "SELECT /* jobs_get_next_job */ `id` FROM `jobs` WHERE `status`='{}' {catalog_filter} AND `depends_on` IS NULL AND `action` NOT IN ('{}') ORDER BY `last_ts` LIMIT 1",
             JobStatus::Todo.as_str(),
             &not_in
         );
@@ -5821,7 +5844,7 @@ mod tests {
         // get_next_initial_job
         let sql4 = StorageMySQL::jobs_get_next_job_construct_sql(JobStatus::Todo, None, &[], None);
         let expected4 = format!(
-            "SELECT `id` FROM `jobs` WHERE `status`='{}' {catalog_filter} AND `depends_on` IS NULL ORDER BY `last_ts` LIMIT 1",
+            "SELECT /* jobs_get_next_job */ `id` FROM `jobs` WHERE `status`='{}' {catalog_filter} AND `depends_on` IS NULL ORDER BY `last_ts` LIMIT 1",
             JobStatus::Todo.as_str()
         );
         assert_eq!(sql4, expected4);
@@ -5835,7 +5858,7 @@ mod tests {
             Some(timestamp.to_owned()),
         );
         let expected5 = format!(
-            "SELECT `id` FROM `jobs` WHERE `status`='{}' {catalog_filter} AND `next_ts`!='' AND `next_ts`<='{}' ORDER BY `next_ts` LIMIT 1",
+            "SELECT /* jobs_get_next_job */ `id` FROM `jobs` WHERE `status`='{}' {catalog_filter} AND `next_ts`!='' AND `next_ts`<='{}' ORDER BY `next_ts` LIMIT 1",
             JobStatus::Done.as_str(),
             &timestamp
         );
@@ -5846,7 +5869,7 @@ mod tests {
         let sql6 =
             StorageMySQL::jobs_get_next_job_construct_sql(JobStatus::Todo, None, &no_actions, None);
         let expected6 = format!(
-            "SELECT `id` FROM `jobs` WHERE `status`='{}' {catalog_filter} AND `depends_on` IS NULL AND `action` NOT IN ('foo','bar') ORDER BY `last_ts` LIMIT 1",
+            "SELECT /* jobs_get_next_job */ `id` FROM `jobs` WHERE `status`='{}' {catalog_filter} AND `depends_on` IS NULL AND `action` NOT IN ('foo','bar') ORDER BY `last_ts` LIMIT 1",
             JobStatus::Todo.as_str()
         );
         assert_eq!(sql6, expected6);
