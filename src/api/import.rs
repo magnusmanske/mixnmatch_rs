@@ -252,5 +252,15 @@ pub async fn query_save_scraper(app: &AppState, params: &Params) -> Result<Respo
         .await
         .map_err(|e| ApiError(format!("save scraper: {e}")))?;
 
+    // Queue the matching autoscrape job so the runner picks the scraper
+    // up. `jobs_queue_simple_job` upserts on (catalog, action), so
+    // re-saving the scraper after an initial run won't create duplicates.
+    // Scraper is already persisted at this point — if the job queue write
+    // fails, log it but let the save succeed so the user can retry via
+    // the jobs page.
+    if let Err(e) = crate::job::Job::queue_simple_job(app, catalog_id, "autoscrape", None).await {
+        log::warn!("catalog {catalog_id}: failed to queue autoscrape job after save: {e}");
+    }
+
     Ok(ok(serde_json::json!({ "catalog": catalog_id })))
 }
