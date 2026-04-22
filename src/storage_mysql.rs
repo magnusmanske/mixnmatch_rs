@@ -1179,6 +1179,14 @@ impl Storage for StorageMySQL {
     }
 
     async fn queue_reference_fixer(&self, q_numeric: isize) -> Result<()> {
+        // The reference_fixer.q column is INT UNSIGNED and represents the
+        // Wikidata item whose references should be re-checked. For N/A
+        // (q=0) there's no item to re-check, and for no-Wikidata (q=-1)
+        // the insert would overflow the UNSIGNED column and raise
+        // ERROR 22003. Skip both: there's nothing meaningful to queue.
+        if q_numeric <= 0 {
+            return Ok(());
+        }
         self.get_conn().await?.exec_drop(r"INSERT INTO `reference_fixer` (`q`,`done`) VALUES (:q_numeric,0) ON DUPLICATE KEY UPDATE `done`=0",params! {q_numeric}).await?;
         Ok(())
     }
