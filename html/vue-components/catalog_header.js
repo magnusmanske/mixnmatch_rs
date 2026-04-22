@@ -4,13 +4,19 @@ export default {
 	template: `
 	<div>
 		<div v-if='catalog.id'>
-			<div class='mb-2' style='overflow:hidden'>
+			<div class='mb-2 clearfix'>
 				<!--
 					Float the dropdown to the right so the heading text
 					wraps around it independently. The previous
 					flex + flex-wrap layout pushed the whole dropdown
 					onto a new line as soon as the title stopped fitting
 					in one row.
+
+					`clearfix` contains the float via ::after{clear:both}.
+					Earlier we tried `overflow:hidden` here and it worked
+					for layout — but it also clipped the absolutely-
+					positioned dropdown menu when opened, so the Action
+					popup was invisible.
 				-->
 				<div class='btn-group float-end ms-2 mt-1'>
 					<button type='button' class='btn btn-outline-secondary dropdown-toggle'
