@@ -75,6 +75,13 @@ pub struct ReferenceFixer {
     /// If true, don't actually call the Wikidata API — just log what
     /// would have happened. Primarily for local testing.
     pub simulating: bool,
+    /// Logged-in bot API session, reused across every edit in a single
+    /// run. Lazy-initialised on the first mutating call so initialize()
+    /// / read-only flows don't pay for a login they never use. The
+    /// previous implementation cloned AppState::wikidata() per call,
+    /// which meant a fresh login for every wbsetreference / wbremove
+    /// request — tens of thousands of round-trips on a large queue.
+    mw_api: Option<mediawiki::api::Api>,
 }
 
 impl ReferenceFixer {
@@ -89,6 +96,7 @@ impl ReferenceFixer {
             url_patterns: Vec::new(),
             stated_in: HashMap::new(),
             simulating: false,
+            mw_api: None,
         })
     }
 
@@ -229,10 +237,22 @@ impl ReferenceFixer {
                 if let Err(e) = self.check_item(q).await {
                     warn!("reference_fixer: Q{q} failed: {e}");
                 }
-                // Mark done regardless of success — a row that can't be
-                // processed now (e.g. deleted item) won't become
-                // processable later without explicit re-enqueue.
-                let _ = self.app.storage().reference_fixer_mark_done(q).await;
+                // Mark done regardless of per-item success — a row that
+                // can't be processed now (deleted item, permission
+                // issues, …) wouldn't become processable later without
+                // an explicit re-enqueue, and leaving it pending would
+                // spin on it forever. But we do log DB failures on the
+                // mark-done itself: if we can't update the queue, we
+                // need to know because the next loop iteration would
+                // see the same row and retry in a tight loop.
+                if let Err(e) = self.app.storage().reference_fixer_mark_done(q).await {
+                    warn!(
+                        "reference_fixer: failed to mark Q{q} done (queue will retry): {e}"
+                    );
+                    // Bail out — marking-done is supposed to be cheap;
+                    // if it's failing, the whole run is in trouble.
+                    return Err(e);
+                }
                 processed += 1;
             }
         }
@@ -245,11 +265,22 @@ impl ReferenceFixer {
         let url = format!(
             "https://www.wikidata.org/w/api.php?action=wbgetentities&format=json&ids=Q{q}"
         );
-        let json: Value = self.http.get(&url).send().await?.json().await?;
+        let resp = self.http.get(&url).send().await?;
+        if !resp.status().is_success() {
+            return Err(anyhow!("wbgetentities Q{q} returned HTTP {}", resp.status()));
+        }
+        let json: Value = resp.json().await?;
+        // A missing / redirected / deleted item shows up as either an
+        // `error` block at the top level, or an `entities.Q<id>` object
+        // with `missing: ""`. Either way there's nothing for us to
+        // rewrite — bail silently, don't blow up the run.
+        if json.get("error").is_some() {
+            return Ok(());
+        }
         let qstr = format!("Q{q}");
         let item = match json.pointer(&format!("/entities/{qstr}")) {
-            Some(v) => v.clone(),
-            None => return Ok(()), // item was deleted or hidden
+            Some(v) if v.get("missing").is_none() => v.clone(),
+            _ => return Ok(()),
         };
         self.check_item_json(&item).await
     }
@@ -323,32 +354,32 @@ impl ReferenceFixer {
 
     /// Given a reference group, decide whether it should be rewritten.
     /// Returns new group(s) to insert; None means "leave as-is".
+    ///
+    /// We only rewrite the simplest, unambiguous case: a reference group
+    /// whose only property is P854 (reference URL) and whose P854 has a
+    /// single value. Splitting a multi-URL group into N single-URL
+    /// groups — which the PHP original did — silently changes the
+    /// semantic meaning (one combined citation becomes several
+    /// independent ones), which is exactly the "POTENTIALLY ADDING
+    /// MULTIPLE REFERENCE PARTS INSTEAD OF SINGLE REFERENCE" bug the
+    /// PHP author flagged by disabling the script. We refuse to rewrite
+    /// in that shape at all; the row still gets marked done so we don't
+    /// spin on it forever.
     fn check_reference_group(&self, group: &Value) -> Option<Vec<Value>> {
         let snaks = group.get("snaks").and_then(|v| v.as_object())?;
         let url_snaks = snaks.get("P854")?.as_array()?;
-        // We only rewrite reference groups whose only property is P854
-        // (reference URL) — anything else (date retrieved, author, …) is
-        // potentially meaningful context we don't want to lose.
         if snaks.len() > 1 {
+            // Other properties present (retrieval date, author, …) —
+            // can't tell which are load-bearing, so don't touch.
             return None;
         }
-        let is_multiple = url_snaks.len() > 1;
-        let mut new_groups: Vec<Value> = Vec::new();
-        let mut changed = is_multiple;
-        for snak in url_snaks {
-            match self.improved_reference_snak(snak) {
-                Some(improved) => {
-                    changed = true;
-                    new_groups.push(new_reference_group(&improved));
-                }
-                None => {
-                    // No rewrite for this URL — keep it as its own group
-                    // (PHP parity — this is the split-multi-url step).
-                    new_groups.push(new_reference_group(&[snak.clone()]));
-                }
-            }
+        if url_snaks.len() != 1 {
+            // Zero URLs shouldn't happen (the array exists), multiple
+            // URLs → see docstring. Either way, skip.
+            return None;
         }
-        if changed { Some(new_groups) } else { None }
+        let improved = self.improved_reference_snak(&url_snaks[0])?;
+        Some(vec![new_reference_group(&improved)])
     }
 
     /// Try to turn a P854 URL snak into [(P248 stated-in,) Pxxx external-id].
@@ -450,7 +481,7 @@ impl ReferenceFixer {
         matches_main
     }
 
-    async fn add_reference_group(&self, statement_id: &str, rg: &Value) -> Result<bool> {
+    async fn add_reference_group(&mut self, statement_id: &str, rg: &Value) -> Result<bool> {
         let snaks = rg.get("snaks").ok_or_else(|| anyhow!("rg missing snaks"))?;
         let order = rg
             .get("snaks-order")
@@ -464,7 +495,7 @@ impl ReferenceFixer {
     }
 
     async fn remove_reference_group(
-        &self,
+        &mut self,
         statement_id: &str,
         hashes: &[String],
     ) -> Result<bool> {
@@ -475,31 +506,35 @@ impl ReferenceFixer {
         self.api_action(params).await
     }
 
-    async fn api_action(&self, mut params: HashMap<String, String>) -> Result<bool> {
+    /// Execute a bot API call. Reuses the cached logged-in session if
+    /// available (one login per job run, not per edit).
+    async fn api_action(&mut self, mut params: HashMap<String, String>) -> Result<bool> {
         if self.simulating {
-            info!("reference_fixer (simulated) {}: {:?}", params.get("action").map(String::as_str).unwrap_or(""), params);
+            info!(
+                "reference_fixer (simulated) {}: {:?}",
+                params.get("action").map(String::as_str).unwrap_or(""),
+                params
+            );
             return Ok(true);
         }
+        self.ensure_logged_in().await?;
+        let api = self
+            .mw_api
+            .as_mut()
+            .ok_or_else(|| anyhow!("bot API not available after login"))?;
         params.insert("format".into(), "json".into());
         params.insert("bot".into(), "1".into());
         params.insert("summary".into(), EDIT_SUMMARY.into());
-        // Be polite: rate-limit mutating edits at 1/s. The Wikidata API
-        // would eventually throttle us anyway; self-throttling is less
-        // disruptive.
-        tokio::time::sleep(INTER_EDIT_DELAY).await;
-        let mut wd = self.app.wikidata().clone();
-        wd.api_log_in().await?;
-        let mw_api = wd
-            .get_mw_api()
-            .await
-            .map_err(|e| anyhow!("MW API unavailable: {e}"))?;
-        let mut mw_api = mw_api;
-        let token = mw_api
+        let token = api
             .get_edit_token()
             .await
             .map_err(|e| anyhow!("edit token: {e}"))?;
         params.insert("token".into(), token);
-        match mw_api.post_query_api_json_mut(&params).await {
+        // Self-throttle: the Wikidata API would eventually rate-limit
+        // us anyway; doing it up-front is less disruptive than hitting
+        // maxlag mid-pass.
+        tokio::time::sleep(INTER_EDIT_DELAY).await;
+        match api.post_query_api_json_mut(&params).await {
             Ok(v) => {
                 if let Some(err) = v.get("error") {
                     warn!("reference_fixer API error: {err}");
@@ -509,9 +544,32 @@ impl ReferenceFixer {
             }
             Err(e) => {
                 warn!("reference_fixer API call failed: {e}");
+                // Drop the cached session on transport errors — a stale
+                // cookie / expired token would otherwise keep failing.
+                self.mw_api = None;
                 Ok(false)
             }
         }
+    }
+
+    /// Build a logged-in bot session on first use, and re-login if the
+    /// cached session lost its auth (e.g. the server dropped our cookie).
+    async fn ensure_logged_in(&mut self) -> Result<()> {
+        if let Some(api) = self.mw_api.as_ref() {
+            if api.user().logged_in() {
+                return Ok(());
+            }
+        }
+        let wd = self.app.wikidata();
+        let mut api = wd
+            .get_mw_api()
+            .await
+            .map_err(|e| anyhow!("MW API unavailable: {e}"))?;
+        api.login(wd.bot_name().to_string(), wd.bot_password().to_string())
+            .await
+            .map_err(|e| anyhow!("bot login failed: {e}"))?;
+        self.mw_api = Some(api);
+        Ok(())
     }
 }
 
@@ -708,6 +766,84 @@ mod tests {
         assert!(!rf.is_self_reference(&statement, &group));
     }
 
+    #[test]
+    fn check_reference_group_skips_multi_url_groups() {
+        // The PHP script's splitting behaviour (N URLs → N separate
+        // single-URL reference groups) flips semantics from AND to OR
+        // and was explicitly flagged by the original author. Make
+        // damn sure we don't do that: any group with != 1 P854 URL
+        // must be left untouched.
+        let mut rf = bare_fixer();
+        rf.url_patterns.push((
+            Regex::new(r"^https?://openlibrary\.org/authors/(.+?)/.*$").unwrap(),
+            "P648".to_string(),
+        ));
+        let group = json!({
+            "snaks": {
+                "P854": [
+                    {"snaktype":"value","property":"P854",
+                     "datavalue":{"type":"string","value":"https://openlibrary.org/authors/OL1A/foo"}},
+                    {"snaktype":"value","property":"P854",
+                     "datavalue":{"type":"string","value":"https://openlibrary.org/authors/OL2A/bar"}},
+                ],
+            },
+        });
+        assert!(rf.check_reference_group(&group).is_none());
+    }
+
+    #[test]
+    fn check_reference_group_skips_groups_with_other_properties() {
+        let rf = bare_fixer();
+        let group = json!({
+            "snaks": {
+                "P854": [{"snaktype":"value","property":"P854",
+                          "datavalue":{"type":"string","value":"https://example.org/$1/x"}}],
+                "P813": [{"snaktype":"value","property":"P813",
+                          "datavalue":{"type":"time","value":{"time":"+2020-01-01T00:00:00Z"}}}],
+            },
+        });
+        assert!(rf.check_reference_group(&group).is_none());
+    }
+
+    #[test]
+    fn check_reference_group_rewrites_single_url_match() {
+        let mut rf = bare_fixer();
+        rf.url_patterns.push((
+            Regex::new(r"^https?://openlibrary\.org/authors/(.+?)/.*$").unwrap(),
+            "P648".to_string(),
+        ));
+        rf.stated_in.insert("P648".into(), "Q1201876".into());
+        let group = json!({
+            "snaks": {
+                "P854": [{
+                    "snaktype": "value",
+                    "property": "P854",
+                    "datavalue": {"type": "string", "value": "https://openlibrary.org/authors/OL23919A/foo"},
+                }],
+            },
+        });
+        let new_groups = rf.check_reference_group(&group).expect("should rewrite");
+        assert_eq!(new_groups.len(), 1);
+        let g = &new_groups[0];
+        // P248 first in snaks-order, followed by the external-id property.
+        let order: Vec<&str> = g["snaks-order"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(order, vec!["P248", "P648"]);
+        // The typed external-id snak carries the cleaned capture group.
+        assert_eq!(
+            g["snaks"]["P648"][0]["datavalue"]["value"].as_str().unwrap(),
+            "OL23919A"
+        );
+        assert_eq!(
+            g["snaks"]["P248"][0]["datavalue"]["value"]["id"].as_str().unwrap(),
+            "Q1201876"
+        );
+    }
+
     fn bare_fixer() -> ReferenceFixer {
         // Build a ReferenceFixer that never calls network — just enough
         // to exercise the offline logic. Avoid AppState construction by
@@ -718,6 +854,7 @@ mod tests {
             url_patterns: vec![],
             stated_in: HashMap::new(),
             simulating: true,
+            mw_api: None,
         }
     }
 }
