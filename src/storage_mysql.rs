@@ -1043,13 +1043,18 @@ impl Storage for StorageMySQL {
     }
 
     async fn catalog_refresh_overview_table(&self, catalog_id: usize) -> Result<()> {
+        // `manual` must only count real item matches (q>0). The previous
+        // `q IS NOT NULL AND user>0` predicate folded in N/A (q=0) and
+        // no-Wikidata (q=-1) rows, so every N/A entry was counted as both
+        // "na" and "manual" when the overview was rebuilt via the Refresh
+        // button. Match the PHP Catalog::updateStatistics formula exactly.
         let sql = r"REPLACE INTO `overview` (catalog,total,noq,autoq,na,manual,nowd,multi_match,types) VALUES (
 	        :catalog_id,
 	        (SELECT count(*) FROM `entry` WHERE `catalog`=:catalog_id),
 	        (SELECT count(*) FROM `entry` WHERE `catalog`=:catalog_id AND `q` IS NULL),
 	        (SELECT count(*) FROM `entry` WHERE `catalog`=:catalog_id AND `user`=0),
 	        (SELECT count(*) FROM `entry` WHERE `catalog`=:catalog_id AND `q`=0),
-	        (SELECT count(*) FROM `entry` WHERE `catalog`=:catalog_id AND `q` IS NOT NULL AND `user`>0),
+	        (SELECT count(*) FROM `entry` WHERE `catalog`=:catalog_id AND `q`>0 AND `user`>0),
 	        (SELECT count(*) FROM `entry` WHERE `catalog`=:catalog_id AND `q`=-1),
 	        (SELECT count(*) FROM `multi_match` WHERE `catalog`=:catalog_id),
 	        (SELECT group_concat(DISTINCT `type` SEPARATOR '|') FROM `entry` WHERE `catalog`=:catalog_id)
