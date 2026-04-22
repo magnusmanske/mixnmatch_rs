@@ -28,9 +28,19 @@ pub async fn query_download(app: &AppState, params: &Params) -> Result<Response,
                 .and_then(|v| v.get("name"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            out.push_str(&format!(
-                "{q}\t{ext_id}\t{ext_url}\t{ext_name}\t{uname}\n"
-            ));
+            // Scrub embedded tabs/newlines out of every cell so an
+            // ext_name / ext_url containing stray whitespace can't tear
+            // a row into two.
+            out.push_str(&scrub_tsv_cell(&q.to_string()));
+            out.push('\t');
+            out.push_str(&scrub_tsv_cell(ext_id));
+            out.push('\t');
+            out.push_str(&scrub_tsv_cell(ext_url));
+            out.push('\t');
+            out.push_str(&scrub_tsv_cell(ext_name));
+            out.push('\t');
+            out.push_str(&scrub_tsv_cell(uname));
+            out.push('\n');
         }
         out
     })
@@ -95,7 +105,7 @@ pub async fn query_download2(app: &AppState, params: &Params) -> Result<Response
         offset,
     };
 
-    let rows = app.storage().api_download2(&filter).await?;
+    let (columns, rows) = app.storage().api_download2(&filter).await?;
     let ct = if format == "json" {
         "application/json; charset=UTF-8"
     } else {
@@ -106,43 +116,166 @@ pub async fn query_download2(app: &AppState, params: &Params) -> Result<Response
     // can dominate the response time for large dumps.
     let format_owned = format.clone();
     let out = tokio::task::spawn_blocking(move || {
-        let mut out = String::new();
-        for (i, row) in rows.iter().enumerate() {
-            if i == 0 {
-                if format_owned == "tab" {
-                    out.push('#');
-                    out.push_str(&row.keys().cloned().collect::<Vec<_>>().join("\t"));
-                    out.push('\n');
-                }
-                if format_owned == "json" {
-                    out.push_str("[\n");
-                }
-            }
-            if format_owned == "json" {
-                if i > 0 {
-                    out.push_str(",\n");
-                }
-                out.push_str(&serde_json::to_string(row).unwrap_or_default());
-            } else {
-                out.push_str(
-                    &row.values()
-                        .map(|v| v.replace(['\t', '\n', '\r'], " "))
-                        .collect::<Vec<_>>()
-                        .join("\t"),
-                );
-                out.push('\n');
-            }
-        }
-        if rows.is_empty() && format_owned == "json" {
-            out.push_str("[\n");
-        }
         if format_owned == "json" {
-            out.push_str("\n]");
+            write_json(&columns, &rows)
+        } else {
+            write_tsv(&columns, &rows)
         }
-        out
     })
     .await
     .map_err(|e| ApiError(format!("download2 formatting panic: {e}")))?;
 
     Ok(([(axum::http::header::CONTENT_TYPE, ct)], out).into_response())
+}
+
+/// Strip characters that would tear a TSV row apart. Tabs and newlines
+/// (LF, CR, NEL U+0085, LINE-SEPARATOR U+2028, PARA-SEPARATOR U+2029) get
+/// replaced with a single space — same behaviour for every column.
+fn scrub_tsv_cell(v: &str) -> String {
+    v.chars()
+        .map(|c| match c {
+            '\t' | '\n' | '\r' | '\u{0085}' | '\u{2028}' | '\u{2029}' => ' ',
+            other => other,
+        })
+        .collect()
+}
+
+/// Build the TSV body with `#` + tab-joined columns as the header, one
+/// row per line. Columns follow the SQL SELECT order exactly, so each
+/// value lines up with its header across every row.
+fn write_tsv(columns: &[String], rows: &[Vec<String>]) -> String {
+    let mut out = String::new();
+    if !columns.is_empty() {
+        out.push('#');
+        out.push_str(&columns.join("\t"));
+        out.push('\n');
+    }
+    for row in rows {
+        // If a row is shorter than the header (shouldn't happen — defensive),
+        // pad with empties so cells stay aligned with the header.
+        for i in 0..columns.len() {
+            if i > 0 {
+                out.push('\t');
+            }
+            if let Some(cell) = row.get(i) {
+                out.push_str(&scrub_tsv_cell(cell));
+            }
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// Build the JSON body as an array of objects. Each object's keys follow
+/// the SELECT column order (not HashMap random order), so consumers get
+/// deterministic output that also matches the TSV dump.
+fn write_json(columns: &[String], rows: &[Vec<String>]) -> String {
+    let mut out = String::from("[\n");
+    for (ri, row) in rows.iter().enumerate() {
+        if ri > 0 {
+            out.push_str(",\n");
+        }
+        out.push('{');
+        for (ci, col) in columns.iter().enumerate() {
+            if ci > 0 {
+                out.push(',');
+            }
+            out.push_str(&serde_json::to_string(col).unwrap_or_default());
+            out.push(':');
+            let value = row.get(ci).map(String::as_str).unwrap_or("");
+            out.push_str(&serde_json::to_string(value).unwrap_or_default());
+        }
+        out.push('}');
+    }
+    out.push_str("\n]");
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scrub_replaces_tabs_and_every_newline_flavour() {
+        // LF, CR, NEL, LINE-SEPARATOR, PARA-SEPARATOR all become spaces.
+        let input = "a\tb\nc\rd\u{0085}e\u{2028}f\u{2029}g";
+        assert_eq!(scrub_tsv_cell(input), "a b c d e f g");
+    }
+
+    #[test]
+    fn scrub_leaves_ordinary_text_untouched() {
+        assert_eq!(scrub_tsv_cell("hello world"), "hello world");
+        assert_eq!(scrub_tsv_cell(""), "");
+    }
+
+    #[test]
+    fn tsv_has_one_newline_per_row_and_aligned_columns() {
+        let cols = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let rows = vec![
+            vec!["1".to_string(), "2".to_string(), "3".to_string()],
+            vec!["x".to_string(), "y".to_string(), "z".to_string()],
+        ];
+        let out = write_tsv(&cols, &rows);
+        // Exactly header + 2 data lines = 3 newlines, no blanks.
+        assert_eq!(out.matches('\n').count(), 3);
+        assert_eq!(out, "#a\tb\tc\n1\t2\t3\nx\ty\tz\n");
+    }
+
+    #[test]
+    fn tsv_scrubs_embedded_newlines_and_tabs() {
+        let cols = vec!["name".to_string(), "url".to_string()];
+        let rows = vec![vec![
+            "foo\nbar\tbaz".to_string(),
+            "http://example.com".to_string(),
+        ]];
+        let out = write_tsv(&cols, &rows);
+        // Header + one data row → exactly 2 newlines, no extras from
+        // the embedded \n or \t in the cell.
+        assert_eq!(out.matches('\n').count(), 2);
+        assert!(out.contains("foo bar baz\thttp://example.com"));
+    }
+
+    #[test]
+    fn tsv_emits_header_even_when_rows_is_empty() {
+        let cols = vec!["a".to_string(), "b".to_string()];
+        let out = write_tsv(&cols, &[]);
+        assert_eq!(out, "#a\tb\n");
+    }
+
+    #[test]
+    fn json_preserves_column_order_across_rows() {
+        // The old implementation serialised HashMap<String, String>, whose
+        // iteration order varies per-instance, so two rows could have
+        // different key orders in the same JSON payload. Lock it down.
+        let cols = vec!["z".to_string(), "a".to_string(), "m".to_string()];
+        let rows = vec![
+            vec!["z1".to_string(), "a1".to_string(), "m1".to_string()],
+            vec!["z2".to_string(), "a2".to_string(), "m2".to_string()],
+        ];
+        let out = write_json(&cols, &rows);
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        // Check key-order in the emitted text (not via parsed, since
+        // serde_json re-orders maps).
+        assert!(out.contains(r#""z":"z1","a":"a1","m":"m1""#));
+        assert!(out.contains(r#""z":"z2","a":"a2","m":"m2""#));
+        assert_eq!(parsed.as_array().map(|a| a.len()), Some(2));
+    }
+
+    #[test]
+    fn json_escapes_quotes_and_backslashes_in_values() {
+        let cols = vec!["v".to_string()];
+        let rows = vec![vec![r#"he said "hi" \ foo"#.to_string()]];
+        let out = write_json(&cols, &rows);
+        // Round-trips through serde_json, so it stays valid JSON.
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed[0]["v"], r#"he said "hi" \ foo"#);
+    }
+
+    #[test]
+    fn json_empty_rows_still_valid() {
+        let cols = vec!["a".to_string()];
+        let out = write_json(&cols, &[]);
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed.as_array().map(|a| a.len()), Some(0));
+    }
 }
