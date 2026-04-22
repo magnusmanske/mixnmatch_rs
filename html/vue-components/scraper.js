@@ -341,6 +341,106 @@ const scraperTemplate = `<div>
 						<strong>Test failed:</strong> {{test_results.status}}
 					</div>
 
+					<!--
+						Diagnostics panel. Shown whenever the backend returned
+						a diagnostics blob (most useful when a test reports
+						zero results or fails to fetch). Surfaces the pieces
+						of info the server knows but the user can't see: HTTP
+						status, per-regex match counts, options as applied,
+						and any warnings the backend computed.
+					-->
+					<div v-if='test_results.diagnostics && (test_results.status=="OK" || test_results.status=="")'>
+						<div v-for='(w,i) in (test_results.diagnostics.warnings||[])' :key='"w-"+i'
+							class='alert alert-warning py-2 mb-2' style='font-size:0.9em'>
+							&#x26A0; {{w}}
+						</div>
+					</div>
+
+					<details v-if='test_results.diagnostics'
+						class='card mb-3' open
+						style='border-color:rgba(0,0,0,.1)'>
+						<summary class='card-body py-2' style='cursor:pointer;list-style:revert;font-weight:600'>
+							Diagnostics
+						</summary>
+						<div class='card-body pt-0' style='font-size:0.9em'>
+							<!-- HTTP row -->
+							<div class='row g-2 mb-2' v-if='test_results.diagnostics.http'>
+								<div class='col-sm-3 text-muted'>HTTP</div>
+								<div class='col-sm-9'>
+									<span v-if='test_results.diagnostics.http.error' class='text-danger'>
+										{{test_results.diagnostics.http.error}}
+									</span>
+									<span v-else>
+										<span :class='"badge me-2 " + (test_results.diagnostics.http.status>=200 && test_results.diagnostics.http.status<300 ? "text-bg-success" : "text-bg-danger")'>
+											{{test_results.diagnostics.http.status}}
+										</span>
+										<span v-if='test_results.diagnostics.http.content_type' class='text-muted me-2'>
+											{{test_results.diagnostics.http.content_type}}
+										</span>
+										<span class='text-muted'>
+											{{test_results.diagnostics.http.body_length}} bytes
+										</span>
+									</span>
+								</div>
+							</div>
+
+							<!-- HTML length / whitespace compression -->
+							<div class='row g-2 mb-2' v-if='typeof test_results.diagnostics.html_length_before_compression!="undefined"'>
+								<div class='col-sm-3 text-muted'>HTML size</div>
+								<div class='col-sm-9'>
+									{{test_results.diagnostics.html_length_before_compression}} chars
+									<span v-if='test_results.diagnostics.html_length_after_compression != test_results.diagnostics.html_length_before_compression'
+										class='text-muted'>
+										&rarr; {{test_results.diagnostics.html_length_after_compression}} after whitespace compression
+									</span>
+								</div>
+							</div>
+
+							<!-- Options as applied -->
+							<div class='row g-2 mb-2' v-if='test_results.diagnostics.options'>
+								<div class='col-sm-3 text-muted'>Options in effect</div>
+								<div class='col-sm-9'>
+									<span v-for='(v,k) in test_results.diagnostics.options' :key='"opt-"+k'
+										class='badge me-1'
+										:class='v ? "text-bg-secondary" : "text-bg-light text-dark border"'>
+										{{k}}: {{v ? "on" : "off"}}
+									</span>
+								</div>
+							</div>
+
+							<!-- Block regex -->
+							<div class='row g-2 mb-2' v-if='test_results.diagnostics.regex && test_results.diagnostics.regex.block'>
+								<div class='col-sm-3 text-muted'>Block regex</div>
+								<div class='col-sm-9'>
+									<div>
+										<span class='badge text-bg-primary me-2'>
+											{{test_results.diagnostics.regex.block.match_count}} match(es)
+										</span>
+									</div>
+									<code class='d-block mt-1 text-break' style='font-size:0.85em;color:#555'>
+										{{test_results.diagnostics.regex.block.source}}
+									</code>
+								</div>
+							</div>
+
+							<!-- Entry regex(es) -->
+							<div class='row g-2 mb-2' v-if='test_results.diagnostics.regex && test_results.diagnostics.regex.entries && test_results.diagnostics.regex.entries.length'>
+								<div class='col-sm-3 text-muted'>Entry regex</div>
+								<div class='col-sm-9'>
+									<div v-for='(e,idx) in test_results.diagnostics.regex.entries' :key='"e-"+idx' class='mb-2'>
+										<span v-if='test_results.diagnostics.regex.entries.length>1' class='text-muted me-1'>#{{idx+1}}</span>
+										<span :class='"badge me-2 " + (e.match_count>0 ? "text-bg-primary" : "text-bg-light text-dark border")'>
+											{{e.match_count}} match(es)
+										</span>
+										<code class='d-block text-break' style='font-size:0.85em;color:#555'>
+											{{e.source}}
+										</code>
+									</div>
+								</div>
+							</div>
+						</div>
+					</details>
+
 					<div v-if='test_results.status=="OK"'>
 						<div v-if='typeof test_results.last_url!="undefined"' class='mb-2'>
 							<span class='text-muted me-1' style='font-size:0.9em'>URL fetched:</span>

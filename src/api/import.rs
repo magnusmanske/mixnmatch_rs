@@ -164,12 +164,21 @@ pub async fn query_autoscrape_test(
     }
     let json: serde_json::Value = serde_json::from_str(&json_str)
         .map_err(|e| ApiError(format!("invalid scraper JSON: {e}")))?;
-    let (url, html, results) = crate::autoscrape::Autoscrape::test_fetch(app, &json)
+    let res = crate::autoscrape::Autoscrape::test_fetch(app, &json)
         .await
         .map_err(|e| ApiError(e.to_string()))?;
-    // The client uses `data.html` for regex testing, `data.url` for display,
-    // and `data.results` for the "entries found" table + the save-button gate.
-    Ok(ok(serde_json::json!({ "url": url, "html": html, "results": results })))
+    // `data.html` feeds the client-side regex preview, `data.url` is the
+    // "URL fetched" link, `data.results` drives the entries table (and the
+    // Save button gate), and `data.diagnostics` backs the scraper-test
+    // diagnostics panel — there so the user can see *why* a test returned
+    // zero rows (fetch failed, block regex matched but entry regex didn't,
+    // unsupported regex feature, etc.).
+    Ok(ok(serde_json::json!({
+        "url":         res.url,
+        "html":        res.html,
+        "results":     res.results,
+        "diagnostics": res.diagnostics,
+    })))
 }
 
 pub async fn query_save_scraper(app: &AppState, params: &Params) -> Result<Response, ApiError> {
