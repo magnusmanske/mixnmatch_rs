@@ -5446,8 +5446,15 @@ impl Storage for StorageMySQL {
 impl StorageMySQL {
     /// Shared body for `api_get_catalog_overview`,
     /// `api_get_single_catalog_overview`, and `api_get_catalog_overview_for_ids`.
-    /// When `id_filter` is Some, pushes the filter into SQL so that "fetch one
-    /// (or a few) catalog(s)" doesn't scan the whole active catalog set — that
+    ///
+    /// Previously ran four separate queries (catalog, overview, user,
+    /// autoscrape) and merged the results client-side. A single LEFT JOIN
+    /// is equivalent data-wise (each side is 1:0-or-1 per catalog) but
+    /// saves three round-trips and lets MySQL plan a single index scan
+    /// over `catalog` instead of re-filtering it three times.
+    ///
+    /// When `id_filter` is Some, the filter is pushed into SQL so "fetch
+    /// one (or a few) catalog(s)" doesn't scan the whole active set — that
     /// used to make single_catalog take ~10s and batch_catalogs with 5 ids
     /// take ~50s.
     async fn api_get_catalog_overview_impl(
@@ -5457,184 +5464,110 @@ impl StorageMySQL {
         if matches!(id_filter, Some(ids) if ids.is_empty()) {
             return Ok(vec![]);
         }
-        let clauses = CatalogOverviewFilter::new(id_filter);
-
-        let mut conn = self.get_conn_ro().await?;
-        let mut overview_map = Self::fetch_catalog_overview_rows(&mut conn, &clauses.overview).await?;
-        let catalog_map = Self::fetch_catalog_rows(&mut conn, &clauses.catalog_id).await?;
-        let user_map = Self::fetch_catalog_usernames(&mut conn, &clauses.catalog_dot_id).await?;
-        let autoscrape_map = Self::fetch_catalog_autoscrape(&mut conn, &clauses.catalog_dot_id).await?;
-
-        let results = catalog_map
-            .iter()
-            .map(|(catalog_id, catalog_val)| {
-                Self::merge_catalog_overview_row(
-                    catalog_id,
-                    catalog_val,
-                    &mut overview_map,
-                    &user_map,
-                    &autoscrape_map,
-                )
-            })
-            .collect();
-        Ok(results)
-    }
-
-    async fn fetch_catalog_overview_rows(
-        conn: &mut mysql_async::Conn,
-        filter: &str,
-    ) -> Result<HashMap<usize, serde_json::Value>> {
-        let sql = format!("SELECT `overview`.* FROM `overview`,`catalog` WHERE `catalog`.`id`=`overview`.`catalog` AND `catalog`.`active`>=1{filter}");
-        let rows = conn
-            .exec_iter(sql, ())
-            .await?
-            .map_and_drop(|row: Row| {
-                let catalog_id: usize = row.get::<Option<usize>, _>("catalog").flatten().unwrap_or(0);
-                let total: isize = row.get::<Option<isize>, _>("total").flatten().unwrap_or(0);
-                let noq: isize = row.get::<Option<isize>, _>("noq").flatten().unwrap_or(0);
-                let autoq: isize = row.get::<Option<isize>, _>("autoq").flatten().unwrap_or(0);
-                let na: isize = row.get::<Option<isize>, _>("na").flatten().unwrap_or(0);
-                let manual: isize = row.get::<Option<isize>, _>("manual").flatten().unwrap_or(0);
-                let nowd: isize = row.get::<Option<isize>, _>("nowd").flatten().unwrap_or(0);
-                let multi_match: isize = row.get::<Option<isize>, _>("multi_match").flatten().unwrap_or(0);
-                let types: String = row.get::<Option<String>, _>("types").flatten().unwrap_or_default();
-                (catalog_id, json!({
-                    "total": total, "noq": noq, "autoq": autoq, "na": na,
-                    "manual": manual, "nowd": nowd, "multi_match": multi_match, "types": types
-                }))
-            })
-            .await?;
-        Ok(rows.into_iter().collect())
-    }
-
-    async fn fetch_catalog_rows(
-        conn: &mut mysql_async::Conn,
-        filter: &str,
-    ) -> Result<HashMap<usize, serde_json::Value>> {
-        let sql = format!("SELECT * FROM `catalog` WHERE `active`>=1{filter}");
-        let rows = conn
-            .exec_iter(sql, ())
-            .await?
-            .map_and_drop(|row: Row| {
-                // All optional columns are wrapped in Option to survive NULLs.
-                let id: usize = row.get::<Option<usize>, _>("id").flatten().unwrap_or(0);
-                let name: String = row.get::<Option<String>, _>("name").flatten().unwrap_or_default();
-                let url: String = row.get::<Option<String>, _>("url").flatten().unwrap_or_default();
-                let desc: String = row.get::<Option<String>, _>("desc").flatten().unwrap_or_default();
-                let type_name: String = row.get::<Option<String>, _>("type").flatten().unwrap_or_default();
-                let wd_prop: Option<usize> = row.get::<Option<usize>, _>("wd_prop").flatten();
-                let wd_qual: Option<usize> = row.get::<Option<usize>, _>("wd_qual").flatten();
-                let search_wp: String = row.get::<Option<String>, _>("search_wp").flatten().unwrap_or_default();
-                let active: u8 = row.get::<Option<u8>, _>("active").flatten().unwrap_or(0);
-                let owner: Option<usize> = row.get::<Option<usize>, _>("owner").flatten();
-                let note: String = row.get::<Option<String>, _>("note").flatten().unwrap_or_default();
-                let source_item: Option<usize> = row.get::<Option<usize>, _>("source_item").flatten();
-                let has_person_date: String = row.get::<Option<String>, _>("has_person_date").flatten().unwrap_or_default();
-                let taxon_run: u8 = row.get::<Option<u8>, _>("taxon_run").flatten().unwrap_or(0);
-                (id, json!({
-                    "id": id, "name": name, "url": url, "desc": desc, "type": type_name,
-                    "wd_prop": wd_prop, "wd_qual": wd_qual, "search_wp": search_wp,
-                    "active": active, "owner": owner, "note": note,
-                    "source_item": source_item, "has_person_date": has_person_date,
-                    "taxon_run": taxon_run
-                }))
-            })
-            .await?;
-        Ok(rows.into_iter().collect())
-    }
-
-    async fn fetch_catalog_usernames(
-        conn: &mut mysql_async::Conn,
-        filter: &str,
-    ) -> Result<HashMap<usize, String>> {
-        let sql = format!("SELECT `user`.`name` AS `username`,`catalog`.`id` FROM `catalog`,`user` WHERE `owner`=`user`.`id` AND `active`>=1{filter}");
-        let rows = conn
-            .exec_iter(sql, ())
-            .await?
-            .map_and_drop(|row: Row| {
-                let id: usize = row.get::<Option<usize>, _>("id").flatten().unwrap_or(0);
-                let username: String = row.get::<Option<String>, _>("username").flatten().unwrap_or_default();
-                (id, username)
-            })
-            .await?;
-        Ok(rows.into_iter().collect())
-    }
-
-    async fn fetch_catalog_autoscrape(
-        conn: &mut mysql_async::Conn,
-        filter: &str,
-    ) -> Result<HashMap<usize, serde_json::Value>> {
-        let sql = format!("SELECT `catalog`.`id` AS `id`,`last_update`,`do_auto_update`,`autoscrape`.`json` AS `json` FROM `catalog`,`autoscrape` WHERE `active`>=1 AND `catalog`.`id`=`autoscrape`.`catalog`{filter}");
-        let rows = conn
-            .exec_iter(sql, ())
-            .await?
-            .map_and_drop(|row: Row| {
-                let id: usize = row.get::<Option<usize>, _>("id").flatten().unwrap_or(0);
-                let last_update: String = row.get::<Option<String>, _>("last_update").flatten().unwrap_or_default();
-                let do_auto_update: u8 = row.get::<Option<u8>, _>("do_auto_update").flatten().unwrap_or(0);
-                let json_str: String = row.get::<Option<String>, _>("json").flatten().unwrap_or_default();
-                (id, json!({
-                    "last_update": last_update,
-                    "do_auto_update": do_auto_update,
-                    "autoscrape_json": json_str
-                }))
-            })
-            .await?;
-        Ok(rows.into_iter().collect())
-    }
-
-    fn merge_catalog_overview_row(
-        catalog_id: &usize,
-        catalog_val: &serde_json::Value,
-        overview_map: &mut HashMap<usize, serde_json::Value>,
-        user_map: &HashMap<usize, String>,
-        autoscrape_map: &HashMap<usize, serde_json::Value>,
-    ) -> serde_json::Value {
-        let mut merged = catalog_val.clone();
-        if let Some(ov) = overview_map.remove(catalog_id) {
-            if let Some(obj) = ov.as_object() {
-                for (k, v) in obj {
-                    merged[k] = v.clone();
-                }
-            }
-        }
-        if let Some(username) = user_map.get(catalog_id) {
-            merged["username"] = json!(username);
-        }
-        if let Some(auto) = autoscrape_map.get(catalog_id) {
-            if let Some(obj) = auto.as_object() {
-                for (k, v) in obj {
-                    merged[k] = v.clone();
-                }
-            }
-        }
-        merged
-    }
-}
-
-/// Pre-built `IN (…)` clauses for the three join positions used by
-/// `api_get_catalog_overview_impl`. Computed once per call.
-struct CatalogOverviewFilter {
-    overview: String,
-    catalog_id: String,
-    catalog_dot_id: String,
-}
-
-impl CatalogOverviewFilter {
-    fn new(id_filter: Option<&[usize]>) -> Self {
-        let Some(ids) = id_filter else {
-            return Self {
-                overview: String::new(),
-                catalog_id: String::new(),
-                catalog_dot_id: String::new(),
-            };
+        // `catalog.desc` is a reserved word, hence the backticks. Every
+        // joined column gets an alias so column-name collisions between
+        // `overview.types` and whatever future column lands on `catalog`
+        // never cross-contaminate the Row getters.
+        let id_filter_clause = match id_filter {
+            Some(ids) => format!(" AND c.`id` IN ({})", ids.iter().join(",")),
+            None => String::new(),
         };
-        let id_list = ids.iter().join(",");
-        Self {
-            overview: format!(" AND `overview`.`catalog` IN ({id_list})"),
-            catalog_id: format!(" AND `id` IN ({id_list})"),
-            catalog_dot_id: format!(" AND `catalog`.`id` IN ({id_list})"),
+        let sql = format!(
+            "SELECT \
+                c.`id` AS c_id, c.`name` AS c_name, c.`url` AS c_url, \
+                c.`desc` AS c_desc, c.`type` AS c_type, \
+                c.`wd_prop` AS c_wd_prop, c.`wd_qual` AS c_wd_qual, \
+                c.`search_wp` AS c_search_wp, c.`active` AS c_active, \
+                c.`owner` AS c_owner, c.`note` AS c_note, \
+                c.`source_item` AS c_source_item, \
+                c.`has_person_date` AS c_has_person_date, \
+                c.`taxon_run` AS c_taxon_run, \
+                u.`id` AS u_id, u.`name` AS u_name, \
+                o.`catalog` AS o_catalog, \
+                o.`total` AS o_total, o.`noq` AS o_noq, o.`autoq` AS o_autoq, \
+                o.`na` AS o_na, o.`manual` AS o_manual, o.`nowd` AS o_nowd, \
+                o.`multi_match` AS o_multi_match, o.`types` AS o_types, \
+                a.`catalog` AS a_catalog, \
+                a.`last_update` AS a_last_update, \
+                a.`do_auto_update` AS a_do_auto_update, \
+                a.`json` AS a_json \
+             FROM `catalog` c \
+               LEFT JOIN `overview` o ON o.`catalog` = c.`id` \
+               LEFT JOIN `user` u ON u.`id` = c.`owner` \
+               LEFT JOIN `autoscrape` a ON a.`catalog` = c.`id` \
+             WHERE c.`active`>=1{id_filter_clause}"
+        );
+        let mut conn = self.get_conn_ro().await?;
+        let rows = conn
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(Self::overview_row_to_json)
+            .await?;
+        Ok(rows)
+    }
+
+    fn overview_row_to_json(row: Row) -> serde_json::Value {
+        // Catalog fields — every column is Option<T> to survive NULLs.
+        let id: usize = row.get::<Option<usize>, _>("c_id").flatten().unwrap_or(0);
+        let name: String = row.get::<Option<String>, _>("c_name").flatten().unwrap_or_default();
+        let url: String = row.get::<Option<String>, _>("c_url").flatten().unwrap_or_default();
+        let desc: String = row.get::<Option<String>, _>("c_desc").flatten().unwrap_or_default();
+        let type_name: String = row.get::<Option<String>, _>("c_type").flatten().unwrap_or_default();
+        let wd_prop: Option<usize> = row.get::<Option<usize>, _>("c_wd_prop").flatten();
+        let wd_qual: Option<usize> = row.get::<Option<usize>, _>("c_wd_qual").flatten();
+        let search_wp: String = row.get::<Option<String>, _>("c_search_wp").flatten().unwrap_or_default();
+        let active: u8 = row.get::<Option<u8>, _>("c_active").flatten().unwrap_or(0);
+        let owner: Option<usize> = row.get::<Option<usize>, _>("c_owner").flatten();
+        let note: String = row.get::<Option<String>, _>("c_note").flatten().unwrap_or_default();
+        let source_item: Option<usize> = row.get::<Option<usize>, _>("c_source_item").flatten();
+        let has_person_date: String = row.get::<Option<String>, _>("c_has_person_date").flatten().unwrap_or_default();
+        let taxon_run: u8 = row.get::<Option<u8>, _>("c_taxon_run").flatten().unwrap_or(0);
+
+        let mut out = json!({
+            "id": id, "name": name, "url": url, "desc": desc, "type": type_name,
+            "wd_prop": wd_prop, "wd_qual": wd_qual, "search_wp": search_wp,
+            "active": active, "owner": owner, "note": note,
+            "source_item": source_item, "has_person_date": has_person_date,
+            "taxon_run": taxon_run,
+        });
+
+        // Username — only surface when the owner FK actually resolved,
+        // matching the prior INNER-JOIN-based behaviour (missing user =
+        // no `username` key in the JSON at all). Gate on the user PK
+        // rather than `name`, so a user row with a NULL/empty name is
+        // still treated as "the join succeeded".
+        let user_joined = row.get::<Option<usize>, _>("u_id").flatten().is_some();
+        if user_joined {
+            let username: String = row.get::<Option<String>, _>("u_name").flatten().unwrap_or_default();
+            out["username"] = json!(username);
         }
+
+        // Overview fields — merged iff the overview row existed. Gate on
+        // `overview.catalog` (the PK, NOT NULL), not on any of the count
+        // columns, so a legitimately zero `total` doesn't look like a miss.
+        let overview_joined = row.get::<Option<usize>, _>("o_catalog").flatten().is_some();
+        if overview_joined {
+            out["total"] = json!(row.get::<Option<isize>, _>("o_total").flatten().unwrap_or(0));
+            out["noq"] = json!(row.get::<Option<isize>, _>("o_noq").flatten().unwrap_or(0));
+            out["autoq"] = json!(row.get::<Option<isize>, _>("o_autoq").flatten().unwrap_or(0));
+            out["na"] = json!(row.get::<Option<isize>, _>("o_na").flatten().unwrap_or(0));
+            out["manual"] = json!(row.get::<Option<isize>, _>("o_manual").flatten().unwrap_or(0));
+            out["nowd"] = json!(row.get::<Option<isize>, _>("o_nowd").flatten().unwrap_or(0));
+            out["multi_match"] = json!(row.get::<Option<isize>, _>("o_multi_match").flatten().unwrap_or(0));
+            out["types"] = json!(row.get::<Option<String>, _>("o_types").flatten().unwrap_or_default());
+        }
+
+        // Autoscrape fields — merged iff the autoscrape row existed.
+        // Gate on `autoscrape.catalog` (the PK) so a NULL last_update
+        // doesn't suppress an otherwise-present row.
+        let autoscrape_joined = row.get::<Option<usize>, _>("a_catalog").flatten().is_some();
+        if autoscrape_joined {
+            out["last_update"] = json!(row.get::<Option<String>, _>("a_last_update").flatten().unwrap_or_default());
+            out["do_auto_update"] = json!(row.get::<Option<u8>, _>("a_do_auto_update").flatten().unwrap_or(0));
+            out["autoscrape_json"] = json!(row.get::<Option<String>, _>("a_json").flatten().unwrap_or_default());
+        }
+
+        out
     }
 }
 
@@ -5886,23 +5819,6 @@ mod tests {
         // Still filters out userq/na via the general branch.
         assert!(clause.contains("(user<=0 OR user is null)"));
         assert!(clause.contains("(q!=0 or q is null)"));
-    }
-
-    #[test]
-    fn test_catalog_overview_filter_empty_when_unfiltered() {
-        let f = CatalogOverviewFilter::new(None);
-        assert!(f.overview.is_empty());
-        assert!(f.catalog_id.is_empty());
-        assert!(f.catalog_dot_id.is_empty());
-    }
-
-    #[test]
-    fn test_catalog_overview_filter_populated_when_filtered() {
-        let ids = [3_usize, 7, 11];
-        let f = CatalogOverviewFilter::new(Some(&ids));
-        assert_eq!(f.overview, " AND `overview`.`catalog` IN (3,7,11)");
-        assert_eq!(f.catalog_id, " AND `id` IN (3,7,11)");
-        assert_eq!(f.catalog_dot_id, " AND `catalog`.`id` IN (3,7,11)");
     }
 
     #[test]
