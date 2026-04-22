@@ -55,6 +55,10 @@ impl StaticCache {
         self.files.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.files.is_empty()
+    }
+
     /// Total bytes held. Useful for startup logging.
     pub fn total_bytes(&self) -> usize {
         self.files.values().map(|f| f.body.len()).sum()
@@ -113,8 +117,8 @@ fn not_found() -> Response<Body> {
 }
 
 fn load_dir(root: &Path, dir: &Path, out: &mut HashMap<String, CachedFile>) -> Result<()> {
-    for entry in std::fs::read_dir(dir)
-        .with_context(|| format!("reading directory {}", dir.display()))?
+    for entry in
+        std::fs::read_dir(dir).with_context(|| format!("reading directory {}", dir.display()))?
     {
         let entry = entry?;
         let path = entry.path();
@@ -127,8 +131,7 @@ fn load_dir(root: &Path, dir: &Path, out: &mut HashMap<String, CachedFile>) -> R
             // Symlinks, sockets, etc. — skip.
             continue;
         }
-        let bytes = std::fs::read(&path)
-            .with_context(|| format!("reading {}", path.display()))?;
+        let bytes = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
         let rel = path
             .strip_prefix(root)
             .with_context(|| format!("path {} not under {}", path.display(), root.display()))?;
@@ -167,9 +170,8 @@ fn mime_for(path: &Path) -> HeaderValue {
         }
         _ => essence,
     };
-    HeaderValue::from_str(&with_charset).unwrap_or_else(|_| {
-        HeaderValue::from_static("application/octet-stream")
-    })
+    HeaderValue::from_str(&with_charset)
+        .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream"))
 }
 
 #[cfg(test)]
@@ -193,7 +195,10 @@ mod tests {
         let (_tmp, root) = make_tree();
         let cache = StaticCache::load(&root).unwrap();
         assert_eq!(cache.len(), 2);
-        assert_eq!(cache.total_bytes(), "<!doctype html>hi".len() + "console.log(1)".len());
+        assert_eq!(
+            cache.total_bytes(),
+            "<!doctype html>hi".len() + "console.log(1)".len()
+        );
     }
 
     #[test]
