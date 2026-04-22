@@ -765,11 +765,15 @@ impl Storage for StorageMySQL {
         let mut conn = self.get_conn().await?;
         // `name` is UNIQUE in the catalog table, so a duplicate wizard submission
         // would silently return the existing id rather than erroring.
-        let wd_prop_val: usize = wd_prop.unwrap_or(0);
+        // Normalise wd_prop so 0 / Some(0) are stored as NULL — other queries
+        // elsewhere use `wd_prop IS NOT NULL` as the "this catalog has a
+        // property" sentinel, and a zero slipping through would masquerade
+        // as a real property there.
+        let wd_prop = normalize_wd_prop(wd_prop);
         conn.exec_drop(
             "INSERT INTO `catalog` (`name`,`url`,`desc`,`type`,`wd_prop`,`active`,`owner`,`note`,`has_person_date`) \
              VALUES (:name,:url,:desc,:type_name,:wd_prop,1,:owner,'','no')",
-            params! {name, url, desc, type_name, "wd_prop" => wd_prop_val, owner},
+            params! {name, url, desc, type_name, wd_prop, owner},
         )
         .await?;
         let id: Option<u64> = conn.last_insert_id();
@@ -849,7 +853,9 @@ impl Storage for StorageMySQL {
         let url = catalog.url();
         let desc = catalog.desc();
         let type_name = catalog.type_name();
-        let wd_prop = catalog.wd_prop().unwrap_or(0);
+        // Normalise to NULL when 0 / None — see `normalize_wd_prop` for why
+        // a stored 0 would break `wd_prop IS NOT NULL`-style callers.
+        let wd_prop = normalize_wd_prop(catalog.wd_prop());
         let wd_qual = catalog.wd_qual();
         let search_wp = catalog.search_wp();
         let active = catalog.is_active();
@@ -4101,6 +4107,12 @@ impl Storage for StorageMySQL {
 
     async fn api_edit_catalog(&self, catalog_id: usize, name: &str, url: &str, desc: &str, type_name: &str, search_wp: &str, wd_prop: Option<usize>, wd_qual: Option<usize>, active: bool) -> Result<()> {
         let active_val: u8 = if active { 1 } else { 0 };
+        // Coerce 0 → NULL before the UPDATE; the frontend form yields 0 when
+        // a user clears the property field (input type=number), and leaving
+        // that as-is would confuse downstream callers that treat `wd_prop
+        // IS NOT NULL` as "this catalog has a property".
+        let wd_prop = normalize_wd_prop(wd_prop);
+        let wd_qual = normalize_wd_prop(wd_qual);
         let sql = "UPDATE catalog SET name=:name,url=:url,`desc`=:desc,`type`=:type_name,search_wp=:search_wp,wd_prop=:wd_prop,wd_qual=:wd_qual,active=:active_val WHERE id=:catalog_id";
         let mut conn = self.get_conn().await?;
         conn.exec_drop(sql, params! { name, url, desc, type_name, search_wp, wd_prop, wd_qual, active_val, catalog_id }).await?;
@@ -5571,6 +5583,16 @@ impl StorageMySQL {
     }
 }
 
+/// Coerce a Wikidata property-number field (`wd_prop` / `wd_qual`) to NULL
+/// when the incoming value is None or zero. Callers elsewhere in the
+/// codebase use `wd_prop IS NOT NULL` or `wd_prop > 0` interchangeably to
+/// gate "catalog has a property" logic — a stored `0` muddles both, and
+/// (having been observed in the wild on catalogs created via scrapers)
+/// needs to be filtered at every write path, not just at read time.
+fn normalize_wd_prop(v: Option<usize>) -> Option<usize> {
+    v.filter(|n| *n > 0)
+}
+
 /// Convert a MySQL Row to a JSON object, preserving column names and basic types.
 fn row_to_json(row: Row) -> Value {
     let mut obj = serde_json::Map::new();
@@ -5594,6 +5616,18 @@ fn row_to_json(row: Row) -> Value {
 mod tests {
     use super::*;
     use crate::app_state::get_test_app;
+
+    #[test]
+    fn normalize_wd_prop_zero_and_none_become_none() {
+        assert_eq!(normalize_wd_prop(None), None);
+        assert_eq!(normalize_wd_prop(Some(0)), None);
+    }
+
+    #[test]
+    fn normalize_wd_prop_positive_passes_through() {
+        assert_eq!(normalize_wd_prop(Some(1)), Some(1));
+        assert_eq!(normalize_wd_prop(Some(7471)), Some(7471));
+    }
 
     #[tokio::test]
     #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
