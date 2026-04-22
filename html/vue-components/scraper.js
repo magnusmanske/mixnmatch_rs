@@ -590,11 +590,19 @@ export default Vue.extend({
 			me.is_example = true;
 			me.canSaveScraper();
 		},
+		// Wire-format options: {key: 1} for truthy, drop falsy. The server
+		// accepts bool/number/string now, but keep this normalisation so
+		// the test, save, and stored shapes stay identical (load re-reads
+		// the same shape, so round-trips stay byte-identical).
+		normalizedOptions: function () {
+			var out = {};
+			Object.entries(this.options).forEach(function (e) { if (e[1]) out[e[0]] = 1; });
+			return out;
+		},
 		saveScraper: async function () {
 			const me = this;
 			if (!me.canSaveScraper()) return;
-			var params = { scraper: me.scraper, options: {}, levels: me.levels, tusc_user: widar.getUserName(), meta: me.meta };
-			Object.entries(me.options).forEach(function (e) { if (e[1]) params.options[e[0]] = 1; });
+			var params = { scraper: me.scraper, options: me.normalizedOptions(), levels: me.levels, tusc_user: widar.getUserName(), meta: me.meta };
 			params.scraper = JSON.stringify(params.scraper); params.meta = JSON.stringify(params.meta);
 			params.levels = JSON.stringify(params.levels); params.options = JSON.stringify(params.options);
 			var btn = document.getElementById('save_scraper_button');
@@ -705,7 +713,14 @@ export default Vue.extend({
 		keysChanged: function (event) { var level_id = event.target.getAttribute('level'); this.levels[level_id].keys = (event.target.value || '').trim().split("\n"); },
 		setUcAZ: function (event) { var ta = event.target.closest('div.col').querySelector('textarea'); this.levels[ta.getAttribute('level')].keys = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split(''); },
 		setLcAZ: function (event) { var ta = event.target.closest('div.col').querySelector('textarea'); this.levels[ta.getAttribute('level')].keys = "abcdefghijklmnopqrstuvwxyz".split(''); },
-		generateJSON: function () { return JSON.stringify({ levels: this.levels, options: this.options, scraper: this.scraper }, null, 2); }
+		generateJSON: function () {
+			// Options must hit the wire in the same normalised shape save
+			// uses — previously this emitted JS booleans, which the
+			// server's options parser silently treated as all-false
+			// (it was calling as_u64() on a bool). Bug surfaced as a
+			// test run ignoring the "Compress whitespace" checkbox.
+			return JSON.stringify({ levels: this.levels, options: this.normalizedOptions(), scraper: this.scraper }, null, 2);
+		}
 	},
 	watch: {
 		'$route'(to, from) { this.init(to.params.opt); },
