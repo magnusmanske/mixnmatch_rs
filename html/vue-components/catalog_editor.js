@@ -57,9 +57,12 @@ export default Vue.extend({
 			label_cache: {},
 			location_bool_keys: LOCATION_BOOL_KEYS,
 			sparql_placeholder: SPARQL_PLACEHOLDER,
+			types: [],
 		};
 	},
-	created: async function () { await this.reload(); },
+	created: async function () {
+		await Promise.all([this.reload(), this.updateTypes()]);
+	},
 	updated: function () { tt_update_interface(); },
 	mounted: function () { tt_update_interface(); },
 	computed: {
@@ -88,6 +91,21 @@ export default Vue.extend({
 	},
 	methods: {
 		fieldHelp: function (key) { return FIELD_HELP[key] || ''; },
+		ucFirst: function (s) { return s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, ' '); },
+		updateTypes: async function () {
+			const me = this;
+			try {
+				const d = await mnm_api('catalog_type_counts');
+				me.types = (d.data || []).map(v => v.type).sort();
+			} catch (e) { /* leave empty — select will just show the current value */ }
+		},
+		// The current catalog's type might not be in the active-catalogs list
+		// (e.g. rare or legacy type). Union it in so v-model still resolves.
+		type_options: function () {
+			const t = (this.catalog || {}).type || '';
+			if (t && this.types.indexOf(t) === -1) return [t].concat(this.types);
+			return this.types;
+		},
 		reload: async function () {
 			const me = this;
 			me.loaded = false;
@@ -253,7 +271,9 @@ export default Vue.extend({
 							</div>
 							<div class='col-md-4'>
 								<label class='form-label'>Type</label>
-								<input type='text' class='form-control' v-model='catalog.type' placeholder='e.g. person, place, work' />
+								<select class='form-select' v-model='catalog.type'>
+									<option v-for='t in type_options()' :key='t' :value='t'>{{ucFirst(t)}}</option>
+								</select>
 							</div>
 						</div>
 

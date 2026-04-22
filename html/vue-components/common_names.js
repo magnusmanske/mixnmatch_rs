@@ -2,12 +2,13 @@ import { mnm_api, mnm_loading, ensure_catalog, get_specific_catalog, tt_update_i
 
 export default Vue.extend({
     props : ['id'] ,
-    data : function () { return { catalog:{} , loading:true , entries:[] , type_q:'' , limit:50 , offset:0 , min:3 , max:20 , other_cats_desc:false } } ,
+    data : function () { return { catalog:{} , loading:true , entries:[] , type_q:'' , limit:50 , offset:0 , min:3 , max:20 , other_cats_desc:false , page_jump:'' , page_sizes:[25,50,100,200] } } ,
     created : async function () {
     	let me = this ;
     	await ensure_catalog(me.id) ;
     	me.catalog = get_specific_catalog(me.id) ;
 		if ( typeof me.$route.query.offset!='undefined' ) me.offset = me.$route.query.offset*1 ;
+		if ( typeof me.$route.query.limit!='undefined' ) me.limit = me.$route.query.limit*1 ;
 		if ( typeof me.$route.query.min!='undefined' ) me.min = me.$route.query.min*1 ;
 		if ( typeof me.$route.query.max!='undefined' ) me.max = me.$route.query.max*1 ;
 		if ( typeof me.$route.query.other_cats_desc!='undefined' ) me.other_cats_desc = me.$route.query.other_cats_desc==1 ;
@@ -22,11 +23,31 @@ export default Vue.extend({
     		this.offset = new_offset ;
     		this.reload();
     	} ,
+    	set_page : function ( page_num ) {
+    		page_num = parseInt(page_num,10) ;
+    		if ( !page_num || page_num < 1 ) page_num = 1 ;
+    		this.set_offset ( (page_num-1) * this.limit ) ;
+    	} ,
+    	jump_to_page : function () {
+    		this.set_page ( this.page_jump ) ;
+    		this.page_jump = '' ;
+    	} ,
+    	change_page_size : function ( new_limit ) {
+    		new_limit = parseInt(new_limit,10) ;
+    		if ( !new_limit || new_limit < 1 ) return ;
+    		// Preserve the first currently-visible row's page position across
+    		// size changes: figure out which entry we're on, then re-anchor.
+    		let first_row = this.offset ;
+    		this.limit = new_limit ;
+    		this.offset = Math.floor(first_row / new_limit) * new_limit ;
+    		this.reload() ;
+    	} ,
     	reload : function () {
     		let me = this ;
     		let url = '/common_names/' + me.id ;
     		let parts = [] ;
     		if ( me.offset != 0 ) parts.push ( "offset="+me.offset ) ;
+    		if ( me.limit != 50 ) parts.push ( "limit="+me.limit ) ;
     		if ( me.min != 3 ) parts.push ( "min="+me.min ) ;
     		if ( me.max != 20 ) parts.push ( "max="+me.max ) ;
     		if ( me.type_q != '' ) parts.push ( "type="+me.type_q ) ;
@@ -95,14 +116,26 @@ export default Vue.extend({
 		<p tt="no_results"></p>
 	</div>
 	<div v-else>
-		<div class="d-flex justify-content-between align-items-center mb-2">
+		<div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
 			<small class="text-muted">
-				Showing {{offset+1}}&ndash;{{offset+entries.length}}
-				<span v-if="offset>0"> &middot; Page {{Math.floor(offset/limit)+1}}</span>
+				Showing {{offset+1}}&ndash;{{offset+entries.length}} &middot; Page {{Math.floor(offset/limit)+1}}
 			</small>
-			<div class="d-flex gap-1">
-				<button v-if="offset>0" class="btn btn-outline-secondary btn-sm" @click.prevent="set_offset(offset-limit)" tt="previous"></button>
-				<button v-if="entries.length==limit" class="btn btn-outline-secondary btn-sm" @click.prevent="set_offset(offset+limit)" tt="next"></button>
+			<div class="d-flex flex-wrap align-items-center gap-1">
+				<button class="btn btn-outline-secondary btn-sm" :disabled="offset==0"
+					@click.prevent="set_offset(0)" title="First page">&laquo;</button>
+				<button class="btn btn-outline-secondary btn-sm" :disabled="offset==0"
+					@click.prevent="set_offset(offset-limit)" tt="previous"></button>
+				<button class="btn btn-outline-secondary btn-sm" :disabled="entries.length<limit"
+					@click.prevent="set_offset(offset+limit)" tt="next"></button>
+				<span class="mx-1 text-muted small">go to</span>
+				<input type="number" class="form-control form-control-sm" style="width:5rem" min="1"
+					v-model="page_jump" @keyup.enter="jump_to_page" placeholder="page" />
+				<button class="btn btn-outline-secondary btn-sm" @click.prevent="jump_to_page" tt="go"></button>
+				<select class="form-select form-select-sm ms-2" style="width:auto"
+					:value="limit" @change="change_page_size($event.target.value)"
+					title="Rows per page">
+					<option v-for="s in page_sizes" :key="s" :value="s">{{s}} / page</option>
+				</select>
 			</div>
 		</div>
 
@@ -116,13 +149,17 @@ export default Vue.extend({
 			</div>
 		</div>
 
-		<div class="d-flex justify-content-between align-items-center mt-2">
+		<div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mt-2">
 			<small class="text-muted">
-				Showing {{offset+1}}&ndash;{{offset+entries.length}}
+				Showing {{offset+1}}&ndash;{{offset+entries.length}} &middot; Page {{Math.floor(offset/limit)+1}}
 			</small>
-			<div class="d-flex gap-1">
-				<button v-if="offset>0" class="btn btn-outline-secondary btn-sm" @click.prevent="set_offset(offset-limit)" tt="previous"></button>
-				<button v-if="entries.length==limit" class="btn btn-outline-secondary btn-sm" @click.prevent="set_offset(offset+limit)" tt="next"></button>
+			<div class="d-flex flex-wrap align-items-center gap-1">
+				<button class="btn btn-outline-secondary btn-sm" :disabled="offset==0"
+					@click.prevent="set_offset(0)" title="First page">&laquo;</button>
+				<button class="btn btn-outline-secondary btn-sm" :disabled="offset==0"
+					@click.prevent="set_offset(offset-limit)" tt="previous"></button>
+				<button class="btn btn-outline-secondary btn-sm" :disabled="entries.length<limit"
+					@click.prevent="set_offset(offset+limit)" tt="next"></button>
 			</div>
 		</div>
 	</div>
