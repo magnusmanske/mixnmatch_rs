@@ -47,16 +47,34 @@ const SELF_REF_IGNORED_PROPS: &[&str] = &["P248", "P813"];
 /// collections that don't expose a usable P1630/P1921. Kept here so we
 /// don't lose the curated coverage.
 const HARDCODED_PATTERNS: &[(&str, &str)] = &[
-    (r"^https?://www\.biodiversitylibrary\.org/creator/(.+?)/*$", "P4081"),
+    (
+        r"^https?://www\.biodiversitylibrary\.org/creator/(.+?)/*$",
+        "P4081",
+    ),
     (r"^https?://trove\.nla\.gov\.au/people/(\d+).*$", "P1315"),
     (r"^https?://openlibrary\.org/authors/(.+?)/.*$", "P648"),
-    (r"^https?://www\.biusante\.parisdescartes\.fr/histoire/biographies/index\.php\?cle=(\d+)", "P5375"),
-    (r"^https?://biusante\.parisdescartes\.fr/histoire/biographies/index\.php\?cle=(\d+)", "P5375"),
-    (r"^https?://bibliotheque\.academie-medecine\.fr/membres/membre/\?mbreid=(\d+).*$", "P3956"),
+    (
+        r"^https?://www\.biusante\.parisdescartes\.fr/histoire/biographies/index\.php\?cle=(\d+)",
+        "P5375",
+    ),
+    (
+        r"^https?://biusante\.parisdescartes\.fr/histoire/biographies/index\.php\?cle=(\d+)",
+        "P5375",
+    ),
+    (
+        r"^https?://bibliotheque\.academie-medecine\.fr/membres/membre/\?mbreid=(\d+).*$",
+        "P3956",
+    ),
     (r"^https?://www\.artnet\.com/artists/([^/]+).*$", "P3782"),
-    (r"^https?://www\.mutualart\.com/Artist/[^/]+/([^/]+).*$", "P6578"),
+    (
+        r"^https?://www\.mutualart\.com/Artist/[^/]+/([^/]+).*$",
+        "P6578",
+    ),
     (r"^https?://en\.isabart\.org/person/(\d+).*$", "P6844"),
-    (r"^https?://www\.sikart\.ch/KuenstlerInnen\.aspx\?id=(\d+).*$", "P781"),
+    (
+        r"^https?://www\.sikart\.ch/KuenstlerInnen\.aspx\?id=(\d+).*$",
+        "P781",
+    ),
 ];
 
 /// Main actor. `new` is cheap; `initialize` does the SPARQL work to
@@ -121,10 +139,7 @@ impl ReferenceFixer {
             .send()
             .await?;
         if !resp.status().is_success() {
-            return Err(anyhow!(
-                "SPARQL endpoint returned HTTP {}",
-                resp.status()
-            ));
+            return Err(anyhow!("SPARQL endpoint returned HTTP {}", resp.status()));
         }
         Ok(resp.json().await?)
     }
@@ -160,10 +175,7 @@ impl ReferenceFixer {
                 Some(r) => r,
                 None => continue,
             };
-            by_pattern
-                .entry(regex_src)
-                .or_default()
-                .push(property);
+            by_pattern.entry(regex_src).or_default().push(property);
         }
 
         let mut out: Vec<(Regex, String)> = Vec::new();
@@ -246,9 +258,7 @@ impl ReferenceFixer {
                 // need to know because the next loop iteration would
                 // see the same row and retry in a tight loop.
                 if let Err(e) = self.app.storage().reference_fixer_mark_done(q).await {
-                    warn!(
-                        "reference_fixer: failed to mark Q{q} done (queue will retry): {e}"
-                    );
+                    warn!("reference_fixer: failed to mark Q{q} done (queue will retry): {e}");
                     // Bail out — marking-done is supposed to be cheap;
                     // if it's failing, the whole run is in trouble.
                     return Err(e);
@@ -262,12 +272,14 @@ impl ReferenceFixer {
     /// Process one item — fetch its statements and rewrite references
     /// where improvable.
     pub async fn check_item(&mut self, q: usize) -> Result<()> {
-        let url = format!(
-            "https://www.wikidata.org/w/api.php?action=wbgetentities&format=json&ids=Q{q}"
-        );
+        let url =
+            format!("https://www.wikidata.org/w/api.php?action=wbgetentities&format=json&ids=Q{q}");
         let resp = self.http.get(&url).send().await?;
         if !resp.status().is_success() {
-            return Err(anyhow!("wbgetentities Q{q} returned HTTP {}", resp.status()));
+            return Err(anyhow!(
+                "wbgetentities Q{q} returned HTTP {}",
+                resp.status()
+            ));
         }
         let json: Value = resp.json().await?;
         // A missing / redirected / deleted item shows up as either an
@@ -317,7 +329,7 @@ impl ReferenceFixer {
         };
         let mut remove_hashes: Vec<String> = Vec::new();
         for reference_group in references {
-            if self.is_self_reference(statement, &reference_group) {
+            if Self::is_self_reference(statement, &reference_group) {
                 if let Some(h) = reference_group.get("hash").and_then(|v| v.as_str()) {
                     remove_hashes.push(h.to_string());
                 }
@@ -329,13 +341,10 @@ impl ReferenceFixer {
             };
             for rg in &new_groups {
                 // Don't loop an external-id onto itself as its own reference.
-                if self.is_self_reference(statement, rg) {
+                if Self::is_self_reference(statement, rg) {
                     continue;
                 }
-                if !self
-                    .add_reference_group(&statement_id, rg)
-                    .await?
-                {
+                if !self.add_reference_group(&statement_id, rg).await? {
                     // Stop this statement; don't remove the original if we
                     // couldn't successfully add replacement(s).
                     return Ok(());
@@ -451,7 +460,7 @@ impl ReferenceFixer {
 
     /// Is this reference group nothing but "the statement's main property
     /// as a reference", ignoring stated-in/retrieved?
-    fn is_self_reference(&self, statement: &Value, group: &Value) -> bool {
+    fn is_self_reference(statement: &Value, group: &Value) -> bool {
         let mainsnak = match statement.get("mainsnak") {
             Some(v) => v,
             None => return false,
@@ -650,7 +659,9 @@ fn formatter_url_to_regex(url: &str) -> Option<String> {
 /// trailing slash, and the long `_(Dizionario_Biografico)` suffix used
 /// by P1986. Trimmed at the end.
 fn clean_captured_id(raw: &str) -> String {
-    let decoded = urlencoding::decode(raw).map(|s| s.into_owned()).unwrap_or_else(|_| raw.to_string());
+    let decoded = urlencoding::decode(raw)
+        .map(|s| s.into_owned())
+        .unwrap_or_else(|_| raw.to_string());
     let mut s = decoded.as_str();
     if let Some(amp) = s.find('&') {
         s = &s[..amp];
@@ -680,7 +691,9 @@ mod tests {
     fn formatter_url_to_regex_handles_basic_template() {
         let rx = formatter_url_to_regex("https://openlibrary.org/authors/$1").unwrap();
         let re = Regex::new(&rx).unwrap();
-        let caps = re.captures("https://openlibrary.org/authors/OL23919A").unwrap();
+        let caps = re
+            .captures("https://openlibrary.org/authors/OL23919A")
+            .unwrap();
         assert_eq!(&caps[1], "OL23919A");
     }
 
@@ -730,7 +743,6 @@ mod tests {
 
     #[test]
     fn is_self_reference_on_external_id_same_prop() {
-        let rf = bare_fixer();
         let statement = json!({
             "mainsnak": {"datatype": "external-id", "property": "P648"},
             "id": "Q1$abc",
@@ -739,31 +751,29 @@ mod tests {
             "snaks": {"P648": [{}], "P248": [{}], "P813": [{}]},
             "snaks-order": ["P248", "P813", "P648"],
         });
-        assert!(rf.is_self_reference(&statement, &group));
+        assert!(ReferenceFixer::is_self_reference(&statement, &group));
     }
 
     #[test]
     fn is_self_reference_not_external_id() {
-        let rf = bare_fixer();
         let statement = json!({
             "mainsnak": {"datatype": "wikibase-item", "property": "P31"},
         });
         let group = json!({
             "snaks": {"P31": [{}]},
         });
-        assert!(!rf.is_self_reference(&statement, &group));
+        assert!(!ReferenceFixer::is_self_reference(&statement, &group));
     }
 
     #[test]
     fn is_self_reference_other_prop_bails() {
-        let rf = bare_fixer();
         let statement = json!({
             "mainsnak": {"datatype": "external-id", "property": "P648"},
         });
         let group = json!({
             "snaks": {"P648": [{}], "P1234": [{}]},
         });
-        assert!(!rf.is_self_reference(&statement, &group));
+        assert!(!ReferenceFixer::is_self_reference(&statement, &group));
     }
 
     #[test]
@@ -835,11 +845,15 @@ mod tests {
         assert_eq!(order, vec!["P248", "P648"]);
         // The typed external-id snak carries the cleaned capture group.
         assert_eq!(
-            g["snaks"]["P648"][0]["datavalue"]["value"].as_str().unwrap(),
+            g["snaks"]["P648"][0]["datavalue"]["value"]
+                .as_str()
+                .unwrap(),
             "OL23919A"
         );
         assert_eq!(
-            g["snaks"]["P248"][0]["datavalue"]["value"]["id"].as_str().unwrap(),
+            g["snaks"]["P248"][0]["datavalue"]["value"]["id"]
+                .as_str()
+                .unwrap(),
             "Q1201876"
         );
     }

@@ -36,7 +36,10 @@ pub async fn query_single_catalog(app: &AppState, params: &Params) -> Result<Res
     let mut data = data?;
     if let Some(obj) = data.as_object_mut() {
         let kvs = kvs.unwrap_or_default();
-        obj.insert("kv_pairs".into(), serde_json::to_value(&kvs).unwrap_or_default());
+        obj.insert(
+            "kv_pairs".into(),
+            serde_json::to_value(&kvs).unwrap_or_default(),
+        );
     }
     let mut map = serde_json::Map::new();
     map.insert(cid.to_string(), data);
@@ -177,7 +180,7 @@ pub async fn query_edit_catalog(
             // All kv values are stored as strings — coerce numbers/booleans
             // on the way in so callers don't have to JSON-stringify them.
             let stored = match v {
-                serde_json::Value::String(s) => s.clone(),
+                serde_json::Value::String(s2) => s2.clone(),
                 other => other.to_string(),
             };
             s.set_catalog_kv(cid, k, &stored).await?;

@@ -105,7 +105,7 @@ pub async fn query_download2(app: &AppState, params: &Params) -> Result<Response
         offset,
     };
 
-    let (columns, rows) = app.storage().api_download2(&filter).await?;
+    let (cols, rows) = app.storage().api_download2(&filter).await?;
     let ct = if format == "json" {
         "application/json; charset=UTF-8"
     } else {
@@ -117,9 +117,9 @@ pub async fn query_download2(app: &AppState, params: &Params) -> Result<Response
     let format_owned = format.clone();
     let out = tokio::task::spawn_blocking(move || {
         if format_owned == "json" {
-            write_json(&columns, &rows)
+            write_json(&cols, &rows)
         } else {
-            write_tsv(&columns, &rows)
+            write_tsv(&cols, &rows)
         }
     })
     .await
