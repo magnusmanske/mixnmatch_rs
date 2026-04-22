@@ -400,7 +400,7 @@ impl CerseiSync {
                 )
                 .await
             {
-                eprintln!("cersei: scraper {scraper_id} failed: {e}");
+                return Err(anyhow!("cersei: scraper {scraper_id} failed: {e}"));
             }
         }
 
