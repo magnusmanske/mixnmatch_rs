@@ -140,22 +140,6 @@ impl StorageMySQL {
         Ok(true)
     }
 
-    /// Computes the column of the overview table that is affected, given a user ID and item ID
-    fn get_overview_column_name_for_user_and_q(
-        user_id: Option<usize>,
-        q: Option<isize>,
-    ) -> String {
-        match (user_id, q) {
-            (Some(0), _) => "autoq",
-            (Some(_), None) => "noq",
-            (Some(_), Some(0)) => "na",
-            (Some(_), Some(-1)) => "nowd",
-            (Some(_), _) => "manual",
-            _ => "noq",
-        }
-        .to_string()
-    }
-
     fn jobs_get_next_job_construct_sql(
         status: JobStatus,
         depends_on: Option<JobStatus>,
@@ -1043,22 +1027,36 @@ impl Storage for StorageMySQL {
     }
 
     async fn catalog_refresh_overview_table(&self, catalog_id: usize) -> Result<()> {
-        // `manual` must only count real item matches (q>0). The previous
-        // `q IS NOT NULL AND user>0` predicate folded in N/A (q=0) and
-        // no-Wikidata (q=-1) rows, so every N/A entry was counted as both
-        // "na" and "manual" when the overview was rebuilt via the Refresh
-        // button. Match the PHP Catalog::updateStatistics formula exactly.
-        let sql = r"REPLACE INTO `overview` (catalog,total,noq,autoq,na,manual,nowd,multi_match,types) VALUES (
-	        :catalog_id,
-	        (SELECT count(*) FROM `entry` WHERE `catalog`=:catalog_id),
-	        (SELECT count(*) FROM `entry` WHERE `catalog`=:catalog_id AND `q` IS NULL),
-	        (SELECT count(*) FROM `entry` WHERE `catalog`=:catalog_id AND `user`=0),
-	        (SELECT count(*) FROM `entry` WHERE `catalog`=:catalog_id AND `q`=0),
-	        (SELECT count(*) FROM `entry` WHERE `catalog`=:catalog_id AND `q`>0 AND `user`>0),
-	        (SELECT count(*) FROM `entry` WHERE `catalog`=:catalog_id AND `q`=-1),
-	        (SELECT count(*) FROM `multi_match` WHERE `catalog`=:catalog_id),
-	        (SELECT group_concat(DISTINCT `type` SEPARATOR '|') FROM `entry` WHERE `catalog`=:catalog_id)
-	        )";
+        // Predicates come from OverviewColumn::entry_predicate() — the
+        // same source of truth used by the incremental update_overview_table
+        // path, so Refresh and post-click counts can't disagree. The
+        // predicates are mutually exclusive: every entry row contributes
+        // to exactly one bucket (total = noq + autoq + na + nowd + manual).
+        use crate::overview::OverviewColumn;
+        let pred = |c: OverviewColumn| {
+            format!(
+                "(SELECT count(*) FROM `entry` WHERE `catalog`=:catalog_id AND {})",
+                c.entry_predicate()
+            )
+        };
+        let sql = format!(
+            "REPLACE INTO `overview` (catalog,total,noq,autoq,na,manual,nowd,multi_match,types) VALUES (\n\
+                :catalog_id,\n\
+                (SELECT count(*) FROM `entry` WHERE `catalog`=:catalog_id),\n\
+                {noq},\n\
+                {autoq},\n\
+                {na},\n\
+                {manual},\n\
+                {nowd},\n\
+                (SELECT count(*) FROM `multi_match` WHERE `catalog`=:catalog_id),\n\
+                (SELECT group_concat(DISTINCT `type` SEPARATOR '|') FROM `entry` WHERE `catalog`=:catalog_id)\n\
+            )",
+            noq = pred(OverviewColumn::Noq),
+            autoq = pred(OverviewColumn::Autoq),
+            na = pred(OverviewColumn::Na),
+            manual = pred(OverviewColumn::Manual),
+            nowd = pred(OverviewColumn::Nowd),
+        );
         let mut conn = self.get_conn().await?;
         conn.exec_drop(sql, params! {catalog_id}).await?;
         Ok(())
@@ -1149,19 +1147,32 @@ impl Storage for StorageMySQL {
     // MixNMatch
 
     /// Updates the overview table for a catalog, given the old Entry object, and the user ID and new item.
+    ///
+    /// Classification is delegated to `crate::overview::OverviewColumn`,
+    /// the single source of truth shared with
+    /// `catalog_refresh_overview_table`. When the state change doesn't
+    /// actually move a row between buckets (e.g. re-confirming an
+    /// existing match), we short-circuit — the previous implementation
+    /// emitted `SET col=col+1, col=col-1` which MySQL accepts but is
+    /// pointless.
     async fn update_overview_table(
         &self,
         old_entry: &Entry,
         user_id: Option<usize>,
         q: Option<isize>,
     ) -> Result<()> {
-        let add_column = Self::get_overview_column_name_for_user_and_q(user_id, q);
-        let reduce_column =
-            Self::get_overview_column_name_for_user_and_q(old_entry.user, old_entry.q);
+        use crate::overview::OverviewColumn;
+        let to_col = OverviewColumn::classify(user_id, q);
+        let from_col = OverviewColumn::classify(old_entry.user, old_entry.q);
+        if to_col == from_col {
+            return Ok(());
+        }
+        let add_column = to_col.column();
+        let reduce_column = from_col.column();
         let catalog_id = old_entry.catalog;
         let sql = format!(
-            "UPDATE overview SET {}={}+1,{}={}-1 WHERE catalog=:catalog_id",
-            &add_column, &add_column, &reduce_column, &reduce_column
+            "UPDATE overview SET `{}`=`{}`+1, `{}`=`{}`-1 WHERE catalog=:catalog_id",
+            add_column, add_column, reduce_column, reduce_column
         );
         let mut conn = self.get_conn().await?;
         conn.exec_drop(sql, params! {catalog_id}).await?;
@@ -5743,56 +5754,6 @@ mod tests {
         assert_eq!(sql6, expected6);
     }
 
-    #[test]
-    fn test_get_overview_column_name_for_user_and_q() {
-        // user=0 (automatch) => "autoq" regardless of q
-        assert_eq!(
-            StorageMySQL::get_overview_column_name_for_user_and_q(Some(0), None),
-            "autoq"
-        );
-        assert_eq!(
-            StorageMySQL::get_overview_column_name_for_user_and_q(Some(0), Some(42)),
-            "autoq"
-        );
-        assert_eq!(
-            StorageMySQL::get_overview_column_name_for_user_and_q(Some(0), Some(0)),
-            "autoq"
-        );
-
-        // user>0, q=None => "noq"
-        assert_eq!(
-            StorageMySQL::get_overview_column_name_for_user_and_q(Some(5), None),
-            "noq"
-        );
-
-        // user>0, q=0 (N/A) => "na"
-        assert_eq!(
-            StorageMySQL::get_overview_column_name_for_user_and_q(Some(5), Some(0)),
-            "na"
-        );
-
-        // user>0, q=-1 (no Wikidata item) => "nowd"
-        assert_eq!(
-            StorageMySQL::get_overview_column_name_for_user_and_q(Some(5), Some(-1)),
-            "nowd"
-        );
-
-        // user>0, q>0 (manual match) => "manual"
-        assert_eq!(
-            StorageMySQL::get_overview_column_name_for_user_and_q(Some(5), Some(42)),
-            "manual"
-        );
-
-        // user=None => "noq"
-        assert_eq!(
-            StorageMySQL::get_overview_column_name_for_user_and_q(None, None),
-            "noq"
-        );
-        assert_eq!(
-            StorageMySQL::get_overview_column_name_for_user_and_q(None, Some(42)),
-            "noq"
-        );
-    }
 
     #[test]
     fn test_escape_sql_literal() {
