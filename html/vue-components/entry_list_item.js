@@ -81,7 +81,13 @@ export default {
 		},
 		setNA: function (e) {
 			e.preventDefault();
-			return this.setQ(e, 0);
+			// Pass the N/A sentinel (q=0) and skip the Wikidata edit
+			// explicitly. The previous `setQ(e, 0)` sent the Event object
+			// as q, which setEntryQ then coerced to NaN, which the server
+			// parsed as the default -1 — leading to "Out of range value
+			// for column 'q'" on the reference_fixer insert (that column
+			// is INT UNSIGNED).
+			return this.setQ(0, true);
 		},
 		newItem: function (e) {
 			e.preventDefault();
