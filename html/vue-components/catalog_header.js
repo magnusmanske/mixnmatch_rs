@@ -12,11 +12,11 @@ export default {
 					onto a new line as soon as the title stopped fitting
 					in one row.
 
-					`clearfix` contains the float via ::after{clear:both}.
-					Earlier we tried `overflow:hidden` here and it worked
-					for layout — but it also clipped the absolutely-
-					positioned dropdown menu when opened, so the Action
-					popup was invisible.
+					The clearfix class contains the float via
+					::after{clear:both}. An earlier revision used
+					overflow:hidden here, which worked for layout but
+					also clipped the absolutely-positioned dropdown menu
+					when opened, making the Action popup invisible.
 				-->
 				<div class='btn-group float-end ms-2 mt-1'>
 					<button type='button' class='btn btn-outline-secondary dropdown-toggle'
