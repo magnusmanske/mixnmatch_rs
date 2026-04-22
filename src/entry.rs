@@ -785,13 +785,20 @@ impl Entry {
 
     // Removes the current match from the entry, and marks the entry as unmatched in other tables.
     pub async fn unmatch(&mut self) -> Result<()> {
-        self.app()?
-            .storage()
-            .entry_unmatch(self.get_valid_id()?)
-            .await?;
+        // Snapshot old (user, q) so the overview shift runs against the
+        // pre-unmatch bucket. Without this the overview drifts: the
+        // catalog's `manual`/`na`/`nowd`/`autoq` counter stays elevated
+        // until the next full Refresh.
+        let old_entry = self.clone();
+        let entry_id = self.get_valid_id()?;
+        self.app()?.storage().entry_unmatch(entry_id).await?;
         self.user = None;
         self.timestamp = None;
         self.q = None;
+        self.app()?
+            .storage()
+            .update_overview_table(&old_entry, None, None)
+            .await?;
         Ok(())
     }
 
