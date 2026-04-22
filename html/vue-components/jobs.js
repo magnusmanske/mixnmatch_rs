@@ -29,7 +29,11 @@ export default Vue.extend({
         if ( me.specific_catalog ) {
             await ensure_catalog(me.id) ;
             me.catalog = get_specific_catalog(me.id) || me.get_catalog(me.id) ;
-            if ( me.catalog.no_automatches=='1' ) {
+            // Gate the generic automatchers on the catalog's opt-out flag.
+            // `no_automatches` is the legacy PHP-style signal; kv_pairs is
+            // the new source of truth — check both.
+            const kv = me.catalog.kv_pairs || {};
+            if ( me.catalog.no_automatches=='1' || kv.use_automatchers=='0' ) {
                 me.valid_actions = me.valid_actions.filter((action) => !action.includes('automatch'));
             }
             if ( me.catalog.has_person_date == 'yes' ) {

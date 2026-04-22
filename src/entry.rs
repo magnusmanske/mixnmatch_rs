@@ -314,10 +314,20 @@ impl Entry {
         let catalog = Catalog::from_id(self.catalog, self.app()?).await?;
         let references = catalog.references(self).await;
         let language = catalog.search_wp().to_string();
+        // `use_description_for_new` gates whether the catalog's ext_desc is
+        // copied into a newly-created item's description. Default is on;
+        // catalog admins can opt out via kv_catalog.
+        let use_desc = catalog
+            .get_key_value_pairs()
+            .await
+            .unwrap_or_default()
+            .get("use_description_for_new")
+            .map(|v| v != "0")
+            .unwrap_or(true);
         self.add_to_item_own_id(&catalog, &references, item);
         self.add_to_item_type(&references, item);
         self.add_to_item_name_and_aliases(&language, item).await?;
-        self.add_to_item_descriptions(language, item).await?;
+        self.add_to_item_descriptions(language, use_desc, item).await?;
         self.add_to_item_coordinates(&references, item).await?;
         self.add_to_item_person_dates(&references, item).await?;
         self.add_to_item_auxiliary(references, item).await?;
@@ -381,10 +391,11 @@ impl Entry {
     async fn add_to_item_descriptions(
         &self,
         language: String,
+        use_ext_desc: bool,
         item: &mut ItemEntity,
     ) -> Result<()> {
         let mut descriptions = self.get_language_descriptions().await?;
-        if !self.ext_desc.is_empty() {
+        if use_ext_desc && !self.ext_desc.is_empty() {
             descriptions.insert(language.to_owned(), self.ext_desc.to_owned());
         }
         for (lang, desc) in descriptions {

@@ -191,6 +191,8 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
         &self,
         catalog_id: usize,
     ) -> Result<HashMap<String, String>>;
+    async fn set_catalog_kv(&self, catalog_id: usize, key: &str, value: &str) -> Result<()>;
+    async fn delete_catalog_kv(&self, catalog_id: usize, key: &str) -> Result<()>;
     // async fn remove_inactive_catalogs_from_overview(&self) -> Result<()>;
     async fn replace_nowd_with_noq(&self) -> Result<()>;
     async fn catalog_refresh_overview_table(&self, catalog_id: usize) -> Result<()>;

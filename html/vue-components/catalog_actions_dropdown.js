@@ -70,7 +70,8 @@ export default {
 			tt='issues_in_this_catalog'></router-link>
 		<router-link v-if='catalog.wd_prop!=null && catalog.wd_qual==null' :to='"/sync/"+catalog.id'
 			class="dropdown-item" style="padding:2px" tt="sync_catalog"></router-link>
-		<router-link v-if='widar.is_catalog_admin' :to='"/catalog_editor/"+catalog.id' class="dropdown-item"
+		<router-link v-if='widar.is_catalog_admin || (widar.mnm_user_id && catalog.owner && widar.mnm_user_id==catalog.owner)'
+			:to='"/catalog_editor/"+catalog.id' class="dropdown-item"
 			style="padding:2px" tt="catalog_editor"></router-link>
 		<router-link :to="'/mobile_match/'+catalog.id" class="dropdown-item" style="padding:2px"
 			tt="mobile_game"></router-link>

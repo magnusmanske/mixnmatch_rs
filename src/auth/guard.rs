@@ -142,3 +142,41 @@ pub async fn require_catalog_admin(
         ))),
     }
 }
+
+/// Allow either a catalog admin or the catalog's own creator (the
+/// `catalog.owner` column) to perform the action. Admins can edit every
+/// catalog; creators can edit only the ones they own. Reads the `username`
+/// form field as the claim (same shape as `require_catalog_admin_from_params`).
+pub async fn require_catalog_admin_or_owner_from_params(
+    app: &AppState,
+    session: &Session,
+    params: &Params,
+    catalog_id: usize,
+) -> Result<AuthedUser, ApiError> {
+    let claimed = claimed_username_from(params);
+    let user = require_user(app, session, claimed).await?;
+    if let Some(u) = dev_bypass_user() {
+        // Dev bypass already grants admin; accept without a DB lookup.
+        return Ok(u);
+    }
+    // Admin short-circuit.
+    let admin_info = app
+        .storage()
+        .get_user_by_name(&user.wikidata_username)
+        .await
+        .map_err(|e| ApiError(format!("Admin lookup failed: {e}")))?;
+    if matches!(admin_info, Some((_, _, true))) {
+        return Ok(user);
+    }
+    // Otherwise, must be the catalog's owner.
+    let catalog = crate::catalog::Catalog::from_id(catalog_id, app)
+        .await
+        .map_err(|e| ApiError(format!("Catalog lookup failed: {e}")))?;
+    if catalog.owner() == user.mnm_user_id {
+        return Ok(user);
+    }
+    Err(ApiError(format!(
+        "'{}' is not a catalog admin and does not own catalog #{catalog_id}",
+        user.wikidata_username
+    )))
+}
