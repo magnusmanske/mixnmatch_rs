@@ -152,21 +152,13 @@ impl Autoscrape {
 
     //TODO test
     fn options_from_json(&mut self, json: &Value) {
-        self.simple_space = json
-            .get("simple_space")
-            .map(|x| x.as_u64().unwrap_or(0))
-            .unwrap_or(0)
-            == 1;
-        self.skip_failed = json
-            .get("skip_failed")
-            .map(|x| x.as_u64().unwrap_or(0))
-            .unwrap_or(0)
-            == 1;
-        self.utf8_encode = json
-            .get("utf8_encode")
-            .map(|x| x.as_u64().unwrap_or(0))
-            .unwrap_or(0)
-            == 1;
+        // Accept bool, number, or string for each flag. The scraper wizard
+        // sends JS booleans on test (via generateJSON) but stores numbers
+        // on save — the two paths used to disagree, silently forcing every
+        // option off during tests. Treat anything truthy/non-zero as on.
+        self.simple_space = json_flag(json.get("simple_space"));
+        self.skip_failed = json_flag(json.get("skip_failed"));
+        self.utf8_encode = json_flag(json.get("utf8_encode"));
     }
 
     //TODO test
@@ -652,6 +644,21 @@ impl Autoscrape {
     }
 }
 
+/// Interpret a JSON value as an on/off flag. Accepts bool, number
+/// (non-zero = on), and string ("1"/"true"/"yes"/"on" case-insensitive).
+/// Missing / null / anything else = off.
+fn json_flag(v: Option<&Value>) -> bool {
+    match v {
+        Some(Value::Bool(b)) => *b,
+        Some(Value::Number(n)) => n.as_i64().map(|x| x != 0).unwrap_or(false)
+            || n.as_f64().map(|x| x != 0.0).unwrap_or(false),
+        Some(Value::String(s)) => {
+            matches!(s.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
+        }
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -660,6 +667,28 @@ mod tests {
     const TEST_CATALOG_ID: usize = 91; //5526 ;
     const _TEST_ENTRY_ID: usize = 143962196;
     const _TEST_ITEM_ID: usize = 13520818; // Q13520818
+
+    #[test]
+    fn json_flag_accepts_bool_number_string() {
+        use serde_json::json;
+        // Falsy / missing
+        assert!(!json_flag(None));
+        assert!(!json_flag(Some(&json!(false))));
+        assert!(!json_flag(Some(&json!(0))));
+        assert!(!json_flag(Some(&json!("0"))));
+        assert!(!json_flag(Some(&json!("false"))));
+        assert!(!json_flag(Some(&json!(""))));
+        assert!(!json_flag(Some(&json!(null))));
+        // Truthy
+        assert!(json_flag(Some(&json!(true))));
+        assert!(json_flag(Some(&json!(1))));
+        assert!(json_flag(Some(&json!(42))));
+        assert!(json_flag(Some(&json!("1"))));
+        assert!(json_flag(Some(&json!("true"))));
+        assert!(json_flag(Some(&json!("TRUE"))));
+        assert!(json_flag(Some(&json!("yes"))));
+        assert!(json_flag(Some(&json!("on"))));
+    }
 
     #[test]
     fn test_fix_regex() {
