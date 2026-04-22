@@ -265,7 +265,8 @@ impl ShellCommands {
         let router: Router = api_router
             .fallback(static_handler)
             .layer(session_layer)
-            .layer(cors);
+            .layer(cors)
+            .layer(axum::middleware::from_fn(collapse_slashes_in_path));
 
         let scheme = if tls { "https" } else { "http" };
         let addr: std::net::SocketAddr = format!("0.0.0.0:{port}").parse()?;
@@ -440,4 +441,44 @@ impl ShellCommands {
         }
         Ok(())
     }
+}
+
+/// Collapse runs of `/` in the request path to a single `/`. Fixes URLs like
+/// `https://host//#/entry/X`, where the HTML's `./resources/...` relative
+/// imports resolve to `//resources/...` — a path that doesn't match the
+/// `/resources/{*path}` route and so falls through to the 404 static handler.
+/// Query string is untouched.
+async fn collapse_slashes_in_path(
+    mut req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let uri = req.uri();
+    let path = uri.path();
+    if path.contains("//") {
+        let mut normalized = String::with_capacity(path.len());
+        let mut prev_slash = false;
+        for c in path.chars() {
+            if c == '/' {
+                if !prev_slash {
+                    normalized.push('/');
+                }
+                prev_slash = true;
+            } else {
+                normalized.push(c);
+                prev_slash = false;
+            }
+        }
+        let new_pq = match uri.query() {
+            Some(q) => format!("{normalized}?{q}"),
+            None => normalized,
+        };
+        if let Ok(pq) = axum::http::uri::PathAndQuery::from_maybe_shared(new_pq) {
+            let mut parts = uri.clone().into_parts();
+            parts.path_and_query = Some(pq);
+            if let Ok(new_uri) = axum::http::Uri::from_parts(parts) {
+                *req.uri_mut() = new_uri;
+            }
+        }
+    }
+    next.run(req).await
 }
