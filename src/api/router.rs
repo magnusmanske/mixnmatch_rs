@@ -123,6 +123,10 @@ async fn dispatcher_common(app: &AppState, session: &Session, params: Params) ->
     } else {
         String::new()
     };
+    // `autoclose=1` is used by the Wikidata gadget: it opens the API URL in a
+    // popup (top-level navigation carries the first-party session cookie, unlike
+    // a cross-origin fetch), and we return HTML that closes the popup on success.
+    let autoclose = params.get("autoclose").map(String::as_str) == Some("1");
     // Wrap the dispatcher in catch_unwind so a panic in a single handler
     // (typically a MySQL type mismatch inside `row.get`) returns a clean
     // error response instead of killing the connection mid-flight — the
@@ -143,6 +147,9 @@ async fn dispatcher_common(app: &AppState, session: &Session, params: Params) ->
             ApiError(format!("internal error: {msg}")).into_response()
         }
     };
+    if autoclose {
+        return wrap_autoclose(resp).await;
+    }
     if callback.is_empty() {
         return resp;
     }
@@ -170,6 +177,44 @@ async fn dispatcher_common(app: &AppState, session: &Session, params: Params) ->
             .into_response();
     }
     resp
+}
+
+/// Wrap a JSON response in minimal HTML that closes the popup on success.
+/// Errors keep the popup open so the user can see what went wrong.
+async fn wrap_autoclose(resp: Response) -> Response {
+    let (parts, body) = resp.into_parts();
+    let bytes = match axum::body::to_bytes(body, 10_000_000).await {
+        Ok(b) => b,
+        Err(_) => return axum::http::Response::from_parts(parts, axum::body::Body::empty()),
+    };
+    let json_val: serde_json::Value =
+        serde_json::from_slice(&bytes).unwrap_or(serde_json::json!({}));
+    let status = json_val
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let html = if status == "OK" {
+        "<!DOCTYPE html><html><head><title>Mix'n'match</title></head>\
+         <body style=\"font-family:sans-serif\"><script>window.close();</script>\
+         <p>Done. You can close this window.</p></body></html>"
+            .to_string()
+    } else {
+        let safe = html_escape::encode_text(status);
+        format!(
+            "<!DOCTYPE html><html><head><title>Mix'n'match error</title></head>\
+             <body style=\"font-family:sans-serif\">\
+             <h3>Mix'n'match error</h3><p>{safe}</p>\
+             <p>Close this window to continue.</p></body></html>"
+        )
+    };
+    (
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/html; charset=UTF-8",
+        )],
+        html,
+    )
+        .into_response()
 }
 
 #[allow(clippy::cognitive_complexity)]
