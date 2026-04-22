@@ -1522,24 +1522,29 @@ impl Storage for StorageMySQL {
     }
 
     async fn maintenance_common_names_dates(&self) -> Result<()> {
+        // Build results into a session-local TEMPORARY TABLE first (no global DDL lock
+        // contention on `entry`/`person_dates`).  A single GROUP BY with
+        // HAVING MAX(matched)=0 replaces the old CREATE→index→self-join DELETE pipeline.
         let sqls = [
-            r#"DROP TABLE IF EXISTS tmp1"#,
-            r#"CREATE TABLE tmp1 AS
-			    SELECT ext_name,
-			    catalog,
-			    if(q IS NULL OR user=0,0,1) as matched,
-			    concat(ext_name,'|',year_born,'-',year_died) as nbd,
-			    entry_id
-			    FROM entry,person_dates
-			    WHERE entry_id=entry.id AND year_born!='' AND year_died!=''
-			    AND catalog NOT IN (SELECT id FROM catalog where active=0)"#,
-            r#"CREATE INDEX tmp1a ON tmp1 (nbd)"#,
-            r#"DELETE FROM tmp1 WHERE nbd IN (select nbd from tmp1 where matched=1)"#,
+            r#"DROP TEMPORARY TABLE IF EXISTS tmp_cnd"#,
+            r#"CREATE TEMPORARY TABLE tmp_cnd AS
+                SELECT
+                    ext_name AS `name`,
+                    count(DISTINCT catalog) AS cnt,
+                    group_concat(entry_id) AS entry_ids,
+                    concat(year_born,'-',year_died) AS dates
+                FROM entry
+                JOIN person_dates ON person_dates.entry_id = entry.id
+                WHERE year_born != '' AND year_died != ''
+                  AND catalog NOT IN (SELECT id FROM catalog WHERE active=0)
+                GROUP BY ext_name, year_born, year_died
+                HAVING cnt >= 3
+                   AND max(if(q IS NOT NULL AND user > 0, 1, 0)) = 0"#,
+            // Slow work is done; minimise the window where common_names_dates is empty.
             r#"TRUNCATE common_names_dates"#,
-            r#"INSERT IGNORE INTO common_names_dates (`name`,cnt,entry_ids,dates)
-			    SELECT ext_name,count(DISTINCT catalog) as cnt,group_concat(entry_id),regexp_replace(nbd,'^.*\\|','')
-			    FROM tmp1 GROUP BY nbd HAVING cnt>=3"#,
-            r#"DROP TABLE tmp1"#,
+            r#"INSERT INTO common_names_dates (`name`,cnt,entry_ids,dates)
+                SELECT `name`,cnt,entry_ids,dates FROM tmp_cnd"#,
+            r#"DROP TEMPORARY TABLE tmp_cnd"#,
         ];
         for sql in sqls {
             self.get_conn().await?.exec_drop(sql, ()).await?;
@@ -1899,17 +1904,29 @@ impl Storage for StorageMySQL {
         batch_size: usize,
     ) -> Result<Vec<(usize, usize)>> {
         let mut conn = self.get_conn().await?;
+        // Join base tables directly instead of going through vw_dates twice.
+        // vw_dates embeds a correlated `catalog IN (SELECT … active=1)` subquery
+        // that the optimizer evaluates per row on each alias; explicit JOIN to
+        // catalog lets it be evaluated once as a semi-join or hash join.
+        // Also fixes d2.died=d2.died (always true) → pd2.died=pd1.died.
         let sql = format!(
-            "SELECT d1.entry_id,d2.q
-			FROM vw_dates d1,vw_dates d2
-			WHERE length(d1.born)=10 and length(d1.died)=10 and d1.is_matched=false
-			AND d1.born=d2.born AND d2.died=d2.died AND d2.is_matched=true
-			AND d1.ext_name=d2.ext_name
-			AND (d1.user=0 OR d1.user is null)
-			AND d2.user>0 and d2.user is not null
-			HAVING d2.q>0
-			limit {batch_size}
-			"
+            "SELECT e1.id AS entry_id, e2.q
+            FROM person_dates pd1
+            JOIN entry e1 ON e1.id = pd1.entry_id
+                          AND (e1.user = 0 OR e1.user IS NULL)
+            JOIN catalog c1 ON c1.id = e1.catalog AND c1.active = 1
+            JOIN entry e2 ON e2.ext_name = e1.ext_name
+                          AND e2.user > 0
+                          AND e2.q > 0
+            JOIN catalog c2 ON c2.id = e2.catalog AND c2.active = 1
+            JOIN person_dates pd2 ON pd2.entry_id = e2.id
+                                 AND pd2.born = pd1.born
+                                 AND pd2.died = pd1.died
+                                 AND pd2.is_matched = 1
+            WHERE pd1.is_matched = 0
+              AND LENGTH(pd1.born) = 10
+              AND LENGTH(pd1.died) = 10
+            LIMIT {batch_size}"
         );
         let results = conn
             .exec_iter(sql, ())
@@ -2128,21 +2145,43 @@ impl Storage for StorageMySQL {
 
     /// Auto-matches unmatched and automatched people to fully matched entries that have the same name and birth year.
     async fn automatch_people_with_birth_year(&self, catalog_id: usize) -> Result<()> {
-        // New version
-        // unmatched entries from catalog 7687 that have the same name and birth or death year than other fully matched entries,
-        // but only one distinct q
-
+        // Split the OR (year_born / year_died) into two UNION branches so each
+        // branch can use the `year_born (year_born, year_died)` composite index on
+        // person_dates.  Direct table joins replace vw_dates to avoid the hidden
+        // per-row `catalog IN (SELECT … active=1)` subquery inside the view.
         let sql_select = r#"
-		    SELECT v0.entry_id,group_concat(distinct v1.q) AS q
-		    FROM vw_dates v0,vw_dates v1
-		    where v0.ext_name=v1.ext_name
-		    AND ((v0.year_born=v1.year_born AND v0.year_born!='') OR (v0.year_died=v1.year_died AND v0.year_died!=''))
-		    AND v0.catalog=:catalog_id
-		    AND v1.catalog!=v0.catalog
-		    AND (v1.q is not null and v1.user>0 and v1.user is not null)
-		    AND (v0.user=0 or v0.user is null)
-		    group by v0.entry_id
-		    having count(distinct v1.q)=1"#;
+            SELECT entry_id, group_concat(DISTINCT q) AS q
+            FROM (
+                SELECT e0.id AS entry_id, e1.q
+                FROM entry e0
+                JOIN person_dates pd0 ON pd0.entry_id = e0.id AND pd0.year_born != ''
+                JOIN catalog c0 ON c0.id = e0.catalog AND c0.active = 1
+                JOIN person_dates pd1 ON pd1.year_born = pd0.year_born
+                JOIN entry e1 ON e1.id = pd1.entry_id
+                             AND e1.ext_name = e0.ext_name
+                             AND e1.catalog != e0.catalog
+                             AND e1.user > 0 AND e1.q > 0
+                JOIN catalog c1 ON c1.id = e1.catalog AND c1.active = 1
+                WHERE e0.catalog = :catalog_id
+                  AND (e0.user = 0 OR e0.user IS NULL)
+
+                UNION
+
+                SELECT e0.id AS entry_id, e1.q
+                FROM entry e0
+                JOIN person_dates pd0 ON pd0.entry_id = e0.id AND pd0.year_died != ''
+                JOIN catalog c0 ON c0.id = e0.catalog AND c0.active = 1
+                JOIN person_dates pd1 ON pd1.year_died = pd0.year_died
+                JOIN entry e1 ON e1.id = pd1.entry_id
+                             AND e1.ext_name = e0.ext_name
+                             AND e1.catalog != e0.catalog
+                             AND e1.user > 0 AND e1.q > 0
+                JOIN catalog c1 ON c1.id = e1.catalog AND c1.active = 1
+                WHERE e0.catalog = :catalog_id
+                  AND (e0.user = 0 OR e0.user IS NULL)
+            ) AS combined
+            GROUP BY entry_id
+            HAVING count(DISTINCT q) = 1"#;
 
         let mut conn = self.get_conn().await?;
         let entry_id2q = conn
