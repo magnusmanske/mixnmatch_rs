@@ -70,7 +70,14 @@ export default Vue.extend({
 			return widar.mnm_user_id == this.catalog.owner;
 		},
 		has_locations: function () {
-			return this.catalog && this.catalog.has_locations == 'yes';
+			if (!this.catalog) return false;
+			// `has_locations` lives in kv_catalog. It's exposed on the
+			// overview as a loose top-level field for some pages, but the
+			// authoritative source is kv_pairs — check both so the editor
+			// works regardless of where the flag comes from.
+			if (this.catalog.has_locations == 'yes') return true;
+			const kv = this.catalog.kv_pairs || {};
+			return kv.has_locations == 'yes';
 		},
 		// Qualifier-bearing catalogs are a legacy corner of MnM we're
 		// deliberately not surfacing in this UI — show the property field
@@ -258,7 +265,7 @@ export default Vue.extend({
 						</div>
 
 						<div v-if='show_property_field' class='row g-3 align-items-end mb-3'>
-							<div class='col-md-4'>
+							<div class='col-md-3' style='max-width:14rem'>
 								<label class='form-label'>Wikidata property</label>
 								<div class='input-group'>
 									<span class='input-group-text'>P</span>
@@ -266,7 +273,7 @@ export default Vue.extend({
 								</div>
 								<div class='form-text'>Numeric only. Leave blank if the catalog isn't linked to a Wikidata property.</div>
 							</div>
-							<div class='col-md-8' v-if='typeof catalog.wd_prop!="undefined" && catalog.wd_prop>0'>
+							<div class='col-md' v-if='typeof catalog.wd_prop!="undefined" && catalog.wd_prop>0'>
 								<a href='#' class='btn btn-outline-warning' @click.prevent='update_ext_urls'>
 									Update external URLs from P{{catalog.wd_prop}} formatter URL
 								</a>
@@ -308,25 +315,25 @@ export default Vue.extend({
 						<div>
 							<label class='form-label d-block'>Complex automatch constraints (<code>automatch_complex</code>)</label>
 							<div class='form-text mb-2'>{{ fieldHelp('automatch_complex') }}</div>
-							<table class='table table-sm align-middle' v-if='kv.automatch_complex.length'>
+							<table class='table align-middle' v-if='kv.automatch_complex.length'>
 								<thead>
 									<tr>
-										<th style='width:10rem'>Property</th>
-										<th style='width:10rem'>Item</th>
+										<th style='width:12rem'>Property</th>
+										<th style='width:12rem'>Item</th>
 										<th style='width:100%'>Preview</th>
-										<th></th>
+										<th style='width:3rem'></th>
 									</tr>
 								</thead>
 								<tbody>
 									<tr v-for='(row,i) in kv.automatch_complex' :key='i'>
 										<td>
-											<div class='input-group input-group-sm'>
+											<div class='input-group'>
 												<span class='input-group-text'>P</span>
 												<input type='number' min='1' class='form-control' v-model.number='row[0]' />
 											</div>
 										</td>
 										<td>
-											<div class='input-group input-group-sm'>
+											<div class='input-group'>
 												<span class='input-group-text'>Q</span>
 												<input type='number' min='1' class='form-control' v-model.number='row[1]' />
 											</div>
