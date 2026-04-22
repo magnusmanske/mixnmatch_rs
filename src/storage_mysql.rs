@@ -354,6 +354,41 @@ impl StorageMySQL {
         conds.join(" AND ")
     }
 
+    /// The column names emitted by `build_download2_sql`, in the exact
+    /// order they appear in the SELECT list. Kept next to the SQL builder
+    /// so the two must be edited together — having them drift apart is
+    /// exactly what caused the TSV columns-vs-header misalignment.
+    fn download2_columns(filter: &Download2Filter) -> Vec<String> {
+        let mut cols: Vec<String> = vec![
+            "entry_id".into(),
+            "catalog".into(),
+            "external_id".into(),
+        ];
+        if filter.include_ext_url {
+            cols.extend([
+                "external_url".into(),
+                "name".into(),
+                "description".into(),
+                "entry_type".into(),
+                "mnm_user_id".into(),
+            ]);
+        }
+        cols.push("q".into());
+        cols.push("matched_on".into());
+        if filter.include_username {
+            cols.push("matched_by_username".into());
+        }
+        if filter.include_dates {
+            cols.push("born".into());
+            cols.push("died".into());
+        }
+        if filter.include_location {
+            cols.push("lat".into());
+            cols.push("lon".into());
+        }
+        cols
+    }
+
     /// Build the full SELECT for `api_download2`. All conditional joins,
     /// columns, and row filters are derived from the typed filter — callers
     /// never see raw SQL.
@@ -4077,19 +4112,22 @@ impl Storage for StorageMySQL {
     async fn api_download2(
         &self,
         filter: &Download2Filter,
-    ) -> Result<Vec<HashMap<String, String>>> {
+    ) -> Result<(Vec<String>, Vec<Vec<String>>)> {
+        // Build the column order up-front (same logic as build_download2_sql)
+        // so the header is known even for empty result sets.
+        let columns = Self::download2_columns(filter);
         let sql = Self::build_download2_sql(filter);
         let mut conn = self.get_conn_ro().await?;
         let rows = conn
             .exec_iter(sql, ())
             .await?
             .map_and_drop(|row: Row| {
-                // Pull every column as a string regardless of its DB type —
-                // reading non-string columns as String panics, so dispatch on
-                // the underlying mysql value.
-                let mut map = HashMap::new();
-                for (i, col) in row.columns_ref().iter().enumerate() {
-                    let col_name = col.name_str().to_string();
+                let refs = row.columns_ref();
+                let mut values = Vec::with_capacity(refs.len());
+                for (i, _col) in refs.iter().enumerate() {
+                    // Read as a string regardless of DB type — the caller emits
+                    // TSV/JSON and reading non-string columns as String would
+                    // panic.
                     let s = match &row[i] {
                         mysql_async::Value::NULL => String::new(),
                         mysql_async::Value::Int(n) => n.to_string(),
@@ -4101,12 +4139,12 @@ impl Storage for StorageMySQL {
                         }
                         other => format!("{other:?}"),
                     };
-                    map.insert(col_name, s);
+                    values.push(s);
                 }
-                map
+                values
             })
             .await?;
-        Ok(rows)
+        Ok((columns, rows))
     }
 
     async fn api_update_catalog_ext_urls(

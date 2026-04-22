@@ -650,10 +650,18 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     /// filtering are driven entirely by `filter`; values are returned as
     /// stringified representations of the underlying MySQL types so the caller
     /// can emit them as tab-separated text or JSON unchanged.
+    ///
+    /// Returns `(columns, rows)` where `columns` is the ordered list of
+    /// column names as they appear in the SELECT, and each row is a
+    /// same-length `Vec<String>` aligned to those columns. The previous
+    /// shape (`Vec<HashMap<String, String>>`) was broken: each HashMap has
+    /// its own randomised iteration order, so the TSV header (from row 0's
+    /// keys) didn't align with the values (from each row's own random
+    /// order), and JSON serialization varied across rows too.
     async fn api_download2(
         &self,
         filter: &Download2Filter,
-    ) -> Result<Vec<HashMap<String, String>>>;
+    ) -> Result<(Vec<String>, Vec<Vec<String>>)>;
     /// Rewrite `entry.ext_url` for every row in `catalog_id` as
     /// `concat(prefix, ext_id, suffix)`. Powers `query=update_ext_urls`.
     async fn api_update_catalog_ext_urls(
