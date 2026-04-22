@@ -263,8 +263,18 @@ export default Vue.extend({
             ret.columns = columns;
             return ret;
         },
+        // Single source of truth for "do we have enough to call the server?"
+        // Returns a short user-facing reason when false, empty string when ok.
+        missing_source_reason: function () {
+            if (this.source == 'url' && !this.source_url) return 'Please enter a source URL first.';
+            if (this.source == 'file' && !this.file_uuid) return 'Please upload a file first.';
+            if (this.source != 'url' && this.source != 'file') return 'Please choose a source type.';
+            return '';
+        },
         import_source: async function () {
             let self = this;
+            let reason = self.missing_source_reason();
+            if (reason) { mnm_notify(reason, 'warning'); return; }
             self.importing = true;
             try {
                 let d = await mnm_api('import_source', {
@@ -284,6 +294,8 @@ export default Vue.extend({
         },
         test_source: async function () {
             let self = this;
+            let reason = self.missing_source_reason();
+            if (reason) { self.test_error = reason; self.test_running = false; return; }
             self.test_running = true;
             self.test_successful = false;
             self.test_error = '';
@@ -303,6 +315,8 @@ export default Vue.extend({
         },
         load_headers: async function () {
             let self = this;
+            let reason = self.missing_source_reason();
+            if (reason) { mnm_notify(reason, 'warning'); return; }
             self.headers_loaded = false;
             self.test_successful = false;
             self.preview_rows = [];
@@ -631,7 +645,7 @@ export default Vue.extend({
 							</div>
 							<div v-if="source === 'url'">
 								<input type="text" class="form-control mb-2" v-model="source_url"
-									placeholder="https://example.org/data.csv" @blur="onPropertyChanged">
+									placeholder="https://example.org/data.csv">
 								<div class="d-flex flex-wrap">
 									<label class="me-3 mb-1">
 										<input type='radio' v-model='seconds' value='0' class="me-1">

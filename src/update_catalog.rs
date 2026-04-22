@@ -24,22 +24,25 @@ pub enum UpdateCatalogError {
 impl Error for UpdateCatalogError {}
 
 impl fmt::Display for UpdateCatalogError {
-    //TODO test
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             UpdateCatalogError::NoUpdateInfoForCatalog => {
-                write!(f, "UpdateCatalogError::NoUpdateInfoForCatalog")
+                write!(f, "No update-info record for this catalog")
             }
-            UpdateCatalogError::MissingColumn => write!(f, "UpdateCatalogError::MissingColumn"),
+            UpdateCatalogError::MissingColumn => write!(f, "Required column is missing"),
             UpdateCatalogError::MissingDataSourceLocation => {
-                write!(f, "UpdateCatalogError::MissingDataSourceLocation")
+                write!(f, "Missing data-source location (provide a source URL or upload a file)")
             }
             UpdateCatalogError::MissingDataSourceType => {
-                write!(f, "UpdateCatalogError::MissingDataSourceType")
+                write!(f, "Missing data-source type (choose CSV, TSV or SSV)")
             }
-            UpdateCatalogError::NotEnoughColumns(v) => write!(f, "NotEnoughColumns {v}"),
-            UpdateCatalogError::UnknownColumnLabel(s) => write!(f, "UnknownColumnLabel {s}"),
-            UpdateCatalogError::BadPattern => write!(f, "UpdateCatalogError::BadPattern"),
+            UpdateCatalogError::NotEnoughColumns(v) => {
+                write!(f, "Row has only {v} columns")
+            }
+            UpdateCatalogError::UnknownColumnLabel(s) => {
+                write!(f, "Unknown column label: {s}")
+            }
+            UpdateCatalogError::BadPattern => write!(f, "Invalid source pattern"),
         }
     }
 }
@@ -384,34 +387,34 @@ mod tests {
     fn test_update_catalog_error_display() {
         assert_eq!(
             format!("{}", UpdateCatalogError::NoUpdateInfoForCatalog),
-            "UpdateCatalogError::NoUpdateInfoForCatalog"
+            "No update-info record for this catalog"
         );
         assert_eq!(
             format!("{}", UpdateCatalogError::MissingColumn),
-            "UpdateCatalogError::MissingColumn"
+            "Required column is missing"
         );
         assert_eq!(
             format!("{}", UpdateCatalogError::MissingDataSourceLocation),
-            "UpdateCatalogError::MissingDataSourceLocation"
+            "Missing data-source location (provide a source URL or upload a file)"
         );
         assert_eq!(
             format!("{}", UpdateCatalogError::MissingDataSourceType),
-            "UpdateCatalogError::MissingDataSourceType"
+            "Missing data-source type (choose CSV, TSV or SSV)"
         );
         assert_eq!(
             format!("{}", UpdateCatalogError::NotEnoughColumns(5)),
-            "NotEnoughColumns 5"
+            "Row has only 5 columns"
         );
         assert_eq!(
             format!(
                 "{}",
                 UpdateCatalogError::UnknownColumnLabel("foo".to_string())
             ),
-            "UnknownColumnLabel foo"
+            "Unknown column label: foo"
         );
         assert_eq!(
             format!("{}", UpdateCatalogError::BadPattern),
-            "UpdateCatalogError::BadPattern"
+            "Invalid source pattern"
         );
     }
 
