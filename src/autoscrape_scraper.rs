@@ -106,6 +106,63 @@ impl AutoscrapeScraper {
         )
     }
 
+    /// Instrumented variant of `process_html_page` used by the scraper-
+    /// test UI. Mirrors the production code path exactly but also
+    /// collects per-stage counts so the frontend can tell the user
+    /// where their regex stopped matching (most common "0 results"
+    /// cause is a block regex that works but an entry regex that
+    /// doesn't match inside the extracted blocks, or vice versa).
+    ///
+    /// Not used by the autoscrape runner itself — the extra bookkeeping
+    /// is only worth paying for one-shot tests.
+    pub fn analyze_html_page(
+        &self,
+        html: &str,
+        autoscrape: &Autoscrape,
+    ) -> AutoscrapeAnalysis {
+        let regex_block_source = self.regex_block.as_ref().map(|r| r.as_str().to_string());
+        let regex_entry_sources: Vec<String> =
+            self.regex_entry.iter().map(|r| r.as_str().to_string()).collect();
+        let mut regex_entry_match_counts = vec![0_usize; self.regex_entry.len()];
+        let mut entries: Vec<ExtendedEntry> = vec![];
+
+        // If a block regex is defined, feed each captured block through
+        // the per-block entry pass; otherwise treat the whole page as one
+        // block. Matches process_html_page's behaviour.
+        let (block_match_count, blocks): (Option<usize>, Vec<String>) =
+            if let Some(rb) = self.regex_block.as_ref() {
+                let caps: Vec<String> = rb
+                    .captures_iter(html)
+                    .filter_map(|cap| cap.get(1).map(|m| m.as_str().to_string()))
+                    .collect();
+                (Some(caps.len()), caps)
+            } else {
+                (None, vec![html.to_string()])
+            };
+
+        for block in &blocks {
+            for (i, regex_entry) in self.regex_entry.iter().enumerate() {
+                if !regex_entry.is_match(block) {
+                    continue;
+                }
+                for cap in regex_entry.captures_iter(block) {
+                    let entry_ex = self.process_html_block_generate_entry_ex(cap, autoscrape);
+                    entries.push(entry_ex);
+                    regex_entry_match_counts[i] += 1;
+                }
+                break; // first regex wins, matching process_html_block
+            }
+        }
+
+        AutoscrapeAnalysis {
+            regex_block_source,
+            block_match_count,
+            regex_entry_sources,
+            regex_entry_match_counts,
+            entries,
+        }
+    }
+
     pub fn url(&self) -> &str {
         &self.url
     }
@@ -209,4 +266,22 @@ impl AutoscrapeScraper {
         }
         map
     }
+}
+
+/// Per-stage counters produced by `analyze_html_page`. Drives the
+/// scraper-test diagnostics panel in the frontend.
+#[derive(Debug, Default)]
+pub struct AutoscrapeAnalysis {
+    /// Source string of the block regex as the runtime sees it (after
+    /// `fix_regex` normalisation). `None` if no block regex is configured.
+    pub regex_block_source: Option<String>,
+    /// Number of block-regex captures. `None` means no block regex was
+    /// defined (the whole HTML is used as the single "block").
+    pub block_match_count: Option<usize>,
+    /// Source of each entry regex, in declaration order.
+    pub regex_entry_sources: Vec<String>,
+    /// Per-entry-regex match counts, summed across all blocks.
+    pub regex_entry_match_counts: Vec<usize>,
+    /// Extracted entries (same shape as `process_html_page`).
+    pub entries: Vec<ExtendedEntry>,
 }

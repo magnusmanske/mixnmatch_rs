@@ -17,6 +17,18 @@ use std::fmt;
 pub type AutoscrapeRegex = regex::Regex;
 pub type AutoscrapeRegexBuilder = regex::RegexBuilder;
 
+/// Return value of `Autoscrape::test_fetch`, used by the scraper-builder
+/// wizard. Keeps `url`/`html`/`results` for the success path (unchanged
+/// wire shape) and adds `diagnostics` so the UI can explain *why* a test
+/// returned zero rows.
+#[derive(Debug)]
+pub struct TestFetchResult {
+    pub url: String,
+    pub html: String,
+    pub results: Vec<Value>,
+    pub diagnostics: Value,
+}
+
 const AUTOSCRAPER_USER_AGENT: &str =
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.12; rv:56.0) Gecko/20100101 Firefox/56.0";
 const AUTOSCRAPE_ENTRY_BATCH_SIZE: usize = 100;
@@ -206,6 +218,36 @@ impl Autoscrape {
             .text()
             .await
             .ok()
+    }
+
+    /// Verbose counterpart to `load_url`, used by the scraper-test UI.
+    /// Preserves the HTTP status and content-type alongside the body, and
+    /// surfaces the underlying reqwest error message on failure instead of
+    /// collapsing everything to `None`. The runner itself still calls the
+    /// quiet `load_url`; we only pay for this on one-shot tests.
+    async fn load_url_verbose(
+        &mut self,
+        url: &str,
+    ) -> Result<(String, u16, Option<String>), String> {
+        self.urls_loaded += 1;
+        let client = Self::reqwest_client_external()
+            .map_err(|e| format!("HTTP client setup: {e}"))?;
+        let resp = client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| format!("request failed: {e}"))?;
+        let status = resp.status().as_u16();
+        let content_type = resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(String::from);
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| format!("reading body: {e}"))?;
+        Ok((body, status, content_type))
     }
 
     async fn get_current_url(&self) -> String {
@@ -401,32 +443,131 @@ impl Autoscrape {
     /// One-shot test for the scraper-builder UI: construct an in-memory
     /// Autoscrape from a JSON blob (no DB lookup), initialize the levels to
     /// their starting values, fetch the resulting URL, run the scraper's
-    /// regex pass once, and return `(url, html, entries)` where entries have
-    /// shape `{id, name, desc, url, type}` matching the frontend template.
-    /// No state is persisted.
-    pub async fn test_fetch(
-        app: &AppState,
-        json: &Value,
-    ) -> Result<(String, String, Vec<Value>)> {
+    /// regex pass once, and return the URL, HTML, extracted entries, and a
+    /// structured `diagnostics` blob the frontend can render to help the
+    /// user see where a "zero results" test went wrong (bad fetch, block
+    /// regex mismatch, entry regex mismatch, …). No state is persisted.
+    pub async fn test_fetch(app: &AppState, json: &Value) -> Result<TestFetchResult> {
+        // Compile errors (malformed regex, bad scraper JSON) still bubble
+        // up as hard errors — the UI will surface them as the test status.
         let mut autoscrape = Self::new_basic(&0, 0, app, json)?;
         Self::initialize_with_options(json.clone(), &mut autoscrape)?;
         autoscrape.init().await;
         let url = autoscrape.get_current_url().await;
-        let raw = autoscrape
-            .load_url(&url)
-            .await
-            .ok_or_else(|| anyhow::anyhow!("Failed to fetch URL '{url}'"))?;
-        let html = if autoscrape.simple_space {
-            RE_SIMPLE_SPACE.replace_all(&raw, " ").to_string()
-        } else {
-            raw
+        let mut warnings: Vec<String> = vec![];
+        // Pre-compile warnings: check the raw regex source strings for
+        // features Rust's `regex` crate doesn't support. These are a very
+        // common source of "works in my browser but not here" reports.
+        Self::collect_regex_feature_warnings(json, &mut warnings);
+
+        let options_json = serde_json::json!({
+            "simple_space": autoscrape.simple_space,
+            "utf8_encode":  autoscrape.utf8_encode,
+            "skip_failed":  autoscrape.skip_failed,
+        });
+
+        // Fetch with diagnostics. On failure we still return Ok with a
+        // populated diagnostics blob so the UI can render the "here's what
+        // went wrong" panel rather than just a terse error string.
+        let (raw_html, http_info) = match autoscrape.load_url_verbose(&url).await {
+            Ok((body, status, content_type)) => {
+                if !(200..300).contains(&status) {
+                    warnings.push(format!(
+                        "HTTP {status} from the target — non-success responses often explain empty results."
+                    ));
+                }
+                if let Some(ct) = content_type.as_deref() {
+                    if !ct.to_ascii_lowercase().starts_with("text/html")
+                        && !ct.to_ascii_lowercase().contains("xml")
+                        && !ct.to_ascii_lowercase().contains("json")
+                    {
+                        warnings.push(format!(
+                            "Content-Type '{ct}' is not text/html — regex might be matching the wrong representation."
+                        ));
+                    }
+                }
+                let info = serde_json::json!({
+                    "status": status,
+                    "content_type": content_type,
+                    "body_length": body.len(),
+                });
+                (body, info)
+            }
+            Err(e) => {
+                let info = serde_json::json!({ "error": e });
+                warnings.push(format!("Fetch failed: {e}"));
+                return Ok(TestFetchResult {
+                    url,
+                    html: String::new(),
+                    results: vec![],
+                    diagnostics: serde_json::json!({
+                        "options":  options_json,
+                        "http":     info,
+                        "regex":    serde_json::json!({}),
+                        "warnings": warnings,
+                    }),
+                });
+            }
         };
-        // Re-run the regex match server-side so the UI's result table has
-        // something to show. Client regex behaviour and server regex behaviour
-        // won't disagree on the test round-trip because we're using the same
-        // source text for both.
-        let entries = autoscrape.scraper.process_html_page(&html, &autoscrape);
-        let results: Vec<Value> = entries
+
+        let raw_len = raw_html.len();
+        let html = if autoscrape.simple_space {
+            RE_SIMPLE_SPACE.replace_all(&raw_html, " ").to_string()
+        } else {
+            raw_html
+        };
+
+        // Analyse the scraper pass so we can report per-regex match counts,
+        // which is the single most useful signal when the user's regex
+        // compiles but returns zero rows.
+        let analysis = autoscrape.scraper.analyze_html_page(&html, &autoscrape);
+        let total_entries = analysis.entries.len();
+
+        // Translate post-pass observations into human-readable warnings.
+        if let Some(0) = analysis.block_match_count {
+            warnings.push(
+                "Block regex matched zero blocks in the fetched HTML — entry regex is never consulted."
+                    .to_string(),
+            );
+        } else if let Some(n) = analysis.block_match_count {
+            if n > 0 && total_entries == 0 {
+                warnings.push(format!(
+                    "Block regex matched {n} block(s), but no entry regex matched inside any of them."
+                ));
+            }
+        }
+        if analysis.regex_block_source.is_none() && total_entries == 0 && !html.is_empty() {
+            warnings.push(
+                "Entry regex compiled but matched nothing in the fetched HTML."
+                    .to_string(),
+            );
+        }
+
+        let regex_diag = serde_json::json!({
+            "block": analysis.regex_block_source.as_ref().map(|src| serde_json::json!({
+                "source":      src,
+                "match_count": analysis.block_match_count,
+            })),
+            "entries": analysis.regex_entry_sources.iter().enumerate().map(|(i, src)| {
+                serde_json::json!({
+                    "source":      src,
+                    "match_count": analysis.regex_entry_match_counts.get(i).copied().unwrap_or(0),
+                })
+            }).collect::<Vec<_>>(),
+            "entry_total": total_entries,
+        });
+
+        let diagnostics = serde_json::json!({
+            "options":                          options_json,
+            "http":                             http_info,
+            "html_length_before_compression":   raw_len,
+            "html_length_after_compression":    html.len(),
+            "regex":                            regex_diag,
+            "warnings":                         warnings,
+        });
+
+        let results: Vec<Value> = analysis
+            .entries
             .into_iter()
             .map(|ex| {
                 let e = &ex.entry;
@@ -439,7 +580,57 @@ impl Autoscrape {
                 })
             })
             .collect();
-        Ok((url, html, results))
+
+        Ok(TestFetchResult { url, html, results, diagnostics })
+    }
+
+    /// Surface regex features Rust's `regex` crate doesn't support. The
+    /// scraper wizard's browser-side preview uses JavaScript's richer
+    /// regex engine, so a pattern that works there but silently matches
+    /// nothing here is almost always one of these.
+    fn collect_regex_feature_warnings(json: &Value, warnings: &mut Vec<String>) {
+        let scraper = match json.get("scraper") {
+            Some(v) => v,
+            None => return,
+        };
+        let mut sources: Vec<String> = vec![];
+        if let Some(s) = scraper.get("rx_block").and_then(|v| v.as_str()) {
+            if !s.is_empty() {
+                sources.push(s.to_string());
+            }
+        }
+        match scraper.get("rx_entry") {
+            Some(v) if v.is_string() => {
+                if let Some(s) = v.as_str() {
+                    if !s.is_empty() {
+                        sources.push(s.to_string());
+                    }
+                }
+            }
+            Some(v) if v.is_array() => {
+                for item in v.as_array().unwrap_or(&vec![]) {
+                    if let Some(s) = item.as_str() {
+                        if !s.is_empty() {
+                            sources.push(s.to_string());
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        for src in sources {
+            if src.contains("(?=")
+                || src.contains("(?!")
+                || src.contains("(?<=")
+                || src.contains("(?<!")
+            {
+                warnings.push(
+                    "One of your regexes uses a lookbehind/lookahead — Rust's regex engine doesn't support those. The server-side test won't match even if your browser does."
+                        .into(),
+                );
+                break;
+            }
+        }
     }
 
     fn initialize_with_options(json: Value, ret: &mut Autoscrape) -> Result<()> {
