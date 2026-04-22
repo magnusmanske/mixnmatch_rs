@@ -339,8 +339,8 @@ export default Vue.extend({
 					<div class="card-footer py-1 d-flex flex-wrap align-items-center gap-1">
 						<button class="btn btn-outline-secondary mnm-action-btn" @click.prevent="toggleCheckboxes"
 							tt="toggle_checkboxes"></button>
-						<button class="btn btn-outline-secondary mnm-action-btn" @click.prevent="resetDefaultEntry"
-							tt="reset_default_entry"></button>
+						<button v-if="mode != 'by_ext_name'" class="btn btn-outline-secondary mnm-action-btn"
+							@click.prevent="resetDefaultEntry" tt="reset_default_entry"></button>
 						<template v-if="widar.is_logged_in && checkedInGroup(num) > 0">
 							<button v-if="typeof assign_q_input[num] === 'undefined'"
 								class="btn btn-outline-primary mnm-action-btn"
