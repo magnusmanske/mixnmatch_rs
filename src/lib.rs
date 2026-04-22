@@ -83,6 +83,7 @@ pub mod person_date;
 pub mod php_wrapper;
 pub mod process;
 pub mod prop_todo;
+pub mod static_cache;
 pub mod storage;
 pub mod storage_mysql;
 pub mod task_size;

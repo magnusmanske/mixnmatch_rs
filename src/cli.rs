@@ -172,12 +172,30 @@ impl ShellCommands {
         tls: bool,
     ) -> Result<()> {
         use axum::Router;
-        use tower_http::services::ServeDir;
+        use axum::routing::get;
         use tower_sessions::{Expiry, SessionManagerLayer, cookie::SameSite};
 
         if !html_dir.exists() {
             return Err(anyhow!("html directory not found: {}", html_dir.display()));
         }
+
+        // Walk `html/` once at startup and hold every file in memory. The
+        // tree is a few hundred KB, so this is essentially free — and it
+        // removes per-request stat/open/read from the hot path.
+        let static_cache = crate::static_cache::StaticCache::load(html_dir)
+            .map_err(|e| anyhow!("failed to load static cache from {}: {e}", html_dir.display()))?;
+        println!(
+            "webserver: cached {} static files ({} bytes) from {}",
+            static_cache.len(),
+            static_cache.total_bytes(),
+            html_dir.display()
+        );
+        log::info!(
+            "webserver: cached {} static files ({} bytes) from {}",
+            static_cache.len(),
+            static_cache.total_bytes(),
+            html_dir.display()
+        );
 
         let oauth_cfg = app
             .oauth_config()
@@ -206,10 +224,18 @@ impl ShellCommands {
             .with_expiry(Expiry::OnInactivity(lifetime));
 
         let api_router = crate::api::router(app);
-        let static_service = ServeDir::new(html_dir).append_index_html_on_directories(true);
+
+        // Serve the in-memory snapshot as the fallback handler. Every miss
+        // returns 404 — we don't fall back to disk, because anything a
+        // client could legitimately ask for was already loaded at startup.
+        let static_cache_for_handler = static_cache.clone();
+        let static_handler = get(move |uri: axum::http::Uri| {
+            let cache = static_cache_for_handler.clone();
+            async move { cache.serve(&uri) }
+        });
 
         let router: Router = api_router
-            .fallback_service(static_service)
+            .fallback(static_handler)
             .layer(session_layer);
 
         let scheme = if tls { "https" } else { "http" };
