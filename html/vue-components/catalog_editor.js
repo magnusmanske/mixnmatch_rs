@@ -327,13 +327,13 @@ export default Vue.extend({
 								<tbody>
 									<tr v-for='(row,i) in kv.automatch_complex' :key='i'>
 										<td>
-											<div class='input-group'>
+											<div class='input-group' style='width:14rem'>
 												<span class='input-group-text'>P</span>
 												<input type='number' min='1' class='form-control' v-model.number='row[0]' />
 											</div>
 										</td>
 										<td>
-											<div class='input-group'>
+											<div class='input-group' style='width:14rem'>
 												<span class='input-group-text'>Q</span>
 												<input type='number' min='1' class='form-control' v-model.number='row[1]' />
 											</div>
