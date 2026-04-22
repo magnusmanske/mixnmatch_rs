@@ -123,7 +123,10 @@ export default Vue.extend({
 					.map(r => [Number(r[0]) | 0, Number(r[1]) | 0]);
 			} catch (e) { return []; }
 		},
-		addComplexRow: function () { this.kv.automatch_complex.push([0, 0]); },
+		// New rows start blank so the user sees empty inputs rather than
+		// two "0"s that would look pre-filled. buildKvPayload's > 0 filter
+		// drops any row whose prop or item is blank / non-numeric / < 1.
+		addComplexRow: function () { this.kv.automatch_complex.push([null, null]); },
 		removeComplexRow: function (i) { this.kv.automatch_complex.splice(i, 1); },
 		complexLabelFor: function (prefix, n) {
 			if (!n) return '';
