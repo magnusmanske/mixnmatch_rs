@@ -226,7 +226,13 @@ export default Vue.extend({
 	<div v-if='!loaded'><i tt='loading'></i></div>
 
 	<template v-else>
-		<h2 class='mb-3' tt='catalog_editor'></h2>
+		<h2 class='mb-3'>
+			<span tt='catalog_editor'></span>
+			<a href='https://meta.wikimedia.org/wiki/Mix%27n%27match/Manual/Catalog_editor'
+			   target='_blank' class='ms-2 text-muted'
+			   style='font-size:0.55em;vertical-align:middle'
+			   title='Help page for the catalog editor'>[?]</a>
+		</h2>
 
 		<div v-if='!can_edit' class='alert alert-warning'>
 			You aren't a catalog admin or this catalog's creator, so you can't change settings here.
