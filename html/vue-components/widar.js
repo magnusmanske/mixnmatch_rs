@@ -38,7 +38,8 @@ export default {
 			userinfo: {},
 			widar_api: './api.php',
 			loaded: false,
-			is_catalog_admin: false
+			is_catalog_admin: false,
+			mnm_user_id: 0
 		}
 	},
 	created: function () {
@@ -58,6 +59,7 @@ export default {
 					this.is_logged_in = true;
 					this.userinfo = cached.userinfo;
 					this.is_catalog_admin = !!cached.is_catalog_admin;
+					this.mnm_user_id = cached.mnm_user_id | 0;
 					this.loaded = true;
 				}
 			} catch (e) { /* sessionStorage unavailable or corrupt — ignore */ }
@@ -67,7 +69,8 @@ export default {
 				sessionStorage.setItem(WIDAR_CACHE_KEY, JSON.stringify({
 					is_logged_in: this.is_logged_in,
 					userinfo: this.userinfo,
-					is_catalog_admin: this.is_catalog_admin
+					is_catalog_admin: this.is_catalog_admin,
+					mnm_user_id: this.mnm_user_id
 				}));
 			} catch (e) { /* quota or private-mode — ignore */ }
 		},
@@ -87,6 +90,7 @@ export default {
 						var resp2 = await fetch('./api.php?' + new URLSearchParams({ query: 'get_user_info', username: me.getUserName() }));
 						var d2 = await resp2.json();
 						me.is_catalog_admin = !!(d2.data && d2.data.is_catalog_admin == 1);
+						me.mnm_user_id = (d2.data && d2.data.id) | 0;
 					} catch (e) { /* non-critical */ }
 					me.saveToCache();
 				} else {
@@ -94,6 +98,7 @@ export default {
 					me.is_logged_in = false;
 					me.userinfo = {};
 					me.is_catalog_admin = false;
+					me.mnm_user_id = 0;
 					me.clearCache();
 				}
 			} catch (e) {

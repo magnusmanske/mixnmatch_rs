@@ -103,6 +103,22 @@ pub async fn query_catalog(app: &AppState, params: &Params) -> Result<Response, 
     })))
 }
 
+/// Keys the catalog editor is allowed to write into `kv_catalog`. Anything
+/// outside this list is silently ignored — prevents a compromised frontend
+/// from injecting arbitrary config into the table.
+const EDITABLE_KV_KEYS: &[&str] = &[
+    "use_automatchers",
+    "use_description_for_new",
+    "automatch_sparql",
+    "automatch_complex",
+    "allow_location_operations",
+    "allow_location_match",
+    "location_allow_full_match",
+    "allow_location_create",
+    "location_force_same_type",
+    "location_distance",
+];
+
 pub async fn query_edit_catalog(
     app: &AppState,
     session: &Session,
@@ -112,11 +128,18 @@ pub async fn query_edit_catalog(
     let data_str = common::get_param(params, "data", "");
     let data: serde_json::Value =
         serde_json::from_str(&data_str).map_err(|_| ApiError("Bad data".into()))?;
-    auth::guard::require_catalog_admin_from_params(app, session, params).await?;
+    // Catalog creators (catalog.owner) can now edit their own catalog, not
+    // only site-wide admins — mirrors who can realistically maintain the
+    // catalog once it's imported.
+    auth::guard::require_catalog_admin_or_owner_from_params(app, session, params, cid).await?;
     let name = data
         .get("name")
         .and_then(|v| v.as_str())
         .ok_or(ApiError("Bad data".into()))?;
+    // `active` comes back from the frontend as either a bool or the raw u8
+    // from the catalog row (0/1). Accept both rather than silently flipping
+    // the row to inactive.
+    let active = active_flag_from(data.get("active"));
     app.storage()
         .api_edit_catalog(
             cid,
@@ -131,11 +154,35 @@ pub async fn query_edit_catalog(
             data.get("wd_qual")
                 .and_then(|v| v.as_u64())
                 .map(|v| v as usize),
-            data.get("active")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false),
+            active,
         )
         .await?;
+    // Apply kv_catalog writes. The frontend sends a flat `kv` object; empty
+    // strings (and explicit nulls) mean "delete the key", anything else is
+    // upserted. Unknown keys are dropped so an out-of-date frontend can't
+    // wedge configuration into unsupported keys.
+    if let Some(kv) = data.get("kv").and_then(|v| v.as_object()) {
+        let s = app.storage();
+        for (k, v) in kv {
+            if !EDITABLE_KV_KEYS.contains(&k.as_str()) {
+                continue;
+            }
+            let delete = v.is_null()
+                || v.as_str().map(str::is_empty).unwrap_or(false)
+                || v.as_str() == Some("[]");
+            if delete {
+                s.delete_catalog_kv(cid, k).await?;
+                continue;
+            }
+            // All kv values are stored as strings — coerce numbers/booleans
+            // on the way in so callers don't have to JSON-stringify them.
+            let stored = match v {
+                serde_json::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            s.set_catalog_kv(cid, k, &stored).await?;
+        }
+    }
     // Refresh in the background — the materialised overview is not on the
     // critical response path, so don't make the user wait for the rebuild.
     let app_bg = app.clone();
@@ -143,6 +190,19 @@ pub async fn query_edit_catalog(
         let _ = app_bg.storage().catalog_refresh_overview_table(cid).await;
     });
     Ok(ok(serde_json::json!({})))
+}
+
+/// Coerce a JSON value coming from the catalog editor's `active` field
+/// into the bool the storage layer expects. Accepts `true/false`, `0/1`,
+/// and `"0"/"1"` — the editor round-trips the raw u8 from the catalog row,
+/// which would otherwise silently deactivate the catalog on every save.
+fn active_flag_from(v: Option<&serde_json::Value>) -> bool {
+    match v {
+        Some(serde_json::Value::Bool(b)) => *b,
+        Some(serde_json::Value::Number(n)) => n.as_i64().map(|x| x != 0).unwrap_or(false),
+        Some(serde_json::Value::String(s)) => !matches!(s.as_str(), "" | "0" | "false"),
+        _ => false,
+    }
 }
 
 pub async fn query_catalog_overview(app: &AppState, params: &Params) -> Result<Response, ApiError> {

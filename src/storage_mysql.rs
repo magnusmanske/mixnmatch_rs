@@ -1609,10 +1609,28 @@ impl Storage for StorageMySQL {
     }
 
     async fn use_automatchers(&self, catalog_id: usize, use_automatchers: u8) -> Result<()> {
-        let sql = r#"REPLACE INTO kv_catalog (catalog_id,kv_entry,kv_value) VALUES (:catalog_id,"use_automatchers",:kv_value)"#;
+        // Stored as a string in kv_catalog; "0" means the generic
+        // automatchers are disabled for this catalog.
+        let value = use_automatchers.to_string();
+        self.set_catalog_kv(catalog_id, "use_automatchers", &value).await
+    }
+
+    async fn set_catalog_kv(&self, catalog_id: usize, key: &str, value: &str) -> Result<()> {
+        let sql = "INSERT INTO `kv_catalog` (`catalog_id`,`kv_key`,`kv_value`) \
+                   VALUES (:catalog_id,:key,:value) \
+                   ON DUPLICATE KEY UPDATE `kv_value`=:value";
         self.get_conn()
             .await?
-            .exec_drop(sql, params! {catalog_id,use_automatchers})
+            .exec_drop(sql, params! {catalog_id, key, value})
+            .await?;
+        Ok(())
+    }
+
+    async fn delete_catalog_kv(&self, catalog_id: usize, key: &str) -> Result<()> {
+        let sql = "DELETE FROM `kv_catalog` WHERE `catalog_id`=:catalog_id AND `kv_key`=:key";
+        self.get_conn()
+            .await?
+            .exec_drop(sql, params! {catalog_id, key})
             .await?;
         Ok(())
     }
