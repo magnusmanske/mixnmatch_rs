@@ -170,7 +170,11 @@ impl CerseiSync {
             "9" => date_part.split('-').next()?.to_string(),
             "10" => {
                 let segs: Vec<&str> = date_part.split('-').collect();
-                if segs.len() >= 2 { format!("{}-{}", segs[0], segs[1]) } else { return None }
+                if segs.len() >= 2 {
+                    format!("{}-{}", segs[0], segs[1])
+                } else {
+                    return None;
+                }
             }
             "11" => date_part.to_string(),
             _ => return None,
