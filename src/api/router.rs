@@ -40,8 +40,12 @@ pub fn router(app: AppState) -> Router {
 async fn api_dispatcher(
     State(app): State<SharedState>,
     session: Session,
+    headers: axum::http::HeaderMap,
     Query(params): Query<Params>,
 ) -> Response {
+    if let Some(r) = reject_cross_origin(&headers) {
+        return r;
+    }
     dispatcher_common(&app, &session, params).await
 }
 
@@ -51,6 +55,9 @@ async fn api_dispatcher_form(
     req: axum::extract::Request,
 ) -> Response {
     use axum::extract::FromRequest;
+    if let Some(r) = reject_cross_origin(req.headers()) {
+        return r;
+    }
     // Sniff content-type to decide between form-urlencoded (the common case)
     // and multipart uploads (used only by `upload_import_file`).
     let ct = req
@@ -67,6 +74,29 @@ async fn api_dispatcher_form(
     match axum::extract::Form::<Params>::from_request(req, &app).await {
         Ok(axum::extract::Form(params)) => dispatcher_common(&app, &session, params).await,
         Err(e) => ApiError(format!("invalid form body: {e}")).into_response(),
+    }
+}
+
+/// If the request carries a cross-origin `Origin` header that isn't in the
+/// allowlist, reject it before any handler runs. This guards against simple
+/// cross-origin GETs — which browsers send regardless of CORS response
+/// headers, only blocking the *response* from reaching the attacker. For a
+/// mutation endpoint, the attacker already got what they wanted.
+fn reject_cross_origin(headers: &axum::http::HeaderMap) -> Option<Response> {
+    let origin = headers
+        .get(axum::http::header::ORIGIN)
+        .and_then(|v| v.to_str().ok())?;
+    if crate::api::cors::is_allowed_origin(origin) {
+        None
+    } else {
+        use axum::http::StatusCode;
+        Some(
+            (
+                StatusCode::FORBIDDEN,
+                format!("origin {origin} not allowed"),
+            )
+                .into_response(),
+        )
     }
 }
 

@@ -172,7 +172,9 @@ impl ShellCommands {
         tls: bool,
     ) -> Result<()> {
         use axum::Router;
+        use axum::http::{HeaderName, Method};
         use axum::routing::get;
+        use tower_http::cors::{AllowOrigin, CorsLayer};
         use tower_sessions::{Expiry, SessionManagerLayer, cookie::SameSite};
 
         if !html_dir.exists() {
@@ -216,12 +218,38 @@ impl ShellCommands {
         );
         // Over TLS the cookie must be Secure; over plain HTTP it can't be.
         let cookie_secure = oauth_cfg.cookie_secure || tls;
+        // SameSite=None is required for cross-origin authenticated fetches
+        // (e.g. the Wikidata gadget at User:Magnus_Manske/mixnmatch_gadget.js),
+        // and browsers only accept None in combination with Secure. Fall back
+        // to Lax for plain-HTTP local dev so the cookie still works.
+        let same_site = if cookie_secure {
+            SameSite::None
+        } else {
+            SameSite::Lax
+        };
         let session_layer = SessionManagerLayer::new(session_store)
             .with_name(oauth_cfg.cookie_name.clone())
             .with_secure(cookie_secure)
             .with_http_only(true)
-            .with_same_site(SameSite::Lax)
+            .with_same_site(same_site)
             .with_expiry(Expiry::OnInactivity(lifetime));
+
+        // CORS allowlist for cross-origin authenticated requests. Only
+        // Wikimedia-project / Toolforge origins are permitted.  The
+        // dispatcher re-checks the Origin header because CORS alone doesn't
+        // stop simple cross-origin GETs from reaching handlers server-side.
+        let cors = CorsLayer::new()
+            .allow_origin(AllowOrigin::predicate(|origin, _| {
+                origin
+                    .to_str()
+                    .is_ok_and(crate::api::cors::is_allowed_origin)
+            }))
+            .allow_credentials(true)
+            .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+            .allow_headers([
+                HeaderName::from_static("content-type"),
+                HeaderName::from_static("x-requested-with"),
+            ]);
 
         let api_router = crate::api::router(app);
 
@@ -236,7 +264,8 @@ impl ShellCommands {
 
         let router: Router = api_router
             .fallback(static_handler)
-            .layer(session_layer);
+            .layer(session_layer)
+            .layer(cors);
 
         let scheme = if tls { "https" } else { "http" };
         let addr: std::net::SocketAddr = format!("0.0.0.0:{port}").parse()?;

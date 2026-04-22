@@ -4,6 +4,7 @@
 //! `router` wires them together and owns the dispatcher logic.
 
 pub mod common;
+pub mod cors;
 
 mod admin;
 mod catalog;
