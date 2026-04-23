@@ -26,6 +26,16 @@ lazy_static! {
     static ref RE_YEAR: Regex = Regex::new(r"(\d{3,4})").expect("Regexp error");
 }
 
+/// Page size used when the unbatched `automatch_with_sparql` query fails
+/// (timeout, dropped connection, etc.) and we fall back to LIMIT/OFFSET
+/// pagination. Override per deployment via
+/// `task_specific_usize.automatch_sparql_batch_size` in config.
+const SPARQL_FALLBACK_BATCH_SIZE: usize = 10000;
+
+/// While streaming an unbatched SPARQL response, flush to the per-entry
+/// matcher every N rows so we don't hold the whole result in memory.
+const SPARQL_PROCESS_CHUNK_SIZE: usize = 100000;
+
 #[derive(Debug, Clone, Copy)]
 pub enum DateMatchField {
     Born,
@@ -218,28 +228,54 @@ impl AutoMatch {
 
     pub async fn automatch_with_sparql(&mut self, catalog_id: usize) -> Result<()> {
         let catalog = Catalog::from_id(catalog_id, &self.app).await?;
+        let sparql = Self::read_automatch_sparql(&catalog).await?;
+
+        // Try the unbatched query first — fast path when WDQS is healthy
+        // and the result is small enough to stream. If the streaming query
+        // fails for any reason (WDQS timeout, dropped TCP connection,
+        // partial transfer), fall back to LIMIT/OFFSET batching so the
+        // job still completes the whole result set.
+        if let Err(e) = self.run_sparql_streaming(catalog_id, &sparql).await {
+            log::warn!(
+                "automatch_with_sparql cat={catalog_id}: streaming run failed ({e}); falling back to batched query"
+            );
+            self.run_sparql_batched(catalog_id, &sparql).await?;
+        }
+
+        let _ = self.app.storage().use_automatchers(catalog_id, 0).await;
+        Ok(())
+    }
+
+    /// Pull the user-supplied SPARQL fragment out of the catalog's kv_pairs
+    /// and shape it into a complete `SELECT ?q ?qLabel WHERE { ... }` query
+    /// when the user only supplied the WHERE body.
+    async fn read_automatch_sparql(catalog: &Catalog) -> Result<String> {
         let kv_pairs = catalog.get_key_value_pairs().await?;
         let sparql_part = kv_pairs
-            .iter()
-            .filter(|(k, _)| *k == "automatch_sparql")
-            .map(|(_, v)| v)
-            .next()
+            .get("automatch_sparql")
             .ok_or_else(|| anyhow!("No automatch_sparql key in catalog"))?;
-        let sparql = if sparql_part.starts_with("SELECT ") {
-            sparql_part.to_string()
+        Ok(if sparql_part.starts_with("SELECT ") {
+            sparql_part.clone()
         } else {
             format!("SELECT ?q ?qLabel WHERE {{ {sparql_part} }}")
-        };
-        let mut reader = self.app.wikidata().load_sparql_csv(&sparql).await?;
+        })
+    }
+
+    /// Stream the query in one go, processing matches in fixed-size chunks.
+    /// Returns Err on any stream/parse failure so the caller can fall back
+    /// to batched paging.
+    async fn run_sparql_streaming(&self, catalog_id: usize, sparql: &str) -> Result<()> {
+        let mut reader = self.app.wikidata().load_sparql_csv(sparql).await?;
         let api = self.app.wikidata().get_mw_api().await?;
         let mut label2q = HashMap::new();
-        for row in reader.records().filter_map(|r| r.ok()) {
-            let q = api.extract_entity_from_uri(&row[0])?;
-            let q_label = row[1].to_string();
-            if let Ok(q_numeric) = q[1..].parse::<usize>() {
-                let q_label = q_label.to_lowercase();
-                label2q.insert(q_label, q_numeric);
-                if label2q.len() >= 100000 {
+        for row in reader.records() {
+            // Propagate row-level errors instead of `filter_map(Result::ok)`-ing
+            // them away — silently dropping rows after a broken transfer is
+            // exactly what we want to detect and recover from.
+            let row = row?;
+            if let Some((label, q_numeric)) = Self::parse_sparql_row(&api, &row) {
+                label2q.insert(label, q_numeric);
+                if label2q.len() >= SPARQL_PROCESS_CHUNK_SIZE {
                     self.process_automatch_with_sparql(catalog_id, &label2q)
                         .await?;
                     label2q.clear();
@@ -248,8 +284,61 @@ impl AutoMatch {
         }
         self.process_automatch_with_sparql(catalog_id, &label2q)
             .await?;
-        let _ = self.app.storage().use_automatchers(catalog_id, 0).await;
         Ok(())
+    }
+
+    /// Fallback: wrap the user query as a sub-select and page through it
+    /// with deterministic ordering on `?q`. Each batch is its own HTTP
+    /// request, so a single failure costs at most one batch's worth of work.
+    async fn run_sparql_batched(&self, catalog_id: usize, sparql: &str) -> Result<()> {
+        let batch_size = *self
+            .app
+            .task_specific_usize()
+            .get("automatch_sparql_batch_size")
+            .unwrap_or(&SPARQL_FALLBACK_BATCH_SIZE);
+        let api = self.app.wikidata().get_mw_api().await?;
+        let mut offset = 0_usize;
+        loop {
+            let paged = format!(
+                "SELECT * WHERE {{ {{ {sparql} }} }} ORDER BY ?q LIMIT {batch_size} OFFSET {offset}"
+            );
+            let mut reader = match self.app.wikidata().load_sparql_csv(&paged).await {
+                Ok(r) => r,
+                Err(e) => {
+                    return Err(anyhow!(
+                        "batched SPARQL failed at offset {offset}: {e}"
+                    ));
+                }
+            };
+            let mut label2q = HashMap::new();
+            let mut row_count = 0_usize;
+            for row in reader.records() {
+                // Inside a batch, skip the occasional bad row instead of
+                // aborting — we'll still surface a clean stop-condition via
+                // `row_count < batch_size`.
+                let Ok(row) = row else { continue };
+                row_count += 1;
+                if let Some((label, q_numeric)) = Self::parse_sparql_row(&api, &row) {
+                    label2q.insert(label, q_numeric);
+                }
+            }
+            if !label2q.is_empty() {
+                self.process_automatch_with_sparql(catalog_id, &label2q)
+                    .await?;
+            }
+            if row_count < batch_size {
+                break;
+            }
+            offset += batch_size;
+        }
+        Ok(())
+    }
+
+    fn parse_sparql_row(api: &Api, row: &csv::StringRecord) -> Option<(String, usize)> {
+        let q = api.extract_entity_from_uri(row.get(0)?).ok()?;
+        let q_numeric = q.get(1..)?.parse::<usize>().ok()?;
+        let label = row.get(1)?.to_lowercase();
+        Some((label, q_numeric))
     }
 
     async fn process_automatch_with_sparql(
