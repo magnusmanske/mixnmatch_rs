@@ -2,7 +2,7 @@ use crate::import_catalog::ImportMode;
 use crate::{app_state::AppState, extended_entry::ExtendedEntry, process::Process};
 use anyhow::{Result, anyhow};
 use clap::{Parser, Subcommand};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 // use wikibase::{EntityTrait, entity_container::EntityContainer};
 // use wikibase_rest_api::prelude::*;
 
@@ -165,7 +165,7 @@ impl ShellCommands {
     ///   POST     /api/v1/import_catalog
     ///   GET      everything else -> static files from `html_dir`
     #[allow(clippy::print_stdout)]
-    async fn run_webserver(app: AppState, port: u16, html_dir: &PathBuf, tls: bool) -> Result<()> {
+    async fn run_webserver(app: AppState, port: u16, html_dir: &Path, tls: bool) -> Result<()> {
         use axum::Router;
         use axum::http::{HeaderName, Method};
         use axum::routing::get;
