@@ -65,8 +65,10 @@ export default Vue.extend({
             return this.mode === 'new' ? 4 : 3;
         },
         has_valid_source_simple: function () {
-            if (this.source == 'url' && this.source_url != '') return true;
-            if (this.source == 'file' && this.file_uuid != '') return true;
+            // Use falsy checks so null/undefined (not just empty string) are
+            // treated as "not set" — matches missing_source_reason exactly.
+            if (this.source == 'url' && this.source_url) return true;
+            if (this.source == 'file' && this.file_uuid) return true;
             return false;
         },
         has_columns: function () {
@@ -232,7 +234,11 @@ export default Vue.extend({
                 try {
                     var result = JSON.parse(xhr.responseText);
                     if (result.status != 'OK') { mnm_notify(result.status, 'danger'); return; }
-                    self.file_uuid = result.uuid;
+                    // Server wraps payloads as {status, data:{…}}; the UUID
+                    // lives inside data, not at the top level.
+                    var uuid = (result.data && result.data.uuid) || result.uuid || '';
+                    if (!uuid) { mnm_notify('Upload succeeded but no UUID returned', 'danger'); return; }
+                    self.file_uuid = uuid;
                     self.source = 'file';
                 } catch (e) { mnm_notify('Invalid response from server', 'danger'); }
             });
