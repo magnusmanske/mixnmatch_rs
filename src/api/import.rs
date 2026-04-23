@@ -129,15 +129,16 @@ pub async fn query_import_source(
         }
     }
 
-    // Tabbed-file path. For an existing catalog, persist the update_info
-    // JSON and run the shared updater. A "new catalog" wizard path needs a
-    // catalog-creation step that doesn't exist yet at the trait level —
-    // surface that clearly rather than silently no-oping.
-    if catalog_id == 0 {
-        return Err(ApiError(
-            "creating a new catalog from the wizard is not yet supported; please create the catalog first and re-run in 'update' mode".into(),
-        ));
-    }
+    // Tabbed-file path. For a "new" wizard, build the catalog row from
+    // `meta` first; for "update", reuse the existing catalog_id. Then persist
+    // the update_info and queue the importer as a job — the import itself
+    // scans the whole file and can take minutes, so we don't want the HTTP
+    // request to block on it.
+    let catalog_id = if catalog_id > 0 {
+        catalog_id
+    } else {
+        resolve_or_create_catalog(app, &meta, user_id).await?
+    };
 
     let update_info_json = serde_json::to_string(&update_info)
         .map_err(|e| ApiError(format!("serialize update_info: {e}")))?;
@@ -146,12 +147,59 @@ pub async fn query_import_source(
         .await
         .map_err(|e| ApiError(format!("persist update_info: {e}")))?;
 
-    let mut uc = crate::update_catalog::UpdateCatalog::new(app);
-    uc.update_from_tabbed_file(catalog_id)
+    crate::job::Job::queue_simple_job(app, catalog_id, "update_from_tabbed_file", None)
         .await
-        .map_err(|e| ApiError(e.to_string()))?;
+        .map_err(|e| ApiError(format!("queue import job: {e}")))?;
 
-    Ok(ok(serde_json::json!({ "catalog_id": catalog_id })))
+    Ok(ok(serde_json::json!({
+        "catalog_id": catalog_id,
+        "queued": true,
+    })))
+}
+
+/// Look up or create the target catalog from the wizard's `meta` block.
+/// Used when the "new catalog" wizard submits without an existing id.
+async fn resolve_or_create_catalog(
+    app: &AppState,
+    meta: &serde_json::Value,
+    user_id: usize,
+) -> Result<usize, ApiError> {
+    // `meta.catalog_id` can still be filled in by the wizard if it was set
+    // (e.g. by a prior round-trip), so honour it before creating.
+    let meta_cid = meta
+        .get("catalog_id")
+        .and_then(|v| {
+            v.as_u64()
+                .map(|n| n as usize)
+                .or_else(|| v.as_str().and_then(|s| s.parse::<usize>().ok()))
+        })
+        .unwrap_or(0);
+    if meta_cid > 0 {
+        return Ok(meta_cid);
+    }
+
+    let name = meta
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    if name.is_empty() {
+        return Err(ApiError(
+            "meta.name is required when creating a new catalog".into(),
+        ));
+    }
+    let desc = meta.get("desc").and_then(|v| v.as_str()).unwrap_or("");
+    let url = meta.get("url").and_then(|v| v.as_str()).unwrap_or("");
+    let type_name = meta.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    let wd_prop: Option<usize> = meta
+        .get("property")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim_start_matches(['P', 'p']))
+        .and_then(|s| s.parse::<usize>().ok());
+    app.storage()
+        .create_catalog_from_meta(name, desc, url, type_name, wd_prop, user_id)
+        .await
+        .map_err(|e| ApiError(format!("create catalog: {e}")))
 }
 
 pub async fn query_autoscrape_test(

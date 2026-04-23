@@ -283,7 +283,10 @@ export default Vue.extend({
                     username: widar.getUserName()
                 }, { method: 'POST' });
                 self.importing = false;
-                self.meta.catalog_id = d.catalog_id;
+                // Server wraps the payload under `data` (see common::ok);
+                // fall back to top level for backwards compatibility.
+                let payload = d.data || d;
+                if (payload.catalog_id) self.meta.catalog_id = payload.catalog_id;
                 self.is_done = true;
             } catch (e) {
                 self.importing = false;
