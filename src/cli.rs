@@ -165,12 +165,7 @@ impl ShellCommands {
     ///   POST     /api/v1/import_catalog
     ///   GET      everything else -> static files from `html_dir`
     #[allow(clippy::print_stdout)]
-    async fn run_webserver(
-        app: AppState,
-        port: u16,
-        html_dir: &PathBuf,
-        tls: bool,
-    ) -> Result<()> {
+    async fn run_webserver(app: AppState, port: u16, html_dir: &PathBuf, tls: bool) -> Result<()> {
         use axum::Router;
         use axum::http::{HeaderName, Method};
         use axum::routing::get;
@@ -184,8 +179,12 @@ impl ShellCommands {
         // Walk `html/` once at startup and hold every file in memory. The
         // tree is a few hundred KB, so this is essentially free — and it
         // removes per-request stat/open/read from the hot path.
-        let static_cache = crate::static_cache::StaticCache::load(html_dir)
-            .map_err(|e| anyhow!("failed to load static cache from {}: {e}", html_dir.display()))?;
+        let static_cache = crate::static_cache::StaticCache::load(html_dir).map_err(|e| {
+            anyhow!(
+                "failed to load static cache from {}: {e}",
+                html_dir.display()
+            )
+        })?;
         println!(
             "webserver: cached {} static files ({} bytes) from {}",
             static_cache.len(),
@@ -208,14 +207,12 @@ impl ShellCommands {
         // `oauth.session_dir`. Users stay logged in across restarts up to the
         // configured `session_lifetime_days` (default 90 days, matching the
         // PHP Widar cookie lifetime).
-        let session_store = crate::auth::file_store::FileSessionStore::new(
-            PathBuf::from(&oauth_cfg.session_dir),
-        )
-        .map_err(|e| anyhow!("cannot open session_dir '{}': {e}", oauth_cfg.session_dir))?;
+        let session_store =
+            crate::auth::file_store::FileSessionStore::new(PathBuf::from(&oauth_cfg.session_dir))
+                .map_err(|e| anyhow!("cannot open session_dir '{}': {e}", oauth_cfg.session_dir))?;
 
-        let lifetime = tower_sessions::cookie::time::Duration::days(
-            oauth_cfg.session_lifetime_days,
-        );
+        let lifetime =
+            tower_sessions::cookie::time::Duration::days(oauth_cfg.session_lifetime_days);
         // Over TLS the cookie must be Secure; over plain HTTP it can't be.
         let cookie_secure = oauth_cfg.cookie_secure || tls;
         // SameSite=None is required for cross-origin authenticated fetches
@@ -274,8 +271,7 @@ impl ShellCommands {
         println!("webserver: listening on {url}");
         log::info!("webserver: listening on {url}");
         if !AppState::is_on_toolforge() {
-            let warning =
-                "webserver: OAuth is BYPASSED (not running on toolforge) — all requests are attributed to Magnus Manske / uid 2";
+            let warning = "webserver: OAuth is BYPASSED (not running on toolforge) — all requests are attributed to Magnus Manske / uid 2";
             println!("{warning}");
             log::warn!("{warning}");
         }
@@ -303,16 +299,15 @@ impl ShellCommands {
             "127.0.0.1".to_string(),
             "::1".to_string(),
         ];
-        let params = CertificateParams::new(subject_alt_names)
-            .map_err(|e| anyhow!("rcgen params: {e}"))?;
+        let params =
+            CertificateParams::new(subject_alt_names).map_err(|e| anyhow!("rcgen params: {e}"))?;
         let key_pair = KeyPair::generate().map_err(|e| anyhow!("rcgen keygen: {e}"))?;
         let cert = params
             .self_signed(&key_pair)
             .map_err(|e| anyhow!("rcgen self-sign: {e}"))?;
         let cert_pem = cert.pem().into_bytes();
         let key_pem = key_pair.serialize_pem().into_bytes();
-        let tls_config =
-            axum_server::tls_rustls::RustlsConfig::from_pem(cert_pem, key_pem).await?;
+        let tls_config = axum_server::tls_rustls::RustlsConfig::from_pem(cert_pem, key_pem).await?;
         Ok(tls_config)
     }
 
@@ -419,10 +414,6 @@ impl ShellCommands {
                         eprintln!("  {e}");
                     }
                 }
-            }
-            Some(Commands::MicroApi { config, port }) => {
-                let app = Self::path2app(config)?;
-                crate::micro_api::serve(app, *port).await;
             }
             Some(Commands::Webserver {
                 config,
