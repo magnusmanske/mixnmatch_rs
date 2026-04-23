@@ -18,6 +18,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::env;
 use std::fs::File;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::{thread, time};
 use sysinfo::System;
@@ -61,6 +62,11 @@ pub struct AppState {
     max_concurrent_jobs: usize,
     toolforge_php_command: String,
     oauth_config: Option<Arc<OauthConfig>>,
+    /// Optional override for the webserver's static-file directory. When
+    /// set, the webserver serves files from this path *live* (no in-memory
+    /// cache), so HTML/JS edits to a checked-out repo show up immediately.
+    /// Unset → fall back to the CLI `--html-dir` argument with caching.
+    html_dir_override: Option<Arc<PathBuf>>,
 }
 
 impl AppState {
@@ -123,6 +129,15 @@ impl AppState {
         } else {
             None
         };
+        // Optional. When set, the webserver serves static files live from
+        // this path (no in-memory cache). Lets a production deployment
+        // point at a checked-out repo for instant HTML/JS iteration
+        // without rebuilding the deploy image.
+        let html_dir_override = config["html_dir_override"]
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| Arc::new(PathBuf::from(s)));
         Ok(Self {
             wikidata: Wikidata::new(&config["wikidata"], bot_name.clone(), bot_password.clone()),
             wdt: Wikidata::new(&config["wdt"], bot_name, bot_password),
@@ -138,7 +153,15 @@ impl AppState {
             max_concurrent_jobs,
             toolforge_php_command,
             oauth_config,
+            html_dir_override,
         })
+    }
+
+    /// Optional override path for the webserver's static-file directory.
+    /// Returns `Some` when set in config; the webserver then serves
+    /// that path live (no caching). `None` → use the CLI `--html-dir`.
+    pub fn html_dir_override(&self) -> Option<&Path> {
+        self.html_dir_override.as_deref().map(PathBuf::as_path)
     }
 
     pub fn oauth_config(&self) -> Option<&Arc<OauthConfig>> {
