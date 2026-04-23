@@ -172,31 +172,54 @@ impl ShellCommands {
         use tower_http::cors::{AllowOrigin, CorsLayer};
         use tower_sessions::{Expiry, SessionManagerLayer, cookie::SameSite};
 
-        if !html_dir.exists() {
-            return Err(anyhow!("html directory not found: {}", html_dir.display()));
-        }
-
-        // Walk `html/` once at startup and hold every file in memory. The
-        // tree is a few hundred KB, so this is essentially free — and it
-        // removes per-request stat/open/read from the hot path.
-        let static_cache = crate::static_cache::StaticCache::load(html_dir).map_err(|e| {
-            anyhow!(
-                "failed to load static cache from {}: {e}",
+        // `html_dir_override` in config wins over the CLI argument and
+        // switches us into live (no-cache) serving — handy for production
+        // deployments that point at a checked-out repo so HTML/JS edits
+        // surface without rebuilding the deploy image. Without the
+        // override, walk `html/` once at startup and serve from RAM with a
+        // short browser cache header (the production default).
+        let static_cache = if let Some(override_path) = app.html_dir_override() {
+            if !override_path.exists() {
+                return Err(anyhow!(
+                    "html_dir_override directory not found: {}",
+                    override_path.display()
+                ));
+            }
+            let cache =
+                crate::static_cache::StaticCache::live(override_path).map_err(|e| {
+                    anyhow!(
+                        "failed to set up live static dir at {}: {e}",
+                        override_path.display()
+                    )
+                })?;
+            let msg = format!(
+                "webserver: live static serving (no cache) from {} (config.html_dir_override)",
+                override_path.display()
+            );
+            println!("{msg}");
+            log::info!("{msg}");
+            cache
+        } else {
+            if !html_dir.exists() {
+                return Err(anyhow!("html directory not found: {}", html_dir.display()));
+            }
+            let cache =
+                crate::static_cache::StaticCache::load(html_dir).map_err(|e| {
+                    anyhow!(
+                        "failed to load static cache from {}: {e}",
+                        html_dir.display()
+                    )
+                })?;
+            let msg = format!(
+                "webserver: cached {} static files ({} bytes) from {}",
+                cache.len(),
+                cache.total_bytes(),
                 html_dir.display()
-            )
-        })?;
-        println!(
-            "webserver: cached {} static files ({} bytes) from {}",
-            static_cache.len(),
-            static_cache.total_bytes(),
-            html_dir.display()
-        );
-        log::info!(
-            "webserver: cached {} static files ({} bytes) from {}",
-            static_cache.len(),
-            static_cache.total_bytes(),
-            html_dir.display()
-        );
+            );
+            println!("{msg}");
+            log::info!("{msg}");
+            cache
+        };
 
         let oauth_cfg = app
             .oauth_config()
