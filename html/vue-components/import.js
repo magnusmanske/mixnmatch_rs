@@ -64,17 +64,6 @@ export default Vue.extend({
         reviewStep: function () {
             return this.mode === 'new' ? 4 : 3;
         },
-        has_valid_source: function () {
-            if (this.source == 'url' && this.source_url != '') {
-                if (!this.headers_loaded) this.load_headers();
-                return true;
-            }
-            if (this.source == 'file' && this.file_uuid != '') {
-                if (!this.headers_loaded) this.load_headers();
-                return true;
-            }
-            return false;
-        },
         has_valid_source_simple: function () {
             if (this.source == 'url' && this.source_url != '') return true;
             if (this.source == 'file' && this.file_uuid != '') return true;
@@ -152,6 +141,9 @@ export default Vue.extend({
             }
         },
         goToColumns: function () {
+            // Guarded by :disabled on the button, but belt-and-braces so a
+            // stale reactive state or programmatic call can't punch through.
+            if (this.missing_source_reason()) return;
             this.step = this.columnStep;
             if (!this.headers_loaded) this.load_headers();
         },
@@ -315,8 +307,9 @@ export default Vue.extend({
         },
         load_headers: async function () {
             let self = this;
-            let reason = self.missing_source_reason();
-            if (reason) { mnm_notify(reason, 'warning'); return; }
+            // Silent bail-out — the entry points (goToColumns, Reload button)
+            // already gate on source validity; this is just a safety net.
+            if (self.missing_source_reason()) return;
             self.headers_loaded = false;
             self.test_successful = false;
             self.preview_rows = [];
@@ -863,7 +856,8 @@ export default Vue.extend({
 			<div class="card-body">
 				<div class="d-flex justify-content-between align-items-center mb-3">
 					<h5 class="card-title mb-0">Column mapping</h5>
-					<button class='btn btn-outline-secondary btn-sm' @click.prevent='load_headers'>
+					<button class='btn btn-outline-secondary btn-sm' @click.prevent='load_headers'
+						:disabled='!has_valid_source_simple'>
 						&#x21BB; Reload
 					</button>
 				</div>
