@@ -5,6 +5,29 @@
 .jobs-done { color:#14866d !important; }
 .jobs-running { color:#fc3 !important; }
 .jobs-failed { color:#b32424 !important; }
+.jobs-low_priority, .jobs-high_priority { color:#36c !important; font-style:italic; }
+/* Job rows: each job is one main row plus an optional note row.
+   Use a top border between job groups instead of table-striped — the
+   variable row count per group breaks alternating-row striping. */
+#jobs_table { table-layout: auto; }
+#jobs_table tbody tr.jobs-main > td { border-top: 1px solid #dee2e6; vertical-align: top; }
+#jobs_table tbody tr.jobs-main:first-child > td { border-top: 0; }
+#jobs_table tbody tr.jobs-note > td {
+  border-top: 0;
+  padding-top: 0;
+  padding-bottom: .55rem;
+  padding-left: 1.25rem;
+}
+#jobs_table .jobs-ts { line-height: 1.15; }
+#jobs_table .jobs-ts-date { display: block; }
+#jobs_table .jobs-ts-time { display: block; color:#6c757d; font-size: .75rem; }
+#jobs_table .jobs-action { word-break: break-word; }
+#jobs_table .jobs-note-text { word-break: break-word; }
+#jobs_table .jobs-catalog-name { font-size: .75rem; line-height: 1.1; color:#6c757d; }
+@media (max-width: 575.98px) {
+  /* On phones, hide the rarely-set "recurring" column to win width back. */
+  #jobs_table .jobs-col-recurring { display: none; }
+}
 `;
   document.head.appendChild(s);
 })();
@@ -145,6 +168,22 @@ export default Vue.extend({
             if ( ts == '' ) return '';
             return ts.substr(0,4)+'-'+ts.substr(4,2)+'-'+ts.substr(6,2)+' '+ts.substr(8,2)+':'+ts.substr(10,2)+':'+ts.substr(12,2);
         },
+        // Split a timestamp into its date/time halves so the cell can stack
+        // them vertically — saves ~60px per timestamp column vs. the old
+        // `nowrap` "yyyy-mm-dd hh:mm:ss" single line.
+        date_part : function(ts) {
+            const s = this.format_ts(ts);
+            return s ? s.substr(0,10) : '';
+        },
+        time_part : function(ts) {
+            const s = this.format_ts(ts);
+            return s ? s.substr(11) : '';
+        },
+        // Total number of columns in the main row, used as colspan for the
+        // full-width note row below each job.
+        main_colspan : function() {
+            return this.specific_catalog ? 6 : 7;
+        },
         goToOffset: function(new_offset) {
             this.start = new_offset;
             this.load();
@@ -210,40 +249,53 @@ export default Vue.extend({
     <pagination v-if='total_jobs > per_page' :offset='start' :items-per-page='per_page' :total='total_jobs'
         :show-first-last='true' @go-to-page='goToOffset'></pagination>
 
-    <table class='table table-striped' id='jobs_table' style='font-size:90%'>
+    <div class='table-responsive'>
+    <table class='table table-hover' id='jobs_table' style='font-size:90%'>
         <thead>
             <tr>
-                <th v-if='!specific_catalog' tt='catalog' style='min-width:10rem;'></th>
+                <th v-if='!specific_catalog' tt='catalog' style='min-width:7rem;'></th>
                 <th tt='actions'></th>
                 <th tt='status'></th>
                 <th tt='last_change'></th>
-                <th tt='recurring'></th>
+                <th class='jobs-col-recurring' tt='recurring'></th>
                 <th tt='next_scheduled_run'></th>
-                <th tt='note'></th>
                 <th tt='user'></th>
             </tr>
         </thead>
         <tbody>
-            <tr v-for='job in jobs'>
-                <td v-if='!specific_catalog'>
-                    <router-link :to='"/jobs/"+job.catalog'>{{job.catalog}}</router-link><br/>
-                    <div style='font-size:8pt;line-height:1'>
-                        {{job.catalog_name}}
-                    </div>
-                </td>
-                <td nowrap>{{job.action.replace(/_/g,' ')}}</td>
-                <td><span :class='"jobs-"+job.status.toLowerCase()'>{{job.status}}</span></td>
-                <td nowrap>{{format_ts(job.last_ts)}}</td>
-                <td nowrap>{{format_recurring(job.repeat_after_sec)}}</td>
-                <td nowrap>{{format_ts(job.next_ts)}}</td>
-                <td>{{job.note}}</td>
-                <td>
-                    <userlink v-if='job.user_id!=0' :username='job.user_name' :user_id='job.user_id' />
-                    <span v-else>{{job.user_name}}</span>
-                </td>
-            </tr>
+            <template v-for='job in jobs'>
+                <tr class='jobs-main' :key='"j-"+job.id'>
+                    <td v-if='!specific_catalog'>
+                        <router-link :to='"/jobs/"+job.catalog'>{{job.catalog}}</router-link>
+                        <div class='jobs-catalog-name'>{{job.catalog_name}}</div>
+                    </td>
+                    <td class='jobs-action'>{{job.action.replace(/_/g,' ')}}</td>
+                    <td><span :class='"jobs-"+job.status.toLowerCase()'>{{job.status}}</span></td>
+                    <td class='jobs-ts'>
+                        <span class='jobs-ts-date'>{{date_part(job.last_ts)}}</span>
+                        <span class='jobs-ts-time'>{{time_part(job.last_ts)}}</span>
+                    </td>
+                    <td class='jobs-col-recurring'>{{format_recurring(job.repeat_after_sec)}}</td>
+                    <td class='jobs-ts'>
+                        <span class='jobs-ts-date'>{{date_part(job.next_ts)}}</span>
+                        <span class='jobs-ts-time'>{{time_part(job.next_ts)}}</span>
+                    </td>
+                    <td>
+                        <userlink v-if='job.user_id!=0' :username='job.user_name' :user_id='job.user_id' />
+                        <span v-else>{{job.user_name}}</span>
+                    </td>
+                </tr>
+                <tr v-if='job.note' class='jobs-note' :key='"n-"+job.id'>
+                    <td :colspan='main_colspan()'>
+                        <small class='text-muted jobs-note-text'>
+                            <span class='fw-semibold me-1'>Note:</span>{{job.note}}
+                        </small>
+                    </td>
+                </tr>
+            </template>
         </tbody>
     </table>
+    </div>
 
     <!-- Bottom pagination -->
     <pagination v-if='total_jobs > per_page' :offset='start' :items-per-page='per_page' :total='total_jobs'
