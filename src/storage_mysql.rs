@@ -4533,9 +4533,15 @@ impl Storage for StorageMySQL {
         let mut unions = Vec::new();
         let base_select = Self::entry_sql_select();
 
-        // Match by q
+        // Match by q — restrict to entries in active catalogs so callers
+        // (e.g. the Wikidata gadget) don't see matches on dormant catalogs
+        // they can't act on. The prop-values branch is already scoped to
+        // active catalogs via `api_get_prop2catalog`.
         if q > 0 {
-            unions.push(format!("{base_select} WHERE q={q}"));
+            unions.push(format!(
+                "{base_select} WHERE q={q} \
+                 AND catalog IN (SELECT id FROM catalog WHERE active=1)"
+            ));
         }
 
         // Match by prop values
