@@ -3787,9 +3787,23 @@ impl Storage for StorageMySQL {
         if catalog_id > 0 {
             filters.push(format!("`catalog`={catalog_id}"));
         }
-        if !status_filter.is_empty() {
-            let safe = status_filter.replace('\'', "''");
-            filters.push(format!("`status`='{safe}'"));
+        // `status_filter` is a comma-separated list of statuses to include.
+        // Empty = no filter. Single value still works (one-element list).
+        // Each value is validated against `JobStatus::new` so unknown
+        // statuses can't smuggle SQL through the IN list.
+        let allowed_statuses: Vec<&str> = status_filter
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .filter(|s| crate::job_status::JobStatus::new(s).is_some())
+            .collect();
+        if !allowed_statuses.is_empty() {
+            let in_list = allowed_statuses
+                .iter()
+                .map(|s| format!("'{s}'"))
+                .collect::<Vec<_>>()
+                .join(",");
+            filters.push(format!("`status` IN ({in_list})"));
         }
         let where_clause = filters.join(" AND ");
 
