@@ -1,7 +1,7 @@
 #!/bin/bash
 toolforge jobs delete rustbot
 \rm ~/rustbot.*
-PORT=8089 toolforge jobs run --mem 3500Mi --cpu 3 --continuous --port 8089 \
+PORT=8089 toolforge jobs run --mem 3500Mi --cpu 3 --continuous \
 	--mount=all \
 	--image tool-mix-n-match/tool-mix-n-match:latest \
 	--command "target/release/main server --config /data/project/mix-n-match/mixnmatch_rs/config.json" \
