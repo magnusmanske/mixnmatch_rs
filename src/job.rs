@@ -12,6 +12,7 @@ use crate::match_state::MatchState;
 use crate::microsync::Microsync;
 use crate::code_fragment;
 use crate::php_wrapper::PhpWrapper;
+use crate::task_size::TaskSize;
 use crate::taxon_matcher::TaxonMatcher;
 use crate::update_catalog::UpdateCatalog;
 use anyhow::{Result, anyhow};
@@ -197,6 +198,13 @@ impl Job {
 
     //TODO test
     pub async fn get_next_job_id(&self) -> Option<usize> {
+        // Tiny TODO / HIGH_PRIORITY jobs are cheap and must never be
+        // starved by the big-job gating that populates `skip_actions`.
+        // Try them first, bypassing the skip list entirely.
+        if let Some(job_id) = self.get_next_tiny_priority_job().await {
+            return Some(job_id);
+        }
+
         if let Some(job_id) = self.get_next_high_priority_job().await {
             return Some(job_id);
         }
@@ -225,6 +233,33 @@ impl Job {
             return Some(job_id);
         }
         None
+    }
+
+    /// Pick a TODO/HIGH_PRIORITY job whose action is configured as
+    /// `TaskSize::Tiny`, ignoring `skip_actions`. Used as the first probe
+    /// in `get_next_job_id` so tiny jobs can always start.
+    async fn get_next_tiny_priority_job(&self) -> Option<usize> {
+        let tasks = self.app.storage().jobs_get_tasks().await.ok()?;
+        let tiny: Vec<String> = tasks
+            .into_iter()
+            .filter(|(_a, size)| *size == TaskSize::Tiny)
+            .map(|(a, _)| a)
+            .collect();
+        if tiny.is_empty() {
+            return None;
+        }
+        if let Some(id) = self
+            .app
+            .storage()
+            .jobs_get_next_job_by_actions(JobStatus::HighPriority, &tiny)
+            .await
+        {
+            return Some(id);
+        }
+        self.app
+            .storage()
+            .jobs_get_next_job_by_actions(JobStatus::Todo, &tiny)
+            .await
     }
 
     /// Returns the current `json` as an Option<`serde_json::Value`>

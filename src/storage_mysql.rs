@@ -2208,6 +2208,44 @@ impl Storage for StorageMySQL {
             .pop()
     }
 
+    async fn jobs_get_next_job_by_actions(
+        &self,
+        status: JobStatus,
+        only_actions: &[String],
+    ) -> Option<usize> {
+        if only_actions.is_empty() {
+            return None;
+        }
+        // Action names come from our own task-size config (never user input),
+        // but belt-and-braces: filter to ASCII word chars before interpolating.
+        let safe: Vec<String> = only_actions
+            .iter()
+            .filter(|a| a.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+            .cloned()
+            .collect();
+        if safe.is_empty() {
+            return None;
+        }
+        let actions = safe.join("','");
+        let sql = format!(
+            "SELECT /* jobs_get_next_job_by_actions */ `id` FROM `jobs` \
+             WHERE `status`='{status}' \
+             AND NOT EXISTS (SELECT * FROM catalog WHERE catalog.id=jobs.catalog AND active!=1) \
+             AND `depends_on` IS NULL \
+             AND `action` IN ('{actions}') \
+             ORDER BY `last_ts` LIMIT 1",
+            status = status.as_str(),
+        );
+        let mut conn = self.get_conn().await.ok()?;
+        conn.exec_iter(sql, ())
+            .await
+            .ok()?
+            .map_and_drop(from_row::<usize>)
+            .await
+            .ok()?
+            .pop()
+    }
+
     // Automatch
 
     /// Auto-matches unmatched and automatched people to fully matched entries that have the same name and birth year.

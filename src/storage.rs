@@ -376,6 +376,15 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
         no_actions: &[String],
         next_ts: Option<String>,
     ) -> Option<usize>;
+    /// Pick the next job whose action is in the given positive whitelist.
+    /// Used by the tiny-job fast path — tiny jobs are cheap and should
+    /// never be starved by the big-job skip list applied to the generic
+    /// `jobs_get_next_job`. Returns None if `only_actions` is empty.
+    async fn jobs_get_next_job_by_actions(
+        &self,
+        status: JobStatus,
+        only_actions: &[String],
+    ) -> Option<usize>;
 
     // Automatch
 

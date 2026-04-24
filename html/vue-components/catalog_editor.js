@@ -146,6 +146,16 @@ export default Vue.extend({
 		// drops any row whose prop or item is blank / non-numeric / < 1.
 		addComplexRow: function () { this.kv.automatch_complex.push([null, null]); },
 		removeComplexRow: function (i) { this.kv.automatch_complex.splice(i, 1); },
+		// Vue 2 can't detect direct `row[i] = x` assignments on arrays, so
+		// `v-model.number='row[0]'` silently leaves other bindings (the
+		// preview label) stale. Route input through $set so the whole row
+		// reacts — the user sees the preview update as they type, which
+		// is both better UX and confirms the value is actually captured.
+		updateComplexField: function (rowIdx, colIdx, raw) {
+			const n = parseInt(raw, 10);
+			const value = isFinite(n) && n > 0 ? n : null;
+			this.$set(this.kv.automatch_complex[rowIdx], colIdx, value);
+		},
 		complexLabelFor: function (prefix, n) {
 			if (!n) return '';
 			const key = prefix + n;
@@ -358,13 +368,17 @@ export default Vue.extend({
 										<td>
 											<div class='input-group' style='width:14rem'>
 												<span class='input-group-text'>P</span>
-												<input type='number' min='1' class='form-control' v-model.number='row[0]' />
+												<input type='number' min='1' class='form-control'
+													:value='row[0]'
+													@input='updateComplexField(i, 0, $event.target.value)' />
 											</div>
 										</td>
 										<td>
 											<div class='input-group' style='width:14rem'>
 												<span class='input-group-text'>Q</span>
-												<input type='number' min='1' class='form-control' v-model.number='row[1]' />
+												<input type='number' min='1' class='form-control'
+													:value='row[1]'
+													@input='updateComplexField(i, 1, $event.target.value)' />
 											</div>
 										</td>
 										<td>
