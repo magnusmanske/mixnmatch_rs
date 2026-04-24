@@ -79,11 +79,12 @@ export default {
         if (typeof ace === 'undefined') {
             await new Promise(function (resolve, reject) {
                 var s = document.createElement('script');
-                s.src = 'https://mix-n-match.toolforge.org/ace-builds/src-min-noconflict/ace.js';
+                s.src = 'https://cdn.jsdelivr.net/npm/ace-builds@1.37.5/src-min-noconflict/ace.js';
                 s.onload = resolve;
                 s.onerror = reject;
                 document.head.appendChild(s);
             });
+            ace.config.set('basePath', 'https://cdn.jsdelivr.net/npm/ace-builds@1.37.5/src-min-noconflict/');
         }
         me.$nextTick(function () {
             // Lua editor (editable)
