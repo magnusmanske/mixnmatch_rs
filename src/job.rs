@@ -446,6 +446,16 @@ impl Job {
             }
 
             "fix_redirected_items_in_catalog" => {
+                // catalog_id=0 means "any catalog" — pick a random active
+                // one so the worker does useful work even when the job was
+                // queued without a specific catalog in mind.
+                let catalog_id = match catalog_id {
+                    0 => match self.app.storage().get_random_active_catalog_id().await {
+                        Some(id) => id,
+                        None => return Ok(()),
+                    },
+                    other => other,
+                };
                 Maintenance::new(&self.app)
                     .fix_redirects(catalog_id, &MatchState::any_matched())
                     .await

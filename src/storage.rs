@@ -236,6 +236,11 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     async fn reference_fixer_mark_done(&self, q: usize) -> Result<()>;
     async fn avoid_auto_match(&self, entry_id: usize, q_numeric: Option<isize>) -> Result<bool>;
     async fn get_random_active_catalog_id_with_property(&self) -> Option<usize>;
+    /// Random active catalog, with no other constraints. Used as a fallback
+    /// when a job action is queued with `catalog_id=0` so the worker has
+    /// *something* to act on; repeated runs of the queued job will fan out
+    /// across the catalog pool rather than hammering the same one.
+    async fn get_random_active_catalog_id(&self) -> Option<usize>;
     async fn get_kv_value(&self, key: &str) -> Result<Option<String>>;
     async fn set_kv_value(&self, key: &str, value: &str) -> Result<()>;
     async fn do_catalog_entries_have_person_date(&self, catalog_id: usize) -> Result<bool>;
