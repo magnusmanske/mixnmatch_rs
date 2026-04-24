@@ -99,7 +99,12 @@ pub struct AutomatchSearchRow {
 
 impl AutomatchSearchRow {
     pub fn new(entry_id: usize, ext_name: String, type_name: String, aliases: String) -> Self {
-        Self { entry_id, ext_name, type_name, aliases }
+        Self {
+            entry_id,
+            ext_name,
+            type_name,
+            aliases,
+        }
     }
 }
 
@@ -115,7 +120,12 @@ pub struct PersonDateMatchRow {
 
 impl PersonDateMatchRow {
     pub fn new(entry_id: usize, ext_name: String, born: String, died: String) -> Self {
-        Self { entry_id, ext_name, born, died }
+        Self {
+            entry_id,
+            ext_name,
+            born,
+            died,
+        }
     }
 }
 
@@ -130,7 +140,12 @@ pub struct CandidateDatesRow {
 
 impl CandidateDatesRow {
     pub fn new(entry_id: usize, born: String, died: String, candidates_csv: String) -> Self {
-        Self { entry_id, born, died, candidates_csv }
+        Self {
+            entry_id,
+            born,
+            died,
+            candidates_csv,
+        }
     }
 }
 
@@ -299,15 +314,15 @@ impl AutoMatch {
         let api = self.app.wikidata().get_mw_api().await?;
         let mut offset = 0_usize;
         loop {
-            let paged = format!(
-                "SELECT * WHERE {{ {{ {sparql} }} }} ORDER BY ?q LIMIT {batch_size} OFFSET {offset}"
-            );
+            // let paged = format!(
+            //     "SELECT * WHERE {{ {{ {sparql} }} }} ORDER BY ?q LIMIT {batch_size} OFFSET {offset}"
+            // );
+            // Trying to avoid the sub-select wrapper and use `LIMIT/OFFSET` directly
+            let paged = format!("{sparql} LIMIT {batch_size} OFFSET {offset}");
             let mut reader = match self.app.wikidata().load_sparql_csv(&paged).await {
                 Ok(r) => r,
                 Err(e) => {
-                    return Err(anyhow!(
-                        "batched SPARQL failed at offset {offset}: {e}"
-                    ));
+                    return Err(anyhow!("batched SPARQL failed at offset {offset}: {e}"));
                 }
             };
             let mut label2q = HashMap::new();
@@ -955,10 +970,7 @@ impl AutoMatch {
                         // If we have a family name, require the candidate's English label to
                         // contain it (case-insensitive). Skip candidates with no label.
                         if !family_name.is_empty() {
-                            let label = b["qLabel"]["value"]
-                                .as_str()
-                                .unwrap_or("")
-                                .to_lowercase();
+                            let label = b["qLabel"]["value"].as_str().unwrap_or("").to_lowercase();
                             if label.is_empty() || !label.contains(&family_name) {
                                 continue;
                             }
@@ -1516,7 +1528,12 @@ mod tests {
 
     #[test]
     fn test_candidate_dates_from_row() {
-        let row = CandidateDatesRow::new(42, "1900".to_string(), "1980".to_string(), "1,2,3".to_string());
+        let row = CandidateDatesRow::new(
+            42,
+            "1900".to_string(),
+            "1980".to_string(),
+            "1,2,3".to_string(),
+        );
         let cd = CandidateDates::from_row(&row);
         assert_eq!(cd.entry_id, 42);
         assert_eq!(cd.born, "1900");
