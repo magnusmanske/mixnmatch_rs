@@ -161,29 +161,34 @@ pub async fn query_edit_catalog(
         )
         .await?;
     // Apply kv_catalog writes. The frontend sends a flat `kv` object; empty
-    // strings (and explicit nulls) mean "delete the key", anything else is
-    // upserted. Unknown keys are dropped so an out-of-date frontend can't
-    // wedge configuration into unsupported keys.
+    // or whitespace-only strings, explicit nulls, "[]", and empty arrays all
+    // mean "delete the key", anything else is upserted. Unknown keys are
+    // dropped so an out-of-date frontend can't wedge configuration into
+    // unsupported keys.
     if let Some(kv) = data.get("kv").and_then(|v| v.as_object()) {
         let s = app.storage();
         for (k, v) in kv {
             if !EDITABLE_KV_KEYS.contains(&k.as_str()) {
                 continue;
             }
-            let delete = v.is_null()
-                || v.as_str().map(str::is_empty).unwrap_or(false)
-                || v.as_str() == Some("[]");
-            if delete {
+            if kv_value_means_delete(v) {
                 s.delete_catalog_kv(cid, k).await?;
+                log::info!("edit_catalog cat={cid}: deleted kv key '{k}'");
                 continue;
             }
             // All kv values are stored as strings — coerce numbers/booleans
             // on the way in so callers don't have to JSON-stringify them.
+            // Trim whitespace off string values so a user-entered SPARQL
+            // that happens to have trailing spaces still round-trips cleanly.
             let stored = match v {
-                serde_json::Value::String(s2) => s2.clone(),
+                serde_json::Value::String(s2) => s2.trim().to_string(),
                 other => other.to_string(),
             };
             s.set_catalog_kv(cid, k, &stored).await?;
+            log::info!(
+                "edit_catalog cat={cid}: set kv '{k}' (len={})",
+                stored.len()
+            );
         }
     }
     // Refresh in the background — the materialised overview is not on the
@@ -205,6 +210,52 @@ fn active_flag_from(v: Option<&serde_json::Value>) -> bool {
         Some(serde_json::Value::Number(n)) => n.as_i64().map(|x| x != 0).unwrap_or(false),
         Some(serde_json::Value::String(s)) => !matches!(s.as_str(), "" | "0" | "false"),
         _ => false,
+    }
+}
+
+/// A kv value "means delete" when it carries no information worth storing:
+/// null, an empty/whitespace string, the literal JSON "[]", or an empty
+/// JSON array. Anything else survives and is persisted via set_catalog_kv.
+fn kv_value_means_delete(v: &serde_json::Value) -> bool {
+    match v {
+        serde_json::Value::Null => true,
+        serde_json::Value::String(s) => s.trim().is_empty() || s.trim() == "[]",
+        serde_json::Value::Array(a) => a.is_empty(),
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod kv_tests {
+    use super::kv_value_means_delete;
+    use serde_json::json;
+
+    #[test]
+    fn deletes_on_null() {
+        assert!(kv_value_means_delete(&serde_json::Value::Null));
+    }
+
+    #[test]
+    fn deletes_on_empty_or_whitespace_string() {
+        assert!(kv_value_means_delete(&json!("")));
+        assert!(kv_value_means_delete(&json!("   ")));
+        assert!(kv_value_means_delete(&json!("\n\t  ")));
+    }
+
+    #[test]
+    fn deletes_on_empty_json_array_literals() {
+        assert!(kv_value_means_delete(&json!("[]")));
+        assert!(kv_value_means_delete(&json!("  []  ")));
+        assert!(kv_value_means_delete(&json!([])));
+    }
+
+    #[test]
+    fn keeps_real_values() {
+        assert!(!kv_value_means_delete(&json!("SELECT ?q ?qLabel WHERE {}")));
+        assert!(!kv_value_means_delete(&json!("[[5,10]]")));
+        assert!(!kv_value_means_delete(&json!([[5, 10]])));
+        assert!(!kv_value_means_delete(&json!("0")));
+        assert!(!kv_value_means_delete(&json!("1")));
     }
 }
 
