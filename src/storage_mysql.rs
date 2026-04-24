@@ -5383,28 +5383,25 @@ impl Storage for StorageMySQL {
     async fn get_mnm_double_matches(
         &self,
         catalog_id: usize,
-    ) -> Result<HashMap<String, Vec<String>>> {
-        let sql = "SELECT q, ext_id FROM entry WHERE q IS NOT NULL AND q > 0 AND catalog=:catalog_id AND ext_id NOT LIKE 'fake_id_%'";
+    ) -> Result<HashMap<String, Vec<usize>>> {
+        let sql = "SELECT id, q FROM entry WHERE q IS NOT NULL AND q > 0 AND catalog=:catalog_id AND ext_id NOT LIKE 'fake_id_%'";
         let mut conn = self.get_conn_ro().await?;
         let results = conn
             .exec_iter(sql, params! { catalog_id })
             .await?
             .map_and_drop(|row: Row| {
+                let id: usize = row.get::<usize, _>("id").unwrap_or(0);
                 let q: isize = row.get::<Option<isize>, _>("q").flatten().unwrap_or(0);
-                let ext_id: String = row
-                    .get::<Option<String>, _>("ext_id")
-                    .flatten()
-                    .unwrap_or_default();
-                (q, ext_id)
+                (q, id)
             })
             .await?;
-        let mut q2ext_ids: HashMap<String, Vec<String>> = HashMap::new();
-        for (q, ext_id) in results {
-            q2ext_ids.entry(q.to_string()).or_default().push(ext_id);
+        let mut q2entry_ids: HashMap<String, Vec<usize>> = HashMap::new();
+        for (q, id) in results {
+            q2entry_ids.entry(q.to_string()).or_default().push(id);
         }
-        // Only keep entries where the same Q maps to multiple ext_ids
-        q2ext_ids.retain(|_, v| v.len() > 1);
-        Ok(q2ext_ids)
+        // Only keep Qs that match more than one MnM entry (the "double" case)
+        q2entry_ids.retain(|_, v| v.len() > 1);
+        Ok(q2entry_ids)
     }
 
     // Micro-API: creation_candidates

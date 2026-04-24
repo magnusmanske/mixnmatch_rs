@@ -5,7 +5,7 @@
 //! - `different`: ext_id maps to Q_a in WD and Q_b in MnM
 //! - `wd_no_mm`: ext_id present on WD, absent (matched) in MnM
 //! - `mm_no_wd`: ext_id matched in MnM, absent on WD
-//! - `mm_double`: Q values that map to multiple ext_ids in MnM (all entries)
+//! - `mm_double`: Q values that map to multiple MnM entries (returns entry IDs)
 
 use crate::api::common::{self, ApiError, Params, ok};
 use crate::app_state::AppState;
@@ -75,7 +75,7 @@ pub async fn get(app: &AppState, catalog_id: usize) -> Result<Value, ApiError> {
 
     let mm_double_json: HashMap<String, Value> = mm_double
         .into_iter()
-        .map(|(q, ext_ids)| (q, json!(ext_ids)))
+        .map(|(q, entry_ids)| (q, json!(entry_ids)))
         .collect();
 
     Ok(json!({
