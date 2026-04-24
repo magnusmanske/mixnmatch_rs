@@ -1290,7 +1290,7 @@ impl Storage for StorageMySQL {
 
     //TODO test
     async fn get_random_active_catalog_id_with_property(&self) -> Option<usize> {
-        let sql = "SELECT id FROM catalog WHERE active=1 AND wd_prop IS NOT NULL and wd_qual IS NULL ORDER by rand() LIMIT 1";
+        let sql = "SELECT /* get_random_active_catalog_id_with_property */ id FROM catalog WHERE active=1 AND wd_prop IS NOT NULL and wd_qual IS NULL ORDER by rand() LIMIT 1";
         self.get_conn_ro()
             .await
             .ok()?
@@ -1302,6 +1302,21 @@ impl Storage for StorageMySQL {
             .ok()?
             .first()
             .map(|x| x.to_owned())
+    }
+
+    async fn get_random_active_catalog_id(&self) -> Option<usize> {
+        let sql = "SELECT /* get_random_active_catalog_id */ id FROM catalog WHERE active=1 ORDER by rand() LIMIT 1";
+        self.get_conn_ro()
+            .await
+            .ok()?
+            .exec_iter(sql, ())
+            .await
+            .ok()?
+            .map_and_drop(from_row::<usize>)
+            .await
+            .ok()?
+            .first()
+            .copied()
     }
 
     async fn get_kv_value(&self, key: &str) -> Result<Option<String>> {
