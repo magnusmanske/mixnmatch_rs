@@ -1223,6 +1223,45 @@ impl Storage for StorageMySQL {
         Ok(())
     }
 
+    async fn overview_apply_insert(
+        &self,
+        catalog_id: usize,
+        user_id: Option<usize>,
+        q: Option<isize>,
+    ) -> Result<()> {
+        use crate::overview::OverviewColumn;
+        let col = OverviewColumn::classify(user_id, q).column();
+        // No-op if the catalog has never been refreshed (no overview
+        // row yet) — UPDATE just affects 0 rows. The first refresh will
+        // populate it from `entry` and subsequent inserts will track.
+        let sql = format!(
+            "UPDATE `overview` SET `total`=`total`+1, `{col}`=`{col}`+1 WHERE `catalog`=:catalog_id"
+        );
+        self.get_conn()
+            .await?
+            .exec_drop(sql, params! {catalog_id})
+            .await?;
+        Ok(())
+    }
+
+    async fn overview_apply_delete(
+        &self,
+        catalog_id: usize,
+        user_id: Option<usize>,
+        q: Option<isize>,
+    ) -> Result<()> {
+        use crate::overview::OverviewColumn;
+        let col = OverviewColumn::classify(user_id, q).column();
+        let sql = format!(
+            "UPDATE `overview` SET `total`=`total`-1, `{col}`=`{col}`-1 WHERE `catalog`=:catalog_id"
+        );
+        self.get_conn()
+            .await?
+            .exec_drop(sql, params! {catalog_id})
+            .await?;
+        Ok(())
+    }
+
     async fn get_overview_table(&self) -> Result<Vec<OverviewTableRow>> {
         let sql = "SELECT * FROM `overview`";
         let ret = self

@@ -227,6 +227,27 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
         user_id: Option<usize>,
         q: Option<isize>,
     ) -> Result<()>;
+    /// Bump `total` and the destination bucket by 1 for a row that has
+    /// just been inserted into `entry`. Mirrors `update_overview_table`
+    /// but for the no-old-state case — without this the cached counters
+    /// drift below reality once subsequent matches start decrementing
+    /// the bucket the new row was *supposed* to live in.
+    async fn overview_apply_insert(
+        &self,
+        catalog_id: usize,
+        user_id: Option<usize>,
+        q: Option<isize>,
+    ) -> Result<()>;
+    /// Counterpart to `overview_apply_insert` — decrement `total` and
+    /// the source bucket by 1 when a row is about to disappear from
+    /// `entry`. Caller must read the entry's current (user, q) *before*
+    /// the DELETE, otherwise we can't classify which bucket to debit.
+    async fn overview_apply_delete(
+        &self,
+        catalog_id: usize,
+        user_id: Option<usize>,
+        q: Option<isize>,
+    ) -> Result<()>;
     async fn get_overview_table(&self) -> Result<Vec<OverviewTableRow>>;
     async fn queue_reference_fixer(&self, q_numeric: isize) -> Result<()>;
     /// Pull up to `limit` pending rows off the `reference_fixer` queue,

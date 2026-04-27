@@ -184,18 +184,32 @@ impl Entry {
         if self.id.is_some() {
             return Err(EntryError::TryingToInsertExistingEntry.into());
         }
-        self.id = self.app()?.storage().entry_insert_as_new(self).await?;
+        let storage = self.app()?.storage().clone();
+        self.id = storage.entry_insert_as_new(self).await?;
+        // Bump the cached overview counters so they don't drift below
+        // reality when the autoscrape pipeline matches one of these
+        // freshly-inserted rows. `entry_insert_as_new` uses
+        // `INSERT IGNORE`, so id=Some(0) means the row already
+        // existed — skip the bump in that case.
+        if matches!(self.id, Some(id) if id > 0) {
+            let _ = storage
+                .overview_apply_insert(self.catalog, self.user, self.q)
+                .await;
+        }
         Ok(self.id)
     }
 
     /// Deletes the entry and all of its associated data in the database. Resets the local ID to 0
     //TODO test
     pub async fn delete(&mut self) -> Result<()> {
-        self.app()?
-            .storage()
-            .entry_delete(self.get_valid_id()?)
-            .await?;
-        // TODO overview table?
+        // Snapshot the bucket coordinates *before* the DELETE — once the
+        // row is gone we can't classify which overview column to debit.
+        let catalog = self.catalog;
+        let user = self.user;
+        let q = self.q;
+        let storage = self.app()?.storage().clone();
+        storage.entry_delete(self.get_valid_id()?).await?;
+        let _ = storage.overview_apply_delete(catalog, user, q).await;
         self.id = None;
         Ok(())
     }

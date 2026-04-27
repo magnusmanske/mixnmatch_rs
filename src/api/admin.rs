@@ -16,9 +16,15 @@ pub async fn query_update_overview(
     session: &Session,
     params: &Params,
 ) -> Result<Response, ApiError> {
-    auth::guard::require_user_from_params(app, session, params).await?;
     let cs = common::get_param(params, "catalog", "");
     let ids: Vec<usize> = if cs.is_empty() {
+        // Bulk refresh fans out across every active catalog and is
+        // expensive, so keep it gated. A single-catalog refresh just
+        // recomputes that catalog's overview row from authoritative
+        // entry data — idempotent, no user attribution — so it stays
+        // open to anonymous viewers (the catalog page auto-fires it
+        // when it sees a stale negative count).
+        auth::guard::require_user_from_params(app, session, params).await?;
         app.storage().api_get_active_catalog_ids().await?
     } else {
         cs.split(',')
