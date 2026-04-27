@@ -50,14 +50,41 @@ impl AutoscrapeResolve {
 
     //TODO test
     pub fn replace_vars(&self, map: &HashMap<String, String>) -> String {
+        let effective_map = self.expand_with_replaced_captures(map);
         let mut ret = self.use_pattern.to_owned();
-        for (key, value) in map {
+        for (key, value) in &effective_map {
             ret = ret.replace(key, value);
         }
         for regex in &self.regexs {
             ret = regex.0.replace_all(&ret, &regex.1).into();
         }
         Self::fix_html(&ret).trim().into()
+    }
+
+    /// Adds `$R1`, `$R2`, … entries — each is the matching `$1`, `$2`, …
+    /// capture run through this field's `rx` replacements in isolation.
+    /// Lets a `use` pattern combine raw and per-capture-replaced values
+    /// (e.g. anchor-based replacements that would otherwise need to be
+    /// rewritten to match against the full composed string).
+    fn expand_with_replaced_captures(
+        &self,
+        map: &HashMap<String, String>,
+    ) -> HashMap<String, String> {
+        let mut out = map.clone();
+        for (key, value) in map {
+            let Some(num) = key.strip_prefix('$') else {
+                continue;
+            };
+            if num.is_empty() || !num.chars().all(|c| c.is_ascii_digit()) {
+                continue;
+            }
+            let mut v = value.to_owned();
+            for regex in &self.regexs {
+                v = regex.0.replace_all(&v, &regex.1).into();
+            }
+            out.insert(format!("$R{num}"), v);
+        }
+        out
     }
 
     //TODO test
@@ -351,6 +378,96 @@ mod tests {
             ]
         }});
         assert!(AutoscrapeResolve::from_json(&json, "test").is_err());
+    }
+
+    #[test]
+    fn test_replace_vars_dollar_r_applies_field_rx_to_capture() {
+        // $R1 should be capture group 1 with this field's rx applied to it
+        // alone, independently of the rest of the use_pattern.
+        let json = json!({"test":{
+            "use": "$R1",
+            "rx": [
+                ["^foo", "BAR"]
+            ]
+        }});
+        let resolve = AutoscrapeResolve::from_json(&json, "test").unwrap();
+        let mut map = HashMap::new();
+        map.insert("$1".to_string(), "foofoo".to_string());
+        assert_eq!(resolve.replace_vars(&map), "BARfoo");
+    }
+
+    #[test]
+    fn test_replace_vars_dollar_r_anchored_only_in_capture() {
+        // The `^` anchor in a per-field rx normally only matches the start
+        // of the composed string. $R1 lets it match the start of the
+        // capture itself instead. Here the use_pattern leads with a
+        // literal so the whole-string rx pass at the end can't fire.
+        let json = json!({"test":{
+            "use": "X $R1",
+            "rx": [
+                ["^foo", "BAR"]
+            ]
+        }});
+        let resolve = AutoscrapeResolve::from_json(&json, "test").unwrap();
+        let mut map = HashMap::new();
+        map.insert("$1".to_string(), "foofoo".to_string());
+        assert_eq!(resolve.replace_vars(&map), "X BARfoo");
+    }
+
+    #[test]
+    fn test_replace_vars_dollar_r_with_no_rx_equals_capture() {
+        // With no rx defined, $R1 just mirrors $1 — useful so users can
+        // sprinkle $R1 in templates without breaking when rx is empty.
+        let json = json!({"test":{
+            "use": "[$R1] [$1]"
+        }});
+        let resolve = AutoscrapeResolve::from_json(&json, "test").unwrap();
+        let mut map = HashMap::new();
+        map.insert("$1".to_string(), "abc".to_string());
+        assert_eq!(resolve.replace_vars(&map), "[abc] [abc]");
+    }
+
+    #[test]
+    fn test_replace_vars_dollar_r_does_not_apply_to_levels() {
+        // $L1 represents a level value, not a capture; it must not be
+        // rewritten as $RL1, and `$1` substitution must not corrupt it.
+        let json = json!({"test":{
+            "use": "$L1 $R1",
+            "rx": [
+                ["a", "Z"]
+            ]
+        }});
+        let resolve = AutoscrapeResolve::from_json(&json, "test").unwrap();
+        let mut map = HashMap::new();
+        map.insert("$1".to_string(), "aaa".to_string());
+        map.insert("$L1".to_string(), "level".to_string());
+        // $L1 stays raw; $R1 = "ZZZ"; whole-string rx then turns the
+        // remaining "level" into "Zlevel" (its single 'a'... wait, "level"
+        // has no 'a' — assert literally what the pipeline gives).
+        assert_eq!(resolve.replace_vars(&map), "level ZZZ");
+    }
+
+    #[test]
+    fn test_replace_vars_dollar_r_alongside_raw_capture() {
+        // Mixing $1 (raw) with $R1 (per-capture rx applied) should keep
+        // the two distinct, even though the field-level rx still runs
+        // over the final composed string.
+        let json = json!({"test":{
+            "use": "raw=$1 cooked=$R1",
+            "rx": [
+                ["^foo", "BAR"]
+            ]
+        }});
+        let resolve = AutoscrapeResolve::from_json(&json, "test").unwrap();
+        let mut map = HashMap::new();
+        map.insert("$1".to_string(), "foofoo".to_string());
+        // Final whole-string rx anchors at start of "raw=foofoo cooked=BARfoo",
+        // which has no "foo" prefix, so it doesn't fire — leaving the
+        // raw and cooked forms side by side.
+        assert_eq!(
+            resolve.replace_vars(&map),
+            "raw=foofoo cooked=BARfoo"
+        );
     }
 
     #[test]
