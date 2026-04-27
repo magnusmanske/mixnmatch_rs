@@ -243,24 +243,24 @@ const scraperTemplate = `<div>
 				<div class='card-body'>
 					<h4 class='card-title mb-1'>Resolve</h4>
 					<div class='text-muted mb-3' style='font-size:0.9em'>${DOLLAR_REF_HELP}</div>
-					<div v-for='(r,rid) in scraper.resolve' class='border-bottom pb-3 mb-3'>
+					<div v-for='rid in resolveOrder' v-if='scraper.resolve[rid]' :key='rid' class='border-bottom pb-3 mb-3'>
 						<form>
 							<div class='row g-3 align-items-center'>
 								<div class='col-md-2'>
 									<label class='form-label fw-semibold text-uppercase mb-0' style='letter-spacing:.05em'>{{rid}}</label>
 								</div>
 								<div class='col-md-10'>
-									<input type='text' class='form-control font-monospace' v-model='r.use'>
+									<input type='text' class='form-control font-monospace' v-model='scraper.resolve[rid].use'>
 									<div class='form-text' v-if='note[rid]'>{{note[rid]}}</div>
 								</div>
 							</div>
-							<div v-if='typeof r.rx!="undefined"' class='row g-3 mt-1'>
+							<div v-if='typeof scraper.resolve[rid].rx!="undefined"' class='row g-3 mt-1'>
 								<div class='col-md-2'></div>
 								<div class='col-md-10'>
 									<div class='text-muted mb-2' style='font-size:0.85em'>
 										Optional regex replacements: <em>match &rarr; replace with</em>.
 									</div>
-									<div v-for='(rx,rxid) in r.rx' class='row g-2 mb-2 align-items-center'>
+									<div v-for='(rx,rxid) in scraper.resolve[rid].rx' class='row g-2 mb-2 align-items-center'>
 										<div class='col-auto' style='font-family:monospace;color:#888'>{{rxid+1}}.</div>
 										<div class='col-sm-5'><input type='text' class='form-control form-control-sm font-monospace' v-model='rx[0]' placeholder='pattern' /></div>
 										<div class='col-sm-5'><input type='text' class='form-control form-control-sm font-monospace' v-model='rx[1]' placeholder='replacement' /></div>
@@ -486,20 +486,25 @@ export default Vue.extend({
 	props: ["opt"],
 	data: function () {
 		return {
+			// Canonical render order for the Resolve card. Used by the
+			// template so loaded scrapers (whose JSON keys come back in
+			// alphabetical order from the server) still render in the
+			// order users expect.
+			resolveOrder: ['id', 'name', 'desc', 'type', 'url'],
 			types: [], type2count: {}, levels: [], options: { simple_space: false, utf8_encode: false, skip_failed: true }, is_example: false, test_results: { status: '' }, scraper: {
 				url: '', rx_block: '', rx_entry: '', resolve: {
 					id: { 'use': '', rx: [] },
 					name: { 'use': '', rx: [] },
 					desc: { 'use': '', rx: [] },
-					url: { 'use': '', rx: [] },
 					type: { 'use': '', rx: [] },
+					url: { 'use': '', rx: [] },
 				}
 			}, meta: { catalog_id: '', name: '', desc: '', property: '', lang: 'en', type: 'unknown', url: '' }, note: {
 				id: '',
 				name: 'For people (Q5), try to get "first_name last_name", maybe with a RegEx (below): ^(.+?), (.+)$ => $2 $1',
 				desc: 'For people (Q5), try to get birth/death dates into the description, it can help with the auto-matching',
-				url: 'E.g. https://www.thesource.com/entry/$1 if $1 is the entry ID',
 				type: 'Use a Q number to set a default type; optional (e.g. Q5=human; Q16521=taxon)',
+				url: 'E.g. https://www.thesource.com/entry/$1 if $1 is the entry ID',
 			}, block_matches: 0, internal_results: [], can_save_message: '', catalog_from_save: 0, property_already_used: false, property_used_by: '',
 			load_settings_status: '', load_settings_message: ''
 		};
@@ -584,7 +589,7 @@ export default Vue.extend({
 			const me = this;
 			me.levels = [{ mode: 'keys', keys: "abcdefghijklmnopqrstuvwxyzõäöü".split('') }];
 			me.test_results = { status: '' };
-			me.scraper = { url: 'https://digikogu.ekm.ee/ekm/authors?letter=$1', rx_block: '', rx_entry: '<a href="/ekm/authors/author_id-(\\d+)">(.+?)</a>', resolve: { id: { 'use': '$1', rx: [] }, name: { 'use': '$2', rx: [['^(.+?), (.+)$', '$2 $1']] }, desc: { 'use': '', rx: [] }, url: { 'use': 'https://digikogu.ekm.ee/ekm/authors/author_id-$1', rx: [] }, type: { 'use': 'Q5', rx: [] } } };
+			me.scraper = { url: 'https://digikogu.ekm.ee/ekm/authors?letter=$1', rx_block: '', rx_entry: '<a href="/ekm/authors/author_id-(\\d+)">(.+?)</a>', resolve: { id: { 'use': '$1', rx: [] }, name: { 'use': '$2', rx: [['^(.+?), (.+)$', '$2 $1']] }, desc: { 'use': '', rx: [] }, type: { 'use': 'Q5', rx: [] }, url: { 'use': 'https://digikogu.ekm.ee/ekm/authors/author_id-$1', rx: [] } } };
 			me.meta = { catalog_id: '', name: 'Art Museum of Estonia artist', desc: 'Artist identifier for the Art Museum of Estonia', property: 'P4563', lang: 'et', url: 'https://digikogu.ekm.ee', type: 'biography' };
 			me.options = { simple_space: true, utf8_encode: false, skip_failed: false };
 			me.is_example = true;
