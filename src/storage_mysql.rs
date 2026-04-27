@@ -65,7 +65,7 @@ pub const TABLES_WITH_ENTRY_ID_FIELDS: &[&str] = &[
 /// Catalogs to skip in `maintenance_common_names_birth_year` — large or
 /// otherwise noisy catalogs where name+birth-year collisions aren't a
 /// useful matching signal and would swamp the aggregation.
-const NAME_BIRTH_YEAR_EXCLUDED_CATALOGS: &[usize] = &[4837, 5580, 6094, 3247, 7480];
+const NAME_BIRTH_YEAR_EXCLUDED_CATALOGS: &[usize] = &[4837, 5580, 6094, 3247, 7480, 7562];
 
 #[derive(Debug)]
 pub struct StorageMySQL {
