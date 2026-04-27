@@ -1,9 +1,9 @@
 import { mnm_api, mnm_fetch_json, mnm_notify, tt_update_interface, widar } from './store.js';
 
-// Shared inline reference for the $n / $Ln notation used in both the
-// Scraper and Resolve cards.
+// Shared inline reference for the $n / $Rn / $Ln notation used in both
+// the Scraper and Resolve cards.
 const DOLLAR_REF_HELP =
-	"Use $1, $2, … for capture groups from the entry regex, and $L1, $L2, … for the current value of each level.";
+	"Use $1, $2, … for capture groups from the entry regex, $R1, $R2, … for the same capture groups with this field's regex replacements applied to each one alone, and $L1, $L2, … for the current value of each level.";
 
 const scraperTemplate = `<div>
 		<mnm-breadcrumb :crumbs="[{text: 'Scraper'}]"></mnm-breadcrumb>

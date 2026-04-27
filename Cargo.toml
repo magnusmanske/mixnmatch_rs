@@ -43,7 +43,7 @@ sha1 = "0.10"
 base64 = "0.22"
 time = "0.3"
 bytes = "1"
-atom_syndication = "0.12.7"
+atom_syndication = "0.12"
 mime_guess = "2"
 
 [dev-dependencies]
