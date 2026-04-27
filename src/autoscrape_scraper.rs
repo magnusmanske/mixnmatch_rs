@@ -187,7 +187,13 @@ impl AutoscrapeScraper {
         cap: regex::Captures,
         autoscrape: &Autoscrape,
     ) -> ExtendedEntry {
-        let map = Self::process_html_block_generate_map(cap, autoscrape);
+        let mut map = Self::process_html_block_generate_map(cap, autoscrape);
+        // Resolve the id first, then publish it as $RID so all the
+        // other resolve fields (and aux) can reference the post-rx id —
+        // typically used to build URL/name patterns from the canonical
+        // ext_id rather than the raw capture.
+        let ext_id = self.resolve_id.replace_vars(&map);
+        map.insert("$RID".to_string(), ext_id.clone());
         let type_name = self.resolve_type.replace_vars(&map);
         let type_name = if type_name.is_empty() {
             None
@@ -197,7 +203,7 @@ impl AutoscrapeScraper {
         ExtendedEntry {
             entry: Entry {
                 catalog: autoscrape.catalog_id(),
-                ext_id: self.resolve_id.replace_vars(&map),
+                ext_id,
                 ext_url: self.resolve_url.replace_vars(&map),
                 ext_name: self.resolve_name.replace_vars(&map),
                 ext_desc: self.resolve_desc.replace_vars(&map),
