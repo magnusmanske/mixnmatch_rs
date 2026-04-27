@@ -5423,7 +5423,13 @@ impl Storage for StorageMySQL {
         &self,
         catalog_id: usize,
     ) -> Result<HashMap<String, Vec<usize>>> {
-        let sql = "SELECT id, q FROM entry WHERE q IS NOT NULL AND q > 0 AND catalog=:catalog_id AND ext_id NOT LIKE 'fake_id_%'";
+        // `user > 0` excludes auto-matched rows (user=0) and never-touched
+        // rows (user IS NULL — `NULL > 0` evaluates to NULL → false). The
+        // "Multiple external IDs for a single Wikidata item" report is
+        // only meaningful for *fully* matched entries; including
+        // automatcher hits floods the panel with false positives.
+        // Mirrors microsync_get_multiple_q_in_mnm above.
+        let sql = "SELECT id, q FROM entry WHERE q IS NOT NULL AND q > 0 AND user > 0 AND catalog=:catalog_id AND ext_id NOT LIKE 'fake_id_%'";
         let mut conn = self.get_conn_ro().await?;
         let results = conn
             .exec_iter(sql, params! { catalog_id })
