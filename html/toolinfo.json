@@ -5,12 +5,5 @@
 		"url": "http://mix-n-match.toolforge.org",
 		"keywords": "glam, wikidata, redlinks",
 		"author": "Magnus Manske"
-	},
-	{
-		"name": "Painters",
-		"description": "Find creators for paintings on Wikidata",
-		"url": "http://mix-n-match.toolforge.org/painters.php",
-		"keywords": "creator, painter, painters, painting, paintings, glam, wikidata",
-		"author": "Magnus Manske"
 	}
 ]
