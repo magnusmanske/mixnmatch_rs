@@ -645,6 +645,47 @@ impl Maintenance {
         Ok(())
     }
 
+    /// Decode HTML entities (`&amp;`, `&eacute;`, …) in every
+    /// `entry.ext_name` of the given catalog and rewrite the row when
+    /// the decoded form differs. Imports occasionally pick names up
+    /// pre-decoded by the source HTML; this is the post-hoc fix.
+    /// Mirrors PHP `Maintenance::fixHTMLentitiesForNamesInCatalog`.
+    pub async fn fix_html_entities_in_catalog(&self, catalog_id: usize) -> Result<()> {
+        if catalog_id == 0 {
+            return Err(anyhow!("catalog id must be positive"));
+        }
+        let candidates = self
+            .app
+            .storage()
+            .entry_select_with_html_entities_in_name(catalog_id)
+            .await?;
+        let mut rewritten = 0_usize;
+        for (id, raw) in candidates {
+            let decoded = html_escape::decode_html_entities(&raw).trim().to_string();
+            if decoded == raw {
+                // LIKE '%&%;%' is approximate: `&` and `;` can show
+                // up in text that isn't an entity reference. Skipping
+                // unchanged rows keeps a noisy false-positive set
+                // from generating no-op writes.
+                continue;
+            }
+            // Existing storage helper takes (name, id) — note the
+            // arg order. Truncates to 127 chars at the SQL layer to
+            // match the column width.
+            if let Err(e) = self.app.storage().entry_set_ext_name(&decoded, id).await {
+                log::warn!(
+                    "fix_html_entities_in_catalog: update failed for entry {id}: {e}"
+                );
+                continue;
+            }
+            rewritten += 1;
+        }
+        log::info!(
+            "fix_html_entities_in_catalog: catalog {catalog_id} rewrote {rewritten} name(s)"
+        );
+        Ok(())
+    }
+
     /// Rebuild `aux_candidates` — the cache the
     /// `creation_candidates?mode=random_prop` picker reads from.
     ///
