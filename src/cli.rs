@@ -162,6 +162,22 @@ enum Commands {
         batch_size: usize,
     },
 
+    /// Forcibly bring a catalog's manual matches into agreement
+    /// with the live Wikidata view of its property — pulls
+    /// `?q wdt:Pn ?v` and rewrites every entry whose stored Q
+    /// disagrees with Wikidata's. Overwrites manual matches; use
+    /// deliberately as a per-catalog corrective. Equivalent to
+    /// PHP `Maintenance::overwriteFromWikidata`.
+    OverwriteFromWikidata {
+        #[arg(short, long, value_name = "FILE")]
+        config: Option<PathBuf>,
+
+        /// Catalog id to rewrite. Must be active and have `wd_prop`
+        /// set without a `wd_qual`.
+        #[arg(long)]
+        catalog_id: usize,
+    },
+
     /// Rewrite every `entry.ext_url` in a catalog by substituting
     /// `$1` in the supplied pattern with the row's `ext_id`. Useful
     /// when a catalog's source moves to a new URL scheme and the
@@ -564,6 +580,13 @@ impl ShellCommands {
                 println!(
                     "merge {source} -> {target}: {stats}"
                 );
+            }
+            Some(Commands::OverwriteFromWikidata { config, catalog_id }) => {
+                let app = Self::path2app(config)?;
+                let n = crate::maintenance::Maintenance::new(&app)
+                    .overwrite_from_wikidata(*catalog_id)
+                    .await?;
+                println!("overwrite-from-wikidata: catalog {catalog_id} rewrote {n} match(es)");
             }
             Some(Commands::UpdateCatalogExtUrls {
                 config,

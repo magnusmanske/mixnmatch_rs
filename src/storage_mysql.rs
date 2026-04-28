@@ -6598,6 +6598,32 @@ impl Storage for StorageMySQL {
         Ok(rows)
     }
 
+    async fn entry_get_manual_matches_for_catalog(
+        &self,
+        catalog_id: usize,
+    ) -> Result<Vec<(usize, String, isize)>> {
+        let sql = "SELECT `id`, `ext_id`, `q` FROM `entry` \
+            WHERE `catalog` = :catalog_id \
+              AND `q` IS NOT NULL AND `q` > 0 \
+              AND `user` IS NOT NULL AND `user` > 0";
+        let rows = self
+            .get_conn_ro()
+            .await?
+            .exec_iter(sql, params! { catalog_id })
+            .await?
+            .map_and_drop(|row: Row| {
+                let id: usize = row.get("id").unwrap_or(0);
+                let ext_id: String = row.get::<String, _>("ext_id").unwrap_or_default();
+                let q: isize = row.get::<Option<isize>, _>("q").flatten().unwrap_or(0);
+                (id, ext_id, q)
+            })
+            .await?;
+        Ok(rows
+            .into_iter()
+            .filter(|(id, _, q)| *id > 0 && *q > 0)
+            .collect())
+    }
+
     async fn entry_get_algorithmic_human_matches(&self) -> Result<Vec<(usize, isize)>> {
         // `user IN (3,4)` is exactly the audit shape PHP uses —
         // those are the algorithmic-match user ids
