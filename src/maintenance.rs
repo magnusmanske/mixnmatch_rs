@@ -630,6 +630,20 @@ impl Maintenance {
         log::info!("delete_multi_match_for_fully_matched: removed {n} row(s)");
         Ok(())
     }
+
+    /// Tidy up `wd_matches` against the catalogs they reference:
+    /// orphan deletes, catalog back-fills, and N/A flips for catalogs
+    /// `wd_match_sync` can't do anything with. Mirrors PHP
+    /// `Maintenance::fixupWdMatches`.
+    pub async fn fixup_wd_matches(&self) -> Result<()> {
+        let (deleted, recatalogued, marked_na) =
+            self.app.storage().maintenance_fixup_wd_matches().await?;
+        log::info!(
+            "fixup_wd_matches: deleted {deleted}, back-filled {recatalogued}, \
+             marked {marked_na} N/A"
+        );
+        Ok(())
+    }
 }
 
 /// Decode one TSV row of `?p ?v ?vLabel` into the storage row.

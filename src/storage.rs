@@ -980,6 +980,15 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     /// cleanup happens inline via `Entry::set_match`, but a periodic
     /// sweep catches stragglers from older code paths that didn't.
     async fn maintenance_delete_multi_match_for_fully_matched(&self) -> Result<usize>;
+
+    /// Tidy up `wd_matches` rows whose state is wrong relative to the
+    /// catalog they reference: drop rows from deactivated catalogs,
+    /// back-fill `catalog=0` rows from the entry's actual catalog, and
+    /// flip any row whose catalog has no `wd_prop` (or has a
+    /// `wd_qual`) to status `N/A`. Returns counts in
+    /// (deleted, recatalogued, marked_na) order so the cron line can
+    /// surface them. Mirrors PHP `Maintenance::fixupWdMatches`.
+    async fn maintenance_fixup_wd_matches(&self) -> Result<(usize, usize, usize)>;
 }
 
 #[cfg(test)]
