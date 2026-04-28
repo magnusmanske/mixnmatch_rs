@@ -9,7 +9,18 @@ export const SearchBox = {
   methods: {
     submit: function () {
       const me = this;
-      var url = '/search/' + encodeURIComponent(me.query);
+      // The navbar mounts <search-box></search-box> with no props, so
+      // me.query stays undefined until the user types. Guard against
+      // submit-on-empty: encodeURIComponent(undefined) returns the
+      // literal string "undefined", which used to produce
+      // /search/undefined and render the word "undefined" in the
+      // search input on landing.
+      var q = (me.query || '').trim();
+      if (!q) {
+        router.push('/search');
+        return;
+      }
+      var url = '/search/' + encodeURIComponent(q);
       if (typeof me.exclude != 'undefined' && me.exclude.length > 0) {
         url += '/' + this.exclude.join(',');
       }
@@ -52,6 +63,9 @@ export default Vue.extend({
       }
 
       me.query = (me.query || '').trim();
+      // Defensive: stale bookmarks of the old /search/undefined URL
+      // would otherwise run a literal search for the word "undefined".
+      if (me.query === 'undefined') me.query = '';
       if (me.query.match(/^\s*$/)) {
         me.running = false;
         return;
