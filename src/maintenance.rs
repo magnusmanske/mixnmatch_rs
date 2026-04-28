@@ -645,6 +645,41 @@ impl Maintenance {
         Ok(())
     }
 
+    /// Rewrite every `entry.ext_url` in the catalog by substituting
+    /// `$1` in `url_pattern` with the row's `ext_id`. Useful when a
+    /// catalog's source moves to a new URL scheme and the existing
+    /// rows need their cached external URLs refreshed; also a one-
+    /// off fix when an importer wrote the wrong URLs to begin with.
+    /// Mirrors PHP `Maintenance::updateExternalUrlsFromPattern`.
+    ///
+    /// The bulk SQL lives in `storage::api_update_catalog_ext_urls`
+    /// (also reached by the web `update_ext_urls` API endpoint); this
+    /// is the matching Rust-callable wrapper that splits the pattern
+    /// on `$1` and validates the input.
+    pub async fn update_ext_urls_from_pattern(
+        &self,
+        catalog_id: usize,
+        url_pattern: &str,
+    ) -> Result<()> {
+        if catalog_id == 0 {
+            return Err(anyhow!("catalog id must be positive"));
+        }
+        let parts: Vec<&str> = url_pattern.splitn(2, "$1").collect();
+        if parts.len() != 2 {
+            return Err(anyhow!(
+                "url_pattern '{url_pattern}' does not contain '$1'"
+            ));
+        }
+        self.app
+            .storage()
+            .api_update_catalog_ext_urls(catalog_id, parts[0], parts[1])
+            .await?;
+        log::info!(
+            "update_ext_urls_from_pattern: catalog {catalog_id} rewritten with '{url_pattern}'"
+        );
+        Ok(())
+    }
+
     /// Walk every `auxiliary` row for P227 (GND ID) and delete the
     /// rows whose GND target is an "Undifferentiated Person" — the
     /// GND placeholder used when several real-world people share a

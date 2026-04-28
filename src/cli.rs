@@ -162,6 +162,25 @@ enum Commands {
         batch_size: usize,
     },
 
+    /// Rewrite every `entry.ext_url` in a catalog by substituting
+    /// `$1` in the supplied pattern with the row's `ext_id`. Useful
+    /// when a catalog's source moves to a new URL scheme and the
+    /// existing rows need their cached external URLs refreshed.
+    /// Equivalent to PHP `Maintenance::updateExternalUrlsFromPattern`.
+    UpdateCatalogExtUrls {
+        #[arg(short, long, value_name = "FILE")]
+        config: Option<PathBuf>,
+
+        /// Catalog id whose ext_url column gets rewritten.
+        #[arg(long)]
+        catalog_id: usize,
+
+        /// URL pattern containing `$1` as the placeholder for each
+        /// row's ext_id, e.g. `https://example.com/people/$1.html`.
+        #[arg(long)]
+        url_pattern: String,
+    },
+
     /// Migrate confirmed manual matches from a catalog with the old
     /// ext_id scheme to a freshly-imported successor with the new
     /// scheme, anchoring on entry name + a description sanity check.
@@ -545,6 +564,17 @@ impl ShellCommands {
                 println!(
                     "merge {source} -> {target}: {stats}"
                 );
+            }
+            Some(Commands::UpdateCatalogExtUrls {
+                config,
+                catalog_id,
+                url_pattern,
+            }) => {
+                let app = Self::path2app(config)?;
+                crate::maintenance::Maintenance::new(&app)
+                    .update_ext_urls_from_pattern(*catalog_id, url_pattern)
+                    .await?;
+                println!("update-catalog-ext-urls: catalog {catalog_id} rewritten");
             }
             Some(Commands::MigrateCatalogProperty { config, old, new }) => {
                 let app = Self::path2app(config)?;
