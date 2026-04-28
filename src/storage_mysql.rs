@@ -6681,13 +6681,14 @@ impl Storage for StorageMySQL {
         // filter", matching the PHP behaviour. Defensive escape on
         // the type string rather than parameterising — the rest of
         // the SQL is already a format!-built string.
-        let mut type_filter = String::new();
-        if !rule.type_constraint.is_empty() {
-            type_filter = format!(
+        let type_filter = if rule.type_constraint.is_empty() {
+            String::new()
+        } else {
+            format!(
                 " AND `type` = '{}'",
                 escape_sql_literal(&rule.type_constraint)
-            );
-        }
+            )
+        };
         // RLIKE pattern is parameterised; the property + value land
         // in the SELECT list and need to come through as bound
         // params too so a malformed `value` can't break out into the
