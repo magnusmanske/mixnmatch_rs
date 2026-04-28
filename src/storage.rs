@@ -1068,6 +1068,15 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     /// human items on Wikidata.
     async fn entry_get_algorithmic_human_matches(&self) -> Result<Vec<(usize, isize)>>;
 
+    /// `(id, ext_id, q)` for every manually-matched entry in the
+    /// catalog. Used by `overwrite_from_wikidata` to compare each
+    /// row's stored Q against Wikidata's view of the same external
+    /// ID and rewrite the ones that disagree.
+    async fn entry_get_manual_matches_for_catalog(
+        &self,
+        catalog_id: usize,
+    ) -> Result<Vec<(usize, String, isize)>>;
+
     /// Apply one `description_aux` rule to a catalog: any entry whose
     /// `ext_desc` matches `rule.rx` (case-insensitive `RLIKE`) and
     /// doesn't already have the corresponding auxiliary row inserts

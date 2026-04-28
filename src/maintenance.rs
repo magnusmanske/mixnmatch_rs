@@ -645,6 +645,99 @@ impl Maintenance {
         Ok(())
     }
 
+    /// Forcibly bring a catalog's manual matches into agreement with
+    /// the live Wikidata view of its property. Reads
+    /// `?q wdt:Pn ?v` for every entry, then for any entry whose
+    /// stored Q disagrees with Wikidata's, rewrites the match to the
+    /// Wikidata-side Q with attribution `USER_AUX_MATCH`.
+    ///
+    /// **This overwrites manual matches.** Use it deliberately, as a
+    /// per-catalog corrective when an entry's external IDs have been
+    /// reissued or human matches have systematically drifted from
+    /// Wikidata's authoritative state. The `wd_match_sync` classifier
+    /// covers the routine cross-check; `overwrite_from_wikidata` is
+    /// the heavier "trust Wikidata, rewrite ours" intervention.
+    ///
+    /// Mirrors PHP `Maintenance::overwriteFromWikidata`. Returns the
+    /// number of rows it rewrote.
+    pub async fn overwrite_from_wikidata(&self, catalog_id: usize) -> Result<usize> {
+        if catalog_id == 0 {
+            return Err(anyhow!("catalog id must be positive"));
+        }
+        let cat = Catalog::from_id(catalog_id, &self.app).await?;
+        if !cat.is_active() {
+            return Err(anyhow!("catalog {catalog_id} is not active"));
+        }
+        let prop = cat
+            .wd_prop()
+            .ok_or_else(|| anyhow!("catalog {catalog_id} has no wd_prop set"))?;
+        if cat.wd_qual().is_some() {
+            return Err(anyhow!(
+                "catalog {catalog_id} uses a wd_qual; overwrite_from_wikidata \
+                 only supports primary-property catalogs"
+            ));
+        }
+
+        // SPARQL: pull the live ext_id → Q map for the property.
+        let client = crate::wdqs::build_client()?;
+        let sparql = format!("SELECT ?q ?v {{ ?q wdt:P{prop} ?v }}");
+        let rows = crate::wdqs::run_tsv_query(&client, &sparql).await?;
+        let mut wd: HashMap<String, isize> = HashMap::with_capacity(rows.len());
+        for row in rows {
+            let Some(q_uri) = row.first() else { continue };
+            let value = row.get(1).map(|s| s.trim().to_string()).unwrap_or_default();
+            if value.is_empty() {
+                continue;
+            }
+            if let Some(q) = crate::wdqs::entity_id_from_uri(q_uri, 'Q') {
+                wd.insert(value, q as isize);
+            }
+        }
+        if wd.is_empty() {
+            return Err(anyhow!(
+                "overwrite_from_wikidata: SPARQL for P{prop} returned no usable rows; \
+                 refusing to proceed"
+            ));
+        }
+
+        // Walk our manual matches; rewrite the disagreements.
+        let manual = self
+            .app
+            .storage()
+            .entry_get_manual_matches_for_catalog(catalog_id)
+            .await?;
+        let mut rewritten = 0_usize;
+        for (entry_id, ext_id, our_q) in manual {
+            let Some(&wd_q) = wd.get(&ext_id) else {
+                continue;
+            };
+            if wd_q == our_q {
+                continue;
+            }
+            let mut entry = match Entry::from_id(entry_id, &self.app).await {
+                Ok(e) => e,
+                Err(e) => {
+                    log::warn!(
+                        "overwrite_from_wikidata: cannot load entry {entry_id}: {e}"
+                    );
+                    continue;
+                }
+            };
+            let q_str = format!("Q{wd_q}");
+            if let Err(e) = entry.set_match(&q_str, USER_AUX_MATCH).await {
+                log::warn!(
+                    "overwrite_from_wikidata: rewrite failed for entry {entry_id}: {e}"
+                );
+                continue;
+            }
+            rewritten += 1;
+        }
+        log::info!(
+            "overwrite_from_wikidata: catalog {catalog_id} rewrote {rewritten} match(es)"
+        );
+        Ok(rewritten)
+    }
+
     /// Walk every Q5 entry whose match was set by the date matcher
     /// (`user=3`) or aux matcher (`user=4`) and verify the matched
     /// Wikidata item is actually `instance of` Q5. Items that aren't
