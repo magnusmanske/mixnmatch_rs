@@ -136,6 +136,19 @@ enum Commands {
         tls: bool,
     },
 
+    /// Reclassify pending `wd_matches` rows (UNKNOWN, DIFFERENT) by
+    /// comparing each entry's confirmed Wikidata item against the
+    /// catalog's property. Equivalent to PHP
+    /// `RecentChangesWatcher::syncWdMatches`.
+    SyncWdMatches {
+        #[arg(short, long, value_name = "FILE")]
+        config: Option<PathBuf>,
+
+        /// Maximum rows to process this run. Defaults to 1000.
+        #[arg(long, default_value_t = crate::wd_match_sync::DEFAULT_BATCH_SIZE)]
+        batch_size: usize,
+    },
+
     /// test
     Test {
         #[arg(short, long, value_name = "FILE")]
@@ -446,6 +459,12 @@ impl ShellCommands {
             }) => {
                 let app = Self::path2app(config)?;
                 Self::run_webserver(app, *port, html_dir, *tls).await?;
+            }
+            Some(Commands::SyncWdMatches { config, batch_size }) => {
+                let app = Self::path2app(config)?;
+                let stats =
+                    crate::wd_match_sync::classify_pending(&app, *batch_size).await?;
+                println!("sync_wd_matches: {stats}");
             }
             Some(Commands::Test { config }) => {
                 let app = Self::path2app(config)?;

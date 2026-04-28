@@ -22,7 +22,7 @@ use crate::{
     mnm_link::MnmLink,
     mysql_misc::MySQLMisc,
     prop_todo::PropTodo,
-    storage::{CatalogEntryListFilter, Download2Filter, OverviewTableRow},
+    storage::{CatalogEntryListFilter, Download2Filter, OverviewTableRow, WdMatchRow},
     task_size::TaskSize,
     taxon_matcher::{RankedNames, TAXON_RANKS, TaxonMatcher, TaxonNameField},
     update_catalog::UpdateInfo,
@@ -6234,6 +6234,71 @@ impl Storage for StorageMySQL {
             tiles.push(tile);
         }
         Ok(tiles)
+    }
+
+    async fn wd_matches_get_batch(
+        &self,
+        status: &str,
+        limit: usize,
+    ) -> Result<Vec<WdMatchRow>> {
+        // Filters mirror the PHP `getEntriesWithWdMatches` + active-catalog
+        // gate: only fully-matched entries (`user>0 AND q>0`) on active
+        // catalogs with a Wikidata property and no qualifier. Anything
+        // outside that set can't be classified or pushed back, so we skip
+        // it at the SQL level rather than at the Rust level.
+        let sql = "SELECT \
+                wd_matches.entry_id, \
+                entry.catalog AS catalog_id, \
+                entry.ext_id, \
+                entry.q AS q_numeric, \
+                catalog.wd_prop \
+            FROM wd_matches \
+            INNER JOIN entry ON entry.id = wd_matches.entry_id \
+            INNER JOIN catalog ON catalog.id = entry.catalog \
+            WHERE wd_matches.status = :status \
+              AND entry.user > 0 AND entry.q > 0 \
+              AND catalog.active = 1 \
+              AND catalog.wd_prop IS NOT NULL \
+              AND catalog.wd_qual IS NULL \
+            LIMIT :limit";
+        let rows: Vec<WdMatchRow> = self
+            .get_conn_ro()
+            .await?
+            .exec_iter(sql, params! { status, limit })
+            .await?
+            .map_and_drop(|row: Row| WdMatchRow {
+                entry_id: row.get("entry_id").unwrap_or(0),
+                catalog_id: row.get("catalog_id").unwrap_or(0),
+                ext_id: row.get::<String, _>("ext_id").unwrap_or_default(),
+                q_numeric: row.get("q_numeric").unwrap_or(0),
+                wd_prop: row.get("wd_prop").unwrap_or(0),
+            })
+            .await?
+            .into_iter()
+            // Defensive: an INNER JOIN combined with the WHERE filter
+            // already excludes nulls, but a partially-malformed row
+            // would still come through with zeroed-out fields. Drop
+            // those — there's nothing useful to do with `entry_id=0`.
+            .filter(|r| r.entry_id > 0 && r.q_numeric > 0 && r.wd_prop > 0)
+            .collect();
+        Ok(rows)
+    }
+
+    async fn wd_matches_set_status(&self, entry_id: usize, status: &str) -> Result<()> {
+        // Targeted update — unlike `entry_set_match_status`, this does
+        // not touch `person_dates.is_matched` or other side-tables.
+        // The classifier only cares about transitioning the status
+        // bucket; running the full cleanup path would also wipe
+        // multi_match rows on every classification, which is wrong.
+        let timestamp = TimeStamp::now();
+        let sql = "UPDATE `wd_matches` \
+            SET `status` = :status, `timestamp` = :timestamp \
+            WHERE `entry_id` = :entry_id";
+        self.get_conn()
+            .await?
+            .exec_drop(sql, params! { entry_id, status, timestamp })
+            .await?;
+        Ok(())
     }
 }
 
