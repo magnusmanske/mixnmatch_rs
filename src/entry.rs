@@ -142,13 +142,69 @@ pub struct Entry {
     pub app: Option<AppState>,
 }
 
+/// Repository — encapsulates the static "load Entry from storage"
+/// methods that previously lived as `Entry::from_id`,
+/// `Entry::from_ext_id`, and `Entry::multiple_from_ids`. New code
+/// should prefer this over the static methods on Entry; the static
+/// methods are kept as thin facades so existing call sites
+/// (~25 files) don't need to change in lockstep.
+///
+/// Why split: `Entry` currently mixes domain model + repository +
+/// Wikidata writer + self-DI'd `AppState`, an Active Record
+/// anti-pattern flagged in the design-pattern audit (#4.4). Lifting
+/// loads into a dedicated `EntryRepo` is the first piece of the
+/// three-way split (model / repo / writer) and the only piece
+/// tractable in one commit.
+///
+/// The repo holds a borrowed `&AppState`, so it's cheap to
+/// construct per call (`EntryRepo(&app).find(id).await`) without
+/// any cloning. Future work can swap the inner type for `&dyn
+/// AppContext` to break the AppState concrete dependency.
+#[derive(Debug)]
+pub struct EntryRepo<'a>(pub &'a AppState);
+
+impl<'a> EntryRepo<'a> {
+    pub fn new(app: &'a AppState) -> Self {
+        Self(app)
+    }
+
+    /// Load an entry by primary key. Sets `entry.app` so the
+    /// entry's mutator methods work without a separate `set_app`.
+    pub async fn find(&self, entry_id: DbId) -> Result<Entry> {
+        let mut ret = self.0.storage().entry_from_id(entry_id).await?;
+        ret.set_app(self.0);
+        Ok(ret)
+    }
+
+    /// Load multiple entries by primary key in one round-trip.
+    /// Missing ids are silently absent from the returned map.
+    pub async fn find_many(&self, entry_ids: &[DbId]) -> Result<HashMap<DbId, Entry>> {
+        let mut ret = self.0.storage().multiple_from_ids(entry_ids).await?;
+        ret.iter_mut().for_each(|(_id, entry)| {
+            entry.set_app(self.0);
+        });
+        Ok(ret)
+    }
+
+    /// Load an entry by `(catalog_id, ext_id)`. The pair is unique
+    /// per the storage contract.
+    pub async fn find_by_ext_id(&self, catalog_id: DbId, ext_id: &str) -> Result<Entry> {
+        let mut ret = self.0.storage().entry_from_ext_id(catalog_id, ext_id).await?;
+        ret.set_app(self.0);
+        Ok(ret)
+    }
+}
+
 impl Entry {
     /// Returns an Entry object for a given entry ID.
+    ///
+    /// **Prefer [`EntryRepo::find`]** for new code; this static
+    /// facade exists so the existing call sites in `automatch/`,
+    /// `maintenance/`, `auxiliary_matcher/`, etc. don't all need to
+    /// change in lockstep with the repo extraction.
     //TODO test
     pub async fn from_id(entry_id: DbId, app: &AppState) -> Result<Self> {
-        let mut ret = app.storage().entry_from_id(entry_id).await?;
-        ret.set_app(app);
-        Ok(ret)
+        EntryRepo::new(app).find(entry_id).await
     }
 
     pub fn new_from_catalog_and_ext_id(catalog_id: DbId, ext_id: &str) -> Self {
@@ -161,22 +217,21 @@ impl Entry {
     }
 
     /// Returns an Entry object for a given external ID in a catalog.
+    ///
+    /// **Prefer [`EntryRepo::find_by_ext_id`]** for new code.
     //TODO test
     pub async fn from_ext_id(catalog_id: DbId, ext_id: &str, app: &AppState) -> Result<Entry> {
-        let mut ret = app.storage().entry_from_ext_id(catalog_id, ext_id).await?;
-        ret.set_app(app);
-        Ok(ret)
+        EntryRepo::new(app)
+            .find_by_ext_id(catalog_id, ext_id)
+            .await
     }
 
+    /// **Prefer [`EntryRepo::find_many`]** for new code.
     pub async fn multiple_from_ids(
         entry_ids: &[DbId],
         app: &AppState,
     ) -> Result<HashMap<DbId, Self>> {
-        let mut ret = app.storage().multiple_from_ids(entry_ids).await?;
-        ret.iter_mut().for_each(|(_id, entry)| {
-            entry.set_app(app);
-        });
-        Ok(ret)
+        EntryRepo::new(app).find_many(entry_ids).await
     }
 
     /// Inserts the current entry into the database. id must be None.
@@ -925,6 +980,40 @@ mod tests {
 
     const _TEST_CATALOG_ID: DbId = 5526;
     const TEST_ENTRY_ID: DbId = 143962196;
+
+    /// Verifies the new EntryRepo API loads the same row that
+    /// `Entry::from_id` does — the static method should be a thin
+    /// facade over the repo, so any divergence is a regression.
+    #[tokio::test]
+    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
+    async fn entry_repo_find_matches_legacy_static() {
+        let app = get_test_app();
+        let via_repo = EntryRepo::new(&app).find(TEST_ENTRY_ID).await.unwrap();
+        let via_static = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+        assert_eq!(via_repo.id, via_static.id);
+        assert_eq!(via_repo.catalog, via_static.catalog);
+        assert_eq!(via_repo.ext_id, via_static.ext_id);
+        assert_eq!(via_repo.ext_name, via_static.ext_name);
+        assert!(via_repo.app.is_some(), "repo should set app on returned entry");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
+    async fn entry_repo_find_many_returns_map_keyed_by_id() {
+        let app = get_test_app();
+        let entries = EntryRepo::new(&app)
+            .find_many(&[TEST_ENTRY_ID])
+            .await
+            .unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(entries.contains_key(&TEST_ENTRY_ID));
+        assert!(
+            entries
+                .values()
+                .all(|e| e.app.is_some()),
+            "repo should set app on every returned entry"
+        );
+    }
 
     #[tokio::test]
     #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
