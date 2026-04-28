@@ -389,6 +389,62 @@ pub trait AutoscrapeQueries: std::fmt::Debug + Send + Sync {
     async fn autoscrape_finish(&self, autoscrape_id: usize, last_run_urls: usize) -> Result<()>;
 }
 
+/// ISP-segregated sub-trait covering the `jobs` table:
+/// status transitions, JSON state, queueing new jobs, and the
+/// next-job picker. Used by `job.rs` and the cron loop.
+#[async_trait]
+pub trait JobQueries: std::fmt::Debug + Send + Sync {
+    async fn jobs_get_tasks(&self) -> Result<HashMap<String, TaskSize>>;
+    async fn reset_running_jobs(&self) -> Result<()>;
+    async fn reset_failed_jobs(&self) -> Result<()>;
+    /// Send KILL QUERY to every connection under the current DB user whose
+    /// current query has been running for at least `threshold_secs`. Returns
+    /// the killed connection IDs. Used on bot startup to drop orphaned
+    /// long-runners left behind by a prior instance that didn't exit cleanly,
+    /// which would otherwise race with the new instance on the same jobs.
+    async fn kill_long_running_queries(&self, threshold_secs: u64) -> Result<Vec<u64>>;
+    async fn jobs_queue_simple_job(
+        &self,
+        catalog_id: usize,
+        action: &str,
+        depends_on: Option<usize>,
+        status: &str,
+        timestamp: String,
+    ) -> Result<usize>;
+    async fn jobs_reset_json(&self, job_id: usize, timestamp: String) -> Result<()>;
+    async fn jobs_set_json(
+        &self,
+        job_id: usize,
+        json_string: String,
+        timestamp: &str,
+    ) -> Result<()>;
+    async fn jobs_row_from_id(&self, job_id: usize) -> Result<JobRow>;
+    async fn jobs_set_status(
+        &self,
+        status: &JobStatus,
+        job_id: usize,
+        timestamp: String,
+    ) -> Result<()>;
+    async fn jobs_set_note(&self, note: Option<String>, job_id: usize) -> Result<Option<String>>;
+    async fn jobs_update_next_ts(&self, job_id: usize, next_ts: String) -> Result<()>;
+    async fn jobs_get_next_job(
+        &self,
+        status: JobStatus,
+        depends_on: Option<JobStatus>,
+        no_actions: &[String],
+        next_ts: Option<String>,
+    ) -> Option<usize>;
+    /// Pick the next job whose action is in the given positive whitelist.
+    /// Used by the tiny-job fast path — tiny jobs are cheap and should
+    /// never be starved by the big-job skip list applied to the generic
+    /// `jobs_get_next_job`. Returns None if `only_actions` is empty.
+    async fn jobs_get_next_job_by_actions(
+        &self,
+        status: JobStatus,
+        only_actions: &[String],
+    ) -> Option<usize>;
+}
+
 /// ISP-segregated sub-trait covering meta-entry reads/deletes.
 /// Used by the entry-detail API endpoints (`/api.php?query=get_entry`)
 /// and the entry-deletion / kv-entry write paths.
@@ -472,6 +528,7 @@ pub trait Storage:
     + CerseiQueries
     + MetaEntryQueries
     + AuxiliaryMatcherQueries
+    + JobQueries
     + std::fmt::Debug
     + Send
     + Sync
@@ -681,57 +738,8 @@ pub trait Storage:
         target_entry_id: usize,
     ) -> Result<()>;
 
-    // Jobs
-
-    async fn jobs_get_tasks(&self) -> Result<HashMap<String, TaskSize>>;
-    async fn reset_running_jobs(&self) -> Result<()>;
-    async fn reset_failed_jobs(&self) -> Result<()>;
-    /// Send KILL QUERY to every connection under the current DB user whose
-    /// current query has been running for at least `threshold_secs`. Returns
-    /// the killed connection IDs. Used on bot startup to drop orphaned
-    /// long-runners left behind by a prior instance that didn't exit cleanly,
-    /// which would otherwise race with the new instance on the same jobs.
-    async fn kill_long_running_queries(&self, threshold_secs: u64) -> Result<Vec<u64>>;
-    async fn jobs_queue_simple_job(
-        &self,
-        catalog_id: usize,
-        action: &str,
-        depends_on: Option<usize>,
-        status: &str,
-        timestamp: String,
-    ) -> Result<usize>;
-    async fn jobs_reset_json(&self, job_id: usize, timestamp: String) -> Result<()>;
-    async fn jobs_set_json(
-        &self,
-        job_id: usize,
-        json_string: String,
-        timestamp: &str,
-    ) -> Result<()>;
-    async fn jobs_row_from_id(&self, job_id: usize) -> Result<JobRow>;
-    async fn jobs_set_status(
-        &self,
-        status: &JobStatus,
-        job_id: usize,
-        timestamp: String,
-    ) -> Result<()>;
-    async fn jobs_set_note(&self, note: Option<String>, job_id: usize) -> Result<Option<String>>;
-    async fn jobs_update_next_ts(&self, job_id: usize, next_ts: String) -> Result<()>;
-    async fn jobs_get_next_job(
-        &self,
-        status: JobStatus,
-        depends_on: Option<JobStatus>,
-        no_actions: &[String],
-        next_ts: Option<String>,
-    ) -> Option<usize>;
-    /// Pick the next job whose action is in the given positive whitelist.
-    /// Used by the tiny-job fast path — tiny jobs are cheap and should
-    /// never be starved by the big-job skip list applied to the generic
-    /// `jobs_get_next_job`. Returns None if `only_actions` is empty.
-    async fn jobs_get_next_job_by_actions(
-        &self,
-        status: JobStatus,
-        only_actions: &[String],
-    ) -> Option<usize>;
+    // Job-table methods now live on the `JobQueries` sub-trait above;
+    // `Storage` inherits them via supertrait bound.
 
     // Automatch
 
