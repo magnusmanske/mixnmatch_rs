@@ -1022,6 +1022,17 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
         &self,
         prop: usize,
     ) -> Result<Vec<(usize, String)>>;
+    /// Group `auxiliary` rows by `(aux_p, aux_name)` over the supplied
+    /// property allowlist, keeping only groups with multiple entries
+    /// where at least one entry isn't yet matched. Used by
+    /// `crossmatch_via_aux` to find entries that share a strong
+    /// authority identifier (ISNI, GND, …) but disagree on whether
+    /// they're matched to a Wikidata item. Returns one tuple per
+    /// candidate group: `(aux_p, aux_name, entry_ids)`.
+    async fn auxiliary_get_crossmatch_groups(
+        &self,
+        props: &[usize],
+    ) -> Result<Vec<(usize, String, Vec<usize>)>>;
     /// Delete one `auxiliary` row by primary key.
     async fn auxiliary_delete_row(&self, id: usize) -> Result<()>;
 }

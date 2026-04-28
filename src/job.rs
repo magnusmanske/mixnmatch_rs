@@ -478,6 +478,12 @@ impl Job {
                     .fix_gnd_undifferentiated_persons()
                     .await
             }
+            "maintenance_crossmatch_via_aux" => {
+                Maintenance::new(&self.app)
+                    .crossmatch_via_aux()
+                    .await
+                    .map(|n| log::info!("crossmatch_via_aux: {n} new match(es)"))
+            }
             "maintenance_taxa" => Maintenance::new(&self.app).taxa().await,
             "maintenance_artwork" => Maintenance::new(&self.app).artwork().await,
             "maintenance_common_aux" => Maintenance::new(&self.app).common_aux().await,

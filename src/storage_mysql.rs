@@ -6598,6 +6598,53 @@ impl Storage for StorageMySQL {
         Ok(rows)
     }
 
+    async fn auxiliary_get_crossmatch_groups(
+        &self,
+        props: &[usize],
+    ) -> Result<Vec<(usize, String, Vec<usize>)>> {
+        if props.is_empty() {
+            return Ok(vec![]);
+        }
+        // `cnt > entry_is_matched` means at least one row in the group
+        // is *not* yet manually matched — i.e. there's something to
+        // potentially propagate the match to. The PHP version also
+        // accepts `entry_is_matched=0` cases (no manual match
+        // anywhere in the group); the maintenance pass filters those
+        // out at the Rust level after loading the entries because
+        // it needs the per-entry user/q values anyway.
+        let props_csv: String = props.iter().join(",");
+        let sql = format!(
+            "SELECT `aux_p`, `aux_name`, group_concat(`entry_id`) AS `entry_ids` \
+             FROM `auxiliary` \
+             WHERE `aux_p` IN ({props_csv}) \
+             GROUP BY `aux_p`, `aux_name` \
+             HAVING count(`entry_id`) > 1 \
+                AND count(`entry_id`) > sum(`entry_is_matched`)"
+        );
+        let rows = self
+            .get_conn_ro()
+            .await?
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(|row: Row| {
+                let prop: usize = row.get("aux_p").unwrap_or(0);
+                let name: String = row.get::<String, _>("aux_name").unwrap_or_default();
+                let entry_ids_csv: String = row
+                    .get::<String, _>("entry_ids")
+                    .unwrap_or_default();
+                let entry_ids: Vec<usize> = entry_ids_csv
+                    .split(',')
+                    .filter_map(|s| s.trim().parse().ok())
+                    .collect();
+                (prop, name, entry_ids)
+            })
+            .await?;
+        Ok(rows
+            .into_iter()
+            .filter(|(p, n, ids)| *p > 0 && !n.is_empty() && !ids.is_empty())
+            .collect())
+    }
+
     async fn auxiliary_select_for_prop(
         &self,
         prop: usize,

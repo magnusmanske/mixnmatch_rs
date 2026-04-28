@@ -645,6 +645,128 @@ impl Maintenance {
         Ok(())
     }
 
+    /// Propagate a confirmed Wikidata match across entries that
+    /// share a strong authority identifier — ISNI (P214) or GND
+    /// (P227). When two or more catalog entries hold the same value
+    /// for one of those properties and exactly one of them has a
+    /// human-confirmed match, the others are auto-matched to the
+    /// same Q with attribution `USER_AUX_MATCH`. After the pass,
+    /// every catalog that received a new match gets a `microsync`
+    /// job queued so the cross-walk between MnM and WD reflects
+    /// the new state.
+    ///
+    /// Mirrors PHP `Maintenance::crossmatchViaAux` but builds the
+    /// candidate group set in one storage call rather than walking
+    /// per-row, and skips the optional `entry_is_matched=1`
+    /// pre-flight UPDATE — the storage HAVING clause already does
+    /// the right comparison without needing the column to be fresh.
+    ///
+    /// Returns total auto-matches set; useful both for cron logging
+    /// and for callers that want to know whether to run a follow-up
+    /// pass straight away.
+    pub async fn crossmatch_via_aux(&self) -> Result<usize> {
+        // Authority properties strong enough to imply same-person.
+        // Matches PHP's hardcoded list — keeping them in lock-step
+        // means cross-tool data quality stays consistent.
+        const AUX_PROPS: &[usize] = &[214, 227];
+
+        let groups = self
+            .app
+            .storage()
+            .auxiliary_get_crossmatch_groups(AUX_PROPS)
+            .await?;
+        if groups.is_empty() {
+            log::info!("crossmatch_via_aux: no candidate groups");
+            return Ok(0);
+        }
+
+        // Cache active catalogs once — looking each catalog up
+        // per-entry would dominate the runtime when groups are large
+        // (P214/P227 alone routinely have tens of thousands of rows).
+        let active_catalogs: HashSet<usize> = self
+            .app
+            .storage()
+            .api_get_active_catalog_ids()
+            .await?
+            .into_iter()
+            .collect();
+
+        let mut total_matched = 0_usize;
+        let mut catalogs_to_microsync: HashSet<usize> = HashSet::new();
+        for (prop, _aux_name, entry_ids) in groups {
+            let entries = match Entry::multiple_from_ids(&entry_ids, &self.app).await {
+                Ok(map) => map,
+                Err(e) => {
+                    log::warn!(
+                        "crossmatch_via_aux: cannot load entries for P{prop} group: {e}"
+                    );
+                    continue;
+                }
+            };
+
+            // Bucket the loaded entries by match state. Inactive
+            // catalogs are dropped here rather than at the SQL level —
+            // mirrors PHP's `JOIN catalog ... WHERE catalog.active=1`.
+            let mut manual_qs: HashSet<isize> = HashSet::new();
+            let mut unmatched_entries: Vec<(usize, usize)> = Vec::new(); // (entry_id, catalog_id)
+            for (_id, entry) in entries {
+                if !active_catalogs.contains(&entry.catalog) {
+                    continue;
+                }
+                let user = entry.user.unwrap_or(0);
+                let q = entry.q.unwrap_or(0);
+                if user > 0 && q > 0 {
+                    manual_qs.insert(q);
+                } else if let Some(entry_id) = entry.id {
+                    unmatched_entries.push((entry_id, entry.catalog));
+                }
+            }
+
+            // Need exactly one human-confirmed Q to know what to
+            // propagate. Zero → nothing to share. More than one →
+            // ambiguous; PHP logs and skips, we do the same.
+            if manual_qs.len() != 1 || unmatched_entries.is_empty() {
+                continue;
+            }
+            let q = *manual_qs.iter().next().expect("len == 1");
+            let q_str = format!("Q{q}");
+
+            for (entry_id, catalog_id) in unmatched_entries {
+                let mut entry = match Entry::from_id(entry_id, &self.app).await {
+                    Ok(e) => e,
+                    Err(e) => {
+                        log::warn!(
+                            "crossmatch_via_aux: re-load failed for entry {entry_id}: {e}"
+                        );
+                        continue;
+                    }
+                };
+                if entry.set_match(&q_str, USER_AUX_MATCH).await.is_ok() {
+                    total_matched += 1;
+                    catalogs_to_microsync.insert(catalog_id);
+                }
+            }
+        }
+
+        // Queue follow-up microsync per touched catalog so the
+        // wd_matches / external state reflects the new matches in
+        // the next sweep. Failure to queue is logged but doesn't
+        // unwind the matches — the wd_matches inline insert in
+        // entry_set_match_cleanup already covers the most important
+        // bookkeeping.
+        for catalog_id in catalogs_to_microsync {
+            if let Err(e) = Job::queue_simple_job(&self.app, catalog_id, "microsync", None).await
+            {
+                log::warn!(
+                    "crossmatch_via_aux: failed to queue microsync for catalog {catalog_id}: {e}"
+                );
+            }
+        }
+
+        log::info!("crossmatch_via_aux: matched {total_matched} entry(ies)");
+        Ok(total_matched)
+    }
+
     /// Rewrite every `entry.ext_url` in the catalog by substituting
     /// `$1` in `url_pattern` with the row's `ext_id`. Useful when a
     /// catalog's source moves to a new URL scheme and the existing
