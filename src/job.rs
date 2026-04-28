@@ -608,6 +608,11 @@ impl Job {
                 rf.run().await.map(|_| ())
             }
 
+            "update_iso" => {
+                // catalog_id is 0 (global job, not per-catalog).
+                Maintenance::new(&self.app).update_iso_codes().await
+            }
+
             other => Err(anyhow!("Job::run_this_job: Unknown action '{}'", other)),
         }
     }
