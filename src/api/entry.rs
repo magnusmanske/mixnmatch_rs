@@ -49,9 +49,7 @@ pub async fn query_get_entry(app: &AppState, params: &Params) -> Result<Response
             .into_values()
             .collect()
     };
-    let mut data = common::entries_to_json_data(&entries, app).await?;
-    common::add_extended_entry_data(app, &mut data).await?;
-    Ok(ok(data))
+    Ok(ok(common::entries_with_extended_data(&entries, app).await?))
 }
 
 pub async fn query_get_entry_by_extid(
@@ -61,9 +59,7 @@ pub async fn query_get_entry_by_extid(
     let catalog = common::get_catalog(params)?;
     let ext_id = common::get_param(params, "extid", "");
     let entry = crate::entry::Entry::from_ext_id(catalog, &ext_id, app).await?;
-    let mut data = common::entries_to_json_data(&[entry], app).await?;
-    common::add_extended_entry_data(app, &mut data).await?;
-    Ok(ok(data))
+    Ok(ok(common::entries_with_extended_data(&[entry], app).await?))
 }
 
 pub async fn query_search(app: &AppState, params: &Params) -> Result<Response, ApiError> {
@@ -180,9 +176,7 @@ pub async fn query_entries_query(app: &AppState, params: &Params) -> Result<Resp
         .with_limit(50)
         .with_offset(offset);
     let entries = app.storage().entry_query(&eq).await?;
-    let mut data = common::entries_to_json_data(&entries, app).await?;
-    common::add_extended_entry_data(app, &mut data).await?;
-    Ok(ok(data))
+    Ok(ok(common::entries_with_extended_data(&entries, app).await?))
 }
 
 pub async fn query_entries_via_property_value(
@@ -206,9 +200,7 @@ pub async fn query_entries_via_property_value(
             .into_values()
             .collect()
     };
-    let mut data = common::entries_to_json_data(&entries, app).await?;
-    common::add_extended_entry_data(app, &mut data).await?;
-    Ok(ok(data))
+    Ok(ok(common::entries_with_extended_data(&entries, app).await?))
 }
 
 pub async fn query_get_entries_by_q_or_value(

@@ -6,7 +6,6 @@
 use crate::api::code_fragments;
 use crate::api::common::{self, ApiError, Params, json_resp};
 use crate::app_state::AppState;
-use crate::auth;
 use crate::code_fragment::{self, LuaEntry, entry_to_lua_entry};
 use axum::response::Response;
 use serde_json::{Value, json};
@@ -125,9 +124,7 @@ pub async fn query_test_code_fragment(
     session: &Session,
     params: &Params,
 ) -> Result<Response, ApiError> {
-    let uid = auth::guard::require_user_from_params(app, session, params)
-        .await?
-        .mnm_user_id;
+    let uid = common::require_user_id(app, session, params).await?;
     if !code_fragments::user_is_allowed(uid) {
         return Err(ApiError("Not allowed, ask Magnus".into()));
     }

@@ -1,10 +1,12 @@
 use crate::app_state::AppState;
+use crate::auth;
 use crate::entry::Entry;
 use axum::Json;
 use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::collections::HashSet;
+use tower_sessions::Session;
 
 /// Query parameter map used by API handlers.
 pub type Params = HashMap<String, String>;
@@ -34,6 +36,40 @@ pub fn get_catalog(params: &Params) -> Result<usize, ApiError> {
         return Err(ApiError("Invalid catalog ID".into()));
     }
     Ok(id as usize)
+}
+
+/// Parse a non-negative integer parameter; return an error if the value is
+/// missing or negative.  Use for IDs and other mandatory unsigned fields.
+pub fn get_param_usize(params: &Params, key: &str) -> Result<usize, ApiError> {
+    let v = get_param_int(params, key, -1);
+    if v < 0 {
+        return Err(ApiError(format!("Invalid or missing parameter: {key}")));
+    }
+    Ok(v as usize)
+}
+
+/// Parse a `limit` parameter clamped to `[1, max]`, defaulting to `default`.
+pub fn get_limit(params: &Params, default: usize, max: usize) -> usize {
+    let v = get_param_int(params, "limit", default as i64);
+    v.max(1).min(max as i64) as usize
+}
+
+/// Parse an `offset` parameter, flooring at 0.
+pub fn get_offset(params: &Params) -> usize {
+    get_param_int(params, "offset", 0).max(0) as usize
+}
+
+/// Require a logged-in user and return their MnM user id.  Convenience
+/// wrapper around `auth::guard::require_user_from_params` for handlers that
+/// only need the numeric id, not the full `AuthedUser` struct.
+pub async fn require_user_id(
+    app: &AppState,
+    session: &Session,
+    params: &Params,
+) -> Result<usize, ApiError> {
+    Ok(auth::guard::require_user_from_params(app, session, params)
+        .await?
+        .mnm_user_id)
 }
 
 // ---------------------------------------------------------------------------
@@ -117,6 +153,19 @@ pub async fn entries_to_json_data(entries: &[Entry], app: &AppState) -> Result<V
         "entries": Value::Object(entries_map),
         "users": users,
     }))
+}
+
+/// Convert entries to JSON and immediately enrich with extended data.
+/// Returns the combined `{"entries": …, "users": …}` value ready for `ok()`.
+/// Use this instead of calling `entries_to_json_data` + `add_extended_entry_data`
+/// separately when no further mutations to `data` are needed before the response.
+pub async fn entries_with_extended_data(
+    entries: &[Entry],
+    app: &AppState,
+) -> Result<Value, ApiError> {
+    let mut data = entries_to_json_data(entries, app).await?;
+    add_extended_entry_data(app, &mut data).await?;
+    Ok(data)
 }
 
 // ---------------------------------------------------------------------------

@@ -3,7 +3,6 @@
 
 use crate::api::common::{self, ApiError, Params, json_resp, ok};
 use crate::app_state::AppState;
-use crate::auth;
 use axum::response::Response;
 use tower_sessions::Session;
 
@@ -26,14 +25,10 @@ pub async fn query_create(app: &AppState, params: &Params) -> Result<Response, A
 }
 
 pub async fn query_user_edits(app: &AppState, params: &Params) -> Result<Response, ApiError> {
-    let user_id = common::get_param_int(params, "user_id", -1);
-    if user_id < 0 {
-        return Err(ApiError("Invalid user ID".into()));
-    }
-    let user_id = user_id as usize;
+    let user_id = common::get_param_usize(params, "user_id")?;
     let catalog = common::get_param_int(params, "catalog", 0) as usize;
-    let limit = common::get_param_int(params, "limit", 50).clamp(1, 200) as usize;
-    let offset = common::get_param_int(params, "offset", 0).max(0) as usize;
+    let limit = common::get_limit(params, 50, 200);
+    let offset = common::get_offset(params);
     let (events, users_map, total, user_info) = app
         .storage()
         .api_user_edits(user_id, catalog, limit, offset)
@@ -54,8 +49,8 @@ pub async fn query_get_statement_text_groups(
     params: &Params,
 ) -> Result<Response, ApiError> {
     let catalog = common::get_catalog(params)?;
-    let limit = common::get_param_int(params, "limit", 50).max(1) as usize;
-    let offset = common::get_param_int(params, "offset", 0).max(0) as usize;
+    let limit = common::get_limit(params, 50, usize::MAX);
+    let offset = common::get_offset(params);
     let property = common::get_param_int(params, "property", 0).max(0) as usize;
     let (properties, groups) = app
         .storage()
@@ -76,9 +71,7 @@ pub async fn query_set_statement_text_q(
     let text = common::get_param(params, "text", "");
     let property = common::get_param_int(params, "property", 0);
     let q = common::get_param_int(params, "q", 0);
-    let user_id = auth::guard::require_user_from_params(app, session, params)
-        .await?
-        .mnm_user_id;
+    let user_id = common::require_user_id(app, session, params).await?;
     if text.is_empty() {
         return Err(ApiError("Missing text parameter".into()));
     }

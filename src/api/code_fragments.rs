@@ -3,7 +3,6 @@
 
 use crate::api::common::{self, ApiError, Params, ok};
 use crate::app_state::AppState;
-use crate::auth;
 use axum::response::Response;
 use serde_json::{Value, json};
 use tower_sessions::Session;
@@ -58,9 +57,7 @@ pub async fn query_save_code_fragment(
     session: &Session,
     params: &Params,
 ) -> Result<Response, ApiError> {
-    let uid = auth::guard::require_user_from_params(app, session, params)
-        .await?
-        .mnm_user_id;
+    let uid = common::require_user_id(app, session, params).await?;
     if !user_is_allowed(uid) {
         return Err(ApiError("Not allowed, ask Magnus".into()));
     }

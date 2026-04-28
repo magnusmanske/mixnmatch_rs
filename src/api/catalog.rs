@@ -95,8 +95,7 @@ pub async fn query_catalog(app: &AppState, params: &Params) -> Result<Response, 
     };
 
     let (entries, total_filtered) = app.storage().api_get_catalog_entries(&filter).await?;
-    let mut data = common::entries_to_json_data(&entries, app).await?;
-    common::add_extended_entry_data(app, &mut data).await?;
+    let data = common::entries_with_extended_data(&entries, app).await?;
     // PHP places `total_filtered` alongside `status`/`data`, not inside `data`,
     // so return a manually-assembled envelope here.
     Ok(json_resp(serde_json::json!({
@@ -362,9 +361,7 @@ pub async fn query_set_top_group(
     session: &Session,
     params: &Params,
 ) -> Result<Response, ApiError> {
-    let uid = auth::guard::require_user_from_params(app, session, params)
-        .await?
-        .mnm_user_id;
+    let uid = common::require_user_id(app, session, params).await?;
     let name = common::get_param(params, "group_name", "");
     let catalogs = common::get_param(params, "catalogs", "");
     let based_on = common::get_param_int(params, "group_id", 0) as usize;
