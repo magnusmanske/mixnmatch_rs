@@ -17,7 +17,7 @@ export const SearchBox = {
       // search input on landing.
       var q = (me.query || '').trim();
       if (!q) {
-        router.push('/search');
+        this.$router.push('/search');
         return;
       }
       var url = '/search/' + encodeURIComponent(q);
@@ -27,7 +27,7 @@ export const SearchBox = {
       if (typeof me.include != 'undefined' && me.include.length > 0) {
         url += '?include=' + me.include.join(',');
       }
-      router.push(url);
+      this.$router.push(url);
     }
   },
   template: `<form class="d-flex my-2 my-lg-0 search_box_form" @submit="submit();return false">
