@@ -580,6 +580,19 @@ td.catalog_row_left {
 
 [data-bs-theme="dark"] .text-info { color: #2ecfad; }
 
+/* btn-light doesn't adapt to Bootstrap's dark mode; fix it inside the navbar */
+[data-bs-theme="dark"] .navbar .btn-light {
+	background-color: var(--bs-body-bg);
+	border-color: transparent;
+	color: var(--bs-body-color);
+}
+[data-bs-theme="dark"] .navbar .btn-light:hover,
+[data-bs-theme="dark"] .navbar .btn-light:focus {
+	background-color: var(--mnm-bg-alt);
+	border-color: var(--mnm-border);
+	color: var(--bs-body-color);
+}
+
 [data-bs-theme="dark"] .fist-pag-btn {
 	background: var(--bs-body-bg);
 	color: var(--mnm-blue);
