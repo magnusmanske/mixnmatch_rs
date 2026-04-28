@@ -23,15 +23,15 @@ impl PropTodo {
 
     pub fn from_row(r: mysql_async::Row) -> Option<Self> {
         Some(Self {
-            id: r.get(0)?,
-            prop_num: r.get(1)?,
-            name: r.get(2)?,
-            default_type: r.get(3)?,
-            status: r.get(4)?,
-            note: r.get(5)?,
-            user_id: r.get(6)?,
-            items_using: r.get(7)?,
-            number_of_records: r.get(8)?,
+            id: r.get("id")?,
+            prop_num: r.get("property_num")?,
+            name: r.get("property_name")?,
+            default_type: r.get("default_type")?,
+            status: r.get("status")?,
+            note: r.get("note")?,
+            user_id: r.get("user_id")?,
+            items_using: r.get("items_using")?,
+            number_of_records: r.get("number_of_records")?,
         })
     }
 }

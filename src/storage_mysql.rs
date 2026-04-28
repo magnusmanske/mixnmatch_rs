@@ -115,13 +115,13 @@ impl StorageMySQL {
 
     fn location_row_from_row(row: &Row) -> Option<LocationRow> {
         Some(LocationRow {
-            lat: row.get(0)?,
-            lon: row.get(1)?,
-            entry_id: row.get(2)?,
-            catalog_id: row.get(3)?,
-            ext_name: row.get(4)?,
-            entry_type: row.get(5)?,
-            q: row.get(6)?,
+            lat: row.get("lat")?,
+            lon: row.get("lon")?,
+            entry_id: row.get("id")?,
+            catalog_id: row.get("catalog")?,
+            ext_name: row.get("ext_name")?,
+            entry_type: row.get("type")?,
+            q: row.get("q")?,
         })
     }
 
