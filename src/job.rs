@@ -484,6 +484,11 @@ impl Job {
                     .await
                     .map(|n| log::info!("crossmatch_via_aux: {n} new match(es)"))
             }
+            "maintenance_apply_description_aux" => {
+                Maintenance::new(&self.app)
+                    .apply_description_aux(catalog_id)
+                    .await
+            }
             "maintenance_taxa" => Maintenance::new(&self.app).taxa().await,
             "maintenance_artwork" => Maintenance::new(&self.app).artwork().await,
             "maintenance_common_aux" => Maintenance::new(&self.app).common_aux().await,

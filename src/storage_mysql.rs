@@ -23,8 +23,8 @@ use crate::{
     mysql_misc::MySQLMisc,
     prop_todo::PropTodo,
     storage::{
-        CatalogEntryListFilter, Download2Filter, GroupedEntry, MergeableMatch, OverviewTableRow,
-        PropertyCacheRow, WdMatchRow,
+        CatalogEntryListFilter, DescriptionAuxRule, Download2Filter, GroupedEntry,
+        MergeableMatch, OverviewTableRow, PropertyCacheRow, WdMatchRow,
     },
     task_size::TaskSize,
     taxon_matcher::{RankedNames, TAXON_RANKS, TaxonMatcher, TaxonNameField},
@@ -6596,6 +6596,76 @@ impl Storage for StorageMySQL {
             })
             .await?;
         Ok(rows)
+    }
+
+    async fn description_aux_get_all(&self) -> Result<Vec<DescriptionAuxRule>> {
+        let sql = "SELECT `property`, `value`, `rx`, `type_constraint` \
+            FROM `description_aux`";
+        let rows = self
+            .get_conn_ro()
+            .await?
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(|row: Row| DescriptionAuxRule {
+                property: row.get("property").unwrap_or(0),
+                value: row.get::<String, _>("value").unwrap_or_default(),
+                rx: row.get::<String, _>("rx").unwrap_or_default(),
+                type_constraint: row
+                    .get::<String, _>("type_constraint")
+                    .unwrap_or_default(),
+            })
+            .await?;
+        Ok(rows
+            .into_iter()
+            .filter(|r| r.property > 0 && !r.rx.is_empty())
+            .collect())
+    }
+
+    async fn apply_description_aux_to_catalog(
+        &self,
+        catalog_id: usize,
+        rule: &DescriptionAuxRule,
+    ) -> Result<usize> {
+        // Build the type filter as a literal SQL fragment because
+        // the column we're filtering on (`entry.type`) may be
+        // anything the catalog imported. Empty string means "no
+        // filter", matching the PHP behaviour. Defensive escape on
+        // the type string rather than parameterising — the rest of
+        // the SQL is already a format!-built string.
+        let mut type_filter = String::new();
+        if !rule.type_constraint.is_empty() {
+            type_filter = format!(
+                " AND `type` = '{}'",
+                escape_sql_literal(&rule.type_constraint)
+            );
+        }
+        // RLIKE pattern is parameterised; the property + value land
+        // in the SELECT list and need to come through as bound
+        // params too so a malformed `value` can't break out into the
+        // surrounding SQL.
+        let property = rule.property;
+        let value = rule.value.trim().to_string();
+        let rx = rule.rx.to_lowercase();
+        let sql = format!(
+            "INSERT IGNORE INTO `auxiliary` (`entry_id`, `aux_p`, `aux_name`) \
+             SELECT `id`, :property, :value \
+             FROM `entry` \
+             WHERE `catalog` = :catalog_id \
+               AND lower(`ext_desc`) RLIKE :rx \
+               AND NOT EXISTS ( \
+                 SELECT 1 FROM `auxiliary` \
+                 WHERE `entry_id` = `entry`.`id` \
+                   AND `aux_p` = :property \
+                   AND `aux_name` = :value \
+               ){type_filter}"
+        );
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop(
+            sql,
+            params! { catalog_id, property, value, rx },
+        )
+        .await?;
+        Ok(conn.affected_rows() as usize)
     }
 
     async fn auxiliary_get_crossmatch_groups(
