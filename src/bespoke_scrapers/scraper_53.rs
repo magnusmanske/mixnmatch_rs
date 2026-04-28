@@ -17,17 +17,8 @@ pub struct BespokeScraper53 {
 
 #[async_trait]
 impl BespokeScraper for BespokeScraper53 {
-    fn new(app: &AppState) -> Self {
-        Self { app: app.clone() }
-    }
 
-    fn catalog_id(&self) -> usize {
-        53
-    }
-
-    fn app(&self) -> &AppState {
-        &self.app
-    }
+    scraper_boilerplate!(53);
 
     async fn run(&self) -> Result<()> {
         let base_url =
@@ -56,10 +47,7 @@ impl BespokeScraper for BespokeScraper53 {
             };
             let entries = Self::parse_page(self.catalog_id(), &html);
             entry_cache.extend(entries);
-            if entry_cache.len() >= 100 {
-                self.process_cache(&mut entry_cache).await?;
-                entry_cache.clear();
-            }
+            self.maybe_flush_cache(&mut entry_cache).await?;
             offset += 100;
         }
         self.process_cache(&mut entry_cache).await?;

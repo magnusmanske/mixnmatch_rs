@@ -22,17 +22,8 @@ pub struct BespokeScraper2670 {
 
 #[async_trait]
 impl BespokeScraper for BespokeScraper2670 {
-    fn new(app: &AppState) -> Self {
-        Self { app: app.clone() }
-    }
 
-    fn catalog_id(&self) -> usize {
-        2670
-    }
-
-    fn app(&self) -> &AppState {
-        &self.app
-    }
+    scraper_boilerplate!(2670);
 
     async fn run(&self) -> Result<()> {
         let url = "http://www.cyprusgazetteer.org/map/?&mime_type=application/json&selected_facets=*";
@@ -44,10 +35,7 @@ impl BespokeScraper for BespokeScraper2670 {
         let mut entry_cache = vec![];
         for ee in entries {
             entry_cache.push(ee);
-            if entry_cache.len() >= 100 {
-                self.process_cache(&mut entry_cache).await?;
-                entry_cache.clear();
-            }
+            self.maybe_flush_cache(&mut entry_cache).await?;
         }
         self.process_cache(&mut entry_cache).await?;
         Ok(())

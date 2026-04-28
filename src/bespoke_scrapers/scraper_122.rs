@@ -15,17 +15,8 @@ pub struct BespokeScraper122 {
 
 #[async_trait]
 impl BespokeScraper for BespokeScraper122 {
-    fn new(app: &AppState) -> Self {
-        Self { app: app.clone() }
-    }
 
-    fn catalog_id(&self) -> usize {
-        122
-    }
-
-    fn app(&self) -> &AppState {
-        &self.app
-    }
+    scraper_boilerplate!(122);
 
     async fn run(&self) -> Result<()> {
         let client = self.http_client();
@@ -47,10 +38,7 @@ impl BespokeScraper for BespokeScraper122 {
             };
             let entries = Self::parse_page(self.catalog_id(), &json);
             entry_cache.extend(entries);
-            if entry_cache.len() >= 100 {
-                self.process_cache(&mut entry_cache).await?;
-                entry_cache.clear();
-            }
+            self.maybe_flush_cache(&mut entry_cache).await?;
             let page_count = json["pagination"]["pageCount"].as_u64().unwrap_or(0);
             if page_count <= page {
                 break;

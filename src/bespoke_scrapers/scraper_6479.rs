@@ -29,17 +29,8 @@ impl BespokeScraper for BespokeScraper6479 {
         true
     }
 
-    fn new(app: &AppState) -> Self {
-        Self { app: app.clone() }
-    }
 
-    fn app(&self) -> &AppState {
-        &self.app
-    }
-
-    fn catalog_id(&self) -> usize {
-        6479
-    }
+    scraper_boilerplate!(6479);
 
     async fn run(&self) -> Result<()> {
         let url = "https://www.sikart.ch/personen_export.aspx";
@@ -65,10 +56,7 @@ impl BespokeScraper for BespokeScraper6479 {
                 None => continue,
             };
             entry_cache.push(ext_entry);
-            if entry_cache.len() > 100 {
-                self.process_cache(&mut entry_cache).await?;
-                entry_cache.clear();
-            }
+            self.maybe_flush_cache(&mut entry_cache).await?;
         }
         self.process_cache(&mut entry_cache).await?;
         Ok(())

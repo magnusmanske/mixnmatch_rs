@@ -18,17 +18,8 @@ pub struct BespokeScraper5103 {
 
 #[async_trait]
 impl BespokeScraper for BespokeScraper5103 {
-    fn new(app: &AppState) -> Self {
-        Self { app: app.clone() }
-    }
 
-    fn catalog_id(&self) -> usize {
-        5103
-    }
-
-    fn app(&self) -> &AppState {
-        &self.app
-    }
+    scraper_boilerplate!(5103);
 
     async fn run(&self) -> Result<()> {
         let url = "https://topostext.org/api/people/readweb.php";
@@ -42,10 +33,7 @@ impl BespokeScraper for BespokeScraper5103 {
         for record in records {
             if let Some(ee) = Self::parse_record(self.catalog_id(), record) {
                 entry_cache.push(ee);
-                if entry_cache.len() >= 100 {
-                    self.process_cache(&mut entry_cache).await?;
-                    entry_cache.clear();
-                }
+            self.maybe_flush_cache(&mut entry_cache).await?;
             }
         }
         self.process_cache(&mut entry_cache).await?;

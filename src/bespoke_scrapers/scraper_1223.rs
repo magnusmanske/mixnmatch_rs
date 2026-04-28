@@ -15,17 +15,8 @@ pub struct BespokeScraper1223 {
 
 #[async_trait]
 impl BespokeScraper for BespokeScraper1223 {
-    fn new(app: &AppState) -> Self {
-        Self { app: app.clone() }
-    }
 
-    fn catalog_id(&self) -> usize {
-        1223
-    }
-
-    fn app(&self) -> &AppState {
-        &self.app
-    }
+    scraper_boilerplate!(1223);
 
     async fn run(&self) -> Result<()> {
         let url = "https://litteraturbanken.se/api/get_authors?exclude=intro,db_*,doc_type,corpus,es_id";
@@ -39,10 +30,7 @@ impl BespokeScraper for BespokeScraper1223 {
         for item in data {
             if let Some(ee) = Self::parse_item(self.catalog_id(), item) {
                 entry_cache.push(ee);
-                if entry_cache.len() >= 100 {
-                    self.process_cache(&mut entry_cache).await?;
-                    entry_cache.clear();
-                }
+            self.maybe_flush_cache(&mut entry_cache).await?;
             }
         }
         self.process_cache(&mut entry_cache).await?;
