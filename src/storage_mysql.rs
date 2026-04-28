@@ -293,80 +293,94 @@ impl StorageMySQL {
     /// to integers, so they cannot inject.
     fn catalog_entries_where_clause(filter: &CatalogEntryListFilter) -> String {
         let mut conds = vec![format!("catalog={}", filter.catalog_id)];
+        conds.extend(Self::match_state_conds(filter));
+        conds.extend(Self::text_filter_conds(filter));
+        if let Some(c) = Self::user_id_cond(filter.user_id) {
+            conds.push(c);
+        }
+        conds.join(" AND ")
+    }
+
+    /// Conditions selecting entries by their match state (Q-value/user
+    /// flags). Returns the fast-path single-condition form when exactly one
+    /// of `show_noq`/`show_na`/`show_nowd` is set, since that is the common
+    /// case (e.g. "Unmatched only") and the simpler `q IS NULL` /
+    /// `q = 0` / `q = -1` lets the MySQL optimiser pick an index on
+    /// `(catalog, q)` if one is present.
+    fn match_state_conds(filter: &CatalogEntryListFilter) -> Vec<String> {
         if filter.show_multiple {
-            conds.push(
+            return vec![
                 "EXISTS (SELECT 1 FROM multi_match WHERE entry_id=entry.id) AND (user<=0 OR user is null)"
                     .into(),
-            );
-        } else if filter.show_noq
-            && !filter.show_autoq
-            && !filter.show_userq
-            && !filter.show_nowd
-            && !filter.show_na
-        {
-            // Fast-path for the common "Unmatched only" listing —
-            // equivalent to the conjunction the general branch would
-            // build, but compact enough that the optimiser can pick an
-            // index on (catalog, q) if one is present. Without this
-            // simplification, show_noq-only requests still work but
-            // produce a 3-conjunct WHERE that's slow on large catalogs
-            // (frontend reports from catalog=6502 with show_noq=1
-            // were the motivating case).
-            conds.push("q IS NULL".into());
-        } else if !filter.show_noq
-            && !filter.show_autoq
-            && !filter.show_userq
-            && !filter.show_nowd
-            && filter.show_na
-        {
-            conds.push("q=0".into());
-        } else if !filter.show_noq
-            && !filter.show_autoq
-            && !filter.show_userq
-            && !filter.show_na
-            && filter.show_nowd
-        {
-            conds.push("q=-1".into());
-        } else {
-            if !filter.show_noq {
-                conds.push("q IS NOT NULL".into());
-            }
-            if !filter.show_autoq {
-                conds.push("(q is null OR user!=0)".into());
-            }
-            if !filter.show_userq {
-                conds.push("(user<=0 OR user is null)".into());
-            }
-            if !filter.show_na {
-                conds.push("(q!=0 or q is null)".into());
-            }
+            ];
         }
+        if let Some(fast) = Self::match_state_fast_path(filter) {
+            return vec![fast.into()];
+        }
+        let mut out = Vec::new();
+        if !filter.show_noq {
+            out.push("q IS NOT NULL".into());
+        }
+        if !filter.show_autoq {
+            out.push("(q is null OR user!=0)".into());
+        }
+        if !filter.show_userq {
+            out.push("(user<=0 OR user is null)".into());
+        }
+        if !filter.show_na {
+            out.push("(q!=0 or q is null)".into());
+        }
+        out
+    }
+
+    /// Returns the single-condition fast-path SQL when the filter is one of
+    /// the three "exclusive" listings (only show_noq, only show_na, or only
+    /// show_nowd) and nothing else is selected. `None` means the general
+    /// per-flag conjunction is needed.
+    fn match_state_fast_path(filter: &CatalogEntryListFilter) -> Option<&'static str> {
+        match (
+            filter.show_noq,
+            filter.show_autoq,
+            filter.show_userq,
+            filter.show_na,
+            filter.show_nowd,
+        ) {
+            (true, false, false, false, false) => Some("q IS NULL"),
+            (false, false, false, true, false) => Some("q=0"),
+            (false, false, false, false, true) => Some("q=-1"),
+            _ => None,
+        }
+    }
+
+    fn text_filter_conds(filter: &CatalogEntryListFilter) -> Vec<String> {
+        let mut out = Vec::new();
         if !filter.entry_type.is_empty() {
-            conds.push(format!(
+            out.push(format!(
                 "`type`='{}'",
                 filter.entry_type.replace('\'', "''")
             ));
         }
         if !filter.title_match.is_empty() {
-            conds.push(format!(
+            out.push(format!(
                 "`ext_name` LIKE '%{}%'",
                 filter.title_match.replace('\'', "''")
             ));
         }
         if !filter.keyword.is_empty() {
             let kw = filter.keyword.replace('\'', "''");
-            conds.push(format!(
+            out.push(format!(
                 "(`ext_name` LIKE '%{kw}%' OR `ext_desc` LIKE '%{kw}%')"
             ));
         }
-        if let Some(uid) = filter.user_id {
-            if uid > 0 {
-                conds.push(format!("`user`={uid}"));
-            } else if uid == 0 {
-                conds.push("`user`=0".into());
-            }
+        out
+    }
+
+    fn user_id_cond(user_id: Option<i64>) -> Option<String> {
+        match user_id {
+            Some(uid) if uid > 0 => Some(format!("`user`={uid}")),
+            Some(0) => Some("`user`=0".into()),
+            _ => None,
         }
-        conds.join(" AND ")
     }
 
     /// The column names emitted by `build_download2_sql`, in the exact
@@ -7217,6 +7231,110 @@ mod tests {
     fn normalize_wd_prop_zero_and_none_become_none() {
         assert_eq!(normalize_wd_prop(None), None);
         assert_eq!(normalize_wd_prop(Some(0)), None);
+    }
+
+    fn base_filter() -> CatalogEntryListFilter {
+        CatalogEntryListFilter {
+            catalog_id: 42,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn catalog_entries_where_clause_show_multiple() {
+        let mut f = base_filter();
+        f.show_multiple = true;
+        let sql = StorageMySQL::catalog_entries_where_clause(&f);
+        assert_eq!(
+            sql,
+            "catalog=42 AND EXISTS (SELECT 1 FROM multi_match WHERE entry_id=entry.id) AND (user<=0 OR user is null)"
+        );
+    }
+
+    #[test]
+    fn catalog_entries_where_clause_show_noq_fast_path() {
+        let mut f = base_filter();
+        f.show_noq = true;
+        let sql = StorageMySQL::catalog_entries_where_clause(&f);
+        assert_eq!(sql, "catalog=42 AND q IS NULL");
+    }
+
+    #[test]
+    fn catalog_entries_where_clause_show_na_fast_path() {
+        let mut f = base_filter();
+        f.show_na = true;
+        let sql = StorageMySQL::catalog_entries_where_clause(&f);
+        assert_eq!(sql, "catalog=42 AND q=0");
+    }
+
+    #[test]
+    fn catalog_entries_where_clause_show_nowd_fast_path() {
+        let mut f = base_filter();
+        f.show_nowd = true;
+        let sql = StorageMySQL::catalog_entries_where_clause(&f);
+        assert_eq!(sql, "catalog=42 AND q=-1");
+    }
+
+    #[test]
+    fn catalog_entries_where_clause_general_fallback_two_flags() {
+        let mut f = base_filter();
+        f.show_noq = true;
+        f.show_na = true;
+        let sql = StorageMySQL::catalog_entries_where_clause(&f);
+        assert_eq!(
+            sql,
+            "catalog=42 AND (q is null OR user!=0) AND (user<=0 OR user is null)"
+        );
+    }
+
+    #[test]
+    fn catalog_entries_where_clause_all_flags_off() {
+        let f = base_filter();
+        let sql = StorageMySQL::catalog_entries_where_clause(&f);
+        assert_eq!(
+            sql,
+            "catalog=42 AND q IS NOT NULL AND (q is null OR user!=0) AND (user<=0 OR user is null) AND (q!=0 or q is null)"
+        );
+    }
+
+    #[test]
+    fn catalog_entries_where_clause_text_filters() {
+        let mut f = base_filter();
+        f.show_noq = true;
+        f.entry_type = "Q5".into();
+        f.title_match = "smith".into();
+        f.keyword = "writer".into();
+        let sql = StorageMySQL::catalog_entries_where_clause(&f);
+        assert_eq!(
+            sql,
+            "catalog=42 AND q IS NULL AND `type`='Q5' AND `ext_name` LIKE '%smith%' AND (`ext_name` LIKE '%writer%' OR `ext_desc` LIKE '%writer%')"
+        );
+    }
+
+    #[test]
+    fn catalog_entries_where_clause_user_id() {
+        let mut f = base_filter();
+        f.show_noq = true;
+        f.user_id = Some(7);
+        let sql_pos = StorageMySQL::catalog_entries_where_clause(&f);
+        assert_eq!(sql_pos, "catalog=42 AND q IS NULL AND `user`=7");
+
+        f.user_id = Some(0);
+        let sql_zero = StorageMySQL::catalog_entries_where_clause(&f);
+        assert_eq!(sql_zero, "catalog=42 AND q IS NULL AND `user`=0");
+
+        f.user_id = Some(-1);
+        let sql_neg = StorageMySQL::catalog_entries_where_clause(&f);
+        assert_eq!(sql_neg, "catalog=42 AND q IS NULL");
+    }
+
+    #[test]
+    fn catalog_entries_where_clause_quote_doubling() {
+        let mut f = base_filter();
+        f.show_noq = true;
+        f.entry_type = "O'Reilly".into();
+        let sql = StorageMySQL::catalog_entries_where_clause(&f);
+        assert_eq!(sql, "catalog=42 AND q IS NULL AND `type`='O''Reilly'");
     }
 
     #[test]
