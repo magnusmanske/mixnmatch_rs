@@ -1,15 +1,17 @@
-use crate::app_state::AppState;
+mod jobs;
+
+pub use jobs::{run_aux_from_desc_job, run_desc_from_html_job, run_person_dates_job};
+
 use crate::entry::Entry;
 use crate::person_date::PersonDate;
 use anyhow::{Result, anyhow};
 use lazy_static::lazy_static;
-use log::warn;
 use mlua::{Lua, LuaOptions, StdLib, Value, VmState};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 lazy_static! {
-    static ref RE_WHITESPACE: regex::Regex = regex::Regex::new(r"\s+").unwrap();
+    pub(super) static ref RE_WHITESPACE: regex::Regex = regex::Regex::new(r"\s+").unwrap();
     static ref RE_HTML_TAGS: regex::Regex = regex::Regex::new(r"<.+?>").unwrap();
 }
 
@@ -776,7 +778,7 @@ pub fn entry_to_lua_entry(entry: &Entry) -> LuaEntry {
 
 /// Validates and cleans a date string produced by a PERSON_DATE code fragment.
 /// Mirrors the PHP PersonDates::fix_date_format and processEntry validation.
-fn validate_person_date(d: &str) -> Option<String> {
+pub(super) fn validate_person_date(d: &str) -> Option<String> {
     let d = d.trim().to_string();
     if d.is_empty() {
         return None;
@@ -787,7 +789,7 @@ fn validate_person_date(d: &str) -> Option<String> {
 
 /// Validates a born/died pair. Returns None if the pair should be rejected.
 /// Mirrors PHP PersonDates::processEntry validation logic.
-fn validate_born_died(born_raw: &str, died_raw: &str) -> Option<(String, String)> {
+pub(super) fn validate_born_died(born_raw: &str, died_raw: &str) -> Option<(String, String)> {
     let born = validate_person_date(born_raw).unwrap_or_default();
     let died = validate_person_date(died_raw).unwrap_or_default();
 
@@ -829,277 +831,9 @@ fn validate_born_died(born_raw: &str, died_raw: &str) -> Option<(String, String)
     Some((born, died))
 }
 
-const ENTRY_BATCH_SIZE: usize = 5000;
-
-/// Run the update_person_dates job for a catalog using Lua.
-/// Returns Ok(()) on success, or an error if no Lua code fragment exists.
-pub async fn run_person_dates_job(catalog_id: usize, app: &AppState) -> Result<()> {
-    let lua_code = app
-        .storage()
-        .get_code_fragment_lua("PERSON_DATE", catalog_id)
-        .await?
-        .ok_or_else(|| anyhow!("No Lua code fragment for PERSON_DATE catalog {catalog_id}"))?;
-
-    // Clear existing person dates for this catalog
-    app.storage()
-        .clear_person_dates_for_catalog(catalog_id)
-        .await?;
-
-    let mut offset = 0;
-    let mut any_dates_set = false;
-    loop {
-        let entries = app
-            .storage()
-            .get_entry_batch(catalog_id, ENTRY_BATCH_SIZE, offset)
-            .await?;
-        if entries.is_empty() {
-            break;
-        }
-        let batch_len = entries.len();
-
-        for entry in &entries {
-            let lua_entry = entry_to_lua_entry(entry);
-            if lua_entry.type_name.as_deref() != Some("Q5") {
-                continue;
-            }
-            if lua_entry.ext_desc.is_empty() {
-                continue;
-            }
-
-            let result = match run_person_date(&lua_code, &lua_entry) {
-                Ok(r) => r,
-                Err(e) => {
-                    warn!(
-                        "Lua error for PERSON_DATE entry {}: {e}",
-                        lua_entry.id
-                    );
-                    continue;
-                }
-            };
-
-            if let Some((born, died)) = validate_born_died(&result.born, &result.died) {
-                let entry_id = lua_entry.id;
-                app.storage()
-                    .entry_set_person_dates(entry_id, born, died)
-                    .await?;
-                any_dates_set = true;
-            }
-        }
-
-        offset += batch_len;
-    }
-
-    if any_dates_set {
-        app.storage()
-            .set_has_person_date(catalog_id, "yes")
-            .await?;
-    }
-
-    app.storage()
-        .touch_code_fragment("PERSON_DATE", catalog_id)
-        .await?;
-
-    Ok(())
-}
-
-/// Run the generate_aux_from_description job for a catalog using Lua.
-/// Returns Ok(()) on success, or an error if no Lua code fragment exists.
-pub async fn run_aux_from_desc_job(catalog_id: usize, app: &AppState) -> Result<()> {
-    let lua_code = app
-        .storage()
-        .get_code_fragment_lua("AUX_FROM_DESC", catalog_id)
-        .await?
-        .ok_or_else(|| anyhow!("No Lua code fragment for AUX_FROM_DESC catalog {catalog_id}"))?;
-
-    let mut offset = 0;
-    loop {
-        let entries = app
-            .storage()
-            .get_entry_batch(catalog_id, ENTRY_BATCH_SIZE, offset)
-            .await?;
-        if entries.is_empty() {
-            break;
-        }
-        let batch_len = entries.len();
-
-        for entry in &entries {
-            let lua_entry = entry_to_lua_entry(entry);
-            let result = match run_aux_from_desc(&lua_code, &lua_entry) {
-                Ok(r) => r,
-                Err(e) => {
-                    warn!(
-                        "Lua error for AUX_FROM_DESC entry {}: {e}",
-                        lua_entry.id
-                    );
-                    continue;
-                }
-            };
-
-            let mut entry_clone = entry.clone();
-            entry_clone.set_app(app);
-            for cmd in &result.commands {
-                if let Err(e) = apply_command(cmd, &mut entry_clone).await {
-                    warn!(
-                        "Error applying command for entry {}: {e}",
-                        lua_entry.id
-                    );
-                }
-            }
-        }
-
-        offset += batch_len;
-    }
-
-    app.storage()
-        .touch_code_fragment("AUX_FROM_DESC", catalog_id)
-        .await?;
-
-    Ok(())
-}
-
-/// Run the update_descriptions_from_url job for a catalog using Lua.
-/// Fetches HTML from each entry's ext_url, runs DESC_FROM_HTML Lua code, applies results.
-/// Returns Ok(()) on success, or an error if no Lua code fragment exists.
-pub async fn run_desc_from_html_job(catalog_id: usize, app: &AppState) -> Result<()> {
-    let lua_code = app
-        .storage()
-        .get_code_fragment_lua("DESC_FROM_HTML", catalog_id)
-        .await?
-        .ok_or_else(|| anyhow!("No Lua code fragment for DESC_FROM_HTML catalog {catalog_id}"))?;
-    let client = app.http_client().clone();
-
-    let mut offset = 0;
-    loop {
-        let entries = app
-            .storage()
-            .get_entry_batch(catalog_id, ENTRY_BATCH_SIZE, offset)
-            .await?;
-        if entries.is_empty() {
-            break;
-        }
-        let batch_len = entries.len();
-        for entry in &entries {
-            process_desc_from_html_entry(app, &client, &lua_code, entry).await;
-        }
-        offset += batch_len;
-    }
-
-    finalize_desc_from_html(app, catalog_id).await
-}
-
-async fn fetch_html(client: &reqwest::Client, url: &str) -> Option<String> {
-    let resp = client.get(url).send().await.ok()?;
-    let text = resp.text().await.ok()?;
-    Some(RE_WHITESPACE.replace_all(&text, " ").to_string())
-}
-
-async fn process_desc_from_html_entry(
-    app: &AppState,
-    client: &reqwest::Client,
-    lua_code: &str,
-    entry: &Entry,
-) {
-    let lua_entry = entry_to_lua_entry(entry);
-    if lua_entry.ext_url.is_empty() {
-        return;
-    }
-    let Some(html) = fetch_html(client, &lua_entry.ext_url).await else {
-        return;
-    };
-    let result = match run_desc_from_html(lua_code, &lua_entry, &html) {
-        Ok(r) => r,
-        Err(e) => {
-            warn!("Lua error for DESC_FROM_HTML entry {}: {e}", lua_entry.id);
-            return;
-        }
-    };
-
-    let mut entry_clone = entry.clone();
-    entry_clone.set_app(app);
-    apply_desc_from_html_result(&mut entry_clone, &result).await;
-}
-
-async fn apply_desc_from_html_result(entry: &mut Entry, result: &DescFromHtmlResult) {
-    apply_person_dates_from_result(entry, &result.born, &result.died).await;
-    apply_location_from_result(entry, result.location).await;
-    apply_aux_from_result(entry, &result.aux).await;
-    apply_change_name(entry, result.change_name.as_ref()).await;
-    apply_change_type(entry, result.change_type.as_ref()).await;
-    apply_descriptions_from_result(entry, &result.descriptions).await;
-    for cmd in &result.commands {
-        let _ = apply_command(cmd, entry).await;
-    }
-}
-
-async fn apply_person_dates_from_result(entry: &mut Entry, born: &str, died: &str) {
-    if born.is_empty() && died.is_empty() {
-        return;
-    }
-    if let Some((born, died)) = validate_born_died(born, died) {
-        let born_pd = PersonDate::from_db_string(&born);
-        let died_pd = PersonDate::from_db_string(&died);
-        let _ = entry.set_person_dates(&born_pd, &died_pd).await;
-    }
-}
-
-async fn apply_location_from_result(entry: &mut Entry, location: Option<(f64, f64)>) {
-    if let Some((lat, lon)) = location {
-        let cl = crate::coordinates::CoordinateLocation::new(lat, lon);
-        let _ = entry.set_coordinate_location(&Some(cl)).await;
-    }
-}
-
-async fn apply_aux_from_result(entry: &mut Entry, aux: &[(String, String)]) {
-    for (prop_str, value) in aux {
-        let prop_str = prop_str.trim_start_matches('P');
-        if let Ok(prop_numeric) = prop_str.parse::<usize>() {
-            let _ = entry.set_auxiliary(prop_numeric, Some(value.clone())).await;
-        }
-    }
-}
-
-async fn apply_change_name(entry: &mut Entry, change: Option<&(String, String)>) {
-    if let Some((from, to)) = change {
-        if from != to {
-            let _ = entry.set_ext_name(to).await;
-        }
-    }
-}
-
-async fn apply_change_type(entry: &mut Entry, change: Option<&(String, String)>) {
-    if let Some((_from, to)) = change {
-        let _ = entry.set_type_name(Some(to.clone())).await;
-    }
-}
-
-async fn apply_descriptions_from_result(entry: &mut Entry, descriptions: &[String]) {
-    if descriptions.is_empty() {
-        return;
-    }
-    let new_desc = get_new_description(&entry.ext_desc, descriptions);
-    if new_desc != entry.ext_desc {
-        let _ = entry.set_ext_desc(&new_desc).await;
-    }
-}
-
-async fn finalize_desc_from_html(app: &AppState, catalog_id: usize) -> Result<()> {
-    app.storage()
-        .touch_code_fragment("DESC_FROM_HTML", catalog_id)
-        .await?;
-    let _ = app
-        .storage()
-        .queue_job(catalog_id, "update_person_dates", None)
-        .await;
-    let _ = app
-        .storage()
-        .queue_job(catalog_id, "generate_aux_from_description", None)
-        .await;
-    Ok(())
-}
-
 /// Generates a new description from old description and new fragments.
 /// Mirrors PHP HTMLtoDescription::get_new_description.
-fn get_new_description(old_desc: &str, new_parts: &[String]) -> String {
+pub(super) fn get_new_description(old_desc: &str, new_parts: &[String]) -> String {
     if new_parts.is_empty() {
         return old_desc.to_string();
     }
@@ -1120,51 +854,6 @@ fn get_new_description(old_desc: &str, new_parts: &[String]) -> String {
     // Collapse whitespace
     let d = regex::Regex::new(r"\s+").unwrap().replace_all(&d, " ");
     d.trim().to_string()
-}
-
-/// Apply a LuaCommand to an entry in the database.
-async fn apply_command(cmd: &LuaCommand, entry: &mut Entry) -> Result<()> {
-    match cmd {
-        LuaCommand::SetAux {
-            property, value, ..
-        } => {
-            let prop_str = property.trim_start_matches('P');
-            let prop_numeric: usize = prop_str.parse().map_err(|_| {
-                anyhow!("Invalid property '{property}'")
-            })?;
-            entry.set_auxiliary(prop_numeric, Some(value.clone())).await
-        }
-        LuaCommand::SetMatch { q, .. } => {
-            entry.set_match(q, 0).await?;
-            Ok(())
-        }
-        LuaCommand::SetLocation { lat, lon, .. } => {
-            let cl = crate::coordinates::CoordinateLocation::new(*lat, *lon);
-            entry.set_coordinate_location(&Some(cl)).await
-        }
-        LuaCommand::SetPersonDates {
-            born, died, ..
-        } => {
-            let born_pd = PersonDate::from_db_string(born);
-            let died_pd = PersonDate::from_db_string(died);
-            entry.set_person_dates(&born_pd, &died_pd).await
-        }
-        LuaCommand::SetDescription { value, .. } => entry.set_ext_desc(value).await,
-        LuaCommand::SetEntryName { value, .. } => entry.set_ext_name(value).await,
-        LuaCommand::SetEntryType { value, .. } => {
-            entry.set_type_name(Some(value.clone())).await
-        }
-        LuaCommand::AddAlias {
-            label, language, ..
-        } => {
-            let ls = wikimisc::wikibase::locale_string::LocaleString::new(language, label);
-            entry.add_alias(&ls).await
-        }
-        LuaCommand::AddLocationText { .. } => {
-            // Location text is not yet implemented in the Rust storage layer
-            Ok(())
-        }
-    }
 }
 
 // ==========
