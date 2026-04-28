@@ -308,76 +308,50 @@ impl Job {
     // PRIVATE METHODS
 
     //TODO test
-    // #lizard forgives the complexity
-    #[allow(clippy::cognitive_complexity)]
     async fn run_this_job(&mut self) -> Result<()> {
-        // let json = self.get_json().await;
-        // println!("STARTING {:?} with option {:?}", &self.data().await?,&json);
         if self.data.status == JobStatus::Blocked {
             return Err(anyhow!("Job::run_this_job: Blocked"));
         }
         let current_time_str = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
         info!("{current_time_str}: Starting job {:?}", self.get_id().await);
         let catalog_id = self.get_catalog().await?;
-        match self.get_action().await?.as_str() {
-            "automatch" => {
-                let mut am = AutoMatch::new(&self.app);
-                am.set_current_job(self);
-                am.automatch_simple(catalog_id).await
-            }
-            "automatch_by_search" => {
-                let mut am = AutoMatch::new(&self.app);
-                am.set_current_job(self);
-                am.automatch_by_search(catalog_id).await
-            }
-            "automatch_from_other_catalogs" => {
-                let mut am = AutoMatch::new(&self.app);
-                am.set_current_job(self);
-                am.automatch_from_other_catalogs(catalog_id).await
-            }
+        let action = self.get_action().await?;
+
+        if let Some(result) = self.dispatch_automatch(&action, catalog_id).await {
+            return result;
+        }
+        if let Some(result) = self.dispatch_maintenance(&action, catalog_id).await {
+            return result;
+        }
+        self.dispatch_other(&action, catalog_id).await
+    }
+
+    /// Actions handled by `AutoMatch` (and the date-based people matchers).
+    /// Returns `None` if `action` is not one of these.
+    async fn dispatch_automatch(
+        &mut self,
+        action: &str,
+        catalog_id: usize,
+    ) -> Option<Result<()>> {
+        let mut am = AutoMatch::new(&self.app);
+        am.set_current_job(self);
+        let result = match action {
+            "automatch" => am.automatch_simple(catalog_id).await,
+            "automatch_by_search" => am.automatch_by_search(catalog_id).await,
+            "automatch_from_other_catalogs" => am.automatch_from_other_catalogs(catalog_id).await,
             "automatch_people_with_birth_year" => {
-                let mut am = AutoMatch::new(&self.app);
-                am.set_current_job(self);
                 am.automatch_people_with_birth_year(catalog_id).await
             }
-            "automatch_by_sitelink" => {
-                let mut am = AutoMatch::new(&self.app);
-                am.set_current_job(self);
-                am.automatch_by_sitelink(catalog_id).await
-            }
-            "automatch_creations" => {
-                let mut am = AutoMatch::new(&self.app);
-                am.set_current_job(self);
-                am.automatch_creations(catalog_id).await
-            }
-            "automatch_complex" => {
-                let mut am = AutoMatch::new(&self.app);
-                am.set_current_job(self);
-                am.automatch_complex(catalog_id).await
-            }
+            "automatch_by_sitelink" => am.automatch_by_sitelink(catalog_id).await,
+            "automatch_creations" => am.automatch_creations(catalog_id).await,
+            "automatch_complex" => am.automatch_complex(catalog_id).await,
             "automatch_people_with_initials" => {
-                let mut am = AutoMatch::new(&self.app);
-                am.set_current_job(self);
                 am.automatch_people_with_initials(catalog_id).await
             }
-            "automatch_sparql" => {
-                let mut am = AutoMatch::new(&self.app);
-                am.set_current_job(self);
-                am.automatch_with_sparql(catalog_id).await
-            }
-            "purge_automatches" => {
-                let mut am = AutoMatch::new(&self.app);
-                am.set_current_job(self);
-                am.purge_automatches(catalog_id).await
-            }
-            "match_person_dates" => {
-                let mut am = AutoMatch::new(&self.app);
-                am.set_current_job(self);
-                am.match_person_by_dates(catalog_id).await
-            }
+            "automatch_sparql" => am.automatch_with_sparql(catalog_id).await,
+            "purge_automatches" => am.purge_automatches(catalog_id).await,
+            "match_person_dates" => am.match_person_by_dates(catalog_id).await,
             "match_on_birthdate" => {
-                let mut am = AutoMatch::new(&self.app);
-                am.set_current_job(self);
                 am.match_person_by_single_date(
                     catalog_id,
                     DateMatchField::Born,
@@ -386,8 +360,6 @@ impl Job {
                 .await
             }
             "match_on_deathdate" => {
-                let mut am = AutoMatch::new(&self.app);
-                am.set_current_job(self);
                 am.match_person_by_single_date(
                     catalog_id,
                     DateMatchField::Died,
@@ -395,6 +367,82 @@ impl Job {
                 )
                 .await
             }
+            _ => return None,
+        };
+        Some(result)
+    }
+
+    /// Actions handled by `Maintenance`. Returns `None` if `action` is
+    /// not one of these.
+    async fn dispatch_maintenance(
+        &mut self,
+        action: &str,
+        catalog_id: usize,
+    ) -> Option<Result<()>> {
+        let m = Maintenance::new(&self.app);
+        let result = match action {
+            "maintenance_name_and_full_dates" => m.match_by_name_and_full_dates().await,
+            "maintenance_common_names_dates" => m.common_names_dates().await,
+            "maintenance_common_names_birth_year" => m.common_names_birth_year().await,
+            "maintenance_common_names_human" => m.common_names_human().await,
+            "update_property_cache" => m.update_property_cache().await,
+            "maintenance_delete_multi_match_for_fully_matched" => {
+                m.delete_multi_match_for_fully_matched().await
+            }
+            "maintenance_fixup_wd_matches" => m.fixup_wd_matches().await,
+            "maintenance_update_aux_candidates" => m.update_aux_candidates().await,
+            "maintenance_fix_html_entities" => m.fix_html_entities_in_catalog(catalog_id).await,
+            "maintenance_fix_gnd_undifferentiated_persons" => {
+                m.fix_gnd_undifferentiated_persons().await
+            }
+            "maintenance_crossmatch_via_aux" => m
+                .crossmatch_via_aux()
+                .await
+                .map(|n| log::info!("crossmatch_via_aux: {n} new match(es)")),
+            "maintenance_apply_description_aux" => m.apply_description_aux(catalog_id).await,
+            "maintenance_sanity_check_date_matches_are_human" => m
+                .sanity_check_date_matches_are_human()
+                .await
+                .map(|n| log::info!("sanity_check_date_matches_are_human: removed {n}")),
+            "maintenance_taxa" => m.taxa().await,
+            "maintenance_artwork" => m.artwork().await,
+            "maintenance_common_aux" => m.common_aux().await,
+            "maintenance_automatch" => m.automatch().await,
+            "maintenance_auxiliary_item_values" => m.fix_auxiliary_item_values().await,
+            "maintenance_misc_catalog_things" => m.misc_catalog_things().await,
+            "update_props_todo" => m.update_props_todo().await,
+            "remove_p17_for_humans" => m.remove_p17_for_humans().await,
+            "cleanup_mnm_relations" => m.cleanup_mnm_relations().await,
+            "create_match_person_dates" => m.create_match_person_dates_jobs_for_catalogs().await,
+            "fix_disambig" => m.unlink_meta_items(catalog_id, &MatchState::any_matched()).await,
+            "fix_redirected_items_in_catalog" => {
+                // catalog_id=0 means "any catalog" — pick a random active
+                // one so the worker does useful work even when the job was
+                // queued without a specific catalog in mind.
+                let catalog_id = match catalog_id {
+                    0 => match self.app.storage().get_random_active_catalog_id().await {
+                        Some(id) => id,
+                        None => return Some(Ok(())),
+                    },
+                    other => other,
+                };
+                m.fix_redirects(catalog_id, &MatchState::any_matched()).await
+            }
+            "update_has_person_date" => m.update_has_person_date().await,
+            "maintenance_inventory_match" => {
+                m.fully_match_via_collection_inventory_number().await
+            }
+            "automatch_people_via_year_born" => m.automatch_people_via_year_born().await,
+            "update_iso" => m.update_iso_codes().await,
+            _ => return None,
+        };
+        Some(result)
+    }
+
+    /// Catch-all dispatcher for actions not handled by `dispatch_automatch`
+    /// or `dispatch_maintenance`. Returns `Err` for unknown actions.
+    async fn dispatch_other(&mut self, action: &str, catalog_id: usize) -> Result<()> {
+        match action {
             "autoscrape" => {
                 let mut autoscrape = Autoscrape::new(catalog_id, &self.app).await?;
                 autoscrape.set_current_job(self);
@@ -424,137 +472,22 @@ impl Job {
                 let mut ms = Microsync::new(&self.app);
                 ms.set_current_job(self);
                 let catalog_id = match catalog_id {
-                    0 => {
-                        match self
-                            .app
-                            .storage()
-                            .get_random_active_catalog_id_with_property()
-                            .await
-                        {
-                            Some(id) => id,
-                            None => return Ok(()), // Ignore, very unlikely
-                        }
-                    }
+                    0 => match self
+                        .app
+                        .storage()
+                        .get_random_active_catalog_id_with_property()
+                        .await
+                    {
+                        Some(id) => id,
+                        None => return Ok(()), // Ignore, very unlikely
+                    },
                     other => other,
                 };
                 ms.check_catalog(catalog_id).await
             }
-
             "fix_duplicate_issues" => crate::issue::Issue::fix_wd_duplicates(&self.app).await,
             "update_issues" => crate::issue::Issue::sweep_open(&self.app).await,
-            "maintenance_name_and_full_dates" => {
-                Maintenance::new(&self.app)
-                    .match_by_name_and_full_dates()
-                    .await
-            }
-            "maintenance_common_names_dates" => {
-                Maintenance::new(&self.app).common_names_dates().await
-            }
-            "maintenance_common_names_birth_year" => {
-                Maintenance::new(&self.app).common_names_birth_year().await
-            }
-            "maintenance_common_names_human" => {
-                Maintenance::new(&self.app).common_names_human().await
-            }
-            "update_property_cache" => Maintenance::new(&self.app).update_property_cache().await,
-            "maintenance_delete_multi_match_for_fully_matched" => {
-                Maintenance::new(&self.app)
-                    .delete_multi_match_for_fully_matched()
-                    .await
-            }
-            "maintenance_fixup_wd_matches" => {
-                Maintenance::new(&self.app).fixup_wd_matches().await
-            }
-            "maintenance_update_aux_candidates" => {
-                Maintenance::new(&self.app).update_aux_candidates().await
-            }
-            "maintenance_fix_html_entities" => {
-                Maintenance::new(&self.app)
-                    .fix_html_entities_in_catalog(catalog_id)
-                    .await
-            }
-            "maintenance_fix_gnd_undifferentiated_persons" => {
-                Maintenance::new(&self.app)
-                    .fix_gnd_undifferentiated_persons()
-                    .await
-            }
-            "maintenance_crossmatch_via_aux" => {
-                Maintenance::new(&self.app)
-                    .crossmatch_via_aux()
-                    .await
-                    .map(|n| log::info!("crossmatch_via_aux: {n} new match(es)"))
-            }
-            "maintenance_apply_description_aux" => {
-                Maintenance::new(&self.app)
-                    .apply_description_aux(catalog_id)
-                    .await
-            }
-            "maintenance_sanity_check_date_matches_are_human" => {
-                Maintenance::new(&self.app)
-                    .sanity_check_date_matches_are_human()
-                    .await
-                    .map(|n| log::info!("sanity_check_date_matches_are_human: removed {n}"))
-            }
-            "maintenance_taxa" => Maintenance::new(&self.app).taxa().await,
-            "maintenance_artwork" => Maintenance::new(&self.app).artwork().await,
-            "maintenance_common_aux" => Maintenance::new(&self.app).common_aux().await,
-            "maintenance_automatch" => Maintenance::new(&self.app).automatch().await,
-            "maintenance_auxiliary_item_values" => {
-                Maintenance::new(&self.app)
-                    .fix_auxiliary_item_values()
-                    .await
-            }
-            "maintenance_misc_catalog_things" => {
-                Maintenance::new(&self.app).misc_catalog_things().await
-            }
-            "update_props_todo" => Maintenance::new(&self.app).update_props_todo().await,
-            "remove_p17_for_humans" => Maintenance::new(&self.app).remove_p17_for_humans().await,
-            "cleanup_mnm_relations" => Maintenance::new(&self.app).cleanup_mnm_relations().await,
-
-            "create_match_person_dates" => {
-                Maintenance::new(&self.app)
-                    .create_match_person_dates_jobs_for_catalogs()
-                    .await
-            }
-
-            "fix_disambig" => {
-                Maintenance::new(&self.app)
-                    .unlink_meta_items(catalog_id, &MatchState::any_matched())
-                    .await
-            }
-
-            "fix_redirected_items_in_catalog" => {
-                // catalog_id=0 means "any catalog" — pick a random active
-                // one so the worker does useful work even when the job was
-                // queued without a specific catalog in mind.
-                let catalog_id = match catalog_id {
-                    0 => match self.app.storage().get_random_active_catalog_id().await {
-                        Some(id) => id,
-                        None => return Ok(()),
-                    },
-                    other => other,
-                };
-                Maintenance::new(&self.app)
-                    .fix_redirects(catalog_id, &MatchState::any_matched())
-                    .await
-            }
-
-            "update_has_person_date" => Maintenance::new(&self.app).update_has_person_date().await,
-
-            "maintenance_inventory_match" => {
-                Maintenance::new(&self.app)
-                    .fully_match_via_collection_inventory_number()
-                    .await
-            }
-
-            "automatch_people_via_year_born" => {
-                Maintenance::new(&self.app)
-                    .automatch_people_via_year_born()
-                    .await
-            }
-
             "wdrc_sync" => self.app.wdrc().sync(&self.app).await,
-            // Maintenance::new(&self.app).wdrc_sync().await,
             "sync_wd_matches" => crate::wd_match_sync::classify_pending(
                 &self.app,
                 crate::wd_match_sync::DEFAULT_BATCH_SIZE,
@@ -593,12 +526,10 @@ impl Job {
                 let cm = CoordinateMatcher::new(&self.app, Some(catalog_id)).await?;
                 cm.run().await
             }
-
             "sync_from_cersei" => {
                 let cs = crate::cersei::CerseiSync::new(&self.app)?;
                 cs.sync().await
             }
-
             "reference_fixer" => {
                 // Rewrites free-form reference-URL references into typed
                 // external-id references on Wikidata. Drains the
@@ -607,12 +538,6 @@ impl Job {
                 let mut rf = crate::reference_fixer::ReferenceFixer::new(&self.app)?;
                 rf.run().await.map(|_| ())
             }
-
-            "update_iso" => {
-                // catalog_id is 0 (global job, not per-catalog).
-                Maintenance::new(&self.app).update_iso_codes().await
-            }
-
             other => Err(anyhow!("Job::run_this_job: Unknown action '{}'", other)),
         }
     }
