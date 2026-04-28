@@ -792,58 +792,77 @@ impl Maintenance {
         let api = self.app.wikidata().get_mw_api().await?;
         let mut removed = 0_usize;
         for batch in qs.chunks(BATCH_SIZE) {
-            let entities = wikimisc::wikibase::entity_container::EntityContainer::new();
-            if let Err(e) = entities.load_entities(&api, &batch.to_vec()).await {
-                log::warn!(
-                    "sanity_check_date_matches_are_human: batch load failed: {e} \
-                     — continuing"
-                );
-                continue;
-            }
-            for q_label in batch {
-                let q_num: isize = match q_label
-                    .strip_prefix('Q')
-                    .and_then(|s| s.parse().ok())
-                {
-                    Some(n) => n,
-                    None => continue,
-                };
-                let Some(entry_ids) = q_to_entries.get(&q_num) else {
-                    continue;
-                };
-                let item = entities.get_entity(q_label.clone());
-                if item_is_human(item.as_ref()) {
-                    continue;
-                }
-                // Item is not Q5 (or didn't load — treat as
-                // non-human; the mismatch is real and the next
-                // run can re-check after WD data updates).
-                for &entry_id in entry_ids {
-                    let mut entry = match Entry::from_id(entry_id, &self.app).await {
-                        Ok(e) => e,
-                        Err(e) => {
-                            log::warn!(
-                                "sanity_check_date_matches_are_human: \
-                                 cannot load entry {entry_id}: {e}"
-                            );
-                            continue;
-                        }
-                    };
-                    if let Err(e) = entry.unmatch().await {
-                        log::warn!(
-                            "sanity_check_date_matches_are_human: \
-                             unmatch failed for entry {entry_id}: {e}"
-                        );
-                        continue;
-                    }
-                    removed += 1;
-                }
-            }
+            removed += self
+                .sanity_check_one_batch(&api, batch, &q_to_entries)
+                .await;
         }
         log::info!(
             "sanity_check_date_matches_are_human: removed {removed} non-human match(es)"
         );
         Ok(removed)
+    }
+
+    /// Process one batch of QIDs: bulk-load via `wbgetentities`,
+    /// unmatch the entries whose target item isn't an instance of
+    /// Q5. Returns the number of matches removed in this batch.
+    /// Pulled out of `sanity_check_date_matches_are_human` so the
+    /// outer loop stays linear.
+    async fn sanity_check_one_batch(
+        &self,
+        api: &mediawiki::api::Api,
+        batch: &[String],
+        q_to_entries: &HashMap<isize, Vec<usize>>,
+    ) -> usize {
+        let entities = wikimisc::wikibase::entity_container::EntityContainer::new();
+        if let Err(e) = entities.load_entities(api, &batch.to_vec()).await {
+            log::warn!(
+                "sanity_check_date_matches_are_human: batch load failed: {e} — continuing"
+            );
+            return 0;
+        }
+        let mut removed = 0_usize;
+        for q_label in batch {
+            let Some(q_num) = q_label
+                .strip_prefix('Q')
+                .and_then(|s| s.parse::<isize>().ok())
+            else {
+                continue;
+            };
+            let Some(entry_ids) = q_to_entries.get(&q_num) else {
+                continue;
+            };
+            if item_is_human(entities.get_entity(q_label.clone()).as_ref()) {
+                continue;
+            }
+            // Item is not Q5 (or didn't load — treat as non-human;
+            // the mismatch is real and the next run can re-check
+            // after WD data updates).
+            for &entry_id in entry_ids {
+                if self.unmatch_one(entry_id).await {
+                    removed += 1;
+                }
+            }
+        }
+        removed
+    }
+
+    async fn unmatch_one(&self, entry_id: usize) -> bool {
+        let mut entry = match Entry::from_id(entry_id, &self.app).await {
+            Ok(e) => e,
+            Err(e) => {
+                log::warn!(
+                    "sanity_check_date_matches_are_human: cannot load entry {entry_id}: {e}"
+                );
+                return false;
+            }
+        };
+        if let Err(e) = entry.unmatch().await {
+            log::warn!(
+                "sanity_check_date_matches_are_human: unmatch failed for entry {entry_id}: {e}"
+            );
+            return false;
+        }
+        true
     }
 
     /// Apply every regex rule from `description_aux` to one
@@ -881,6 +900,74 @@ impl Maintenance {
             rules.len()
         );
         Ok(())
+    }
+
+    /// Process one `(aux_p, aux_name)` candidate group: load the
+    /// entries, decide whether exactly one manual Q can be
+    /// propagated, and write the resulting matches. Updates the
+    /// caller's running counters in place. Pulled out of
+    /// `crossmatch_via_aux` to keep that function's flow linear.
+    async fn crossmatch_via_aux_one_group(
+        &self,
+        prop: usize,
+        entry_ids: &[usize],
+        active_catalogs: &HashSet<usize>,
+        total_matched: &mut usize,
+        catalogs_to_microsync: &mut HashSet<usize>,
+    ) {
+        let entries = match Entry::multiple_from_ids(entry_ids, &self.app).await {
+            Ok(map) => map,
+            Err(e) => {
+                log::warn!(
+                    "crossmatch_via_aux: cannot load entries for P{prop} group: {e}"
+                );
+                return;
+            }
+        };
+
+        // Bucket the loaded entries by match state. Inactive catalogs
+        // are dropped here rather than at the SQL level — mirrors
+        // PHP's `JOIN catalog ... WHERE catalog.active=1`.
+        let mut manual_qs: HashSet<isize> = HashSet::new();
+        let mut unmatched_entries: Vec<(usize, usize)> = Vec::new(); // (entry_id, catalog_id)
+        for (_id, entry) in entries {
+            if !active_catalogs.contains(&entry.catalog) {
+                continue;
+            }
+            let user = entry.user.unwrap_or(0);
+            let q = entry.q.unwrap_or(0);
+            if user > 0 && q > 0 {
+                manual_qs.insert(q);
+            } else if let Some(entry_id) = entry.id {
+                unmatched_entries.push((entry_id, entry.catalog));
+            }
+        }
+
+        // Need exactly one human-confirmed Q to know what to
+        // propagate. Zero → nothing to share. More than one →
+        // ambiguous; PHP logs and skips, we do the same.
+        let Some(&q) = single_value(&manual_qs) else {
+            return;
+        };
+        if unmatched_entries.is_empty() {
+            return;
+        }
+        let q_str = format!("Q{q}");
+        for (entry_id, catalog_id) in unmatched_entries {
+            let mut entry = match Entry::from_id(entry_id, &self.app).await {
+                Ok(e) => e,
+                Err(e) => {
+                    log::warn!(
+                        "crossmatch_via_aux: re-load failed for entry {entry_id}: {e}"
+                    );
+                    continue;
+                }
+            };
+            if entry.set_match(&q_str, USER_AUX_MATCH).await.is_ok() {
+                *total_matched += 1;
+                catalogs_to_microsync.insert(catalog_id);
+            }
+        }
     }
 
     /// Propagate a confirmed Wikidata match across entries that
@@ -932,58 +1019,14 @@ impl Maintenance {
         let mut total_matched = 0_usize;
         let mut catalogs_to_microsync: HashSet<usize> = HashSet::new();
         for (prop, _aux_name, entry_ids) in groups {
-            let entries = match Entry::multiple_from_ids(&entry_ids, &self.app).await {
-                Ok(map) => map,
-                Err(e) => {
-                    log::warn!(
-                        "crossmatch_via_aux: cannot load entries for P{prop} group: {e}"
-                    );
-                    continue;
-                }
-            };
-
-            // Bucket the loaded entries by match state. Inactive
-            // catalogs are dropped here rather than at the SQL level —
-            // mirrors PHP's `JOIN catalog ... WHERE catalog.active=1`.
-            let mut manual_qs: HashSet<isize> = HashSet::new();
-            let mut unmatched_entries: Vec<(usize, usize)> = Vec::new(); // (entry_id, catalog_id)
-            for (_id, entry) in entries {
-                if !active_catalogs.contains(&entry.catalog) {
-                    continue;
-                }
-                let user = entry.user.unwrap_or(0);
-                let q = entry.q.unwrap_or(0);
-                if user > 0 && q > 0 {
-                    manual_qs.insert(q);
-                } else if let Some(entry_id) = entry.id {
-                    unmatched_entries.push((entry_id, entry.catalog));
-                }
-            }
-
-            // Need exactly one human-confirmed Q to know what to
-            // propagate. Zero → nothing to share. More than one →
-            // ambiguous; PHP logs and skips, we do the same.
-            if manual_qs.len() != 1 || unmatched_entries.is_empty() {
-                continue;
-            }
-            let q = *manual_qs.iter().next().expect("len == 1");
-            let q_str = format!("Q{q}");
-
-            for (entry_id, catalog_id) in unmatched_entries {
-                let mut entry = match Entry::from_id(entry_id, &self.app).await {
-                    Ok(e) => e,
-                    Err(e) => {
-                        log::warn!(
-                            "crossmatch_via_aux: re-load failed for entry {entry_id}: {e}"
-                        );
-                        continue;
-                    }
-                };
-                if entry.set_match(&q_str, USER_AUX_MATCH).await.is_ok() {
-                    total_matched += 1;
-                    catalogs_to_microsync.insert(catalog_id);
-                }
-            }
+            self.crossmatch_via_aux_one_group(
+                prop,
+                &entry_ids,
+                &active_catalogs,
+                &mut total_matched,
+                &mut catalogs_to_microsync,
+            )
+            .await;
         }
 
         // Queue follow-up microsync per touched catalog so the
@@ -1186,6 +1229,17 @@ impl Maintenance {
         );
         Ok(())
     }
+}
+
+/// `Some(&v)` iff the set has exactly one element. Lets a caller
+/// pattern-match on "exactly one value" without a separate
+/// `len() == 1` + `iter().next().unwrap()` two-step that clippy
+/// (correctly) flags as a potential panic source.
+fn single_value<T>(set: &HashSet<T>) -> Option<&T> {
+    if set.len() != 1 {
+        return None;
+    }
+    set.iter().next()
 }
 
 /// True iff the loaded item carries at least one `P31 = Q5`
