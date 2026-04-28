@@ -208,9 +208,57 @@ pub struct MergeableMatch {
     pub source_timestamp: Option<String>,
 }
 
+/// ISP-segregated sub-trait covering the `issues` table reads and
+/// writes. Carved out of `Storage` so consumers that only deal with
+/// issue-tracking (the `update_issues` / `fix_duplicate_issues` jobs,
+/// the issues API endpoints) can declare a tighter dependency than
+/// the 196-method `Storage` superset.
+///
+/// `Storage: IssueQueries` so any existing `&dyn Storage` continues
+/// to satisfy `&dyn IssueQueries` via trait upcasting (stable since
+/// Rust 1.86).
+#[async_trait]
+pub trait IssueQueries: std::fmt::Debug + Send + Sync {
+    async fn get_open_wd_duplicates(&self) -> Result<Vec<Issue>>;
+    /// Close every OPEN issue whose entry belongs to a catalog that's
+    /// no longer active. Mirrors the first SQL in PHP
+    /// `Maintenance::updateIssues`. Returns affected-row count.
+    async fn issues_close_for_inactive_catalogs(&self) -> Result<usize>;
+    /// Close every OPEN MISMATCH_DATES issue where the MnM date is
+    /// "MM-01-01" — these are placeholder January-1st entries that
+    /// look like real dates but almost always indicate a year-only
+    /// import that shouldn't be flagged as a mismatch. Mirrors the
+    /// second SQL in PHP `Maintenance::updateIssues`.
+    async fn issues_close_jan01_mismatches(&self) -> Result<usize>;
+    /// Delete OPEN issues whose entry is matched to Q0 or Q-1 by a
+    /// real user — those entry rows mean "N/A" or "no Wikidata", not a
+    /// real match, so the corresponding issue is moot. Mirrors the
+    /// third SQL in PHP `Maintenance::updateIssues`.
+    async fn issues_delete_invalid_q_matches(&self) -> Result<usize>;
+    async fn issue_insert(&self, issue: &Issue) -> Result<()>;
+    async fn set_issue_status(&self, issue_id: usize, status: IssueStatus) -> Result<()>;
+}
+
+/// ISP-segregated sub-trait covering the coordinate-matcher's two
+/// reads. Tiny on its own, but carving it out lets the
+/// `coordinate_matcher` module declare a dependency on exactly what
+/// it uses, which is the whole point of ISP.
+#[async_trait]
+pub trait CoordinateMatcherQueries: std::fmt::Debug + Send + Sync {
+    async fn get_coordinate_matcher_rows(
+        &self,
+        catalog_id: &Option<usize>,
+        bad_catalogs: &[usize],
+        max_results: usize,
+    ) -> Result<Vec<LocationRow>>;
+    async fn get_all_catalogs_key_value_pairs(&self) -> Result<Vec<(usize, String, String)>>;
+}
+
 #[async_trait]
 #[allow(clippy::too_many_arguments)]
-pub trait Storage: std::fmt::Debug + Send + Sync {
+pub trait Storage:
+    IssueQueries + CoordinateMatcherQueries + std::fmt::Debug + Send + Sync
+{
     // fn new(j: &Value) -> impl Storage;
     async fn disconnect(&self) -> Result<()>;
 
@@ -229,16 +277,6 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
         batch_size: usize,
         offset: usize,
     ) -> Result<(usize, RankedNames)>;
-
-    // Coordinate matcher
-
-    async fn get_coordinate_matcher_rows(
-        &self,
-        catalog_id: &Option<usize>,
-        bad_catalogs: &[usize],
-        max_results: usize,
-    ) -> Result<Vec<LocationRow>>;
-    async fn get_all_catalogs_key_value_pairs(&self) -> Result<Vec<(usize, String, String)>>;
 
     // Data source
 
@@ -362,26 +400,8 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     async fn set_has_person_date(&self, catalog_id: usize, new_has_person_date: &str)
     -> Result<()>;
 
-    // Issue
-
-    async fn get_open_wd_duplicates(&self) -> Result<Vec<Issue>>;
-    /// Close every OPEN issue whose entry belongs to a catalog that's
-    /// no longer active. Mirrors the first SQL in PHP
-    /// `Maintenance::updateIssues`. Returns affected-row count.
-    async fn issues_close_for_inactive_catalogs(&self) -> Result<usize>;
-    /// Close every OPEN MISMATCH_DATES issue where the MnM date is
-    /// "MM-01-01" — these are placeholder January-1st entries that
-    /// look like real dates but almost always indicate a year-only
-    /// import that shouldn't be flagged as a mismatch. Mirrors the
-    /// second SQL in PHP `Maintenance::updateIssues`.
-    async fn issues_close_jan01_mismatches(&self) -> Result<usize>;
-    /// Delete OPEN issues whose entry is matched to Q0 or Q-1 by a
-    /// real user — those entry rows mean "N/A" or "no Wikidata", not a
-    /// real match, so the corresponding issue is moot. Mirrors the
-    /// third SQL in PHP `Maintenance::updateIssues`.
-    async fn issues_delete_invalid_q_matches(&self) -> Result<usize>;
-    async fn issue_insert(&self, issue: &Issue) -> Result<()>;
-    async fn set_issue_status(&self, issue_id: usize, status: IssueStatus) -> Result<()>;
+    // Issue methods now live on the `IssueQueries` sub-trait above;
+    // `Storage` inherits them via supertrait bound.
 
     // Autoscrape
 
@@ -1095,6 +1115,30 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Compile-time check that `Storage` correctly subsumes the new
+    /// sub-traits via supertrait bounds — i.e. any `&dyn Storage`
+    /// can be passed where a tighter trait object is expected, via
+    /// trait upcasting (stable since Rust 1.86).
+    ///
+    /// If a future commit accidentally drops `IssueQueries` or
+    /// `CoordinateMatcherQueries` from Storage's supertrait list,
+    /// this stops compiling, catching the regression at build time.
+    #[allow(dead_code)]
+    fn upcasts_compile(s: &dyn Storage) {
+        let _: &dyn IssueQueries = s;
+        let _: &dyn CoordinateMatcherQueries = s;
+    }
+
+    /// Compile-time check that a function depending only on the
+    /// segregated `IssueQueries` trait can take any `Storage`. This
+    /// is the actual ISP win — issue-touching code declares the
+    /// minimum it needs, but real callers still pass the full
+    /// `&dyn Storage` they hold via `app.storage()`.
+    #[allow(dead_code)]
+    async fn isp_caller_signature<S: IssueQueries + ?Sized>(s: &S) -> Result<usize> {
+        s.issues_close_for_inactive_catalogs().await
+    }
 
     fn make_overview_row(
         total: isize,
