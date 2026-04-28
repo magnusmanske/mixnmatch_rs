@@ -518,6 +518,12 @@ impl Job {
             )
             .await
             .map(|stats| log::info!("sync_wd_matches: {stats}")),
+            "push_wd_matches_to_wikidata" => crate::wd_match_sync::push_wd_missing(
+                &self.app,
+                crate::wd_match_sync::DEFAULT_BATCH_SIZE,
+            )
+            .await
+            .map(|stats| log::info!("push_wd_matches_to_wikidata: {stats}")),
             "update_person_dates" => {
                 match code_fragment::run_person_dates_job(catalog_id, &self.app).await {
                     Ok(()) => Ok(()),

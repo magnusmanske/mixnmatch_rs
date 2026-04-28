@@ -24,10 +24,12 @@
 //!   query.
 
 use crate::app_state::AppState;
+use crate::auth::config::OauthConfig;
+use crate::auth::flow::{TokenPair, wikidata_create_string_claim};
 use crate::issue::{Issue, IssueType};
 use crate::storage::WdMatchRow;
-use anyhow::Result;
-use log::{debug, warn};
+use anyhow::{Result, anyhow};
+use log::{debug, info, warn};
 use serde_json::json;
 use std::collections::HashSet;
 use wikimisc::wikibase::entity_container::EntityContainer;
@@ -179,20 +181,20 @@ async fn classify_batch(app: &AppState, rows: &[WdMatchRow]) -> Result<ClassifyS
             }
         }
 
-        let status = outcome.status();
+        let new_status = outcome.status();
         if let Err(e) = app
             .storage()
-            .wd_matches_set_status(row.entry_id, status.as_str())
+            .wd_matches_set_status(row.entry_id, new_status.as_str())
             .await
         {
             warn!(
                 "wd_matches: status update failed for entry {} ({}): {e}",
                 row.entry_id,
-                status.as_str()
+                new_status.as_str()
             );
             continue;
         }
-        stats.record(status);
+        stats.record(new_status);
     }
     Ok(stats)
 }
@@ -273,6 +275,214 @@ fn string_values_for_property(item: &wikimisc::wikibase::Entity, property: usize
             _ => None,
         })
         .collect()
+}
+
+// ---------------------------------------------------------------------
+// Write-back: push WD_MISSING rows to Wikidata as new statements.
+// ---------------------------------------------------------------------
+
+/// Per-row outcome of a single push attempt. Used only for stats; the
+/// row's persisted status is updated separately as part of each branch.
+#[derive(Debug, Clone, Copy)]
+enum PushOutcome {
+    /// Statement created on Wikidata; row transitioned to SAME.
+    Pushed,
+    /// Re-check found WD already had the value (someone else added it
+    /// meanwhile, or the classifier was stale). Row transitioned to SAME.
+    AlreadySame,
+    /// Re-check found WD now has divergent values. Row transitioned to
+    /// DIFFERENT or MULTIPLE; no statement added.
+    SkippedDivergent,
+    /// Item is no longer accessible (deleted/redirect). Row transitioned
+    /// to N/A; nothing pushed.
+    SkippedDeleted,
+    /// Network or API error. Row left in WD_MISSING for the next run.
+    Error,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct PushStats {
+    pub processed: usize,
+    pub pushed: usize,
+    pub already_same: usize,
+    pub skipped_divergent: usize,
+    pub skipped_deleted: usize,
+    pub errors: usize,
+}
+
+impl PushStats {
+    fn record(&mut self, outcome: PushOutcome) {
+        self.processed += 1;
+        match outcome {
+            PushOutcome::Pushed => self.pushed += 1,
+            PushOutcome::AlreadySame => self.already_same += 1,
+            PushOutcome::SkippedDivergent => self.skipped_divergent += 1,
+            PushOutcome::SkippedDeleted => self.skipped_deleted += 1,
+            PushOutcome::Error => self.errors += 1,
+        }
+    }
+}
+
+impl std::fmt::Display for PushStats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} processed (pushed={}, already_same={}, skipped_divergent={}, \
+             skipped_deleted={}, errors={})",
+            self.processed,
+            self.pushed,
+            self.already_same,
+            self.skipped_divergent,
+            self.skipped_deleted,
+            self.errors,
+        )
+    }
+}
+
+/// Walk the `WD_MISSING` bucket of `wd_matches` and write each pending
+/// `Pn=ext_id` statement back to Wikidata as a `wbcreateclaim` call,
+/// signed with the OAuth1.0a bot token from `oauth.ini` (`[bot]`
+/// section). Mirrors PHP `RecentChangesWatcher::syncMatchesToWikidata`.
+///
+/// Each row is independently re-verified against live Wikidata before
+/// the write, so a row that drifted out of `WD_MISSING` since the
+/// classifier last ran (someone else added the value, or the property
+/// got a different one) is reclassified rather than being clobbered.
+/// Network/API errors leave the row in `WD_MISSING` for the next run.
+pub async fn push_wd_missing(app: &AppState, batch_size: usize) -> Result<PushStats> {
+    let cfg = app
+        .oauth_config()
+        .ok_or_else(|| anyhow!("OAuth config not loaded; cannot push wd_matches"))?
+        .clone();
+    let access = bot_token_pair(&cfg)?;
+
+    let rows = app
+        .storage()
+        .wd_matches_get_batch("WD_MISSING", batch_size)
+        .await?;
+    if rows.is_empty() {
+        debug!("push_wd_missing: nothing in WD_MISSING");
+        return Ok(PushStats::default());
+    }
+    info!("push_wd_missing: pushing {} statement(s) to Wikidata", rows.len());
+
+    let entities = load_items_for_rows(app, &rows).await?;
+    let mut stats = PushStats::default();
+    for row in &rows {
+        let outcome = push_one(app, &cfg, &access, row, &entities).await;
+        stats.record(outcome);
+    }
+    Ok(stats)
+}
+
+async fn push_one(
+    app: &AppState,
+    cfg: &OauthConfig,
+    access: &TokenPair,
+    row: &WdMatchRow,
+    entities: &EntityContainer,
+) -> PushOutcome {
+    let q_label = format!("Q{}", row.q_numeric);
+    let item = entities.get_entity(q_label.clone());
+
+    // Re-verify against live state. Callers might be running this hours
+    // after the classifier put the row in WD_MISSING; another editor
+    // (human or bot) could have populated the property in between. The
+    // classifier output is the source of truth for what to do.
+    match classify_row(row, item.as_ref()) {
+        Outcome::Status(WdMatchStatus::Same) => {
+            update_status_best_effort(app, row, WdMatchStatus::Same).await;
+            return PushOutcome::AlreadySame;
+        }
+        Outcome::Status(WdMatchStatus::Different) => {
+            update_status_best_effort(app, row, WdMatchStatus::Different).await;
+            return PushOutcome::SkippedDivergent;
+        }
+        Outcome::Multiple { .. } => {
+            update_status_best_effort(app, row, WdMatchStatus::Multiple).await;
+            return PushOutcome::SkippedDivergent;
+        }
+        Outcome::Status(WdMatchStatus::NotApplicable) => {
+            update_status_best_effort(app, row, WdMatchStatus::NotApplicable).await;
+            return PushOutcome::SkippedDeleted;
+        }
+        Outcome::Status(WdMatchStatus::WdMissing) => {
+            // Still genuinely missing — proceed with the write.
+        }
+        // Status::WdMissing is the only "proceed" branch; the other
+        // variants are matched explicitly above.
+        Outcome::Status(_) => unreachable!("classifier produced an unhandled status"),
+    }
+
+    let summary = build_summary(row);
+    let property = format!("P{}", row.wd_prop);
+    match wikidata_create_string_claim(cfg, access, &q_label, &property, &row.ext_id, &summary)
+        .await
+    {
+        Ok(response) => {
+            if let Some(err) = response.get("error") {
+                warn!(
+                    "push_wd_missing: wbcreateclaim error for entry {} ({}/{}): {}",
+                    row.entry_id, q_label, property, err
+                );
+                PushOutcome::Error
+            } else {
+                update_status_best_effort(app, row, WdMatchStatus::Same).await;
+                PushOutcome::Pushed
+            }
+        }
+        Err(e) => {
+            warn!(
+                "push_wd_missing: wbcreateclaim failed for entry {} ({}/{}): {e}",
+                row.entry_id, q_label, property
+            );
+            PushOutcome::Error
+        }
+    }
+}
+
+/// Extract the bot's OAuth1.0a access token from the loaded config.
+/// Returns a clear configuration error if either half is absent — the
+/// caller is responsible for checking before walking the row batch so
+/// the failure surfaces before any DB / WD round-trips.
+fn bot_token_pair(cfg: &OauthConfig) -> Result<TokenPair> {
+    let key = cfg.bot_access_key.clone().ok_or_else(|| {
+        anyhow!(
+            "oauth.ini has no [bot] accessKey — cannot push wd_matches \
+             without OAuth1.0a bot credentials"
+        )
+    })?;
+    let secret = cfg.bot_access_secret.clone().ok_or_else(|| {
+        anyhow!(
+            "oauth.ini has no [bot] accessSecret — cannot push wd_matches \
+             without OAuth1.0a bot credentials"
+        )
+    })?;
+    Ok(TokenPair { key, secret })
+}
+
+/// Build the edit summary mirroring PHP's `getQsCommentForEntry`: a
+/// single MediaWiki-link to the entry on the toolforge UI, so reviewers
+/// in the WD edit history can click straight through to the source row.
+fn build_summary(row: &WdMatchRow) -> String {
+    format!(
+        "Mix'n'match entry [[:toollabs:mix-n-match/#/entry/{id}|#{id}]]",
+        id = row.entry_id
+    )
+}
+
+async fn update_status_best_effort(app: &AppState, row: &WdMatchRow, status: WdMatchStatus) {
+    if let Err(e) = app
+        .storage()
+        .wd_matches_set_status(row.entry_id, status.as_str())
+        .await
+    {
+        warn!(
+            "wd_matches: status update failed for entry {} ({}): {e}",
+            row.entry_id,
+            status.as_str()
+        );
+    }
 }
 
 #[cfg(test)]
@@ -362,6 +572,39 @@ mod tests {
         assert_eq!(WdMatchStatus::Different.as_str(), "DIFFERENT");
         assert_eq!(WdMatchStatus::WdMissing.as_str(), "WD_MISSING");
         assert_eq!(WdMatchStatus::Multiple.as_str(), "MULTIPLE");
+    }
+
+    #[test]
+    fn push_summary_links_to_entry_on_toolforge() {
+        // Reviewers reading the WD edit history must be able to click
+        // straight through to the MnM entry — the wikilink shape must
+        // resolve via the cross-wiki :toollabs: prefix.
+        let r = row("abc-123", 213);
+        let mut row_with_id = r.clone();
+        row_with_id.entry_id = 99_999;
+        let s = build_summary(&row_with_id);
+        assert!(
+            s.contains(":toollabs:mix-n-match/#/entry/99999"),
+            "summary missing entry link: {s}"
+        );
+        assert!(s.contains("#99999"));
+    }
+
+    #[test]
+    fn push_stats_records_each_outcome_distinctly() {
+        let mut s = PushStats::default();
+        s.record(PushOutcome::Pushed);
+        s.record(PushOutcome::Pushed);
+        s.record(PushOutcome::AlreadySame);
+        s.record(PushOutcome::SkippedDivergent);
+        s.record(PushOutcome::SkippedDeleted);
+        s.record(PushOutcome::Error);
+        assert_eq!(s.processed, 6);
+        assert_eq!(s.pushed, 2);
+        assert_eq!(s.already_same, 1);
+        assert_eq!(s.skipped_divergent, 1);
+        assert_eq!(s.skipped_deleted, 1);
+        assert_eq!(s.errors, 1);
     }
 
     #[test]
