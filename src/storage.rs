@@ -254,20 +254,10 @@ pub trait CoordinateMatcherQueries: std::fmt::Debug + Send + Sync {
     async fn get_all_catalogs_key_value_pairs(&self) -> Result<Vec<(usize, String, String)>>;
 }
 
+/// ISP-segregated sub-trait covering the taxon-matcher's two reads.
+/// Used by `taxon_matcher.rs`.
 #[async_trait]
-#[allow(clippy::too_many_arguments)]
-pub trait Storage:
-    IssueQueries + CoordinateMatcherQueries + std::fmt::Debug + Send + Sync
-{
-    // fn new(j: &Value) -> impl Storage;
-    async fn disconnect(&self) -> Result<()>;
-
-    async fn entry_query(&self, query: &EntryQuery) -> Result<Vec<Entry>>;
-    async fn get_entry_ids_by_aux(&self, prop_numeric: usize, value: &str) -> Result<Vec<usize>>;
-    async fn get_user_name_from_id(&self, user_id: usize) -> Option<String>;
-
-    // Taxon matcher
-
+pub trait TaxonQueries: std::fmt::Debug + Send + Sync {
     async fn set_catalog_taxon_run(&self, catalog_id: usize, taxon_run: bool) -> Result<()>;
     async fn match_taxa_get_ranked_names_batch(
         &self,
@@ -277,6 +267,62 @@ pub trait Storage:
         batch_size: usize,
         offset: usize,
     ) -> Result<(usize, RankedNames)>;
+}
+
+/// ISP-segregated sub-trait covering the autoscrape state machine
+/// (start/finish) plus the lookup helper used by autoscrape's
+/// "have we already imported this ext_id?" check. Used by
+/// `autoscrape.rs` and the bespoke-scraper trait's `process_cache`.
+#[async_trait]
+pub trait AutoscrapeQueries: std::fmt::Debug + Send + Sync {
+    async fn autoscrape_get_for_catalog(&self, catalog_id: usize) -> Result<Vec<(usize, String)>>;
+    async fn get_entry_ids_for_ext_ids(
+        &self,
+        catalog_id: usize,
+        ext_ids: &[String],
+    ) -> Result<Vec<(String, usize)>>;
+    async fn autoscrape_start(&self, autoscrape_id: usize) -> Result<()>;
+    async fn autoscrape_finish(&self, autoscrape_id: usize, last_run_urls: usize) -> Result<()>;
+}
+
+/// ISP-segregated sub-trait covering the CERSEI sync flow.
+/// Used by `cersei.rs`.
+#[async_trait]
+pub trait CerseiQueries: std::fmt::Debug + Send + Sync {
+    async fn get_cersei_scrapers(&self) -> Result<HashMap<usize, CurrentScraper>>;
+    async fn add_cersei_catalog(&self, catalog_id: usize, scraper_id: usize) -> Result<()>;
+    async fn update_cersei_last_update(&self, scraper_id: usize, last_sync: &str) -> Result<()>;
+    async fn entry_update_cersei(
+        &self,
+        entry_id: usize,
+        ext_name: &str,
+        ext_desc: &str,
+        type_name: &str,
+        ext_url: &str,
+    ) -> Result<()>;
+}
+
+#[async_trait]
+#[allow(clippy::too_many_arguments)]
+pub trait Storage:
+    IssueQueries
+    + CoordinateMatcherQueries
+    + TaxonQueries
+    + AutoscrapeQueries
+    + CerseiQueries
+    + std::fmt::Debug
+    + Send
+    + Sync
+{
+    // fn new(j: &Value) -> impl Storage;
+    async fn disconnect(&self) -> Result<()>;
+
+    async fn entry_query(&self, query: &EntryQuery) -> Result<Vec<Entry>>;
+    async fn get_entry_ids_by_aux(&self, prop_numeric: usize, value: &str) -> Result<Vec<usize>>;
+    async fn get_user_name_from_id(&self, user_id: usize) -> Option<String>;
+
+    // Taxon matcher methods now live on the `TaxonQueries` sub-trait
+    // above; `Storage` inherits them via supertrait bound.
 
     // Data source
 
@@ -403,16 +449,8 @@ pub trait Storage:
     // Issue methods now live on the `IssueQueries` sub-trait above;
     // `Storage` inherits them via supertrait bound.
 
-    // Autoscrape
-
-    async fn autoscrape_get_for_catalog(&self, catalog_id: usize) -> Result<Vec<(usize, String)>>;
-    async fn get_entry_ids_for_ext_ids(
-        &self,
-        catalog_id: usize,
-        ext_ids: &[String],
-    ) -> Result<Vec<(String, usize)>>;
-    async fn autoscrape_start(&self, autoscrape_id: usize) -> Result<()>;
-    async fn autoscrape_finish(&self, autoscrape_id: usize, last_run_urls: usize) -> Result<()>;
+    // Autoscrape methods now live on the `AutoscrapeQueries` sub-trait
+    // above; `Storage` inherits them via supertrait bound.
 
     // Auxiliary matcher
 
@@ -705,18 +743,8 @@ pub trait Storage:
     ) -> Result<()>;
     async fn app_state_seppuku_get_running(&self, ts: &str) -> (usize, usize);
 
-    // CERSEI
-    async fn get_cersei_scrapers(&self) -> Result<HashMap<usize, CurrentScraper>>;
-    async fn add_cersei_catalog(&self, catalog_id: usize, scraper_id: usize) -> Result<()>;
-    async fn update_cersei_last_update(&self, scraper_id: usize, last_sync: &str) -> Result<()>;
-    async fn entry_update_cersei(
-        &self,
-        entry_id: usize,
-        ext_name: &str,
-        ext_desc: &str,
-        type_name: &str,
-        ext_url: &str,
-    ) -> Result<()>;
+    // CERSEI methods now live on the `CerseiQueries` sub-trait above;
+    // `Storage` inherits them via supertrait bound.
 
     // MetaEntry support
     async fn meta_entry_get_mnm_relations(
