@@ -24,8 +24,20 @@ pub fn router(app: AppState) -> Router {
     let state: SharedState = Arc::new(app);
     // 512 MB: big enough for realistic catalog uploads, still bounded.
     const UPLOAD_MAX_BYTES: usize = 512 * 1024 * 1024;
-    Router::new()
+
+    // /api.php is the user-supplied query path: it needs the origin
+    // check (cross-origin browsers can still send simple GETs even
+    // when CORS would block the response) and panic recovery (a
+    // single MySQL-row-decode panic shouldn't kill the connection).
+    // Other routes don't take user-supplied query strings, so they
+    // get neither.
+    let api_php_routes = Router::new()
         .route("/api.php", get(api_dispatcher).post(api_dispatcher_form))
+        .route_layer(axum::middleware::from_fn(panic_recovery_middleware))
+        .route_layer(axum::middleware::from_fn(origin_check_middleware));
+
+    Router::new()
+        .merge(api_php_routes)
         .route(
             "/api/v1/import_catalog",
             post(upload::api_import_catalog),
@@ -41,12 +53,8 @@ pub fn router(app: AppState) -> Router {
 async fn api_dispatcher(
     State(app): State<SharedState>,
     session: Session,
-    headers: axum::http::HeaderMap,
     Query(params): Query<Params>,
 ) -> Response {
-    if let Some(r) = reject_cross_origin(&headers) {
-        return r;
-    }
     dispatcher_common(&app, &session, params).await
 }
 
@@ -56,9 +64,6 @@ async fn api_dispatcher_form(
     req: axum::extract::Request,
 ) -> Response {
     use axum::extract::FromRequest;
-    if let Some(r) = reject_cross_origin(req.headers()) {
-        return r;
-    }
     // Sniff content-type to decide between form-urlencoded (the common case)
     // and multipart uploads (used only by `upload_import_file`).
     let ct = req
@@ -78,26 +83,58 @@ async fn api_dispatcher_form(
     }
 }
 
-/// If the request carries a cross-origin `Origin` header that isn't in the
-/// allowlist, reject it before any handler runs. This guards against simple
-/// cross-origin GETs — which browsers send regardless of CORS response
-/// headers, only blocking the *response* from reaching the attacker. For a
-/// mutation endpoint, the attacker already got what they wanted.
-fn reject_cross_origin(headers: &axum::http::HeaderMap) -> Option<Response> {
-    let origin = headers
+/// Middleware: reject requests with a cross-origin `Origin` header
+/// that isn't in the allowlist. Browsers send simple cross-origin
+/// GETs regardless of CORS response headers — they only block the
+/// *response* from reaching the attacker, which is too late for
+/// mutation endpoints. Lifted out of the per-handler dispatch so
+/// every /api.php request is checked uniformly without each
+/// handler having to remember.
+async fn origin_check_middleware(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    if let Some(origin) = req
+        .headers()
         .get(axum::http::header::ORIGIN)
-        .and_then(|v| v.to_str().ok())?;
-    if crate::api::cors::is_allowed_origin(origin) {
-        None
-    } else {
-        use axum::http::StatusCode;
-        Some(
-            (
+        .and_then(|v| v.to_str().ok())
+    {
+        if !crate::api::cors::is_allowed_origin(origin) {
+            use axum::http::StatusCode;
+            return (
                 StatusCode::FORBIDDEN,
                 format!("origin {origin} not allowed"),
             )
-                .into_response(),
-        )
+                .into_response();
+        }
+    }
+    next.run(req).await
+}
+
+/// Middleware: catch panics in any downstream handler and convert
+/// them into a clean JSON error. Without this, a single MySQL row
+/// decode panic (e.g. an unexpected NULL) would kill the connection
+/// mid-flight; the browser sees that as a `NetworkError` and the
+/// user gets no clue what failed. The recovery body matches the
+/// pre-middleware behaviour that lived inside `dispatcher_common`.
+async fn panic_recovery_middleware(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    use futures::FutureExt;
+    let path = req.uri().path().to_string();
+    let fut = std::panic::AssertUnwindSafe(next.run(req));
+    match fut.catch_unwind().await {
+        Ok(resp) => resp,
+        Err(panic) => {
+            let msg = panic
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| panic.downcast_ref::<&str>().map(|s| (*s).to_string()))
+                .unwrap_or_else(|| "unknown panic".to_string());
+            log::error!("{path} panicked: {msg}");
+            ApiError(format!("internal error: {msg}")).into_response()
+        }
     }
 }
 
@@ -128,25 +165,13 @@ async fn dispatcher_common(app: &AppState, session: &Session, params: Params) ->
     // popup (top-level navigation carries the first-party session cookie, unlike
     // a cross-origin fetch), and we return HTML that closes the popup on success.
     let autoclose = params.get("autoclose").map(String::as_str) == Some("1");
-    // Wrap the dispatcher in catch_unwind so a panic in a single handler
-    // (typically a MySQL type mismatch inside `row.get`) returns a clean
-    // error response instead of killing the connection mid-flight — the
-    // latter would surface in the browser as a NetworkError.
-    use futures::FutureExt;
-    let dispatch_fut = std::panic::AssertUnwindSafe(dispatch(&query, app, session, &params));
-    let result = dispatch_fut.catch_unwind().await;
-    let resp = match result {
-        Ok(Ok(r)) => r,
-        Ok(Err(e)) => e.into_response(),
-        Err(panic) => {
-            let msg = panic
-                .downcast_ref::<String>()
-                .cloned()
-                .or_else(|| panic.downcast_ref::<&str>().map(|s| (*s).to_string()))
-                .unwrap_or_else(|| "unknown panic".to_string());
-            log::error!("api.php query={query} panicked: {msg}");
-            ApiError(format!("internal error: {msg}")).into_response()
-        }
+    // Panic recovery and origin rejection are handled by the
+    // tower middleware layered onto /api.php (see `router()`); a
+    // panic inside `dispatch` propagates up to the catch_unwind
+    // there. Per-handler errors are still mapped to ApiError here.
+    let resp = match dispatch(&query, app, session, &params).await {
+        Ok(r) => r,
+        Err(e) => e.into_response(),
     };
     if autoclose {
         return wrap_autoclose(resp).await;
