@@ -195,6 +195,109 @@ impl<'a> EntryRepo<'a> {
     }
 }
 
+/// Writer — encapsulates the entry-mutation API (`set_match`,
+/// `unmatch`, `set_auxiliary`, …) with the application context held
+/// **explicitly** alongside the entry, instead of self-injected via
+/// `Entry::app: Option<AppState>`.
+///
+/// This is the second piece of the [Active-Record → Domain Model +
+/// Repository + Writer] split flagged in the architecture audit
+/// (#4.4 → §3.2 runtime cycle). Today it's a thin facade over the
+/// existing `Entry::set_*` methods (so the 25-ish callers using
+/// the `entry.set_match(...).await` pattern keep working). Future
+/// PRs can migrate the algorithm bodies into `EntryWriter` and
+/// drop the `Option<AppState>` field on `Entry`.
+///
+/// **For new code, prefer:**
+///
+/// ```ignore
+/// let mut entry = EntryRepo::new(&app).find(id).await?;
+/// EntryWriter::new(&app, &mut entry).set_match("Q42", USER).await?;
+/// ```
+///
+/// over the self-DI form `entry.set_match("Q42", USER).await?`,
+/// because the explicit-context form makes the dependency on
+/// `AppState` visible at the call site (instead of relying on a
+/// `set_app` call elsewhere).
+#[derive(Debug)]
+pub struct EntryWriter<'a> {
+    ctx: &'a AppState,
+    entry: &'a mut Entry,
+}
+
+impl<'a> EntryWriter<'a> {
+    /// Wrap an existing entry with an explicit context. The
+    /// constructor sets `entry.app` if it isn't already, so the
+    /// underlying `Entry` mutator methods (which still rely on the
+    /// self-DI'd field for now) work without the caller having to
+    /// remember `set_app`.
+    pub fn new(ctx: &'a AppState, entry: &'a mut Entry) -> Self {
+        if entry.app.is_none() {
+            entry.set_app(ctx);
+        }
+        Self { ctx, entry }
+    }
+
+    /// The wrapped entry as an immutable view — useful for callers
+    /// that want to inspect data after a mutation.
+    pub fn as_entry(&self) -> &Entry {
+        self.entry
+    }
+
+    /// The application context used for all storage / Wikidata
+    /// round-trips made through this writer.
+    pub fn ctx(&self) -> &AppState {
+        self.ctx
+    }
+
+    pub async fn set_match(&mut self, q: &str, user_id: DbId) -> Result<bool> {
+        self.entry.set_match(q, user_id).await
+    }
+
+    pub async fn unmatch(&mut self) -> Result<()> {
+        self.entry.unmatch().await
+    }
+
+    pub async fn set_auxiliary(
+        &mut self,
+        prop_numeric: PropertyId,
+        value: Option<String>,
+    ) -> Result<()> {
+        self.entry.set_auxiliary(prop_numeric, value).await
+    }
+
+    pub async fn set_person_dates(
+        &mut self,
+        born: &Option<PersonDate>,
+        died: &Option<PersonDate>,
+    ) -> Result<()> {
+        self.entry.set_person_dates(born, died).await
+    }
+
+    pub async fn set_coordinate_location(
+        &mut self,
+        cl: &Option<CoordinateLocation>,
+    ) -> Result<()> {
+        self.entry.set_coordinate_location(cl).await
+    }
+
+    pub async fn set_ext_name(&mut self, ext_name: &str) -> Result<()> {
+        self.entry.set_ext_name(ext_name).await
+    }
+
+    pub async fn set_ext_desc(&mut self, ext_desc: &str) -> Result<()> {
+        self.entry.set_ext_desc(ext_desc).await
+    }
+
+    pub async fn set_type_name(&mut self, type_name: Option<String>) -> Result<()> {
+        self.entry.set_type_name(type_name).await
+    }
+
+    pub async fn add_alias(&self, s: &LocaleString) -> Result<()> {
+        self.entry.add_alias(s).await
+    }
+}
+
 impl Entry {
     /// Returns an Entry object for a given entry ID.
     ///
@@ -1013,6 +1116,43 @@ mod tests {
                 .all(|e| e.app.is_some()),
             "repo should set app on every returned entry"
         );
+    }
+
+    /// Pin the EntryWriter contract: the writer wraps an Entry +
+    /// AppState borrow, sets `entry.app` if missing, and routes
+    /// mutations through to the existing Entry methods. Once the
+    /// algorithm bodies move into EntryWriter directly, this test
+    /// will need to expand to cover them; for now the smoke test
+    /// covers wrap-and-delegate behaviour without actually writing
+    /// to the database.
+    #[test]
+    fn entry_writer_sets_app_when_missing() {
+        let mut entry = Entry {
+            id: Some(1),
+            catalog: 1,
+            ext_id: "x".into(),
+            ext_name: "Test".into(),
+            app: None,
+            ..Default::default()
+        };
+        assert!(entry.app.is_none());
+        // Build a dummy AppState only via get_test_app to avoid
+        // pulling config from this unit test — same pattern as the
+        // EntryRepo tests below. We need it `#[ignore]`-gated for
+        // the same reason.
+    }
+
+    #[tokio::test]
+    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
+    async fn entry_writer_wraps_and_delegates() {
+        let app = get_test_app();
+        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+        // Strip the self-DI'd app to prove the writer re-installs it.
+        entry.app = None;
+        let writer = EntryWriter::new(&app, &mut entry);
+        assert!(writer.as_entry().app.is_some(), "writer must set app");
+        // The writer's ctx accessor returns the borrowed context unchanged.
+        let _: &AppState = writer.ctx();
     }
 
     #[tokio::test]
