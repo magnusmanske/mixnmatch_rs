@@ -26,17 +26,8 @@ pub struct BespokeScraper1619 {
 
 #[async_trait]
 impl BespokeScraper for BespokeScraper1619 {
-    fn new(app: &AppState) -> Self {
-        Self { app: app.clone() }
-    }
 
-    fn catalog_id(&self) -> usize {
-        1619
-    }
-
-    fn app(&self) -> &AppState {
-        &self.app
-    }
+    scraper_boilerplate!(1619);
 
     async fn run(&self) -> Result<()> {
         let client = self.http_client();
@@ -88,11 +79,7 @@ impl BespokeScraper for BespokeScraper1619 {
             ee.aux
                 .insert(AuxiliaryRow::new(227, gnd_id.clone()));
             entry_cache.push(ee);
-
-            if entry_cache.len() >= 100 {
-                self.process_cache(&mut entry_cache).await?;
-                entry_cache.clear();
-            }
+            self.maybe_flush_cache(&mut entry_cache).await?;
         }
         self.process_cache(&mut entry_cache).await?;
         Ok(())

@@ -17,17 +17,8 @@ pub struct BespokeScraper7696 {
 
 #[async_trait]
 impl BespokeScraper for BespokeScraper7696 {
-    fn new(app: &AppState) -> Self {
-        Self { app: app.clone() }
-    }
 
-    fn catalog_id(&self) -> usize {
-        7696
-    }
-
-    fn app(&self) -> &AppState {
-        &self.app
-    }
+    scraper_boilerplate!(7696);
 
     async fn run(&self) -> Result<()> {
         let sitemap_url = "https://www.latvijasdaba.lv/sitemap.xml";
@@ -61,10 +52,7 @@ impl BespokeScraper for BespokeScraper7696 {
                 ..Default::default()
             };
             entry_cache.push(ee);
-            if entry_cache.len() >= 100 {
-                self.process_cache(&mut entry_cache).await?;
-                entry_cache.clear();
-            }
+            self.maybe_flush_cache(&mut entry_cache).await?;
         }
         self.process_cache(&mut entry_cache).await?;
         Ok(())

@@ -7,6 +7,30 @@ use log::info;
 use regex::Regex;
 use std::collections::HashMap;
 
+/// Generates the three identical boilerplate methods required by every `BespokeScraper` impl:
+/// `new`, `catalog_id`, and `app`. Place this inside the `impl BespokeScraper for …` block,
+/// followed by the scraper's unique `async fn run` implementation.
+///
+/// ```ignore
+/// impl BespokeScraper for BespokeScraper53 {
+///     scraper_boilerplate!(53);
+///     async fn run(&self) -> Result<()> { … }
+/// }
+/// ```
+macro_rules! scraper_boilerplate {
+    ($catalog_id:expr) => {
+        fn new(app: &$crate::app_state::AppState) -> Self {
+            Self { app: app.clone() }
+        }
+        fn catalog_id(&self) -> usize {
+            $catalog_id
+        }
+        fn app(&self) -> &$crate::app_state::AppState {
+            &self.app
+        }
+    };
+}
+
 pub mod scraper_53;
 pub mod scraper_85;
 pub mod scraper_121;
@@ -86,6 +110,9 @@ pub async fn run_bespoke_scraper(catalog_id: usize, app: &AppState) -> Result<()
     }
 }
 
+/// Number of buffered entries that triggers an intermediate `process_cache` flush.
+const CACHE_FLUSH_THRESHOLD: usize = 100;
+
 #[async_trait]
 pub trait BespokeScraper {
     fn new(app: &AppState) -> Self;
@@ -109,6 +136,17 @@ pub trait BespokeScraper {
 
     fn http_client(&self) -> reqwest::Client {
         reqwest::Client::new()
+    }
+
+    /// Push-and-flush helper: if `cache` has reached `CACHE_FLUSH_THRESHOLD`
+    /// entries, call `process_cache` and clear it. Call once per loop iteration,
+    /// then call `process_cache` unconditionally after the loop for the remainder.
+    async fn maybe_flush_cache(&self, cache: &mut Vec<ExtendedEntry>) -> Result<()> {
+        if cache.len() >= CACHE_FLUSH_THRESHOLD {
+            self.process_cache(cache).await?;
+            cache.clear();
+        }
+        Ok(())
     }
 
     async fn load_single_line_text_from_url(&self, url: &str) -> Result<String> {

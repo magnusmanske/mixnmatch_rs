@@ -24,17 +24,8 @@ pub struct BespokeScraper121 {
 
 #[async_trait]
 impl BespokeScraper for BespokeScraper121 {
-    fn new(app: &AppState) -> Self {
-        Self { app: app.clone() }
-    }
 
-    fn app(&self) -> &AppState {
-        &self.app
-    }
-
-    fn catalog_id(&self) -> usize {
-        121
-    }
+    scraper_boilerplate!(121);
 
     async fn run(&self) -> Result<()> {
         let url = "https://www.sikart.ch/personen_export.aspx";
@@ -60,10 +51,7 @@ impl BespokeScraper for BespokeScraper121 {
                 None => continue,
             };
             entry_cache.push(ext_entry);
-            if entry_cache.len() > 100 {
-                self.process_cache(&mut entry_cache).await?;
-                entry_cache.clear();
-            }
+            self.maybe_flush_cache(&mut entry_cache).await?;
         }
         self.process_cache(&mut entry_cache).await?;
         Ok(())

@@ -17,17 +17,8 @@ pub struct BespokeScraper6794 {
 
 #[async_trait]
 impl BespokeScraper for BespokeScraper6794 {
-    fn new(app: &AppState) -> Self {
-        Self { app: app.clone() }
-    }
 
-    fn app(&self) -> &AppState {
-        &self.app
-    }
-
-    fn catalog_id(&self) -> usize {
-        6794
-    }
+    scraper_boilerplate!(6794);
 
     async fn run(&self) -> Result<()> {
         lazy_static! {

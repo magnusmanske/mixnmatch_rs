@@ -17,17 +17,8 @@ pub struct BespokeScraper85 {
 
 #[async_trait]
 impl BespokeScraper for BespokeScraper85 {
-    fn new(app: &AppState) -> Self {
-        Self { app: app.clone() }
-    }
 
-    fn catalog_id(&self) -> usize {
-        85
-    }
-
-    fn app(&self) -> &AppState {
-        &self.app
-    }
+    scraper_boilerplate!(85);
 
     async fn run(&self) -> Result<()> {
         let client = self.http_client();
@@ -56,10 +47,7 @@ impl BespokeScraper for BespokeScraper85 {
                     entry_cache.push(ee);
                 }
             }
-            if entry_cache.len() >= 100 {
-                self.process_cache(&mut entry_cache).await?;
-                entry_cache.clear();
-            }
+            self.maybe_flush_cache(&mut entry_cache).await?;
             start += 30;
         }
         self.process_cache(&mut entry_cache).await?;

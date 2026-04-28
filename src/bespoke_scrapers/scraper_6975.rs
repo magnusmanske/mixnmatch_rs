@@ -17,17 +17,8 @@ pub struct BespokeScraper6975 {
 
 #[async_trait]
 impl BespokeScraper for BespokeScraper6975 {
-    fn new(app: &AppState) -> Self {
-        Self { app: app.clone() }
-    }
 
-    fn app(&self) -> &AppState {
-        &self.app
-    }
-
-    fn catalog_id(&self) -> usize {
-        6975
-    }
+    scraper_boilerplate!(6975);
 
     async fn run(&self) -> Result<()> {
         let url = "https://www.web.statistik.zh.ch/webapp/KRRRPublic/app?page=json&nachname=&vorname=&geburtsjahr=&wohnort=&beruf=&geschlecht=&partei=&parteigruppe=&wk_periode_von=2025&wk_periode_bis=2025&wahlkreis=1.+Wahlkreis+(Z%C3%BCrich+1%2B2)&bemerkungen=&einsitztag=1&einsitzmonat=1&einsitzjahr=2025";
@@ -44,10 +35,7 @@ impl BespokeScraper for BespokeScraper6975 {
             };
 
             entry_cache.push(ext_entry);
-            if entry_cache.len() > 100 {
-                self.process_cache(&mut entry_cache).await?;
-                entry_cache.clear();
-            }
+            self.maybe_flush_cache(&mut entry_cache).await?;
         }
         self.process_cache(&mut entry_cache).await?;
         Ok(())
