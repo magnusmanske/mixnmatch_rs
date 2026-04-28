@@ -165,7 +165,13 @@ impl AuxiliaryMatcher {
     }
 
     //TODO test
-    async fn get_properties_that_have_external_ids(app: &AppState) -> Result<Vec<String>> {
+    /// SPARQL list of every property whose `wikibase:propertyType` is
+    /// `wikibase:ExternalId`. Pub-crate so the maintenance jobs that
+    /// only care about external-ID props (e.g. `update_aux_candidates`)
+    /// can reuse the same query without going through the matcher.
+    pub(crate) async fn get_properties_that_have_external_ids(
+        app: &AppState,
+    ) -> Result<Vec<String>> {
         let mw_api = app.wikidata().get_mw_api().await?;
         let sparql = "SELECT ?p WHERE { ?p rdf:type wikibase:Property; wikibase:propertyType wikibase:ExternalId }";
         let sparql_results = mw_api.sparql_query(sparql).await?;

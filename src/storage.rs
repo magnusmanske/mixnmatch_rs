@@ -989,6 +989,22 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     /// (deleted, recatalogued, marked_na) order so the cron line can
     /// surface them. Mirrors PHP `Maintenance::fixupWdMatches`.
     async fn maintenance_fixup_wd_matches(&self) -> Result<(usize, usize, usize)>;
+
+    /// Distinct `aux_p` values currently present in the `auxiliary`
+    /// table. Used by `update_aux_candidates` as the candidate set
+    /// before filtering against Wikidata's external-ID property list.
+    async fn auxiliary_distinct_props(&self) -> Result<Vec<usize>>;
+
+    /// Rebuild `aux_candidates` from scratch, considering only entries
+    /// in catalogs with `wd_prop` set (no qualifier) and auxiliary
+    /// rows whose property is on the supplied `props_ext` allowlist.
+    /// Returns the row count of the rebuilt table. Mirrors PHP
+    /// `Maintenance::updateAuxCandidates`.
+    async fn maintenance_update_aux_candidates(
+        &self,
+        props_ext: &[usize],
+        min_count: usize,
+    ) -> Result<usize>;
 }
 
 #[cfg(test)]

@@ -465,6 +465,9 @@ impl Job {
             "maintenance_fixup_wd_matches" => {
                 Maintenance::new(&self.app).fixup_wd_matches().await
             }
+            "maintenance_update_aux_candidates" => {
+                Maintenance::new(&self.app).update_aux_candidates().await
+            }
             "maintenance_taxa" => Maintenance::new(&self.app).taxa().await,
             "maintenance_artwork" => Maintenance::new(&self.app).artwork().await,
             "maintenance_common_aux" => Maintenance::new(&self.app).common_aux().await,

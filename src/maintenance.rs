@@ -644,6 +644,65 @@ impl Maintenance {
         );
         Ok(())
     }
+
+    /// Rebuild `aux_candidates` — the cache the
+    /// `creation_candidates?mode=random_prop` picker reads from.
+    ///
+    /// Three steps mirroring PHP `Maintenance::updateAuxCandidates`:
+    ///
+    /// 1. Pull every distinct `aux_p` we currently know about from
+    ///    `auxiliary`.
+    /// 2. Intersect that with Wikidata's list of external-ID
+    ///    properties via SPARQL — only properties that actually take
+    ///    string values can power the picker, and external-ID is the
+    ///    canonical type for those.
+    /// 3. Hand the filtered allowlist to the storage layer's
+    ///    `aux_candidates` rebuild.
+    ///
+    /// Refuses to wipe the table when the allowlist is empty (a
+    /// transient SPARQL outage shouldn't break the picker until the
+    /// next successful run). The 3-row floor matches the PHP
+    /// constant.
+    pub async fn update_aux_candidates(&self) -> Result<()> {
+        const MIN_COUNT: usize = 3;
+        let props_in_aux = self.app.storage().auxiliary_distinct_props().await?;
+        if props_in_aux.is_empty() {
+            log::info!("update_aux_candidates: auxiliary is empty, nothing to do");
+            return Ok(());
+        }
+
+        // Wikidata-side allowlist via SPARQL. The matcher uses the
+        // same query, so it lives there as the single source of truth.
+        let ext_id_props: HashSet<usize> =
+            crate::auxiliary_matcher::AuxiliaryMatcher::get_properties_that_have_external_ids(
+                &self.app,
+            )
+            .await?
+            .into_iter()
+            .filter_map(|s| s.trim_start_matches('P').parse::<usize>().ok())
+            .collect();
+        let allowlist: Vec<usize> = props_in_aux
+            .into_iter()
+            .filter(|p| ext_id_props.contains(p))
+            .collect();
+        if allowlist.is_empty() {
+            return Err(anyhow!(
+                "update_aux_candidates: no aux property survived the external-ID \
+                 filter — refusing to truncate aux_candidates"
+            ));
+        }
+
+        let n = self
+            .app
+            .storage()
+            .maintenance_update_aux_candidates(&allowlist, MIN_COUNT)
+            .await?;
+        log::info!(
+            "update_aux_candidates: rebuilt with {n} row(s) across {} prop(s)",
+            allowlist.len()
+        );
+        Ok(())
+    }
 }
 
 /// Decode one TSV row of `?p ?v ?vLabel` into the storage row.

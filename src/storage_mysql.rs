@@ -6598,6 +6598,80 @@ impl Storage for StorageMySQL {
         Ok(rows)
     }
 
+    async fn auxiliary_distinct_props(&self) -> Result<Vec<usize>> {
+        let sql = "SELECT DISTINCT `aux_p` FROM `auxiliary` ORDER BY `aux_p`";
+        let rows = self
+            .get_conn_ro()
+            .await?
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(from_row::<usize>)
+            .await?;
+        Ok(rows)
+    }
+
+    async fn maintenance_update_aux_candidates(
+        &self,
+        props_ext: &[usize],
+        min_count: usize,
+    ) -> Result<usize> {
+        // Refuse to wipe the table when the allowlist is empty —
+        // either the SPARQL fetch returned nothing or every aux
+        // property got filtered out, and dropping every row would
+        // break the random_prop creation_candidates picker until
+        // the next successful run.
+        if props_ext.is_empty() {
+            return Ok(0);
+        }
+
+        // Build via TEMPORARY TABLE so the live `aux_candidates`
+        // window stays minimal — the random-prop picker reads from
+        // it and an empty interval would surface as "no candidates"
+        // errors.
+        let props_csv: String = props_ext.iter().join(",");
+        let create_tmp = format!(
+            "CREATE TEMPORARY TABLE aux_candidates_tmp \
+             SELECT SQL_NO_CACHE aux_name, aux_p, count(*) AS cnt, \
+                    sum(entry_is_matched) AS matched, \
+                    group_concat(entry_id) AS entry_ids \
+             FROM ( \
+                SELECT entry.id AS entry_id, \
+                       entry.ext_id AS aux_name, \
+                       wd_prop AS aux_p, \
+                       IF(q IS NULL OR user = 0, 0, 1) AS entry_is_matched \
+                FROM entry, catalog \
+                WHERE catalog.id = entry.catalog \
+                  AND catalog.active = 1 \
+                  AND wd_prop IN ({props_csv}) \
+                  AND wd_qual IS NULL \
+                  AND entry.ext_id != '' \
+                UNION ALL \
+                SELECT entry_id, aux_name, aux_p, entry_is_matched \
+                FROM auxiliary \
+                WHERE aux_p IN ({props_csv}) AND aux_name != '' \
+             ) t \
+             GROUP BY aux_p, aux_name \
+             HAVING cnt >= {min_count} AND matched = 0"
+        );
+
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop("DROP TEMPORARY TABLE IF EXISTS aux_candidates_tmp", ())
+            .await?;
+        conn.exec_drop(create_tmp, ()).await?;
+        conn.exec_drop("TRUNCATE aux_candidates", ()).await?;
+        conn.exec_drop(
+            "INSERT INTO aux_candidates SELECT * FROM aux_candidates_tmp",
+            (),
+        )
+        .await?;
+        let count: Option<usize> = conn
+            .exec_first("SELECT count(*) FROM aux_candidates", ())
+            .await?;
+        conn.exec_drop("DROP TEMPORARY TABLE aux_candidates_tmp", ())
+            .await?;
+        Ok(count.unwrap_or(0))
+    }
+
     async fn maintenance_fixup_wd_matches(&self) -> Result<(usize, usize, usize)> {
         let mut conn = self.get_conn().await?;
 
