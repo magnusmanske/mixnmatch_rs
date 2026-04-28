@@ -441,7 +441,7 @@ impl ShellCommands {
         Ok(tls_config)
     }
 
-    #[allow(clippy::print_stdout, clippy::print_stderr)]
+    #[allow(clippy::print_stdout, clippy::print_stderr, clippy::cognitive_complexity)]
     pub async fn run(&self) -> Result<()> {
         let cli = Cli::parse();
         match &cli.command {
