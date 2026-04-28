@@ -489,6 +489,12 @@ impl Job {
                     .apply_description_aux(catalog_id)
                     .await
             }
+            "maintenance_sanity_check_date_matches_are_human" => {
+                Maintenance::new(&self.app)
+                    .sanity_check_date_matches_are_human()
+                    .await
+                    .map(|n| log::info!("sanity_check_date_matches_are_human: removed {n}"))
+            }
             "maintenance_taxa" => Maintenance::new(&self.app).taxa().await,
             "maintenance_artwork" => Maintenance::new(&self.app).artwork().await,
             "maintenance_common_aux" => Maintenance::new(&self.app).common_aux().await,

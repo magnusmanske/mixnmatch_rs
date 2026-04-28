@@ -1061,6 +1061,13 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     /// the right shape.
     async fn description_aux_get_all(&self) -> Result<Vec<DescriptionAuxRule>>;
 
+    /// `(entry_id, q)` pairs for every Q5 entry currently matched by
+    /// the date matcher (`user = 3`) or auxiliary-data matcher
+    /// (`user = 4`). Used by `sanity_check_date_matches_are_human`
+    /// to verify that those algorithmic matches actually point at
+    /// human items on Wikidata.
+    async fn entry_get_algorithmic_human_matches(&self) -> Result<Vec<(usize, isize)>>;
+
     /// Apply one `description_aux` rule to a catalog: any entry whose
     /// `ext_desc` matches `rule.rx` (case-insensitive `RLIKE`) and
     /// doesn't already have the corresponding auxiliary row inserts

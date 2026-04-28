@@ -645,6 +645,114 @@ impl Maintenance {
         Ok(())
     }
 
+    /// Walk every Q5 entry whose match was set by the date matcher
+    /// (`user=3`) or aux matcher (`user=4`) and verify the matched
+    /// Wikidata item is actually `instance of` Q5. Items that aren't
+    /// get unmatched — those are the false positives that the
+    /// algorithmic matchers occasionally produce when a name+date
+    /// pair coincidentally matches a non-human Wikidata item (a
+    /// fictional character with year-of-creation = "1850", a
+    /// disambiguation page, …).
+    ///
+    /// Items are fetched from Wikidata in batches via `wbgetentities`
+    /// (one network round-trip per batch through the
+    /// `EntityContainer`); the `P31=Q5` check is then a pure
+    /// in-memory walk of the loaded claims. A single Q can show up
+    /// against many entries (the same item is the "match" for many
+    /// catalogs), so the check is implicitly cached by the
+    /// container's dedup.
+    ///
+    /// Mirrors PHP `Maintenance::sanityCheckDateMatchesAreHuman`,
+    /// trading PHP's per-row `pagelinks` SELECT against the
+    /// Wikidata replica for an item-bulk-load — same result, fewer
+    /// network/DB round-trips. Returns the number of matches it
+    /// removed.
+    pub async fn sanity_check_date_matches_are_human(&self) -> Result<usize> {
+        // wbgetentities caps at 50 ids per request; the
+        // EntityContainer chunks internally so any batch this size
+        // or below maps to one round-trip. 200 keeps the per-batch
+        // memory footprint bounded for very large match sets.
+        const BATCH_SIZE: usize = 200;
+
+        let candidates = self
+            .app
+            .storage()
+            .entry_get_algorithmic_human_matches()
+            .await?;
+        if candidates.is_empty() {
+            log::info!("sanity_check_date_matches_are_human: no algorithmic Q5 matches");
+            return Ok(0);
+        }
+        log::info!(
+            "sanity_check_date_matches_are_human: checking {} algorithmic match(es)",
+            candidates.len()
+        );
+
+        // Group by Q so each item is loaded once regardless of how
+        // many entries point at it.
+        let mut q_to_entries: HashMap<isize, Vec<usize>> = HashMap::new();
+        for (entry_id, q) in candidates {
+            q_to_entries.entry(q).or_default().push(entry_id);
+        }
+        let qs: Vec<String> = q_to_entries.keys().map(|q| format!("Q{q}")).collect();
+
+        let api = self.app.wikidata().get_mw_api().await?;
+        let mut removed = 0_usize;
+        for batch in qs.chunks(BATCH_SIZE) {
+            let entities = wikimisc::wikibase::entity_container::EntityContainer::new();
+            if let Err(e) = entities.load_entities(&api, &batch.to_vec()).await {
+                log::warn!(
+                    "sanity_check_date_matches_are_human: batch load failed: {e} \
+                     — continuing"
+                );
+                continue;
+            }
+            for q_label in batch {
+                let q_num: isize = match q_label
+                    .strip_prefix('Q')
+                    .and_then(|s| s.parse().ok())
+                {
+                    Some(n) => n,
+                    None => continue,
+                };
+                let Some(entry_ids) = q_to_entries.get(&q_num) else {
+                    continue;
+                };
+                let item = entities.get_entity(q_label.clone());
+                if item_is_human(item.as_ref()) {
+                    continue;
+                }
+                // Item is not Q5 (or didn't load — treat as
+                // non-human; the mismatch is real and the next
+                // run can re-check after WD data updates).
+                for &entry_id in entry_ids {
+                    let mut entry = match Entry::from_id(entry_id, &self.app).await {
+                        Ok(e) => e,
+                        Err(e) => {
+                            log::warn!(
+                                "sanity_check_date_matches_are_human: \
+                                 cannot load entry {entry_id}: {e}"
+                            );
+                            continue;
+                        }
+                    };
+                    if let Err(e) = entry.unmatch().await {
+                        log::warn!(
+                            "sanity_check_date_matches_are_human: \
+                             unmatch failed for entry {entry_id}: {e}"
+                        );
+                        continue;
+                    }
+                    removed += 1;
+                }
+            }
+        }
+        log::info!(
+            "sanity_check_date_matches_are_human: removed {removed} non-human match(es)"
+        );
+        Ok(removed)
+    }
+
     /// Apply every regex rule from `description_aux` to one
     /// catalog's `entry.ext_desc` column, materialising matched
     /// `(property, value)` pairs as new `auxiliary` rows. Idempotent:
@@ -985,6 +1093,23 @@ impl Maintenance {
         );
         Ok(())
     }
+}
+
+/// True iff the loaded item carries at least one `P31 = Q5`
+/// statement. Treats a missing item (None) as not-human — the
+/// match either points at a deleted/redirected Q (which
+/// `fix_redirected_items` and `unlink_deleted_items` handle
+/// separately) or at something else entirely; either way, the
+/// algorithmic match shouldn't keep claiming it's a person.
+fn item_is_human(item: Option<&wikimisc::wikibase::Entity>) -> bool {
+    let Some(item) = item else { return false };
+    item.claims_with_property("P31".to_string())
+        .iter()
+        .filter_map(|s| s.main_snak().data_value().clone())
+        .any(|dv| match dv.value() {
+            wikimisc::wikibase::Value::Entity(e) => e.id() == "Q5",
+            _ => false,
+        })
 }
 
 /// Look up a GND identifier in DNB's RDF representation and return

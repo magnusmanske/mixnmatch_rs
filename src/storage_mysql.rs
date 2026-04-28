@@ -6598,6 +6598,29 @@ impl Storage for StorageMySQL {
         Ok(rows)
     }
 
+    async fn entry_get_algorithmic_human_matches(&self) -> Result<Vec<(usize, isize)>> {
+        // `user IN (3,4)` is exactly the audit shape PHP uses —
+        // those are the algorithmic-match user ids
+        // (USER_DATE_MATCH, USER_AUX_MATCH). Manual matches are
+        // trusted; only the algorithmic ones get re-validated.
+        let sql = "SELECT `id`, `q` FROM `entry` \
+            WHERE `q` IS NOT NULL AND `q` > 0 \
+              AND `type` = 'Q5' \
+              AND `user` IN (3, 4)";
+        let rows = self
+            .get_conn_ro()
+            .await?
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(|row: Row| {
+                let id: usize = row.get("id").unwrap_or(0);
+                let q: isize = row.get::<Option<isize>, _>("q").flatten().unwrap_or(0);
+                (id, q)
+            })
+            .await?;
+        Ok(rows.into_iter().filter(|(id, q)| *id > 0 && *q > 0).collect())
+    }
+
     async fn description_aux_get_all(&self) -> Result<Vec<DescriptionAuxRule>> {
         let sql = "SELECT `property`, `value`, `rx`, `type_constraint` \
             FROM `description_aux`";
