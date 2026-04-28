@@ -79,7 +79,7 @@ export default Vue.extend({
 				else v = me[key];
 				url += "&" + key + '=' + v;
 			});
-			router.push(url);
+			me.$router.push(url);
 		},
 		load_offset: function (new_offset) {
 			let self = this;

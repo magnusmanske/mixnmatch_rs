@@ -21,7 +21,7 @@ export default Vue.extend({
 				}, { method: 'POST' });
 				await ensure_catalog(me.id, true);
 				mnm_notify('Aliases added', 'success');
-				router.push('/catalog/' + me.id);
+				me.$router.push('/catalog/' + me.id);
 			} catch (e) {
 				mnm_notify('Failed: ' + e.message, 'danger');
 			}

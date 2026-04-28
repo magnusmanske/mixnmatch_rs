@@ -10,8 +10,8 @@ export default {
 	},
 	methods: {
 		click: function (id, mode, mode2) {
-			if (typeof mode2 == 'undefined') router.push('/' + mode + '/' + id);
-			else router.push('/' + mode + '/' + id + '/' + mode2);
+			if (typeof mode2 == 'undefined') this.$router.push('/' + mode + '/' + id);
+			else this.$router.push('/' + mode + '/' + id + '/' + mode2);
 			return false;
 		},
 		renderPercentage: function (v) {

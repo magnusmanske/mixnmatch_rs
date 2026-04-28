@@ -53,7 +53,7 @@ export default Vue.extend({
     		if ( me.type_q != '' ) parts.push ( "type="+me.type_q ) ;
     		if ( me.other_cats_desc ) parts.push("other_cats_desc=1") ;
     		if ( parts.length > 0 ) url += "?" + parts.join("&") ;
-			router.push ( url ) ;
+			me.$router.push ( url ) ;
 			me.load_entries() ;
     	} ,
     	load_entries : async function () {

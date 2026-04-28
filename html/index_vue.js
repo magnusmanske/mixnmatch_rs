@@ -19,7 +19,10 @@ window.addEventListener('unhandledrejection', function (event) {
 // (a) the error handler above can call mnm_notify before modules load,
 // (b) external magnustools components that read globals still work.
 
-var wd, widar, router, app, tt;
+// `router` is now scoped inside the boot callback (declared with `const`
+// at the VueRouter() site). The other names are still set there as
+// implicit globals to keep magnustools-style external code working.
+var wd, widar, app, tt;
 
 // Stub mnm_notify until the real one loads from store.js
 window.mnm_notify = function () {};
@@ -112,7 +115,7 @@ document.addEventListener('DOMContentLoaded', function () {
 			{ path: '/visual_match/:catalog_param', component: mnm.VisualMatch, props: true },
 		];
 
-		router = new VueRouter({ routes });
+		const router = new VueRouter({ routes });
 		function updateTitle(to) {
 			var title = 'Mix\'n\'match';
 			var p = to.path;
