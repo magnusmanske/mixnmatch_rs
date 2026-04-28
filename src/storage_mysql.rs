@@ -1633,6 +1633,56 @@ impl Storage for StorageMySQL {
         Ok(())
     }
 
+    async fn maintenance_common_names_human(&self) -> Result<()> {
+        // Collect candidate rows in a TEMPORARY TABLE first so the
+        // window where `common_names_human` is empty stays as small as
+        // possible (TRUNCATE→INSERT direct from the heavy SELECT would
+        // leave readers staring at zero rows for the duration of the
+        // scan). Mirrors the dates / birth_year pipelines.
+        //
+        // Filters mirror PHP `Maintenance::updateCommonNames`'s human
+        // arm:
+        //   - type='Q5'                   ← only humans
+        //   - q IS NULL                   ← only never-matched entries
+        //   - ext_name LIKE '____% ____% ____%' ← three space-separated
+        //                                   tokens, each ≥4 chars (avoids
+        //                                   "J. R. R. Tolkien"-style
+        //                                   initials and very short
+        //                                   middle names that would
+        //                                   produce too-broad groups)
+        //   - ext_desc != ''              ← skip rows we have no detail on
+        //   - active catalog              ← stale catalogs shouldn't
+        //                                   create candidate noise
+        //   - HAVING cnt >= 5             ← only names that show up in
+        //                                   5+ different catalogs (i.e.
+        //                                   plausibly the same person)
+        let sqls = [
+            "DROP TEMPORARY TABLE IF EXISTS tmp_cnh",
+            r"CREATE TEMPORARY TABLE tmp_cnh AS
+                SELECT /* maintenance_common_names_human */
+                    ext_name AS `name`,
+                    count(DISTINCT catalog) AS cnt,
+                    group_concat(id) AS entry_ids
+                FROM entry
+                WHERE `type` = 'Q5'
+                  AND q IS NULL
+                  AND ext_name LIKE '____% ____% ____%'
+                  AND ext_desc != ''
+                  AND catalog IN (SELECT id FROM catalog WHERE active = 1)
+                GROUP BY ext_name
+                HAVING cnt >= 5",
+            "TRUNCATE common_names_human",
+            "INSERT IGNORE INTO common_names_human (`name`, cnt, entry_ids) \
+             SELECT `name`, cnt, entry_ids FROM tmp_cnh",
+            "DROP TEMPORARY TABLE tmp_cnh",
+        ];
+        let mut conn = self.get_conn().await?;
+        for sql in sqls {
+            conn.exec_drop(sql, ()).await?;
+        }
+        Ok(())
+    }
+
     async fn maintenance_common_names_birth_year(&self) -> Result<()> {
         // Correlated-subquery → JOIN: the old `(SELECT ext_name FROM entry
         // WHERE entry.id=entry_id ...)` ran once per matching person_dates

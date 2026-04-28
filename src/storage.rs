@@ -351,6 +351,13 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     async fn maintenance_use_auxiliary_broken(&self) -> Result<()>;
     async fn maintenance_common_names_dates(&self) -> Result<()>;
     async fn maintenance_common_names_birth_year(&self) -> Result<()>;
+    /// Rebuild `common_names_human` from scratch: unmatched Q5 entries
+    /// in active catalogs whose `ext_name` looks like a real first/
+    /// middle/last triple and whose name appears in 5+ catalogs.
+    /// Backs the `creation_candidates?mode=` (default mode) random
+    /// pick — without it, the picker hits an empty table and the UI
+    /// falls back to the "no candidates" error.
+    async fn maintenance_common_names_human(&self) -> Result<()>;
     async fn maintenance_taxa(&self) -> Result<()>;
     async fn maintenance_common_aux(&self) -> Result<()>;
     async fn maintenance_artwork(&self) -> Result<()>;

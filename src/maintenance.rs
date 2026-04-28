@@ -104,6 +104,10 @@ impl Maintenance {
         self.app.storage().maintenance_common_names_dates().await
     }
 
+    pub async fn common_names_human(&self) -> Result<()> {
+        self.app.storage().maintenance_common_names_human().await
+    }
+
     pub async fn create_match_person_dates_jobs_for_catalogs(&self) -> Result<()> {
         self.app
             .storage()
