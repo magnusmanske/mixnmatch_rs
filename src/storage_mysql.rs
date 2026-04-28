@@ -6598,6 +6598,52 @@ impl Storage for StorageMySQL {
         Ok(rows)
     }
 
+    async fn maintenance_fixup_wd_matches(&self) -> Result<(usize, usize, usize)> {
+        let mut conn = self.get_conn().await?;
+
+        // 1. Drop rows from deactivated catalogs — they only burn
+        // sweep cycles and surface as "your match was lost" surprises
+        // if the catalog ever comes back.
+        conn.exec_drop(
+            "DELETE FROM `wd_matches` WHERE `catalog` IN \
+             (SELECT `id` FROM `catalog` WHERE `active` != 1)",
+            (),
+        )
+        .await?;
+        let deleted = conn.affected_rows() as usize;
+
+        // 2. Back-fill catalog=0 rows. Pre-`entry_set_match_cleanup`
+        // code paths sometimes inserted with an unset catalog; the
+        // current cleanup populates it correctly but legacy rows linger.
+        conn.exec_drop(
+            "UPDATE `wd_matches` \
+             SET `catalog` = (SELECT `entry`.`catalog` FROM `entry` \
+                              WHERE `entry`.`id` = `wd_matches`.`entry_id`) \
+             WHERE `wd_matches`.`catalog` = 0",
+            (),
+        )
+        .await?;
+        let recatalogued = conn.affected_rows() as usize;
+
+        // 3. Flip every row whose catalog has no usable Wikidata
+        // property pointer (no `wd_prop` set, or has a `wd_qual`)
+        // straight to N/A — wd_match_sync's classifier can't do
+        // anything meaningful with those rows.
+        conn.exec_drop(
+            "UPDATE `wd_matches` SET `status` = 'N/A' \
+             WHERE `status` != 'N/A' \
+               AND `catalog` IN ( \
+                   SELECT `id` FROM `catalog` \
+                   WHERE `wd_prop` IS NULL OR `wd_qual` IS NOT NULL \
+               )",
+            (),
+        )
+        .await?;
+        let marked_na = conn.affected_rows() as usize;
+
+        Ok((deleted, recatalogued, marked_na))
+    }
+
     async fn maintenance_delete_multi_match_for_fully_matched(&self) -> Result<usize> {
         // Mirrors PHP exactly. EXISTS over the indexed (id, q, user)
         // columns lets MySQL short-circuit per row, which beats the

@@ -462,6 +462,9 @@ impl Job {
                     .delete_multi_match_for_fully_matched()
                     .await
             }
+            "maintenance_fixup_wd_matches" => {
+                Maintenance::new(&self.app).fixup_wd_matches().await
+            }
             "maintenance_taxa" => Maintenance::new(&self.app).taxa().await,
             "maintenance_artwork" => Maintenance::new(&self.app).artwork().await,
             "maintenance_common_aux" => Maintenance::new(&self.app).common_aux().await,
