@@ -28,8 +28,8 @@ use crate::{
     mysql_misc::MySQLMisc,
     prop_todo::PropTodo,
     storage::{
-        CatalogEntryListFilter, DescriptionAuxRule, Download2Filter, GroupedEntry,
-        MergeableMatch, OverviewTableRow, PropertyCacheRow, WdMatchRow,
+        AutoscrapeQueries, CatalogEntryListFilter, DescriptionAuxRule, Download2Filter,
+        GroupedEntry, MergeableMatch, OverviewTableRow, PropertyCacheRow, WdMatchRow,
     },
     task_size::TaskSize,
     taxon_matcher::{RankedNames, TAXON_RANKS, TaxonMatcher, TaxonNameField},
@@ -182,15 +182,8 @@ impl Storage for StorageMySQL {
         Ok(results)
     }
 
-    // Taxon matcher
-    async fn set_catalog_taxon_run(&self, catalog_id: usize, taxon_run: bool) -> Result<()> {
-        let taxon_run = taxon_run as u16;
-        let sql =
-            "UPDATE `catalog` SET `taxon_run`=1 WHERE `id`=:catalog_id AND `taxon_run`=:taxon_run";
-        let mut conn = self.get_conn().await?;
-        conn.exec_drop(sql, params! {catalog_id, taxon_run}).await?;
-        Ok(())
-    }
+    // Taxon-matcher methods now live on a separate `impl
+    // TaxonQueries for StorageMySQL` block (further down).
 
     async fn catalog_get_entries_of_people_with_initials(
         &self,
@@ -202,39 +195,6 @@ impl Storage for StorageMySQL {
             .with_match_state(MatchState::unmatched())
             .with_name_regexp("\\. ");
         self.entry_query(&query).await
-    }
-
-    async fn match_taxa_get_ranked_names_batch(
-        &self,
-        ranks: &[&str],
-        field: &TaxonNameField,
-        catalog_id: usize,
-        batch_size: usize,
-        offset: usize,
-    ) -> Result<(usize, RankedNames)> {
-        let results = self
-            .match_taxa_get_ranked_names_batch_get_results(
-                ranks, field, catalog_id, batch_size, offset,
-            )
-            .await?;
-        let mut ranked_names: RankedNames = HashMap::new();
-        for result in &results {
-            let entry_id = result.0;
-            let taxon_name = match TaxonMatcher::rewrite_taxon_name(catalog_id, &result.1) {
-                Some(s) => s,
-                None => continue,
-            };
-            let type_name = &result.2;
-            let rank = match TAXON_RANKS.get(type_name.as_str()) {
-                Some(rank) => format!(" ; wdt:P105 {rank}"),
-                None => "".to_string(),
-            };
-            ranked_names
-                .entry(rank)
-                .or_default()
-                .push((entry_id, taxon_name));
-        }
-        Ok((results.len(), ranked_names))
     }
 
     // Coordinate Matcher methods now live on a separate `impl
@@ -894,59 +854,8 @@ impl Storage for StorageMySQL {
     // StorageMySQL` block (further down) so the trait can be
     // depended on independently of `Storage`.
 
-    // Autoscrape
-
-    async fn autoscrape_get_for_catalog(&self, catalog_id: usize) -> Result<Vec<(usize, String)>> {
-        Ok(self
-            .get_conn_ro()
-            .await?
-            .exec_iter(
-                "SELECT `id`,`json` FROM `autoscrape` WHERE `catalog`=:catalog_id",
-                params! {catalog_id},
-            )
-            .await?
-            .map_and_drop(from_row::<(usize, String)>)
-            .await?)
-    }
-
-    /// Returns a list of (ext_id,entry_id) values for the given catalog_id and ext_ids.
-    async fn get_entry_ids_for_ext_ids(
-        &self,
-        catalog_id: usize,
-        ext_ids: &[String],
-    ) -> Result<Vec<(String, usize)>> {
-        let eq = EntryQuery::default()
-            .with_catalog_id(catalog_id)
-            .with_ext_ids(ext_ids.to_vec());
-        let sql = "SELECT ext_id,id FROM entry WHERE".to_string();
-        let (sql, parts) = Self::get_entry_query_sql_where(&eq, sql, vec![])?;
-        let ret = self
-            .get_conn_ro()
-            .await?
-            .exec_iter(sql, parts)
-            .await?
-            .map_and_drop(from_row::<(String, usize)>)
-            .await?;
-        Ok(ret)
-    }
-
-    async fn autoscrape_start(&self, autoscrape_id: usize) -> Result<()> {
-        let sql = "UPDATE `autoscrape` SET `status`='RUNNING'`last_run_min`=NULL,`last_run_urls`=NULL WHERE `id`=:autoscrape_id";
-        if let Ok(mut conn) = self.get_conn().await {
-            let _ = conn.exec_drop(sql, params! {autoscrape_id}).await; // Ignore error
-        }
-        Ok(())
-    }
-
-    async fn autoscrape_finish(&self, autoscrape_id: usize, last_run_urls: usize) -> Result<()> {
-        let sql = "UPDATE `autoscrape` SET `status`='OK',`last_run_min`=NULL,`last_run_urls`=:last_run_urls WHERE `id`=:autoscrape_id";
-        if let Ok(mut conn) = self.get_conn().await {
-            let _ = conn
-                .exec_drop(sql, params! {autoscrape_id,last_run_urls})
-                .await;
-        }
-        Ok(())
-    }
+    // Autoscrape methods now live on a separate `impl AutoscrapeQueries
+    // for StorageMySQL` block (further down).
 
     // Auxiliary matcher
 
@@ -2637,76 +2546,8 @@ impl Storage for StorageMySQL {
         (running, running_recent)
     }
 
-    // CERSEI
-
-    /// Get current scrapers from database
-    async fn get_cersei_scrapers(&self) -> Result<HashMap<usize, CurrentScraper>> {
-        let mut conn = self.get_conn_ro().await?;
-        let sql = "SELECT * FROM `cersei`";
-        let rows: Vec<Row> = conn.query(sql).await?;
-
-        let mut scrapers = HashMap::new();
-        for row in rows {
-            let scraper = CurrentScraper {
-                cersei_scraper_id: row
-                    .get::<Option<usize>, _>("cersei_scraper_id")
-                    .flatten()
-                    .unwrap_or(0),
-                catalog_id: row
-                    .get::<Option<usize>, _>("catalog_id")
-                    .flatten()
-                    .unwrap_or(0),
-                last_sync: row.get::<Option<String>, _>("last_sync").flatten(),
-            };
-            scrapers.insert(scraper.cersei_scraper_id, scraper);
-        }
-
-        Ok(scrapers)
-    }
-
-    async fn add_cersei_catalog(&self, catalog_id: usize, scraper_id: usize) -> Result<()> {
-        let mut conn = self.get_conn().await?;
-        let sql = "INSERT INTO `cersei` (`catalog_id`, `cersei_scraper_id`) VALUES (:catalog_id, :scraper_id)";
-        conn.exec_drop(sql, params! {catalog_id, scraper_id})
-            .await?;
-        Ok(())
-    }
-
-    async fn update_cersei_last_update(&self, scraper_id: usize, last_sync: &str) -> Result<()> {
-        self.get_conn()
-            .await?
-            .exec_drop(
-                "UPDATE `cersei` SET `last_sync`=:last_sync WHERE `cersei_scraper_id`=:scraper_id",
-                params! {last_sync, scraper_id},
-            )
-            .await?;
-        Ok(())
-    }
-
-    async fn entry_update_cersei(
-        &self,
-        entry_id: usize,
-        ext_name: &str,
-        ext_desc: &str,
-        type_name: &str,
-        ext_url: &str,
-    ) -> Result<()> {
-        let type_name = crate::entry::normalize_entry_type(Some(type_name));
-        let sql = "UPDATE `entry` \
-            SET `ext_name`=SUBSTR(:ext_name,1,127), `ext_desc`=SUBSTR(:ext_desc,1,254), \
-                `type`=:type_name, `ext_url`=:ext_url \
-            WHERE `id`=:entry_id \
-            AND (`ext_name`!=SUBSTR(:ext_name,1,127) OR `ext_desc`!=SUBSTR(:ext_desc,1,254) \
-                 OR `type`!=:type_name OR `ext_url`!=:ext_url)";
-        self.get_conn()
-            .await?
-            .exec_drop(
-                sql,
-                params! {ext_name, ext_desc, type_name, ext_url, entry_id},
-            )
-            .await?;
-        Ok(())
-    }
+    // CERSEI methods now live on a separate `impl CerseiQueries for
+    // StorageMySQL` block (further down).
 
     // MetaEntry support
 
@@ -6533,6 +6374,178 @@ impl crate::storage::IssueQueries for StorageMySQL {
             "status" => status.to_str(),
         };
         self.get_conn().await?.exec_drop(sql, params).await?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl crate::storage::TaxonQueries for StorageMySQL {
+    async fn set_catalog_taxon_run(&self, catalog_id: usize, taxon_run: bool) -> Result<()> {
+        let taxon_run = taxon_run as u16;
+        let sql =
+            "UPDATE `catalog` SET `taxon_run`=1 WHERE `id`=:catalog_id AND `taxon_run`=:taxon_run";
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop(sql, params! {catalog_id, taxon_run}).await?;
+        Ok(())
+    }
+
+    async fn match_taxa_get_ranked_names_batch(
+        &self,
+        ranks: &[&str],
+        field: &TaxonNameField,
+        catalog_id: usize,
+        batch_size: usize,
+        offset: usize,
+    ) -> Result<(usize, RankedNames)> {
+        let results = self
+            .match_taxa_get_ranked_names_batch_get_results(
+                ranks, field, catalog_id, batch_size, offset,
+            )
+            .await?;
+        let mut ranked_names: RankedNames = HashMap::new();
+        for result in &results {
+            let entry_id = result.0;
+            let taxon_name = match TaxonMatcher::rewrite_taxon_name(catalog_id, &result.1) {
+                Some(s) => s,
+                None => continue,
+            };
+            let type_name = &result.2;
+            let rank = match TAXON_RANKS.get(type_name.as_str()) {
+                Some(rank) => format!(" ; wdt:P105 {rank}"),
+                None => "".to_string(),
+            };
+            ranked_names
+                .entry(rank)
+                .or_default()
+                .push((entry_id, taxon_name));
+        }
+        Ok((results.len(), ranked_names))
+    }
+}
+
+#[async_trait]
+impl crate::storage::AutoscrapeQueries for StorageMySQL {
+    async fn autoscrape_get_for_catalog(&self, catalog_id: usize) -> Result<Vec<(usize, String)>> {
+        Ok(self
+            .get_conn_ro()
+            .await?
+            .exec_iter(
+                "SELECT `id`,`json` FROM `autoscrape` WHERE `catalog`=:catalog_id",
+                params! {catalog_id},
+            )
+            .await?
+            .map_and_drop(from_row::<(usize, String)>)
+            .await?)
+    }
+
+    /// Returns a list of (ext_id,entry_id) values for the given catalog_id and ext_ids.
+    async fn get_entry_ids_for_ext_ids(
+        &self,
+        catalog_id: usize,
+        ext_ids: &[String],
+    ) -> Result<Vec<(String, usize)>> {
+        let eq = EntryQuery::default()
+            .with_catalog_id(catalog_id)
+            .with_ext_ids(ext_ids.to_vec());
+        let sql = "SELECT ext_id,id FROM entry WHERE".to_string();
+        let (sql, parts) = Self::get_entry_query_sql_where(&eq, sql, vec![])?;
+        let ret = self
+            .get_conn_ro()
+            .await?
+            .exec_iter(sql, parts)
+            .await?
+            .map_and_drop(from_row::<(String, usize)>)
+            .await?;
+        Ok(ret)
+    }
+
+    async fn autoscrape_start(&self, autoscrape_id: usize) -> Result<()> {
+        let sql = "UPDATE `autoscrape` SET `status`='RUNNING'`last_run_min`=NULL,`last_run_urls`=NULL WHERE `id`=:autoscrape_id";
+        if let Ok(mut conn) = self.get_conn().await {
+            let _ = conn.exec_drop(sql, params! {autoscrape_id}).await; // Ignore error
+        }
+        Ok(())
+    }
+
+    async fn autoscrape_finish(&self, autoscrape_id: usize, last_run_urls: usize) -> Result<()> {
+        let sql = "UPDATE `autoscrape` SET `status`='OK',`last_run_min`=NULL,`last_run_urls`=:last_run_urls WHERE `id`=:autoscrape_id";
+        if let Ok(mut conn) = self.get_conn().await {
+            let _ = conn
+                .exec_drop(sql, params! {autoscrape_id,last_run_urls})
+                .await;
+        }
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl crate::storage::CerseiQueries for StorageMySQL {
+    /// Get current scrapers from database
+    async fn get_cersei_scrapers(&self) -> Result<HashMap<usize, CurrentScraper>> {
+        let mut conn = self.get_conn_ro().await?;
+        let sql = "SELECT * FROM `cersei`";
+        let rows: Vec<Row> = conn.query(sql).await?;
+
+        let mut scrapers = HashMap::new();
+        for row in rows {
+            let scraper = CurrentScraper {
+                cersei_scraper_id: row
+                    .get::<Option<usize>, _>("cersei_scraper_id")
+                    .flatten()
+                    .unwrap_or(0),
+                catalog_id: row
+                    .get::<Option<usize>, _>("catalog_id")
+                    .flatten()
+                    .unwrap_or(0),
+                last_sync: row.get::<Option<String>, _>("last_sync").flatten(),
+            };
+            scrapers.insert(scraper.cersei_scraper_id, scraper);
+        }
+
+        Ok(scrapers)
+    }
+
+    async fn add_cersei_catalog(&self, catalog_id: usize, scraper_id: usize) -> Result<()> {
+        let mut conn = self.get_conn().await?;
+        let sql = "INSERT INTO `cersei` (`catalog_id`, `cersei_scraper_id`) VALUES (:catalog_id, :scraper_id)";
+        conn.exec_drop(sql, params! {catalog_id, scraper_id})
+            .await?;
+        Ok(())
+    }
+
+    async fn update_cersei_last_update(&self, scraper_id: usize, last_sync: &str) -> Result<()> {
+        self.get_conn()
+            .await?
+            .exec_drop(
+                "UPDATE `cersei` SET `last_sync`=:last_sync WHERE `cersei_scraper_id`=:scraper_id",
+                params! {last_sync, scraper_id},
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn entry_update_cersei(
+        &self,
+        entry_id: usize,
+        ext_name: &str,
+        ext_desc: &str,
+        type_name: &str,
+        ext_url: &str,
+    ) -> Result<()> {
+        let type_name = crate::entry::normalize_entry_type(Some(type_name));
+        let sql = "UPDATE `entry` \
+            SET `ext_name`=SUBSTR(:ext_name,1,127), `ext_desc`=SUBSTR(:ext_desc,1,254), \
+                `type`=:type_name, `ext_url`=:ext_url \
+            WHERE `id`=:entry_id \
+            AND (`ext_name`!=SUBSTR(:ext_name,1,127) OR `ext_desc`!=SUBSTR(:ext_desc,1,254) \
+                 OR `type`!=:type_name OR `ext_url`!=:ext_url)";
+        self.get_conn()
+            .await?
+            .exec_drop(
+                sql,
+                params! {ext_name, ext_desc, type_name, ext_url, entry_id},
+            )
+            .await?;
         Ok(())
     }
 }
