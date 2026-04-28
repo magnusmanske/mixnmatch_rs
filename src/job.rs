@@ -457,6 +457,11 @@ impl Job {
                 Maintenance::new(&self.app).common_names_human().await
             }
             "update_property_cache" => Maintenance::new(&self.app).update_property_cache().await,
+            "maintenance_delete_multi_match_for_fully_matched" => {
+                Maintenance::new(&self.app)
+                    .delete_multi_match_for_fully_matched()
+                    .await
+            }
             "maintenance_taxa" => Maintenance::new(&self.app).taxa().await,
             "maintenance_artwork" => Maintenance::new(&self.app).artwork().await,
             "maintenance_common_aux" => Maintenance::new(&self.app).common_aux().await,

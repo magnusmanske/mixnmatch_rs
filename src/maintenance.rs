@@ -615,6 +615,21 @@ impl Maintenance {
     pub async fn automatch(&self) -> Result<()> {
         self.app.storage().maintenance_automatch().await
     }
+
+    /// Sweep every `multi_match` row whose entry has since been fully
+    /// matched. Per-row cleanup happens inline in `Entry::set_match`
+    /// already, but legacy data paths and ad-hoc fixes leave behind
+    /// rows that the inline cleanup never saw — this is the broom.
+    /// Mirrors PHP `Maintenance::deleteMultimatchesForFullyMatchedEntries`.
+    pub async fn delete_multi_match_for_fully_matched(&self) -> Result<()> {
+        let n = self
+            .app
+            .storage()
+            .maintenance_delete_multi_match_for_fully_matched()
+            .await?;
+        log::info!("delete_multi_match_for_fully_matched: removed {n} row(s)");
+        Ok(())
+    }
 }
 
 /// Decode one TSV row of `?p ?v ?vLabel` into the storage row.
