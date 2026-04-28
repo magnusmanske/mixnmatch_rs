@@ -1,9 +1,7 @@
 use crate::{
-    automatch::{AutomatchSearchRow, CandidateDatesRow, PersonDateMatchRow, ResultInOriginalCatalog, ResultInOtherCatalog},
     auxiliary_data::AuxiliaryRow,
     auxiliary_matcher::AuxiliaryResults,
     catalog::Catalog,
-    cersei::CurrentScraper,
     coordinates::{CoordinateLocation, LocationRow},
     entry::Entry,
     entry_query::EntryQuery,
@@ -21,6 +19,112 @@ use async_trait::async_trait;
 use mysql_async::Row;
 use std::collections::HashMap;
 use wikimisc::wikibase::LocaleString;
+
+// ---------------------------------------------------------------------------
+// Row-shape DTOs that live in the storage layer.
+//
+// These were originally defined in their primary domain module
+// (`automatch`, `cersei`, `microsync`) but the storage trait
+// signatures kept needing to import them — a layer inversion
+// flagged in `audits/code_architecture.md` §3.1. Lifting them here
+// makes storage a leaf dependency. Original module paths re-export
+// for backwards compatibility.
+// ---------------------------------------------------------------------------
+
+/// One row of automatch search/simple queries:
+/// `(entry_id, ext_name, type, aliases)`.
+#[derive(Debug, Clone)]
+pub struct AutomatchSearchRow {
+    pub entry_id: usize,
+    pub ext_name: String,
+    pub type_name: String,
+    pub aliases: String,
+}
+
+impl AutomatchSearchRow {
+    pub fn new(entry_id: usize, ext_name: String, type_name: String, aliases: String) -> Self {
+        Self {
+            entry_id,
+            ext_name,
+            type_name,
+            aliases,
+        }
+    }
+}
+
+/// One row of person-date matching queries with both dates:
+/// `(entry_id, ext_name, born, died)`.
+#[derive(Debug, Clone)]
+pub struct PersonDateMatchRow {
+    pub entry_id: usize,
+    pub ext_name: String,
+    pub born: String,
+    pub died: String,
+}
+
+impl PersonDateMatchRow {
+    pub fn new(entry_id: usize, ext_name: String, born: String, died: String) -> Self {
+        Self {
+            entry_id,
+            ext_name,
+            born,
+            died,
+        }
+    }
+}
+
+/// One row of single-date matching queries:
+/// `(entry_id, born, died, comma-separated candidate Q-numbers)`.
+#[derive(Debug, Clone)]
+pub struct CandidateDatesRow {
+    pub entry_id: usize,
+    pub born: String,
+    pub died: String,
+    pub candidates_csv: String,
+}
+
+impl CandidateDatesRow {
+    pub fn new(entry_id: usize, born: String, died: String, candidates_csv: String) -> Self {
+        Self {
+            entry_id,
+            born,
+            died,
+            candidates_csv,
+        }
+    }
+}
+
+/// One row of `automatch_from_other_catalogs` (origin side).
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct ResultInOriginalCatalog {
+    pub entry_id: usize,
+    pub ext_name: String,
+    pub type_name: String,
+}
+
+/// One row of `automatch_from_other_catalogs` (target side, with optional Q).
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct ResultInOtherCatalog {
+    pub entry_id: usize,
+    pub ext_name: String,
+    pub type_name: String,
+    pub q: Option<isize>,
+}
+
+/// One row of the `cersei` table: which scraper a catalog is bound
+/// to and when it was last sync'd.
+#[derive(Debug)]
+pub struct CurrentScraper {
+    pub cersei_scraper_id: usize,
+    pub catalog_id: usize,
+    pub last_sync: Option<String>,
+}
+
+/// Separator string the microsync SQL uses inside
+/// `GROUP_CONCAT(ext_id SEPARATOR '…')` so the parser can split
+/// the ids back out. Defined here (the shared contract layer)
+/// rather than in either consumer alone.
+pub const EXT_URL_UNIQUE_SEPARATOR: &str = "!@£$%^&|";
 
 /// Filter criteria for `query=catalog` (paginated entry listing).
 ///

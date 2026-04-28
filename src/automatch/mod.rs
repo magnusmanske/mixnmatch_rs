@@ -27,6 +27,14 @@ mod strategies;
 pub use dates::{DateMatchField, DateStringLength};
 pub use matchers::{MATCHERS, Matcher, run_matcher_for_action};
 
+// Row DTOs live in `crate::storage` (single source of truth — the
+// storage trait signatures need them). Re-exported here so existing
+// `use crate::automatch::AutomatchSearchRow` paths keep working.
+pub use crate::storage::{
+    AutomatchSearchRow, CandidateDatesRow, PersonDateMatchRow, ResultInOriginalCatalog,
+    ResultInOtherCatalog,
+};
+
 use crate::app_state::AppState;
 use crate::job::Job;
 use crate::job::Jobbable;
@@ -46,82 +54,6 @@ pub(super) const SPARQL_FALLBACK_BATCH_SIZE: usize = 10000;
 /// While streaming an unbatched SPARQL response, flush to the per-entry
 /// matcher every N rows so we don't hold the whole result in memory.
 pub(super) const SPARQL_PROCESS_CHUNK_SIZE: usize = 100000;
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct ResultInOriginalCatalog {
-    pub entry_id: usize,
-    pub ext_name: String,
-    pub type_name: String,
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct ResultInOtherCatalog {
-    pub entry_id: usize,
-    pub ext_name: String,
-    pub type_name: String,
-    pub q: Option<isize>,
-}
-
-/// A row from automatch search/simple queries: entry_id, ext_name, type, aliases.
-#[derive(Debug, Clone)]
-pub struct AutomatchSearchRow {
-    pub entry_id: usize,
-    pub ext_name: String,
-    pub type_name: String,
-    pub aliases: String,
-}
-
-impl AutomatchSearchRow {
-    pub fn new(entry_id: usize, ext_name: String, type_name: String, aliases: String) -> Self {
-        Self {
-            entry_id,
-            ext_name,
-            type_name,
-            aliases,
-        }
-    }
-}
-
-/// A row from person-date matching queries with both dates.
-/// Fields: entry_id, ext_name, born, died.
-#[derive(Debug, Clone)]
-pub struct PersonDateMatchRow {
-    pub entry_id: usize,
-    pub ext_name: String,
-    pub born: String,
-    pub died: String,
-}
-
-impl PersonDateMatchRow {
-    pub fn new(entry_id: usize, ext_name: String, born: String, died: String) -> Self {
-        Self {
-            entry_id,
-            ext_name,
-            born,
-            died,
-        }
-    }
-}
-
-/// A row from single-date matching queries: entry_id, born, died, comma-separated candidates.
-#[derive(Debug, Clone)]
-pub struct CandidateDatesRow {
-    pub entry_id: usize,
-    pub born: String,
-    pub died: String,
-    pub candidates_csv: String,
-}
-
-impl CandidateDatesRow {
-    pub fn new(entry_id: usize, born: String, died: String, candidates_csv: String) -> Self {
-        Self {
-            entry_id,
-            born,
-            died,
-            candidates_csv,
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 pub(super) struct CandidateDates {
