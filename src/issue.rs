@@ -152,6 +152,46 @@ impl Issue {
         })
     }
 
+    /// Run every periodic issue-table maintenance pass in sequence.
+    /// Mirrors PHP `Maintenance::updateIssues`: status-flip issues from
+    /// inactive catalogs, suppress Jan 1 placeholder MISMATCH_DATES,
+    /// delete issues against entries the user has flagged N/A or
+    /// no-Wikidata, then auto-close WD_DUPLICATE pairs that are just
+    /// Wikidata-side redirects.
+    ///
+    /// Each step is best-effort: a transient failure in one pass
+    /// surfaces a `warn!` but doesn't keep the rest from running, so
+    /// one stuck step can't starve the others on every cron tick.
+    pub async fn sweep_open(app: &AppState) -> Result<()> {
+        macro_rules! run_step {
+            ($label:literal, $call:expr) => {
+                match $call.await {
+                    Ok(n) => log::info!("issues sweep: {} closed/deleted {} row(s)", $label, n),
+                    Err(e) => log::warn!("issues sweep: {} failed: {e}", $label),
+                }
+            };
+        }
+        run_step!(
+            "inactive_catalog",
+            app.storage().issues_close_for_inactive_catalogs()
+        );
+        run_step!(
+            "jan01_mismatch",
+            app.storage().issues_close_jan01_mismatches()
+        );
+        run_step!(
+            "invalid_q_match",
+            app.storage().issues_delete_invalid_q_matches()
+        );
+        // The duplicate-resolver hits Wikidata, so a network blip in
+        // the middle would otherwise abort the whole sweep — keep it
+        // last and tolerate failure the same way as the SQL passes.
+        if let Err(e) = Self::fix_wd_duplicates(app).await {
+            log::warn!("issues sweep: fix_wd_duplicates failed: {e}");
+        }
+        Ok(())
+    }
+
     pub async fn fix_wd_duplicates(app: &AppState) -> Result<()> {
         let issues = app.storage().get_open_wd_duplicates().await?;
         let mut items = issues

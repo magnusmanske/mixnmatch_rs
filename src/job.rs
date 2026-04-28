@@ -441,6 +441,7 @@ impl Job {
             }
 
             "fix_duplicate_issues" => crate::issue::Issue::fix_wd_duplicates(&self.app).await,
+            "update_issues" => crate::issue::Issue::sweep_open(&self.app).await,
             "maintenance_name_and_full_dates" => {
                 Maintenance::new(&self.app)
                     .match_by_name_and_full_dates()
