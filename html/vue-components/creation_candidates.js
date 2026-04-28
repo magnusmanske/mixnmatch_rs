@@ -95,7 +95,7 @@ export default Vue.extend({
 				me.require_catalogs = [];
 				me.min_catalogs_required = 0;
 			}
-			router.push(path);
+			me.$router.push(path);
 			me.loadData();
 		},
 		hasHumanEntries: function () {

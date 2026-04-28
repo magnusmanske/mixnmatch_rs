@@ -55,7 +55,7 @@ export default Vue.extend({
 		},
 		onRun: function () {
 			const me = this;
-			router.push('/sparql/' + encodeURIComponent(me.sparql_query));
+			me.$router.push('/sparql/' + encodeURIComponent(me.sparql_query));
 		}
 	},
 	watch: {

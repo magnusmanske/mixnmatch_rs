@@ -237,7 +237,7 @@ export default Vue.extend({
 				}, { method: 'POST' });
 				await ensure_catalog(me.id, true);
 				mnm_notify('Catalog saved', 'success');
-				router.push('/catalog/' + me.id);
+				me.$router.push('/catalog/' + me.id);
 			} catch (e) {
 				mnm_notify('Save failed: ' + (e.message || e), 'danger');
 			} finally { me.saving = false; }
