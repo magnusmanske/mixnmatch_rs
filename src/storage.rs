@@ -310,6 +310,21 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     // Issue
 
     async fn get_open_wd_duplicates(&self) -> Result<Vec<Issue>>;
+    /// Close every OPEN issue whose entry belongs to a catalog that's
+    /// no longer active. Mirrors the first SQL in PHP
+    /// `Maintenance::updateIssues`. Returns affected-row count.
+    async fn issues_close_for_inactive_catalogs(&self) -> Result<usize>;
+    /// Close every OPEN MISMATCH_DATES issue where the MnM date is
+    /// "MM-01-01" — these are placeholder January-1st entries that
+    /// look like real dates but almost always indicate a year-only
+    /// import that shouldn't be flagged as a mismatch. Mirrors the
+    /// second SQL in PHP `Maintenance::updateIssues`.
+    async fn issues_close_jan01_mismatches(&self) -> Result<usize>;
+    /// Delete OPEN issues whose entry is matched to Q0 or Q-1 by a
+    /// real user — those entry rows mean "N/A" or "no Wikidata", not a
+    /// real match, so the corresponding issue is moot. Mirrors the
+    /// third SQL in PHP `Maintenance::updateIssues`.
+    async fn issues_delete_invalid_q_matches(&self) -> Result<usize>;
     async fn issue_insert(&self, issue: &Issue) -> Result<()>;
     async fn set_issue_status(&self, issue_id: usize, status: IssueStatus) -> Result<()>;
 
