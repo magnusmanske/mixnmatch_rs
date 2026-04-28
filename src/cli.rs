@@ -162,6 +162,27 @@ enum Commands {
         batch_size: usize,
     },
 
+    /// Migrate confirmed manual matches from a catalog with the old
+    /// ext_id scheme to a freshly-imported successor with the new
+    /// scheme, anchoring on entry name + a description sanity check.
+    /// Run this when the upstream provider has reissued external IDs
+    /// and the matches need to be carried across by name. Equivalent
+    /// to PHP `CatalogMerger::migrateProperty`.
+    MigrateCatalogProperty {
+        #[arg(short, long, value_name = "FILE")]
+        config: Option<PathBuf>,
+
+        /// Catalog id under the old ext_id scheme — the source of the
+        /// matches that get ported.
+        #[arg(long)]
+        old: usize,
+
+        /// Catalog id under the new ext_id scheme — receives the
+        /// ported matches. Must already contain the new entries.
+        #[arg(long)]
+        new: usize,
+    },
+
     /// Merge one catalog into another: copy missing entries as
     /// unmatched, port confirmed manual matches onto the target's
     /// equivalent ext_ids, then deactivate the source catalog.
@@ -524,6 +545,12 @@ impl ShellCommands {
                 println!(
                     "merge {source} -> {target}: {stats}"
                 );
+            }
+            Some(Commands::MigrateCatalogProperty { config, old, new }) => {
+                let app = Self::path2app(config)?;
+                let merger = crate::catalog_merger::CatalogMerger::new(app);
+                let stats = merger.migrate_property(*old, *new).await?;
+                println!("migrate-catalog-property {old} -> {new}: {stats}");
             }
             Some(Commands::Test { config }) => {
                 let app = Self::path2app(config)?;
