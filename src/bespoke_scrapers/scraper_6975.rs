@@ -22,7 +22,7 @@ impl BespokeScraper for BespokeScraper6975 {
 
     async fn run(&self) -> Result<()> {
         let url = "https://www.web.statistik.zh.ch/webapp/KRRRPublic/app?page=json&nachname=&vorname=&geburtsjahr=&wohnort=&beruf=&geschlecht=&partei=&parteigruppe=&wk_periode_von=2025&wk_periode_bis=2025&wahlkreis=1.+Wahlkreis+(Z%C3%BCrich+1%2B2)&bemerkungen=&einsitztag=1&einsitzmonat=1&einsitzjahr=2025";
-        let client = reqwest::Client::new();
+        let client = self.http_client();
         let json: serde_json::Value = client.get(url).send().await?.json().await?;
         let mut entry_cache = vec![];
         let arr = json["data"]

@@ -966,7 +966,7 @@ pub async fn run_desc_from_html_job(catalog_id: usize, app: &AppState) -> Result
         .get_code_fragment_lua("DESC_FROM_HTML", catalog_id)
         .await?
         .ok_or_else(|| anyhow!("No Lua code fragment for DESC_FROM_HTML catalog {catalog_id}"))?;
-    let client = build_html_client()?;
+    let client = app.http_client().clone();
 
     let mut offset = 0;
     loop {
@@ -985,12 +985,6 @@ pub async fn run_desc_from_html_job(catalog_id: usize, app: &AppState) -> Result
     }
 
     finalize_desc_from_html(app, catalog_id).await
-}
-
-fn build_html_client() -> Result<reqwest::Client> {
-    Ok(reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()?)
 }
 
 async fn fetch_html(client: &reqwest::Client, url: &str) -> Option<String> {

@@ -29,7 +29,7 @@ impl BespokeScraper for BespokeScraper121 {
 
     async fn run(&self) -> Result<()> {
         let url = "https://www.sikart.ch/personen_export.aspx";
-        let client = reqwest::Client::new();
+        let client = self.http_client();
         let text = client.get(url).send().await?.text().await?;
         let file = std::io::Cursor::new(text);
         let mut reader = csv::ReaderBuilder::new()
