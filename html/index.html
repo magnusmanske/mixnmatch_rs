@@ -10,6 +10,14 @@
 	     otherwise be `host//` and make `./resources/…` imports resolve to
 	     `//resources/…` (no Content-Type, JS modules blocked). -->
 	<base href="/" />
+	<!-- Apply saved colour scheme before CSS renders to prevent flash -->
+	<script>
+		(function () {
+			var pref = localStorage.getItem('mnm-theme') || 'auto';
+			var dark = pref === 'dark' || (pref !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+			document.documentElement.setAttribute('data-bs-theme', dark ? 'dark' : 'light');
+		})();
+	</script>
 	<link rel="icon" href="favicon.png" type="image/png" />
 	<title tt="toolname"></title>
 	<link rel="stylesheet"
@@ -92,6 +100,9 @@
 
 				<widar></widar>
 				<search-box></search-box>
+				<button id="mnm-theme-toggle" class="btn btn-sm btn-outline-secondary ms-2"
+					onclick="window.mnmCycleTheme()" title="Toggle colour scheme"
+					style="font-size:1rem;padding:1px 7px;line-height:1.5">◑</button>
 				<a style="margin:0px;padding:0px;margin-top:4px;margin-left:10px;" href="/" target='_blank'>
 					<img src="https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Toolforge_logo.svg/60px-Toolforge_logo.svg.png"
 						tt_title="wmf_powered" border="0" width="32px" />
