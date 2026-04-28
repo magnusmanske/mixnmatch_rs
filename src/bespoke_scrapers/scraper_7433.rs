@@ -29,7 +29,7 @@ impl BespokeScraper for BespokeScraper7433 {
             let url = format!(
                 "https://research.annefrank.org/en/api/search?type=person&format=json&page={page_id}"
             );
-            let client = reqwest::Client::new();
+            let client = self.http_client();
             let json: serde_json::Value = client.get(url).send().await?.json().await?;
             let results = match json["results"].as_array() {
                 Some(results) => results,

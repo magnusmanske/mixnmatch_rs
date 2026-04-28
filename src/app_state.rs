@@ -67,6 +67,17 @@ pub struct AppState {
     /// cache), so HTML/JS edits to a checked-out repo show up immediately.
     /// Unset → fall back to the CLI `--html-dir` argument with caching.
     html_dir_override: Option<Arc<PathBuf>>,
+    /// One shared `reqwest::Client` for the default-config HTTP needs that
+    /// don't have specialised timeout / header requirements (most bespoke
+    /// scrapers, simple HTML fetches, OAuth callbacks). Specialised
+    /// callers — WDQS (longer timeout), the API proxy (per-route config),
+    /// `wikidata::get_mw_api` (constrained by the mediawiki crate's
+    /// builder-only API) — still construct their own.
+    ///
+    /// `reqwest::Client` is `Clone` and internally `Arc`-shared, so passing
+    /// it by clone is cheap; we wrap in `Arc` so AppState clones don't
+    /// duplicate the connection pool struct itself.
+    http_client: Arc<reqwest::Client>,
 }
 
 impl AppState {
@@ -86,6 +97,13 @@ impl AppState {
 
     pub fn task_specific_usize(&self) -> &HashMap<String, usize> {
         &self.task_specific_usize
+    }
+
+    /// Shared HTTP client for default-config requests. Cheap to clone
+    /// (internally Arc-shared) so callers can either borrow the
+    /// reference or `.clone()` to own it.
+    pub fn http_client(&self) -> &reqwest::Client {
+        &self.http_client
     }
 
     /// Creatre an `AppState` object from a config JSON object
@@ -138,6 +156,14 @@ impl AppState {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(|s| Arc::new(PathBuf::from(s)));
+        // One default-config HTTP client for the whole process. 30 s
+        // timeout matches the previous per-call defaults in
+        // bespoke_scrapers / code_fragment HTML fetchers, which is the
+        // majority of consumers.
+        let http_client = reqwest::Client::builder()
+            .timeout(time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| anyhow!("failed to build shared HTTP client: {e}"))?;
         Ok(Self {
             wikidata: Wikidata::new(&config["wikidata"], bot_name.clone(), bot_password.clone()),
             wdt: Wikidata::new(&config["wdt"], bot_name, bot_password),
@@ -154,6 +180,7 @@ impl AppState {
             toolforge_php_command,
             oauth_config,
             html_dir_override,
+            http_client: Arc::new(http_client),
         })
     }
 

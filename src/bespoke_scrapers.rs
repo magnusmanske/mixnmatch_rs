@@ -159,8 +159,11 @@ pub trait BespokeScraper {
         }
     }
 
+    /// Default HTTP client for scrapers — re-uses the AppState's shared
+    /// connection pool. Override per-scraper if a specialised client
+    /// (custom UA, longer timeout, no proxy) is needed.
     fn http_client(&self) -> reqwest::Client {
-        reqwest::Client::new()
+        self.app().http_client().clone()
     }
 
     /// Push-and-flush helper: if `cache` has reached `CACHE_FLUSH_THRESHOLD`
