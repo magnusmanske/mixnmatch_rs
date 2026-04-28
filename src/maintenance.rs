@@ -7,7 +7,7 @@ use crate::match_state::MatchState;
 use crate::prop_todo::PropTodo;
 use anyhow::{Result, anyhow};
 use futures::future::join_all;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 #[derive(Debug, Clone)]
 pub struct Maintenance {
@@ -1226,6 +1226,58 @@ impl Maintenance {
         log::info!(
             "update_aux_candidates: rebuilt with {n} row(s) across {} prop(s)",
             allowlist.len()
+        );
+        Ok(())
+    }
+
+    /// Fetch ISO 639-1 (2-letter) → ISO 639-3 (3-letter) code mappings from
+    /// Wikidata and write the result to `html/iso.json` (or the path given by
+    /// `html_dir_override` in the config). Existing entries not returned by
+    /// Wikidata are preserved so that manually maintained special-cases
+    /// (e.g. `"չկա"→"xcl"`) survive the update.
+    pub async fn update_iso_codes(&self) -> Result<()> {
+        let sparql = "SELECT ?iso1 ?iso3 WHERE { \
+                          ?lang wdt:P218 ?iso1 ; \
+                                wdt:P220 ?iso3 . \
+                      }";
+        let client = crate::wdqs::build_client()?;
+        let rows = crate::wdqs::run_tsv_query(&client, sparql).await?;
+        if rows.len() < 100 {
+            return Err(anyhow!(
+                "update_iso_codes: only {} row(s) from SPARQL, expected ≥100; aborting",
+                rows.len()
+            ));
+        }
+
+        let path = match self.app.html_dir_override() {
+            Some(dir) => dir.join("iso.json"),
+            None => std::path::PathBuf::from("html/iso.json"),
+        };
+
+        // Seed the map from the existing file so manually maintained entries survive.
+        let mut map: BTreeMap<String, String> = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default();
+
+        for row in &rows {
+            if row.len() < 2 {
+                continue;
+            }
+            let iso1 = row[0].trim().to_string();
+            let iso3 = row[1].trim().to_string();
+            if iso1.is_empty() || iso3.is_empty() {
+                continue;
+            }
+            map.insert(iso1, iso3);
+        }
+
+        let json = serde_json::to_string_pretty(&map)?;
+        std::fs::write(&path, json + "\n")?;
+        log::info!(
+            "update_iso_codes: wrote {} entries to {}",
+            map.len(),
+            path.display()
         );
         Ok(())
     }
