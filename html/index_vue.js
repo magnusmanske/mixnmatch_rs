@@ -1,6 +1,40 @@
 // ENFORCE HTTPS
 if (location.protocol != 'https:') location.href = 'https:' + window.location.href.substring(window.location.protocol.length);
 
+// ==================== Colour scheme (dark / light / auto) ====================
+(function () {
+	var PREF_KEY = 'mnm-theme';
+	var MODES = ['auto', 'dark', 'light'];
+	var ICONS = { auto: '◑', dark: '☾', light: '☀' };
+	var mq = window.matchMedia('(prefers-color-scheme: dark)');
+
+	function applyTheme(pref) {
+		var isDark = pref === 'dark' || (pref !== 'light' && mq.matches);
+		document.documentElement.setAttribute('data-bs-theme', isDark ? 'dark' : 'light');
+		var btn = document.getElementById('mnm-theme-toggle');
+		if (btn) {
+			btn.textContent = ICONS[pref] || '◑';
+			btn.title = pref === 'auto' ? 'Colour scheme: auto (following system)' :
+				pref === 'dark' ? 'Colour scheme: dark' : 'Colour scheme: light';
+		}
+	}
+
+	window.mnmCycleTheme = function () {
+		var cur = localStorage.getItem(PREF_KEY) || 'auto';
+		var next = MODES[(MODES.indexOf(cur) + 1) % MODES.length];
+		localStorage.setItem(PREF_KEY, next);
+		applyTheme(next);
+	};
+
+	// Sync button icon with current pref (theme was already applied by the head script)
+	applyTheme(localStorage.getItem(PREF_KEY) || 'auto');
+
+	// Follow system preference changes when in auto mode
+	mq.addEventListener('change', function () {
+		if ((localStorage.getItem(PREF_KEY) || 'auto') === 'auto') applyTheme('auto');
+	});
+})();
+
 // ==================== Global error handler ====================
 
 Vue.config.errorHandler = function (err, vm, info) {

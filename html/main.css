@@ -479,7 +479,7 @@ td.catalog_row_left {
 		display: block !important;
 		margin-bottom: 8px;
 		padding: 4px 0;
-		border-bottom: 1px solid #eee;
+		border-bottom: 1px solid var(--mnm-border);
 	}
 
 	.catalog-list-item,
@@ -562,6 +562,38 @@ td.catalog_row_left {
 		margin-bottom: 4px;
 	}
 }
+
+/* ========== Dark mode ========== */
+
+[data-bs-theme="dark"] {
+	--mnm-blue: #6ea8fe;
+	--mnm-green: #75b798;
+	--mnm-red: #ea868f;
+	--mnm-yellow: #ffda6a;
+	--mnm-bg: #212529;
+	--mnm-bg-alt: #2b3035;
+	--mnm-border: #495057;
+	--mnm-text: #dee2e6;
+	--mnm-text-muted: #adb5bd;
+	--mnm-text-light: #8d949b;
+}
+
+[data-bs-theme="dark"] .text-info { color: #2ecfad; }
+
+[data-bs-theme="dark"] .fist-pag-btn {
+	background: var(--bs-body-bg);
+	color: var(--mnm-blue);
+	border-color: var(--mnm-border);
+}
+[data-bs-theme="dark"] .fist-pag-btn:hover:not(:disabled):not(.fist-pag-active) {
+	background: var(--mnm-bg-alt);
+}
+[data-bs-theme="dark"] .fist-pag-ellipsis,
+[data-bs-theme="dark"] .fist-pag-info { color: var(--mnm-text-muted); }
+
+[data-bs-theme="dark"] .cat-preview:hover { background: var(--mnm-bg-alt) !important; }
+
+[data-bs-theme="dark"] .cat-row { border-bottom-color: var(--mnm-border); }
 
 /* ========== Small phone: <= 575px ========== */
 
