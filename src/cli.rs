@@ -149,6 +149,19 @@ enum Commands {
         batch_size: usize,
     },
 
+    /// Push every `WD_MISSING` row in `wd_matches` to Wikidata as a new
+    /// `Pn=ext_id` statement, signed with the OAuth1.0a bot token from
+    /// `oauth.ini` (`[bot]` section). Equivalent to PHP
+    /// `RecentChangesWatcher::syncMatchesToWikidata`.
+    PushWdMatchesToWikidata {
+        #[arg(short, long, value_name = "FILE")]
+        config: Option<PathBuf>,
+
+        /// Maximum rows to push this run. Defaults to 1000.
+        #[arg(long, default_value_t = crate::wd_match_sync::DEFAULT_BATCH_SIZE)]
+        batch_size: usize,
+    },
+
     /// test
     Test {
         #[arg(short, long, value_name = "FILE")]
@@ -465,6 +478,12 @@ impl ShellCommands {
                 let stats =
                     crate::wd_match_sync::classify_pending(&app, *batch_size).await?;
                 println!("sync_wd_matches: {stats}");
+            }
+            Some(Commands::PushWdMatchesToWikidata { config, batch_size }) => {
+                let app = Self::path2app(config)?;
+                let stats =
+                    crate::wd_match_sync::push_wd_missing(&app, *batch_size).await?;
+                println!("push_wd_matches_to_wikidata: {stats}");
             }
             Some(Commands::Test { config }) => {
                 let app = Self::path2app(config)?;
