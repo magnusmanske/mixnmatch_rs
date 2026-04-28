@@ -972,6 +972,14 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     /// different external IDs, which usually flags a problem the
     /// migration wants to surface as a warning.
     async fn entry_get_duplicate_qs_in_catalog(&self, catalog_id: usize) -> Result<Vec<isize>>;
+
+    /// Delete every `multi_match` row whose entry has since been fully
+    /// matched (manual user, q > 0). Returns affected-row count.
+    /// PHP equivalent: `Maintenance::deleteMultimatchesForFullyMatchedEntries`
+    /// (and its duplicate `removeMultiMatchForManualMatches`). Per-row
+    /// cleanup happens inline via `Entry::set_match`, but a periodic
+    /// sweep catches stragglers from older code paths that didn't.
+    async fn maintenance_delete_multi_match_for_fully_matched(&self) -> Result<usize>;
 }
 
 #[cfg(test)]

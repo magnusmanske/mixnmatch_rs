@@ -6598,6 +6598,24 @@ impl Storage for StorageMySQL {
         Ok(rows)
     }
 
+    async fn maintenance_delete_multi_match_for_fully_matched(&self) -> Result<usize> {
+        // Mirrors PHP exactly. EXISTS over the indexed (id, q, user)
+        // columns lets MySQL short-circuit per row, which beats the
+        // JOIN form when `multi_match` is large.
+        let sql = "DELETE FROM `multi_match` \
+            WHERE EXISTS ( \
+                SELECT 1 FROM `entry` \
+                WHERE `entry`.`id` = `multi_match`.`entry_id` \
+                  AND `entry`.`q` IS NOT NULL \
+                  AND `entry`.`q` > 0 \
+                  AND `entry`.`user` IS NOT NULL \
+                  AND `entry`.`user` > 0 \
+            )";
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop(sql, ()).await?;
+        Ok(conn.affected_rows() as usize)
+    }
+
     async fn entry_get_duplicate_qs_in_catalog(&self, catalog_id: usize) -> Result<Vec<isize>> {
         let sql = "SELECT `q` FROM `entry` \
             WHERE `catalog` = :catalog_id \
