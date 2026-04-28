@@ -11,7 +11,10 @@ use std::collections::HashMap;
 use std::fs::File;
 use wikimisc::timestamp::TimeStamp;
 
-pub const EXT_URL_UNIQUE_SEPARATOR: &str = "!@£$%^&|";
+// Constant used by both microsync and the storage SQL builder; the
+// storage trait owns it now. Re-exported here so existing
+// `use crate::microsync::EXT_URL_UNIQUE_SEPARATOR` paths still work.
+pub use crate::storage::EXT_URL_UNIQUE_SEPARATOR;
 const MAX_WIKI_ROWS: usize = 400;
 const BLACKLISTED_CATALOGS: &[usize] = &[506];
 const MNM_SITE_URL: &str = "https://mix-n-match.toolforge.org";

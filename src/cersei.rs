@@ -27,12 +27,10 @@ pub struct CerseiScrapersResponse {
     pub scrapers: Vec<CerseiScraper>,
 }
 
-#[derive(Debug)]
-pub struct CurrentScraper {
-    pub cersei_scraper_id: usize,
-    pub catalog_id: usize,
-    pub last_sync: Option<String>,
-}
+// `CurrentScraper` is a row DTO used by the `Storage` trait, so it
+// lives in `crate::storage` (avoids the storage layer importing
+// from this domain module). Re-exported here for back-compat.
+pub use crate::storage::CurrentScraper;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CerseiEntry {
