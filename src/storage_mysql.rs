@@ -6598,6 +6598,32 @@ impl Storage for StorageMySQL {
         Ok(rows)
     }
 
+    async fn auxiliary_select_for_prop(
+        &self,
+        prop: usize,
+    ) -> Result<Vec<(usize, String)>> {
+        let sql = "SELECT `id`, `aux_name` FROM `auxiliary` WHERE `aux_p` = :prop";
+        let rows = self
+            .get_conn_ro()
+            .await?
+            .exec_iter(sql, params! { prop })
+            .await?
+            .map_and_drop(from_row::<(usize, String)>)
+            .await?;
+        Ok(rows)
+    }
+
+    async fn auxiliary_delete_row(&self, id: usize) -> Result<()> {
+        self.get_conn()
+            .await?
+            .exec_drop(
+                "DELETE FROM `auxiliary` WHERE `id` = :id",
+                params! { id },
+            )
+            .await?;
+        Ok(())
+    }
+
     async fn entry_select_with_html_entities_in_name(
         &self,
         catalog_id: usize,

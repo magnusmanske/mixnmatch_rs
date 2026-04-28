@@ -473,6 +473,11 @@ impl Job {
                     .fix_html_entities_in_catalog(catalog_id)
                     .await
             }
+            "maintenance_fix_gnd_undifferentiated_persons" => {
+                Maintenance::new(&self.app)
+                    .fix_gnd_undifferentiated_persons()
+                    .await
+            }
             "maintenance_taxa" => Maintenance::new(&self.app).taxa().await,
             "maintenance_artwork" => Maintenance::new(&self.app).artwork().await,
             "maintenance_common_aux" => Maintenance::new(&self.app).common_aux().await,
