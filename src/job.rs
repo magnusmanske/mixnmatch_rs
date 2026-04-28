@@ -19,6 +19,7 @@ use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use chrono::Duration;
 use chrono::Local;
+use futures::future::BoxFuture;
 use log::info;
 use serde_json::json;
 use std::error::Error;
@@ -317,229 +318,12 @@ impl Job {
         let catalog_id = self.get_catalog().await?;
         let action = self.get_action().await?;
 
-        if let Some(result) = self.dispatch_automatch(&action, catalog_id).await {
-            return result;
-        }
-        if let Some(result) = self.dispatch_maintenance(&action, catalog_id).await {
-            return result;
-        }
-        self.dispatch_other(&action, catalog_id).await
-    }
-
-    /// Actions handled by `AutoMatch` (and the date-based people matchers).
-    /// Returns `None` if `action` is not one of these.
-    async fn dispatch_automatch(
-        &mut self,
-        action: &str,
-        catalog_id: usize,
-    ) -> Option<Result<()>> {
-        let mut am = AutoMatch::new(&self.app);
-        am.set_current_job(self);
-        let result = match action {
-            "automatch" => am.automatch_simple(catalog_id).await,
-            "automatch_by_search" => am.automatch_by_search(catalog_id).await,
-            "automatch_from_other_catalogs" => am.automatch_from_other_catalogs(catalog_id).await,
-            "automatch_people_with_birth_year" => {
-                am.automatch_people_with_birth_year(catalog_id).await
-            }
-            "automatch_by_sitelink" => am.automatch_by_sitelink(catalog_id).await,
-            "automatch_creations" => am.automatch_creations(catalog_id).await,
-            "automatch_complex" => am.automatch_complex(catalog_id).await,
-            "automatch_people_with_initials" => {
-                am.automatch_people_with_initials(catalog_id).await
-            }
-            "automatch_sparql" => am.automatch_with_sparql(catalog_id).await,
-            "purge_automatches" => am.purge_automatches(catalog_id).await,
-            "match_person_dates" => am.match_person_by_dates(catalog_id).await,
-            "match_on_birthdate" => {
-                am.match_person_by_single_date(
-                    catalog_id,
-                    DateMatchField::Born,
-                    DateStringLength::Day,
-                )
-                .await
-            }
-            "match_on_deathdate" => {
-                am.match_person_by_single_date(
-                    catalog_id,
-                    DateMatchField::Died,
-                    DateStringLength::Day,
-                )
-                .await
-            }
-            _ => return None,
-        };
-        Some(result)
-    }
-
-    /// Actions handled by `Maintenance`. Returns `None` if `action` is
-    /// not one of these.
-    async fn dispatch_maintenance(
-        &mut self,
-        action: &str,
-        catalog_id: usize,
-    ) -> Option<Result<()>> {
-        let m = Maintenance::new(&self.app);
-        let result = match action {
-            "maintenance_name_and_full_dates" => m.match_by_name_and_full_dates().await,
-            "maintenance_common_names_dates" => m.common_names_dates().await,
-            "maintenance_common_names_birth_year" => m.common_names_birth_year().await,
-            "maintenance_common_names_human" => m.common_names_human().await,
-            "update_property_cache" => m.update_property_cache().await,
-            "maintenance_delete_multi_match_for_fully_matched" => {
-                m.delete_multi_match_for_fully_matched().await
-            }
-            "maintenance_fixup_wd_matches" => m.fixup_wd_matches().await,
-            "maintenance_update_aux_candidates" => m.update_aux_candidates().await,
-            "maintenance_fix_html_entities" => m.fix_html_entities_in_catalog(catalog_id).await,
-            "maintenance_fix_gnd_undifferentiated_persons" => {
-                m.fix_gnd_undifferentiated_persons().await
-            }
-            "maintenance_crossmatch_via_aux" => m
-                .crossmatch_via_aux()
-                .await
-                .map(|n| log::info!("crossmatch_via_aux: {n} new match(es)")),
-            "maintenance_apply_description_aux" => m.apply_description_aux(catalog_id).await,
-            "maintenance_sanity_check_date_matches_are_human" => m
-                .sanity_check_date_matches_are_human()
-                .await
-                .map(|n| log::info!("sanity_check_date_matches_are_human: removed {n}")),
-            "maintenance_taxa" => m.taxa().await,
-            "maintenance_artwork" => m.artwork().await,
-            "maintenance_common_aux" => m.common_aux().await,
-            "maintenance_automatch" => m.automatch().await,
-            "maintenance_auxiliary_item_values" => m.fix_auxiliary_item_values().await,
-            "maintenance_misc_catalog_things" => m.misc_catalog_things().await,
-            "update_props_todo" => m.update_props_todo().await,
-            "remove_p17_for_humans" => m.remove_p17_for_humans().await,
-            "cleanup_mnm_relations" => m.cleanup_mnm_relations().await,
-            "create_match_person_dates" => m.create_match_person_dates_jobs_for_catalogs().await,
-            "fix_disambig" => m.unlink_meta_items(catalog_id, &MatchState::any_matched()).await,
-            "fix_redirected_items_in_catalog" => {
-                // catalog_id=0 means "any catalog" — pick a random active
-                // one so the worker does useful work even when the job was
-                // queued without a specific catalog in mind.
-                let catalog_id = match catalog_id {
-                    0 => match self.app.storage().get_random_active_catalog_id().await {
-                        Some(id) => id,
-                        None => return Some(Ok(())),
-                    },
-                    other => other,
-                };
-                m.fix_redirects(catalog_id, &MatchState::any_matched()).await
-            }
-            "update_has_person_date" => m.update_has_person_date().await,
-            "maintenance_inventory_match" => {
-                m.fully_match_via_collection_inventory_number().await
-            }
-            "automatch_people_via_year_born" => m.automatch_people_via_year_born().await,
-            "update_iso" => m.update_iso_codes().await,
-            _ => return None,
-        };
-        Some(result)
-    }
-
-    /// Catch-all dispatcher for actions not handled by `dispatch_automatch`
-    /// or `dispatch_maintenance`. Returns `Err` for unknown actions.
-    async fn dispatch_other(&mut self, action: &str, catalog_id: usize) -> Result<()> {
-        match action {
-            "autoscrape" => {
-                let mut autoscrape = Autoscrape::new(catalog_id, &self.app).await?;
-                autoscrape.set_current_job(self);
-                autoscrape.run().await
-            }
-            "aux2wd" => {
-                let mut am = AuxiliaryMatcher::new(&self.app);
-                am.set_current_job(self);
-                am.add_auxiliary_to_wikidata(catalog_id).await
-            }
-            "auxiliary_matcher" => {
-                let mut am = AuxiliaryMatcher::new(&self.app);
-                am.set_current_job(self);
-                am.match_via_auxiliary(catalog_id).await
-            }
-            "taxon_matcher" => {
-                let mut tm = TaxonMatcher::new(&self.app);
-                tm.set_current_job(self);
-                tm.match_taxa(catalog_id).await
-            }
-            "update_from_tabbed_file" => {
-                let mut uc = UpdateCatalog::new(&self.app);
-                uc.set_current_job(self);
-                uc.update_from_tabbed_file(catalog_id).await
-            }
-            "microsync" => {
-                let mut ms = Microsync::new(&self.app);
-                ms.set_current_job(self);
-                let catalog_id = match catalog_id {
-                    0 => match self
-                        .app
-                        .storage()
-                        .get_random_active_catalog_id_with_property()
-                        .await
-                    {
-                        Some(id) => id,
-                        None => return Ok(()), // Ignore, very unlikely
-                    },
-                    other => other,
-                };
-                ms.check_catalog(catalog_id).await
-            }
-            "fix_duplicate_issues" => crate::issue::Issue::fix_wd_duplicates(&self.app).await,
-            "update_issues" => crate::issue::Issue::sweep_open(&self.app).await,
-            "wdrc_sync" => self.app.wdrc().sync(&self.app).await,
-            "sync_wd_matches" => crate::wd_match_sync::classify_pending(
-                &self.app,
-                crate::wd_match_sync::DEFAULT_BATCH_SIZE,
-            )
-            .await
-            .map(|stats| log::info!("sync_wd_matches: {stats}")),
-            "push_wd_matches_to_wikidata" => crate::wd_match_sync::push_wd_missing(
-                &self.app,
-                crate::wd_match_sync::DEFAULT_BATCH_SIZE,
-            )
-            .await
-            .map(|stats| log::info!("push_wd_matches_to_wikidata: {stats}")),
-            "update_person_dates" => {
-                match code_fragment::run_person_dates_job(catalog_id, &self.app).await {
-                    Ok(()) => Ok(()),
-                    Err(_) => PhpWrapper::update_person_dates(catalog_id, &self.app),
-                }
-            }
-            "generate_aux_from_description" => {
-                match code_fragment::run_aux_from_desc_job(catalog_id, &self.app).await {
-                    Ok(()) => Ok(()),
-                    Err(_) => PhpWrapper::generate_aux_from_description(catalog_id, &self.app),
-                }
-            }
-            "bespoke_scraper" => {
-                crate::bespoke_scrapers::run_bespoke_scraper(catalog_id, &self.app).await
-            }
-            "import_aux_from_url" => PhpWrapper::import_aux_from_url(catalog_id, &self.app),
-            "update_descriptions_from_url" => {
-                match code_fragment::run_desc_from_html_job(catalog_id, &self.app).await {
-                    Ok(()) => Ok(()),
-                    Err(_) => PhpWrapper::update_descriptions_from_url(catalog_id, &self.app),
-                }
-            }
-            "match_by_coordinates" => {
-                let cm = CoordinateMatcher::new(&self.app, Some(catalog_id)).await?;
-                cm.run().await
-            }
-            "sync_from_cersei" => {
-                let cs = crate::cersei::CerseiSync::new(&self.app)?;
-                cs.sync().await
-            }
-            "reference_fixer" => {
-                // Rewrites free-form reference-URL references into typed
-                // external-id references on Wikidata. Drains the
-                // `reference_fixer` queue populated by every successful
-                // `entry.set_match`. Catalog id is 0 (not catalog-scoped).
-                let mut rf = crate::reference_fixer::ReferenceFixer::new(&self.app)?;
-                rf.run().await.map(|_| ())
-            }
-            other => Err(anyhow!("Job::run_this_job: Unknown action '{}'", other)),
-        }
+        let handler = JOB_HANDLER_REGISTRY
+            .iter()
+            .find(|(name, _)| *name == action)
+            .map(|(_, h)| *h)
+            .ok_or_else(|| anyhow!("Job::run_this_job: Unknown action '{action}'"))?;
+        handler(self, catalog_id).await
     }
 
     //TODO test
@@ -673,13 +457,312 @@ impl Job {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Job-handler registry
+// ---------------------------------------------------------------------------
+//
+// Each registry entry is `(action_name, run_fn)` where `run_fn` consumes the
+// `&mut Job` long enough to set up the subsystem (most subsystems clone Job
+// internally via `set_current_job`, after which the &mut Job borrow ends),
+// then awaits the actual handler. The macros below cover the three common
+// shapes; one-off handlers use a hand-written closure.
+//
+// **Adding a job action**: add one line to `JOB_HANDLER_REGISTRY` (in the
+// appropriate section, alphabetical within section). The compile-time
+// uniqueness test in this file guards against typos; the
+// `job_registry_contains_known_actions` test guards against accidental
+// deletion.
+
+/// Erased async-fn signature every job handler is wrapped to.
+type JobHandlerFn =
+    for<'a> fn(&'a mut Job, usize) -> BoxFuture<'a, Result<()>>;
+
+/// `(action, |job, cat| ... am.<method>(cat).await)` — for the 13 AutoMatch
+/// actions whose body is uniformly "instantiate, set_current_job, call one
+/// method with catalog_id".
+macro_rules! automatch_simple {
+    ($action:literal, $method:ident) => {
+        ($action, ((|job, catalog_id| Box::pin(async move {
+            let mut am = AutoMatch::new(&job.app);
+            am.set_current_job(job);
+            am.$method(catalog_id).await
+        })) as JobHandlerFn))
+    };
+}
+
+/// Same shape but the AutoMatch method takes extra const args
+/// (`match_on_birthdate` / `match_on_deathdate`).
+macro_rules! automatch_single_date {
+    ($action:literal, $field:expr) => {
+        ($action, ((|job, catalog_id| Box::pin(async move {
+            let mut am = AutoMatch::new(&job.app);
+            am.set_current_job(job);
+            am.match_person_by_single_date(catalog_id, $field, DateStringLength::Day).await
+        })) as JobHandlerFn))
+    };
+}
+
+/// `(action, |job, cat| ... m.<method>().await)` for the parameter-free
+/// Maintenance methods (~70% of the maintenance group).
+macro_rules! maintenance_no_arg {
+    ($action:literal, $method:ident) => {
+        ($action, ((|job, _catalog_id| Box::pin(async move {
+            Maintenance::new(&job.app).$method().await
+        })) as JobHandlerFn))
+    };
+}
+
+/// `(action, |job, cat| ... m.<method>(cat).await)` for the Maintenance
+/// methods that take catalog_id.
+macro_rules! maintenance_with_cat {
+    ($action:literal, $method:ident) => {
+        ($action, ((|job, catalog_id| Box::pin(async move {
+            Maintenance::new(&job.app).$method(catalog_id).await
+        })) as JobHandlerFn))
+    };
+}
+
+/// Single-source-of-truth dispatch table. Add new actions here.
+#[rustfmt::skip]
+const JOB_HANDLER_REGISTRY: &[(&str, JobHandlerFn)] = &[
+    // --- AutoMatch ---
+    automatch_simple!("automatch",                          automatch_simple),
+    automatch_simple!("automatch_by_search",                automatch_by_search),
+    automatch_simple!("automatch_by_sitelink",              automatch_by_sitelink),
+    automatch_simple!("automatch_complex",                  automatch_complex),
+    automatch_simple!("automatch_creations",                automatch_creations),
+    automatch_simple!("automatch_from_other_catalogs",      automatch_from_other_catalogs),
+    automatch_simple!("automatch_people_with_birth_year",   automatch_people_with_birth_year),
+    automatch_simple!("automatch_people_with_initials",     automatch_people_with_initials),
+    automatch_simple!("automatch_sparql",                   automatch_with_sparql),
+    automatch_simple!("match_person_dates",                 match_person_by_dates),
+    automatch_simple!("purge_automatches",                  purge_automatches),
+    automatch_single_date!("match_on_birthdate",            DateMatchField::Born),
+    automatch_single_date!("match_on_deathdate",            DateMatchField::Died),
+
+    // --- Maintenance (no-arg) ---
+    maintenance_no_arg!("automatch_people_via_year_born",          automatch_people_via_year_born),
+    maintenance_no_arg!("cleanup_mnm_relations",                   cleanup_mnm_relations),
+    maintenance_no_arg!("create_match_person_dates",               create_match_person_dates_jobs_for_catalogs),
+    maintenance_no_arg!("maintenance_artwork",                     artwork),
+    maintenance_no_arg!("maintenance_automatch",                   automatch),
+    maintenance_no_arg!("maintenance_auxiliary_item_values",       fix_auxiliary_item_values),
+    maintenance_no_arg!("maintenance_common_aux",                  common_aux),
+    maintenance_no_arg!("maintenance_common_names_birth_year",     common_names_birth_year),
+    maintenance_no_arg!("maintenance_common_names_dates",          common_names_dates),
+    maintenance_no_arg!("maintenance_common_names_human",          common_names_human),
+    maintenance_no_arg!("maintenance_delete_multi_match_for_fully_matched", delete_multi_match_for_fully_matched),
+    maintenance_no_arg!("maintenance_fix_gnd_undifferentiated_persons", fix_gnd_undifferentiated_persons),
+    maintenance_no_arg!("maintenance_fixup_wd_matches",            fixup_wd_matches),
+    maintenance_no_arg!("maintenance_inventory_match",             fully_match_via_collection_inventory_number),
+    maintenance_no_arg!("maintenance_misc_catalog_things",         misc_catalog_things),
+    maintenance_no_arg!("maintenance_name_and_full_dates",         match_by_name_and_full_dates),
+    maintenance_no_arg!("maintenance_taxa",                        taxa),
+    maintenance_no_arg!("maintenance_update_aux_candidates",       update_aux_candidates),
+    maintenance_no_arg!("remove_p17_for_humans",                   remove_p17_for_humans),
+    maintenance_no_arg!("update_has_person_date",                  update_has_person_date),
+    maintenance_no_arg!("update_iso",                              update_iso_codes),
+    maintenance_no_arg!("update_property_cache",                   update_property_cache),
+    maintenance_no_arg!("update_props_todo",                       update_props_todo),
+
+    // --- Maintenance (cat-arg) ---
+    maintenance_with_cat!("maintenance_apply_description_aux",     apply_description_aux),
+    maintenance_with_cat!("maintenance_fix_html_entities",         fix_html_entities_in_catalog),
+
+    // --- Maintenance: bespoke (logging on success or special handling) ---
+    ("maintenance_crossmatch_via_aux", (|job, _cat| Box::pin(async move {
+        Maintenance::new(&job.app)
+            .crossmatch_via_aux()
+            .await
+            .map(|n| log::info!("crossmatch_via_aux: {n} new match(es)"))
+    })) as JobHandlerFn),
+    ("maintenance_sanity_check_date_matches_are_human", (|job, _cat| Box::pin(async move {
+        Maintenance::new(&job.app)
+            .sanity_check_date_matches_are_human()
+            .await
+            .map(|n| log::info!("sanity_check_date_matches_are_human: removed {n}"))
+    })) as JobHandlerFn),
+    ("fix_disambig", (|job, catalog_id| Box::pin(async move {
+        Maintenance::new(&job.app)
+            .unlink_meta_items(catalog_id, &MatchState::any_matched())
+            .await
+    })) as JobHandlerFn),
+    ("fix_redirected_items_in_catalog", (|job, catalog_id| Box::pin(async move {
+        // catalog_id=0 means "any catalog" — pick a random active
+        // one so the worker does useful work even when the job was
+        // queued without a specific catalog in mind.
+        let catalog_id = match catalog_id {
+            0 => match job.app.storage().get_random_active_catalog_id().await {
+                Some(id) => id,
+                None => return Ok(()),
+            },
+            other => other,
+        };
+        Maintenance::new(&job.app)
+            .fix_redirects(catalog_id, &MatchState::any_matched())
+            .await
+    })) as JobHandlerFn),
+
+    // --- Subsystems with set_current_job + special construction ---
+    ("autoscrape", (|job, catalog_id| Box::pin(async move {
+        let mut autoscrape = Autoscrape::new(catalog_id, &job.app).await?;
+        autoscrape.set_current_job(job);
+        autoscrape.run().await
+    })) as JobHandlerFn),
+    ("aux2wd", (|job, catalog_id| Box::pin(async move {
+        let mut am = AuxiliaryMatcher::new(&job.app);
+        am.set_current_job(job);
+        am.add_auxiliary_to_wikidata(catalog_id).await
+    })) as JobHandlerFn),
+    ("auxiliary_matcher", (|job, catalog_id| Box::pin(async move {
+        let mut am = AuxiliaryMatcher::new(&job.app);
+        am.set_current_job(job);
+        am.match_via_auxiliary(catalog_id).await
+    })) as JobHandlerFn),
+    ("taxon_matcher", (|job, catalog_id| Box::pin(async move {
+        let mut tm = TaxonMatcher::new(&job.app);
+        tm.set_current_job(job);
+        tm.match_taxa(catalog_id).await
+    })) as JobHandlerFn),
+    ("update_from_tabbed_file", (|job, catalog_id| Box::pin(async move {
+        let mut uc = UpdateCatalog::new(&job.app);
+        uc.set_current_job(job);
+        uc.update_from_tabbed_file(catalog_id).await
+    })) as JobHandlerFn),
+    ("microsync", (|job, catalog_id| Box::pin(async move {
+        let mut ms = Microsync::new(&job.app);
+        ms.set_current_job(job);
+        let catalog_id = match catalog_id {
+            0 => match job.app.storage().get_random_active_catalog_id_with_property().await {
+                Some(id) => id,
+                None => return Ok(()), // Ignore, very unlikely
+            },
+            other => other,
+        };
+        ms.check_catalog(catalog_id).await
+    })) as JobHandlerFn),
+
+    // --- Free-function dispatch ---
+    ("fix_duplicate_issues", (|job, _cat| Box::pin(async move {
+        crate::issue::Issue::fix_wd_duplicates(&job.app).await
+    })) as JobHandlerFn),
+    ("update_issues", (|job, _cat| Box::pin(async move {
+        crate::issue::Issue::sweep_open(&job.app).await
+    })) as JobHandlerFn),
+    ("wdrc_sync", (|job, _cat| Box::pin(async move {
+        job.app.wdrc().sync(&job.app).await
+    })) as JobHandlerFn),
+    ("sync_wd_matches", (|job, _cat| Box::pin(async move {
+        crate::wd_match_sync::classify_pending(&job.app, crate::wd_match_sync::DEFAULT_BATCH_SIZE)
+            .await
+            .map(|stats| log::info!("sync_wd_matches: {stats}"))
+    })) as JobHandlerFn),
+    ("push_wd_matches_to_wikidata", (|job, _cat| Box::pin(async move {
+        crate::wd_match_sync::push_wd_missing(&job.app, crate::wd_match_sync::DEFAULT_BATCH_SIZE)
+            .await
+            .map(|stats| log::info!("push_wd_matches_to_wikidata: {stats}"))
+    })) as JobHandlerFn),
+    ("bespoke_scraper", (|job, catalog_id| Box::pin(async move {
+        crate::bespoke_scrapers::run_bespoke_scraper(catalog_id, &job.app).await
+    })) as JobHandlerFn),
+    ("import_aux_from_url", (|job, catalog_id| Box::pin(async move {
+        PhpWrapper::import_aux_from_url(catalog_id, &job.app)
+    })) as JobHandlerFn),
+
+    // --- Lua-with-PHP-fallback handlers ---
+    ("update_person_dates", (|job, catalog_id| Box::pin(async move {
+        match code_fragment::run_person_dates_job(catalog_id, &job.app).await {
+            Ok(()) => Ok(()),
+            Err(_) => PhpWrapper::update_person_dates(catalog_id, &job.app),
+        }
+    })) as JobHandlerFn),
+    ("generate_aux_from_description", (|job, catalog_id| Box::pin(async move {
+        match code_fragment::run_aux_from_desc_job(catalog_id, &job.app).await {
+            Ok(()) => Ok(()),
+            Err(_) => PhpWrapper::generate_aux_from_description(catalog_id, &job.app),
+        }
+    })) as JobHandlerFn),
+    ("update_descriptions_from_url", (|job, catalog_id| Box::pin(async move {
+        match code_fragment::run_desc_from_html_job(catalog_id, &job.app).await {
+            Ok(()) => Ok(()),
+            Err(_) => PhpWrapper::update_descriptions_from_url(catalog_id, &job.app),
+        }
+    })) as JobHandlerFn),
+
+    // --- Misc ---
+    ("match_by_coordinates", (|job, catalog_id| Box::pin(async move {
+        let cm = CoordinateMatcher::new(&job.app, Some(catalog_id)).await?;
+        cm.run().await
+    })) as JobHandlerFn),
+    ("sync_from_cersei", (|job, _cat| Box::pin(async move {
+        let cs = crate::cersei::CerseiSync::new(&job.app)?;
+        cs.sync().await
+    })) as JobHandlerFn),
+    ("reference_fixer", (|job, _cat| Box::pin(async move {
+        // Rewrites free-form reference-URL references into typed
+        // external-id references on Wikidata. Drains the
+        // `reference_fixer` queue populated by every successful
+        // `entry.set_match`. Catalog id is 0 (not catalog-scoped).
+        let mut rf = crate::reference_fixer::ReferenceFixer::new(&job.app)?;
+        rf.run().await.map(|_| ())
+    })) as JobHandlerFn),
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::app_state::get_test_app;
+    use std::collections::HashSet;
 
     const _TEST_CATALOG_ID: usize = 5526;
     const _TEST_ENTRY_ID: usize = 143962196;
+
+    /// Catches a copy-paste typo in the registry that would silently
+    /// shadow an existing action with a second handler that's never
+    /// invoked (the lookup picks the first match).
+    #[test]
+    fn job_registry_action_names_are_unique() {
+        let mut seen: HashSet<&'static str> = HashSet::new();
+        for (name, _) in JOB_HANDLER_REGISTRY {
+            assert!(seen.insert(name), "duplicate job action registered: {name}");
+        }
+    }
+
+    /// Spot-check critical actions are registered. Catches accidental
+    /// deletion that the build wouldn't flag — runtime would just
+    /// start saying "Unknown action 'X'".
+    #[test]
+    fn job_registry_contains_known_actions() {
+        let names: HashSet<&'static str> = JOB_HANDLER_REGISTRY.iter().map(|(n, _)| *n).collect();
+        for required in [
+            // sample one from each subsystem cluster
+            "automatch",
+            "automatch_by_search",
+            "match_on_birthdate",
+            "maintenance_taxa",
+            "maintenance_apply_description_aux",
+            "maintenance_crossmatch_via_aux",
+            "fix_disambig",
+            "fix_redirected_items_in_catalog",
+            "autoscrape",
+            "aux2wd",
+            "auxiliary_matcher",
+            "taxon_matcher",
+            "microsync",
+            "wdrc_sync",
+            "sync_wd_matches",
+            "bespoke_scraper",
+            "update_person_dates",
+            "match_by_coordinates",
+            "sync_from_cersei",
+            "reference_fixer",
+        ] {
+            assert!(
+                names.contains(required),
+                "JOB_HANDLER_REGISTRY missing required action: {required}"
+            );
+        }
+    }
 
     #[tokio::test]
     #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
