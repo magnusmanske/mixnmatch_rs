@@ -133,6 +133,26 @@ pub struct WdMatchRow {
     pub wd_prop: usize,
 }
 
+/// One row of the `description_aux` table — a regex rule that
+/// translates a substring of an entry's description into an
+/// auxiliary `(property, value)` pair (e.g. "born in Berlin" → P19,
+/// Q64 via the corresponding rule). Used by
+/// `apply_description_aux`. The string fields hold their raw values
+/// from the table; `rx` is a MySQL `RLIKE` pattern, not a Rust
+/// `regex::Regex`, since the matching happens in the database.
+#[derive(Debug, Clone)]
+pub struct DescriptionAuxRule {
+    /// Wikidata property number to write into `auxiliary.aux_p`.
+    pub property: usize,
+    /// `auxiliary.aux_name` value (typically a `Q…` literal).
+    pub value: String,
+    /// MySQL-flavoured regex; matched case-insensitively against
+    /// `lower(entry.ext_desc)`.
+    pub rx: String,
+    /// Optional `entry.type` filter. Empty string means "no filter".
+    pub type_constraint: String,
+}
+
 /// One row of the `property_cache` table — `(prop_group, property, item)`
 /// links a Wikidata property to one of the items it can take as a
 /// value, e.g. `(31, 31, 5, "human")` recording that P31's value Q5
@@ -1033,6 +1053,25 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
         &self,
         props: &[usize],
     ) -> Result<Vec<(usize, String, Vec<usize>)>>;
+
+    /// Every row of the `description_aux` table — the catalog of
+    /// regex rules that turn entry descriptions into auxiliary rows.
+    /// Used by `apply_description_aux`. The table is small (a few
+    /// dozen rows in production), so loading the lot in one query is
+    /// the right shape.
+    async fn description_aux_get_all(&self) -> Result<Vec<DescriptionAuxRule>>;
+
+    /// Apply one `description_aux` rule to a catalog: any entry whose
+    /// `ext_desc` matches `rule.rx` (case-insensitive `RLIKE`) and
+    /// doesn't already have the corresponding auxiliary row inserts
+    /// the rule's `(property, value)` against `entry_id`. The
+    /// `type_constraint`, when set, narrows the catalog scan to a
+    /// specific entry type. Returns affected-row count.
+    async fn apply_description_aux_to_catalog(
+        &self,
+        catalog_id: usize,
+        rule: &DescriptionAuxRule,
+    ) -> Result<usize>;
     /// Delete one `auxiliary` row by primary key.
     async fn auxiliary_delete_row(&self, id: usize) -> Result<()>;
 }

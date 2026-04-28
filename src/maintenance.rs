@@ -645,6 +645,43 @@ impl Maintenance {
         Ok(())
     }
 
+    /// Apply every regex rule from `description_aux` to one
+    /// catalog's `entry.ext_desc` column, materialising matched
+    /// `(property, value)` pairs as new `auxiliary` rows. Idempotent:
+    /// the SQL already skips entries that have the corresponding
+    /// auxiliary row, so re-runs are no-ops on stable data.
+    /// Mirrors PHP `Maintenance::applyDescriptionAux`.
+    pub async fn apply_description_aux(&self, catalog_id: usize) -> Result<()> {
+        if catalog_id == 0 {
+            return Err(anyhow!("catalog id must be positive"));
+        }
+        let rules = self.app.storage().description_aux_get_all().await?;
+        if rules.is_empty() {
+            log::info!("apply_description_aux: description_aux table is empty");
+            return Ok(());
+        }
+        let mut total = 0_usize;
+        for rule in &rules {
+            match self
+                .app
+                .storage()
+                .apply_description_aux_to_catalog(catalog_id, rule)
+                .await
+            {
+                Ok(n) => total += n,
+                Err(e) => log::warn!(
+                    "apply_description_aux: rule P{}={} failed for catalog {catalog_id}: {e}",
+                    rule.property, rule.value
+                ),
+            }
+        }
+        log::info!(
+            "apply_description_aux: catalog {catalog_id} added {total} aux row(s) across {} rule(s)",
+            rules.len()
+        );
+        Ok(())
+    }
+
     /// Propagate a confirmed Wikidata match across entries that
     /// share a strong authority identifier — ISNI (P214) or GND
     /// (P227). When two or more catalog entries hold the same value
