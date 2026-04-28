@@ -228,6 +228,77 @@ impl AppState {
     pub fn wdrc(&self) -> &WDRC {
         &self.wdrc
     }
+}
+
+/// Read-only view of the application's runtime services. Lets a leaf
+/// type take a generic context (or a `&dyn AppContext`) instead of the
+/// concrete `AppState`, which means tests can substitute a mock and
+/// production passes a real `AppState`.
+///
+/// New code should prefer `&impl AppContext` over `&AppState` at
+/// boundaries; existing call sites can keep using `&AppState` until
+/// they're migrated, since `AppState` automatically satisfies the
+/// trait.
+///
+/// `wikidata_mut` is intentionally **not** in this trait: the only
+/// caller (Wikidata edit pipeline) needs the concrete type. Splitting
+/// the immutable read surface from the mutable bot-edit surface is
+/// the second half of the DIP fix; this trait covers the first half.
+pub trait AppContext: std::fmt::Debug + Send + Sync {
+    fn storage(&self) -> &Arc<Box<dyn Storage>>;
+    fn wikidata(&self) -> &Wikidata;
+    fn wdt(&self) -> &Wikidata;
+    fn wdrc(&self) -> &WDRC;
+    fn http_client(&self) -> &reqwest::Client;
+    fn task_specific_usize(&self) -> &HashMap<String, usize>;
+    fn import_file_path(&self) -> &str;
+    fn flickr_key_path(&self) -> &str;
+    fn toolforge_php_command(&self) -> &str;
+    fn html_dir_override(&self) -> Option<&Path>;
+    fn oauth_config(&self) -> Option<&Arc<OauthConfig>>;
+    fn large_catalogs(&self) -> &crate::large_catalogs::LargeCatalogs;
+}
+
+impl AppContext for AppState {
+    fn storage(&self) -> &Arc<Box<dyn Storage>> {
+        AppState::storage(self)
+    }
+    fn wikidata(&self) -> &Wikidata {
+        AppState::wikidata(self)
+    }
+    fn wdt(&self) -> &Wikidata {
+        AppState::wdt(self)
+    }
+    fn wdrc(&self) -> &WDRC {
+        AppState::wdrc(self)
+    }
+    fn http_client(&self) -> &reqwest::Client {
+        AppState::http_client(self)
+    }
+    fn task_specific_usize(&self) -> &HashMap<String, usize> {
+        AppState::task_specific_usize(self)
+    }
+    fn import_file_path(&self) -> &str {
+        AppState::import_file_path(self)
+    }
+    fn flickr_key_path(&self) -> &str {
+        AppState::flickr_key_path(self)
+    }
+    fn toolforge_php_command(&self) -> &str {
+        AppState::toolforge_php_command(self)
+    }
+    fn html_dir_override(&self) -> Option<&Path> {
+        AppState::html_dir_override(self)
+    }
+    fn oauth_config(&self) -> Option<&Arc<OauthConfig>> {
+        AppState::oauth_config(self)
+    }
+    fn large_catalogs(&self) -> &crate::large_catalogs::LargeCatalogs {
+        AppState::large_catalogs(self)
+    }
+}
+
+impl AppState {
 
     pub async fn disconnect(&self) -> Result<()> {
         self.wikidata.disconnect_db().await?;
@@ -505,6 +576,29 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Compile-time + minimal-runtime check that `AppState` correctly
+    /// satisfies the `AppContext` trait surface. Existing leaf code keeps
+    /// using `&AppState`; new code is expected to take `&impl AppContext`
+    /// so it can be tested with a mock. This test proves the upcast
+    /// compiles, and that a generic-over-AppContext function can be
+    /// instantiated with a real AppState.
+    #[test]
+    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
+    fn app_state_satisfies_app_context() {
+        fn takes_context<C: AppContext>(c: &C) -> usize {
+            // Trivial sanity: we can reach the storage handle through the
+            // trait, no different from how a real consumer would.
+            Arc::strong_count(c.storage())
+        }
+        let app = get_test_app();
+        let _ = takes_context(&app);
+
+        // dyn AppContext also works (heap-erased boundary form).
+        let app2 = get_test_app();
+        let dyn_ctx: &dyn AppContext = &app2;
+        assert!(dyn_ctx.toolforge_php_command().starts_with("php"));
+    }
 
     #[test]
     fn test_item2numeric() {

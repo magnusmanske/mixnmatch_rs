@@ -105,16 +105,6 @@ enum Commands {
         mode: ImportMode,
     },
 
-    /// Run the micro-API server on a given port
-    MicroApi {
-        #[arg(short, long, value_name = "FILE")]
-        config: Option<PathBuf>,
-
-        /// Port to listen on
-        #[arg(short, long, default_value = "8089")]
-        port: u16,
-    },
-
     /// Run the public web server: serves /api.php (the Rust port of the PHP API)
     /// and static files from the `html/` directory.
     Webserver {
@@ -292,13 +282,12 @@ impl ShellCommands {
                     override_path.display()
                 ));
             }
-            let cache =
-                crate::static_cache::StaticCache::live(override_path).map_err(|e| {
-                    anyhow!(
-                        "failed to set up live static dir at {}: {e}",
-                        override_path.display()
-                    )
-                })?;
+            let cache = crate::static_cache::StaticCache::live(override_path).map_err(|e| {
+                anyhow!(
+                    "failed to set up live static dir at {}: {e}",
+                    override_path.display()
+                )
+            })?;
             let msg = format!(
                 "webserver: live static serving (no cache) from {} (config.html_dir_override)",
                 override_path.display()
@@ -310,13 +299,12 @@ impl ShellCommands {
             if !html_dir.exists() {
                 return Err(anyhow!("html directory not found: {}", html_dir.display()));
             }
-            let cache =
-                crate::static_cache::StaticCache::load(html_dir).map_err(|e| {
-                    anyhow!(
-                        "failed to load static cache from {}: {e}",
-                        html_dir.display()
-                    )
-                })?;
+            let cache = crate::static_cache::StaticCache::load(html_dir).map_err(|e| {
+                anyhow!(
+                    "failed to load static cache from {}: {e}",
+                    html_dir.display()
+                )
+            })?;
             let msg = format!(
                 "webserver: cached {} static files ({} bytes) from {}",
                 cache.len(),
@@ -441,7 +429,11 @@ impl ShellCommands {
         Ok(tls_config)
     }
 
-    #[allow(clippy::print_stdout, clippy::print_stderr, clippy::cognitive_complexity)]
+    #[allow(
+        clippy::print_stdout,
+        clippy::print_stderr,
+        clippy::cognitive_complexity
+    )]
     pub async fn run(&self) -> Result<()> {
         let cli = Cli::parse();
         match &cli.command {
@@ -556,14 +548,12 @@ impl ShellCommands {
             }
             Some(Commands::SyncWdMatches { config, batch_size }) => {
                 let app = Self::path2app(config)?;
-                let stats =
-                    crate::wd_match_sync::classify_pending(&app, *batch_size).await?;
+                let stats = crate::wd_match_sync::classify_pending(&app, *batch_size).await?;
                 println!("sync_wd_matches: {stats}");
             }
             Some(Commands::PushWdMatchesToWikidata { config, batch_size }) => {
                 let app = Self::path2app(config)?;
-                let stats =
-                    crate::wd_match_sync::push_wd_missing(&app, *batch_size).await?;
+                let stats = crate::wd_match_sync::push_wd_missing(&app, *batch_size).await?;
                 println!("push_wd_matches_to_wikidata: {stats}");
             }
             Some(Commands::MergeCatalogs {
@@ -574,12 +564,8 @@ impl ShellCommands {
             }) => {
                 let app = Self::path2app(config)?;
                 let merger = crate::catalog_merger::CatalogMerger::new(app);
-                let stats = merger
-                    .merge(*source, *target, !*no_blank_entries)
-                    .await?;
-                println!(
-                    "merge {source} -> {target}: {stats}"
-                );
+                let stats = merger.merge(*source, *target, !*no_blank_entries).await?;
+                println!("merge {source} -> {target}: {stats}");
             }
             Some(Commands::OverwriteFromWikidata { config, catalog_id }) => {
                 let app = Self::path2app(config)?;
