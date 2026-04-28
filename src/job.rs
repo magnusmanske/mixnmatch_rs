@@ -456,6 +456,7 @@ impl Job {
             "maintenance_common_names_human" => {
                 Maintenance::new(&self.app).common_names_human().await
             }
+            "update_property_cache" => Maintenance::new(&self.app).update_property_cache().await,
             "maintenance_taxa" => Maintenance::new(&self.app).taxa().await,
             "maintenance_artwork" => Maintenance::new(&self.app).artwork().await,
             "maintenance_common_aux" => Maintenance::new(&self.app).common_aux().await,

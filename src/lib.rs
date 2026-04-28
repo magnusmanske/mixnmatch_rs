@@ -94,6 +94,7 @@ pub mod wikibase;
 pub mod taxon_matcher;
 pub mod update_catalog;
 pub mod wd_match_sync;
+pub mod wdqs;
 pub mod wdrc;
 pub mod wikidata;
 pub mod wikidata_commands;
