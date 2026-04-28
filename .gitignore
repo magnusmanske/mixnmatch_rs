@@ -3,3 +3,5 @@
 config.json
 oauth.ini
 flickr.key
+audits/**
+CLAUDE.md
