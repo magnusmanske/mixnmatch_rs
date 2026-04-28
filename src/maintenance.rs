@@ -645,6 +645,53 @@ impl Maintenance {
         Ok(())
     }
 
+    /// Walk every `auxiliary` row for P227 (GND ID) and delete the
+    /// rows whose GND target is an "Undifferentiated Person" — the
+    /// GND placeholder used when several real-world people share a
+    /// name and DNB hasn't yet split them. Treating those as a single
+    /// person poisons matches downstream, so the rule is to drop them
+    /// from MnM rather than ever match against them.
+    ///
+    /// Each row triggers an HTTP fetch to `d-nb.info` for its
+    /// `…/about/lds` RDF representation; presence of the
+    /// `gndo:UndifferentiatedPerson` literal flags the row for
+    /// deletion. 404s and other read errors are treated as "not
+    /// undifferentiated" — same as PHP — to keep a transient DNB
+    /// outage from sweeping live data.
+    ///
+    /// Mirrors PHP `Maintenance::fixGndUndifferentiatedPersons`.
+    pub async fn fix_gnd_undifferentiated_persons(&self) -> Result<()> {
+        let rows = self.app.storage().auxiliary_select_for_prop(227).await?;
+        if rows.is_empty() {
+            log::info!("fix_gnd_undifferentiated_persons: no GND aux rows");
+            return Ok(());
+        }
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .user_agent("mix-n-match (https://mix-n-match.toolforge.org)")
+            .build()?;
+
+        let mut checked = 0_usize;
+        let mut removed = 0_usize;
+        for (id, gnd) in rows {
+            checked += 1;
+            if !is_gnd_undifferentiated_person(&client, &gnd).await {
+                continue;
+            }
+            if let Err(e) = self.app.storage().auxiliary_delete_row(id).await {
+                log::warn!(
+                    "fix_gnd_undifferentiated_persons: delete failed for aux row {id}: {e}"
+                );
+                continue;
+            }
+            removed += 1;
+        }
+        log::info!(
+            "fix_gnd_undifferentiated_persons: checked {checked}, removed {removed}"
+        );
+        Ok(())
+    }
+
     /// Decode HTML entities (`&amp;`, `&eacute;`, …) in every
     /// `entry.ext_name` of the given catalog and rewrite the row when
     /// the decoded form differs. Imports occasionally pick names up
@@ -743,6 +790,25 @@ impl Maintenance {
             allowlist.len()
         );
         Ok(())
+    }
+}
+
+/// Look up a GND identifier in DNB's RDF representation and return
+/// `true` iff the resource is flagged `gndo:UndifferentiatedPerson`.
+/// Network / parse failures count as "not undifferentiated" so a
+/// transient DNB outage can't silently delete live aux rows. Mirrors
+/// PHP `MixNMatch::isGNDundifferentiatedPerson`.
+async fn is_gnd_undifferentiated_person(client: &reqwest::Client, gnd: &str) -> bool {
+    // The `/about/lds` endpoint returns a small Turtle/RDF fragment;
+    // a substring match is enough — the property literal is unique
+    // to this exact concept in DNB's vocabulary.
+    let url = format!("https://d-nb.info/gnd/{gnd}/about/lds");
+    match client.get(&url).send().await {
+        Ok(resp) if resp.status().is_success() => match resp.text().await {
+            Ok(body) => body.contains("gndo:UndifferentiatedPerson"),
+            Err(_) => false,
+        },
+        _ => false,
     }
 }
 

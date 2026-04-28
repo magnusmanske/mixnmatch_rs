@@ -1014,6 +1014,16 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
         &self,
         catalog_id: usize,
     ) -> Result<Vec<(usize, String)>>;
+
+    /// `(id, aux_name)` for every row of `auxiliary` matching the
+    /// given numeric property. Used by per-property auxiliary
+    /// cleanups (`fix_gnd_undifferentiated_persons`, etc.).
+    async fn auxiliary_select_for_prop(
+        &self,
+        prop: usize,
+    ) -> Result<Vec<(usize, String)>>;
+    /// Delete one `auxiliary` row by primary key.
+    async fn auxiliary_delete_row(&self, id: usize) -> Result<()>;
 }
 
 #[cfg(test)]
