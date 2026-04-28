@@ -960,17 +960,13 @@ pub async fn run_aux_from_desc_job(catalog_id: usize, app: &AppState) -> Result<
 /// Run the update_descriptions_from_url job for a catalog using Lua.
 /// Fetches HTML from each entry's ext_url, runs DESC_FROM_HTML Lua code, applies results.
 /// Returns Ok(()) on success, or an error if no Lua code fragment exists.
-#[allow(clippy::cognitive_complexity)]
 pub async fn run_desc_from_html_job(catalog_id: usize, app: &AppState) -> Result<()> {
     let lua_code = app
         .storage()
         .get_code_fragment_lua("DESC_FROM_HTML", catalog_id)
         .await?
         .ok_or_else(|| anyhow!("No Lua code fragment for DESC_FROM_HTML catalog {catalog_id}"))?;
-
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()?;
+    let client = build_html_client()?;
 
     let mut offset = 0;
     loop {
@@ -982,101 +978,128 @@ pub async fn run_desc_from_html_job(catalog_id: usize, app: &AppState) -> Result
             break;
         }
         let batch_len = entries.len();
-
         for entry in &entries {
-            let lua_entry = entry_to_lua_entry(entry);
-            if lua_entry.ext_url.is_empty() {
-                continue;
-            }
-
-            // Fetch HTML from the entry's URL
-            let html = match client.get(&lua_entry.ext_url).send().await {
-                Ok(resp) => match resp.text().await {
-                    Ok(text) => text,
-                    Err(_) => continue,
-                },
-                Err(_) => continue,
-            };
-
-            // Collapse whitespace (matches PHP behavior)
-            let html = RE_WHITESPACE.replace_all(&html, " ").to_string();
-
-            let result = match run_desc_from_html(&lua_code, &lua_entry, &html) {
-                Ok(r) => r,
-                Err(e) => {
-                    warn!(
-                        "Lua error for DESC_FROM_HTML entry {}: {e}",
-                        lua_entry.id
-                    );
-                    continue;
-                }
-            };
-
-            let mut entry_clone = entry.clone();
-            entry_clone.set_app(app);
-
-            // Apply person dates
-            if !result.born.is_empty() || !result.died.is_empty() {
-                if let Some((born, died)) = validate_born_died(&result.born, &result.died) {
-                    let born_pd = PersonDate::from_db_string(&born);
-                    let died_pd = PersonDate::from_db_string(&died);
-                    let _ = entry_clone.set_person_dates(&born_pd, &died_pd).await;
-                }
-            }
-
-            // Apply location
-            if let Some((lat, lon)) = result.location {
-                let cl = crate::coordinates::CoordinateLocation::new(lat, lon);
-                let _ = entry_clone.set_coordinate_location(&Some(cl)).await;
-            }
-
-            // Apply aux
-            for (prop_str, value) in &result.aux {
-                let prop_str = prop_str.trim_start_matches('P');
-                if let Ok(prop_numeric) = prop_str.parse::<usize>() {
-                    let _ = entry_clone
-                        .set_auxiliary(prop_numeric, Some(value.clone()))
-                        .await;
-                }
-            }
-
-            // Apply change_name
-            if let Some((from, to)) = &result.change_name {
-                if from != to {
-                    let _ = entry_clone.set_ext_name(to).await;
-                }
-            }
-
-            // Apply change_type
-            if let Some((_from, to)) = &result.change_type {
-                let _ = entry_clone.set_type_name(Some(to.clone())).await;
-            }
-
-            // Apply descriptions
-            if !result.descriptions.is_empty() {
-                let new_desc = get_new_description(&entry_clone.ext_desc, &result.descriptions);
-                if new_desc != entry_clone.ext_desc {
-                    let _ = entry_clone.set_ext_desc(&new_desc).await;
-                }
-            }
-
-            // Apply commands from callback functions
-            for cmd in &result.commands {
-                let _ = apply_command(cmd, &mut entry_clone).await;
-            }
+            process_desc_from_html_entry(app, &client, &lua_code, entry).await;
         }
-
         offset += batch_len;
     }
 
+    finalize_desc_from_html(app, catalog_id).await
+}
+
+fn build_html_client() -> Result<reqwest::Client> {
+    Ok(reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()?)
+}
+
+async fn fetch_html(client: &reqwest::Client, url: &str) -> Option<String> {
+    let resp = client.get(url).send().await.ok()?;
+    let text = resp.text().await.ok()?;
+    Some(RE_WHITESPACE.replace_all(&text, " ").to_string())
+}
+
+async fn process_desc_from_html_entry(
+    app: &AppState,
+    client: &reqwest::Client,
+    lua_code: &str,
+    entry: &Entry,
+) {
+    let lua_entry = entry_to_lua_entry(entry);
+    if lua_entry.ext_url.is_empty() {
+        return;
+    }
+    let Some(html) = fetch_html(client, &lua_entry.ext_url).await else {
+        return;
+    };
+    let result = match run_desc_from_html(lua_code, &lua_entry, &html) {
+        Ok(r) => r,
+        Err(e) => {
+            warn!("Lua error for DESC_FROM_HTML entry {}: {e}", lua_entry.id);
+            return;
+        }
+    };
+
+    let mut entry_clone = entry.clone();
+    entry_clone.set_app(app);
+    apply_desc_from_html_result(&mut entry_clone, &result).await;
+}
+
+async fn apply_desc_from_html_result(entry: &mut Entry, result: &DescFromHtmlResult) {
+    apply_person_dates_from_result(entry, &result.born, &result.died).await;
+    apply_location_from_result(entry, result.location).await;
+    apply_aux_from_result(entry, &result.aux).await;
+    apply_change_name(entry, result.change_name.as_ref()).await;
+    apply_change_type(entry, result.change_type.as_ref()).await;
+    apply_descriptions_from_result(entry, &result.descriptions).await;
+    for cmd in &result.commands {
+        let _ = apply_command(cmd, entry).await;
+    }
+}
+
+async fn apply_person_dates_from_result(entry: &mut Entry, born: &str, died: &str) {
+    if born.is_empty() && died.is_empty() {
+        return;
+    }
+    if let Some((born, died)) = validate_born_died(born, died) {
+        let born_pd = PersonDate::from_db_string(&born);
+        let died_pd = PersonDate::from_db_string(&died);
+        let _ = entry.set_person_dates(&born_pd, &died_pd).await;
+    }
+}
+
+async fn apply_location_from_result(entry: &mut Entry, location: Option<(f64, f64)>) {
+    if let Some((lat, lon)) = location {
+        let cl = crate::coordinates::CoordinateLocation::new(lat, lon);
+        let _ = entry.set_coordinate_location(&Some(cl)).await;
+    }
+}
+
+async fn apply_aux_from_result(entry: &mut Entry, aux: &[(String, String)]) {
+    for (prop_str, value) in aux {
+        let prop_str = prop_str.trim_start_matches('P');
+        if let Ok(prop_numeric) = prop_str.parse::<usize>() {
+            let _ = entry.set_auxiliary(prop_numeric, Some(value.clone())).await;
+        }
+    }
+}
+
+async fn apply_change_name(entry: &mut Entry, change: Option<&(String, String)>) {
+    if let Some((from, to)) = change {
+        if from != to {
+            let _ = entry.set_ext_name(to).await;
+        }
+    }
+}
+
+async fn apply_change_type(entry: &mut Entry, change: Option<&(String, String)>) {
+    if let Some((_from, to)) = change {
+        let _ = entry.set_type_name(Some(to.clone())).await;
+    }
+}
+
+async fn apply_descriptions_from_result(entry: &mut Entry, descriptions: &[String]) {
+    if descriptions.is_empty() {
+        return;
+    }
+    let new_desc = get_new_description(&entry.ext_desc, descriptions);
+    if new_desc != entry.ext_desc {
+        let _ = entry.set_ext_desc(&new_desc).await;
+    }
+}
+
+async fn finalize_desc_from_html(app: &AppState, catalog_id: usize) -> Result<()> {
     app.storage()
         .touch_code_fragment("DESC_FROM_HTML", catalog_id)
         .await?;
-
-    // Queue follow-up jobs (mirrors PHP behavior)
-    let _ = app.storage().queue_job(catalog_id, "update_person_dates", None).await;
-    let _ = app.storage().queue_job(catalog_id, "generate_aux_from_description", None).await;
-
+    let _ = app
+        .storage()
+        .queue_job(catalog_id, "update_person_dates", None)
+        .await;
+    let _ = app
+        .storage()
+        .queue_job(catalog_id, "generate_aux_from_description", None)
+        .await;
     Ok(())
 }
 
