@@ -1,3 +1,4 @@
+use crate::util::wikidata_props as wp;
 use crate::{DbId, PropertyId};
 use mysql_async::Row;
 use serde::{Deserialize, Serialize};
@@ -67,7 +68,7 @@ impl AuxiliaryRow {
 
     pub fn fix_external_id(prop: &str, value: &str) -> String {
         match prop {
-            "P213" => value.replace(' ', ""), // ISNI
+            p if p == wp::P_ISNI => value.replace(' ', ""), // ISNI
             _ => value.to_string(),
         }
     }

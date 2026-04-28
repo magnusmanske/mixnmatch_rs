@@ -4,6 +4,7 @@ use crate::catalog::Catalog;
 use crate::coordinates::CoordinateLocation;
 use crate::person::Person;
 use crate::person_date::PersonDate;
+use crate::util::wikidata_props as wp;
 use crate::{DbId, ItemId, PropertyId};
 use anyhow::{Result, anyhow};
 use mysql_async::Value;
@@ -66,7 +67,7 @@ fn build_p625_snak(lat: f64, lon: f64, precision: Option<f64>) -> Snak {
     };
     Snak::new(
         SnakDataType::GlobeCoordinate,
-        "P625",
+        wp::P_COORDINATES,
         SnakType::Value,
         Some(DataValue::new(
             DataValueType::GlobeCoordinate,
@@ -377,12 +378,12 @@ impl Entry {
     ) -> Result<()> {
         let (born, died) = self.get_person_dates().await?;
         if let Some(pd) = born {
-            let snak = Snak::new_time("P569", &pd.to_wikidata_time(), pd.wikidata_precision());
+            let snak = Snak::new_time(wp::P_DATE_OF_BIRTH, &pd.to_wikidata_time(), pd.wikidata_precision());
             let claim = Statement::new_normal(snak, vec![], references.to_owned());
             Self::add_claim_or_references(item, claim);
         }
         if let Some(pd) = died {
-            let snak = Snak::new_time("P570", &pd.to_wikidata_time(), pd.wikidata_precision());
+            let snak = Snak::new_time(wp::P_DATE_OF_DEATH, &pd.to_wikidata_time(), pd.wikidata_precision());
             let claim = Statement::new_normal(snak, vec![], references.to_owned());
             Self::add_claim_or_references(item, claim);
         }
@@ -458,7 +459,7 @@ impl Entry {
         // Type
         if let Some(tn) = &self.type_name {
             if !tn.is_empty() {
-                let snak = Snak::new_item("P31", tn);
+                let snak = Snak::new_item(wp::P_INSTANCE_OF, tn);
                 let claim = Statement::new_normal(snak, vec![], references.to_owned());
                 Self::add_claim_or_references(item, claim);
             }

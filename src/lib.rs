@@ -93,6 +93,7 @@ pub mod wikibase;
 // pub mod storage_wikibase;
 pub mod taxon_matcher;
 pub mod update_catalog;
+pub mod util;
 pub mod wd_match_sync;
 pub mod wdqs;
 pub mod wdrc;

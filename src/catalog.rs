@@ -1,5 +1,6 @@
 use crate::app_state::AppState;
 use crate::auxiliary_data::AuxiliaryRow;
+use crate::util::wikidata_props as wp;
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
 use wikimisc::wikibase::Reference;
@@ -264,7 +265,7 @@ impl Catalog {
         let mut snaks = vec![];
         if let Some(source_item) = self.source_item {
             let value = format!("Q{source_item}");
-            let snak = Snak::new_item("P248", &value);
+            let snak = Snak::new_item(wp::P_STATED_IN, &value);
             snaks.push(snak);
         }
         match (self.wd_prop, self.wd_qual) {
@@ -276,7 +277,7 @@ impl Catalog {
             }
             _ => {
                 if !entry.ext_url.is_empty() {
-                    let snak = Snak::new_string("P854", &entry.ext_url);
+                    let snak = Snak::new_string(wp::P_REFERENCE_URL, &entry.ext_url);
                     snaks.push(snak);
                 }
             }
@@ -285,7 +286,7 @@ impl Catalog {
         if let Some(ts) = entry.get_creation_time().await {
             if let Some(date) = ts.split(' ').next() {
                 let time = format!("+{date}T00:00:00Z");
-                let snak = Snak::new_time("P813", &time, 11);
+                let snak = Snak::new_time(wp::P_RETRIEVED, &time, 11);
                 snaks.push(snak);
             }
         }

@@ -15,6 +15,8 @@
 //! "reference_fixer" job row).
 
 use crate::app_state::AppState;
+use crate::util::wikidata_props as wp;
+use crate::wdqs::WDQS_URL;
 use anyhow::{Result, anyhow};
 use log::{info, warn};
 use regex::Regex;
@@ -25,9 +27,6 @@ use std::time::Duration;
 /// Summary string sent with every edit.
 const EDIT_SUMMARY: &str = "Fixing references as part of Mix'n'match cleanup";
 
-/// SPARQL endpoint. Using the public endpoint so the bot doesn't need
-/// its own SPARQL service account.
-const SPARQL_URL: &str = "https://query.wikidata.org/sparql";
 
 /// Wait between every mutating API call so we don't burst through
 /// maxlag / the rate-limiter. Matches PHP's `sleep(1)`.
@@ -41,7 +40,7 @@ const BATCH_SIZE: usize = 50;
 /// Properties ignored when deciding whether a reference group is a
 /// "self-reference" (the reference restates the statement's main
 /// property). P248 = stated in, P813 = retrieved.
-const SELF_REF_IGNORED_PROPS: &[&str] = &["P248", "P813"];
+const SELF_REF_IGNORED_PROPS: &[&str] = &[wp::P_STATED_IN, wp::P_RETRIEVED];
 
 /// URL-pattern regexes hard-coded in the original script for
 /// collections that don't expose a usable P1630/P1921. Kept here so we
@@ -134,7 +133,7 @@ impl ReferenceFixer {
     async fn sparql_json(&self, sparql: &str) -> Result<Value> {
         let resp = self
             .http
-            .get(SPARQL_URL)
+            .get(WDQS_URL)
             .query(&[("query", sparql), ("format", "json")])
             .send()
             .await?;
@@ -376,7 +375,7 @@ impl ReferenceFixer {
     /// spin on it forever.
     fn check_reference_group(&self, group: &Value) -> Option<Vec<Value>> {
         let snaks = group.get("snaks").and_then(|v| v.as_object())?;
-        let url_snaks = snaks.get("P854")?.as_array()?;
+        let url_snaks = snaks.get(wp::P_REFERENCE_URL)?.as_array()?;
         if snaks.len() > 1 {
             // Other properties present (retrieval date, author, …) —
             // can't tell which are load-bearing, so don't touch.
@@ -604,7 +603,7 @@ fn new_reference_group(snaks_in: &[Value]) -> Value {
     }
     // P248 first if present (stated-in is the canonical lead snak of a
     // structured reference).
-    if let Some(pos) = order.iter().position(|p| p == "P248") {
+    if let Some(pos) = order.iter().position(|p| p == wp::P_STATED_IN) {
         let v = order.remove(pos);
         order.insert(0, v);
     }
