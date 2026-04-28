@@ -1005,6 +1005,15 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
         props_ext: &[usize],
         min_count: usize,
     ) -> Result<usize>;
+
+    /// `(id, ext_name)` for every entry in the catalog whose name
+    /// contains an `&…;` pattern. Used by
+    /// `fix_html_entities_in_catalog` as the working set for an
+    /// HTML-entity decode pass.
+    async fn entry_select_with_html_entities_in_name(
+        &self,
+        catalog_id: usize,
+    ) -> Result<Vec<(usize, String)>>;
 }
 
 #[cfg(test)]

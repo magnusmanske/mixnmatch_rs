@@ -6598,6 +6598,28 @@ impl Storage for StorageMySQL {
         Ok(rows)
     }
 
+    async fn entry_select_with_html_entities_in_name(
+        &self,
+        catalog_id: usize,
+    ) -> Result<Vec<(usize, String)>> {
+        // LIKE '%&%;%' rather than a regex — false positives are
+        // fine (`fix_html_entities_in_catalog` checks each row
+        // post-decode and only writes when the name actually
+        // changed) and LIKE keeps the scan inside the `(catalog,
+        // ext_name)` index instead of forcing a full row read.
+        let sql = "SELECT `id`, `ext_name` FROM `entry` \
+            WHERE `catalog` = :catalog_id \
+              AND `ext_name` LIKE '%&%;%'";
+        let rows = self
+            .get_conn_ro()
+            .await?
+            .exec_iter(sql, params! { catalog_id })
+            .await?
+            .map_and_drop(from_row::<(usize, String)>)
+            .await?;
+        Ok(rows)
+    }
+
     async fn auxiliary_distinct_props(&self) -> Result<Vec<usize>> {
         let sql = "SELECT DISTINCT `aux_p` FROM `auxiliary` ORDER BY `aux_p`";
         let rows = self

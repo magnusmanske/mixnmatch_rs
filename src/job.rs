@@ -468,6 +468,11 @@ impl Job {
             "maintenance_update_aux_candidates" => {
                 Maintenance::new(&self.app).update_aux_candidates().await
             }
+            "maintenance_fix_html_entities" => {
+                Maintenance::new(&self.app)
+                    .fix_html_entities_in_catalog(catalog_id)
+                    .await
+            }
             "maintenance_taxa" => Maintenance::new(&self.app).taxa().await,
             "maintenance_artwork" => Maintenance::new(&self.app).artwork().await,
             "maintenance_common_aux" => Maintenance::new(&self.app).common_aux().await,
