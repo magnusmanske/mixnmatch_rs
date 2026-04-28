@@ -68,21 +68,21 @@ pub async fn query_download(app: &AppState, params: &Params) -> Result<Response,
 /// large catalogs need to walk pages with `limit` + `offset`.
 ///
 /// Parameters:
-/// - `catalogs`  — comma-separated catalog ids (digits and commas only;
-///                 anything else is silently stripped). Required.
-/// - `format`    — `tab` (default, TSV) or `json`.
-/// - `columns`   — JSON object of optional-column flags (`exturl`,
-///                 `username`, `dates`, `location`); each value may be
-///                 `true`/`false` or `1`/`0`. Defaults to `{}` (all off).
-/// - `hidden`    — JSON object of row-filter flags (`any_matched`,
-///                 `firmly_matched`, `user_matched`, `unmatched`,
-///                 `no_multiple`, `name_date_matched`, `automatched`,
-///                 `aux_matched`); same value shape as `columns`.
-/// - `limit`     — page size. Default `100000`, clamped to `[1, 1000000]`.
-/// - `offset`    — number of rows to skip. Default `0`. Combined with
-///                 `limit`, this is the pagination contract: a caller wanting
-///                 every row must keep incrementing `offset` by `limit` until
-///                 a page comes back with fewer than `limit` rows.
+/// - `catalogs` — comma-separated catalog ids (digits and commas only;
+///   anything else is silently stripped). Required.
+/// - `format` — `tab` (default, TSV) or `json`.
+/// - `columns` — JSON object of optional-column flags (`exturl`, `username`,
+///   `dates`, `location`); each value may be `true`/`false` or `1`/`0`.
+///   Defaults to `{}` (all off).
+/// - `hidden` — JSON object of row-filter flags (`any_matched`,
+///   `firmly_matched`, `user_matched`, `unmatched`, `no_multiple`,
+///   `name_date_matched`, `automatched`, `aux_matched`); same value shape as
+///   `columns`.
+/// - `limit` — page size. Default `100000`, clamped to `[1, 1000000]`.
+/// - `offset` — number of rows to skip. Default `0`. Combined with `limit`,
+///   this is the pagination contract: a caller wanting every row must keep
+///   incrementing `offset` by `limit` until a page comes back with fewer than
+///   `limit` rows.
 ///
 /// The result columns are ordered deterministically (matching the SQL
 /// SELECT list); both TSV and JSON share that ordering, so downstream
