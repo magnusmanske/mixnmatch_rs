@@ -162,6 +162,31 @@ enum Commands {
         batch_size: usize,
     },
 
+    /// Merge one catalog into another: copy missing entries as
+    /// unmatched, port confirmed manual matches onto the target's
+    /// equivalent ext_ids, then deactivate the source catalog.
+    /// Equivalent to PHP `CatalogMerger::merge`.
+    MergeCatalogs {
+        #[arg(short, long, value_name = "FILE")]
+        config: Option<PathBuf>,
+
+        /// Source catalog id — its matches are folded into `--target`
+        /// and the catalog is deactivated when the merge finishes.
+        #[arg(long)]
+        source: usize,
+
+        /// Target catalog id — receives the merge.
+        #[arg(long)]
+        target: usize,
+
+        /// Skip the "copy missing entries" step. By default the merger
+        /// also creates fresh unmatched rows in the target for any
+        /// ext_id present only in the source; pass this flag when only
+        /// the matches should be ported.
+        #[arg(long)]
+        no_blank_entries: bool,
+    },
+
     /// test
     Test {
         #[arg(short, long, value_name = "FILE")]
@@ -484,6 +509,21 @@ impl ShellCommands {
                 let stats =
                     crate::wd_match_sync::push_wd_missing(&app, *batch_size).await?;
                 println!("push_wd_matches_to_wikidata: {stats}");
+            }
+            Some(Commands::MergeCatalogs {
+                config,
+                source,
+                target,
+                no_blank_entries,
+            }) => {
+                let app = Self::path2app(config)?;
+                let merger = crate::catalog_merger::CatalogMerger::new(app);
+                let stats = merger
+                    .merge(*source, *target, !*no_blank_entries)
+                    .await?;
+                println!(
+                    "merge {source} -> {target}: {stats}"
+                );
             }
             Some(Commands::Test { config }) => {
                 let app = Self::path2app(config)?;

@@ -133,6 +133,26 @@ pub struct WdMatchRow {
     pub wd_prop: usize,
 }
 
+/// One match the catalog merger should port from the source catalog to
+/// the target catalog. Produced by `entry_get_mergeable_matches`: the
+/// target row exists, isn't manually matched yet, and the source row
+/// has a confirmed match the target should adopt.
+#[derive(Debug, Clone)]
+pub struct MergeableMatch {
+    /// Row id of the target-catalog entry that needs the new match
+    /// applied to it.
+    pub target_entry_id: usize,
+    /// Source-catalog entry's `q` (positive) — what to set on the target.
+    pub source_q: isize,
+    /// Source-catalog entry's `user` — preserved verbatim so the
+    /// merger doesn't accidentally relabel a human match as automated.
+    pub source_user: usize,
+    /// Source-catalog entry's `timestamp`. Optional because legacy rows
+    /// can have nulls; when present, the merger restamps the target
+    /// row to keep the original match-time visible in audit trails.
+    pub source_timestamp: Option<String>,
+}
+
 #[async_trait]
 #[allow(clippy::too_many_arguments)]
 pub trait Storage: std::fmt::Debug + Send + Sync {
@@ -836,6 +856,42 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
         limit: usize,
     ) -> Result<Vec<WdMatchRow>>;
     async fn wd_matches_set_status(&self, entry_id: usize, status: &str) -> Result<()>;
+
+    // Catalog merge (PHP CatalogMerger::merge).
+    /// Toggle a catalog's `active` flag. Used by the merge pipeline to
+    /// retire the source catalog after rolling its matches into the
+    /// target; cheaper than the full `api_edit_catalog` round-trip for
+    /// such a focused write.
+    async fn catalog_set_active(&self, catalog_id: usize, active: bool) -> Result<()>;
+    /// Copy every `entry` row in `source` whose `ext_id` isn't already
+    /// in `target`, materialising a fresh unmatched row in `target`
+    /// (q/user/timestamp = NULL). Returns the number of rows added so
+    /// the caller can bump `overview.noq` accordingly. PHP equivalent:
+    /// `CatalogMerger::addMissingBlankEntries`.
+    async fn entry_copy_missing_to_catalog(
+        &self,
+        source_catalog: usize,
+        target_catalog: usize,
+    ) -> Result<usize>;
+    /// Find target-catalog entries that should adopt the source-catalog
+    /// match for the same `ext_id`: the source has a confirmed manual
+    /// match and the target is either auto-matched or untouched.
+    /// Returns one row per pair the merger should port. PHP equivalent:
+    /// the SELECT inside `CatalogMerger::updateEntriesInNewCatalog`.
+    async fn entry_get_mergeable_matches(
+        &self,
+        source_catalog: usize,
+        target_catalog: usize,
+    ) -> Result<Vec<MergeableMatch>>;
+    /// Force an entry's `timestamp` field to a specific value. The
+    /// merger uses this to preserve the source catalog's original
+    /// match-timestamp on the ported target row, instead of letting
+    /// `entry.set_match()` stamp it with `now()`.
+    async fn entry_force_timestamp(&self, entry_id: usize, timestamp: &str) -> Result<()>;
+    /// Increment `overview.noq` for `catalog_id` by `delta`. Cheaper
+    /// than a full overview refresh after the merger bulk-copies
+    /// hundreds of new unmatched rows in one go.
+    async fn overview_increment_noq(&self, catalog_id: usize, delta: usize) -> Result<()>;
 }
 
 #[cfg(test)]

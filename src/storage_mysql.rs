@@ -22,7 +22,9 @@ use crate::{
     mnm_link::MnmLink,
     mysql_misc::MySQLMisc,
     prop_todo::PropTodo,
-    storage::{CatalogEntryListFilter, Download2Filter, OverviewTableRow, WdMatchRow},
+    storage::{
+        CatalogEntryListFilter, Download2Filter, MergeableMatch, OverviewTableRow, WdMatchRow,
+    },
     task_size::TaskSize,
     taxon_matcher::{RankedNames, TAXON_RANKS, TaxonMatcher, TaxonNameField},
     update_catalog::UpdateInfo,
@@ -6297,6 +6299,132 @@ impl Storage for StorageMySQL {
         self.get_conn()
             .await?
             .exec_drop(sql, params! { entry_id, status, timestamp })
+            .await?;
+        Ok(())
+    }
+
+    async fn catalog_set_active(&self, catalog_id: usize, active: bool) -> Result<()> {
+        let active_int: i32 = if active { 1 } else { 0 };
+        self.get_conn()
+            .await?
+            .exec_drop(
+                "UPDATE `catalog` SET `active` = :active_int WHERE `id` = :catalog_id",
+                params! { catalog_id, active_int },
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn entry_copy_missing_to_catalog(
+        &self,
+        source_catalog: usize,
+        target_catalog: usize,
+    ) -> Result<usize> {
+        // Single bulk INSERT…SELECT, materialising one fresh unmatched
+        // row in `target` for every source ext_id that isn't already
+        // present in target. PHP's per-row loop is gone — same end
+        // state, far fewer round-trips on big catalogs.
+        //
+        // `random` is reset per row so the new entries get the spread
+        // the random-pick UI relies on; copying the source's `random`
+        // would cluster the imports and skew the random samples.
+        let sql = "INSERT INTO `entry` \
+                (`catalog`,`ext_id`,`ext_url`,`ext_name`,`ext_desc`,\
+                 `q`,`user`,`timestamp`,`random`,`type`) \
+            SELECT \
+                :target_catalog, src.`ext_id`, src.`ext_url`, src.`ext_name`, \
+                src.`ext_desc`, NULL, NULL, NULL, RAND(), src.`type` \
+            FROM `entry` AS src \
+            WHERE src.`catalog` = :source_catalog \
+              AND NOT EXISTS ( \
+                SELECT 1 FROM `entry` AS tgt \
+                WHERE tgt.`catalog` = :target_catalog \
+                  AND tgt.`ext_id` = src.`ext_id` \
+              )";
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop(sql, params! { source_catalog, target_catalog })
+            .await?;
+        Ok(conn.affected_rows() as usize)
+    }
+
+    async fn entry_get_mergeable_matches(
+        &self,
+        source_catalog: usize,
+        target_catalog: usize,
+    ) -> Result<Vec<MergeableMatch>> {
+        // Find ext_id pairs where the source carries a confirmed manual
+        // match (`user>0`, `q>0`) and the target row is either unmatched
+        // (`user IS NULL`) or auto-matched (`user=0`). Skips pairs that
+        // already agree (`src.q = tgt.q`) so the merger doesn't churn
+        // through no-op writes.
+        let sql = "SELECT \
+                tgt.`id` AS target_entry_id, \
+                src.`q` AS source_q, \
+                src.`user` AS source_user, \
+                src.`timestamp` AS source_timestamp \
+            FROM `entry` AS src \
+            INNER JOIN `entry` AS tgt \
+                ON tgt.`ext_id` = src.`ext_id` \
+            WHERE src.`catalog` = :source_catalog \
+              AND tgt.`catalog` = :target_catalog \
+              AND src.`user` > 0 \
+              AND src.`q` IS NOT NULL AND src.`q` > 0 \
+              AND (src.`q` <> tgt.`q` OR tgt.`q` IS NULL) \
+              AND (tgt.`user` IS NULL OR tgt.`user` = 0)";
+        let rows = self
+            .get_conn_ro()
+            .await?
+            .exec_iter(sql, params! { source_catalog, target_catalog })
+            .await?
+            .map_and_drop(|row: Row| MergeableMatch {
+                target_entry_id: row.get("target_entry_id").unwrap_or(0),
+                source_q: row.get::<Option<isize>, _>("source_q").flatten().unwrap_or(0),
+                source_user: row.get::<Option<usize>, _>("source_user").flatten().unwrap_or(0),
+                source_timestamp: row
+                    .get_opt::<Option<String>, _>("source_timestamp")
+                    .and_then(Result::ok)
+                    .flatten(),
+            })
+            .await?;
+        Ok(rows
+            .into_iter()
+            // Defensive: an INNER JOIN combined with the WHERE filter
+            // already excludes zero/null source data, but keep the
+            // floor positive so a malformed row can't slip through and
+            // produce a nonsensical Q0 match downstream.
+            .filter(|m| m.target_entry_id > 0 && m.source_q > 0 && m.source_user > 0)
+            .collect())
+    }
+
+    async fn entry_force_timestamp(&self, entry_id: usize, timestamp: &str) -> Result<()> {
+        self.get_conn()
+            .await?
+            .exec_drop(
+                "UPDATE `entry` SET `timestamp` = :timestamp WHERE `id` = :entry_id",
+                params! { entry_id, timestamp },
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn overview_increment_noq(&self, catalog_id: usize, delta: usize) -> Result<()> {
+        // No-op when there's nothing to add — saves a round-trip on
+        // catalogs whose target already had every source ext_id.
+        if delta == 0 {
+            return Ok(());
+        }
+        // Mirrors `overview_apply_insert` but bumps both `total` and
+        // `noq` by `delta` in one go: the merger always adds *unmatched*
+        // rows, so the Noq bucket is always the right destination.
+        // UPDATE on a missing overview row is a 0-row no-op; the next
+        // catalog refresh will populate it.
+        self.get_conn()
+            .await?
+            .exec_drop(
+                "UPDATE `overview` SET `total` = `total` + :delta, `noq` = `noq` + :delta \
+                 WHERE `catalog` = :catalog_id",
+                params! { catalog_id, delta },
+            )
             .await?;
         Ok(())
     }

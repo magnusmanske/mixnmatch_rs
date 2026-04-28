@@ -55,6 +55,7 @@ pub mod auxiliary_data;
 pub mod auxiliary_matcher;
 pub mod bespoke_scrapers;
 pub mod catalog;
+pub mod catalog_merger;
 pub mod cersei;
 pub mod cli;
 pub mod code_fragment;
