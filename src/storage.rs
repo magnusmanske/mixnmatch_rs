@@ -152,6 +152,22 @@ pub struct PropertyCacheRow {
     pub label: String,
 }
 
+/// One row of a catalog as the property-migration code wants to see
+/// it: every field it inspects, nothing more. Lighter than a full
+/// `Entry` because the migration walks every entry of *both* catalogs
+/// and needs the data in memory at once for the cross-catalog lookups
+/// — paying for the un-needed Entry fields would multiply RAM use.
+#[derive(Debug, Clone)]
+pub struct GroupedEntry {
+    pub id: usize,
+    pub ext_id: String,
+    pub ext_name: String,
+    pub ext_desc: String,
+    pub q: Option<isize>,
+    pub user: Option<usize>,
+    pub timestamp: Option<String>,
+}
+
 /// One match the catalog merger should port from the source catalog to
 /// the target catalog. Produced by `entry_get_mergeable_matches`: the
 /// target row exists, isn't manually matched yet, and the source row
@@ -938,6 +954,24 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     /// than a full overview refresh after the merger bulk-copies
     /// hundreds of new unmatched rows in one go.
     async fn overview_increment_noq(&self, catalog_id: usize, delta: usize) -> Result<()>;
+
+    // Catalog property migration (PHP CatalogMerger::migrateProperty).
+    /// Every `ext_id` already manually matched in the catalog. Used by
+    /// `Catalog::sync_from_sparql` to avoid clobbering human matches
+    /// with auto-matches from a fresh SPARQL pull.
+    async fn catalog_get_manually_matched_ext_ids(
+        &self,
+        catalog_id: usize,
+    ) -> Result<std::collections::HashSet<String>>;
+    /// Load every entry of a catalog as a lightweight `GroupedEntry`
+    /// for the migration's cross-catalog name lookups. Returned in
+    /// catalog-row order; the caller groups by `ext_name` itself.
+    async fn entry_load_for_migration(&self, catalog_id: usize) -> Result<Vec<GroupedEntry>>;
+    /// Numeric q values that appear on more than one manually-matched
+    /// row in the catalog — i.e. the same Wikidata item used for two
+    /// different external IDs, which usually flags a problem the
+    /// migration wants to surface as a warning.
+    async fn entry_get_duplicate_qs_in_catalog(&self, catalog_id: usize) -> Result<Vec<isize>>;
 }
 
 #[cfg(test)]

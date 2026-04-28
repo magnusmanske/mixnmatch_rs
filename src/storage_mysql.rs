@@ -23,7 +23,7 @@ use crate::{
     mysql_misc::MySQLMisc,
     prop_todo::PropTodo,
     storage::{
-        CatalogEntryListFilter, Download2Filter, MergeableMatch, OverviewTableRow,
+        CatalogEntryListFilter, Download2Filter, GroupedEntry, MergeableMatch, OverviewTableRow,
         PropertyCacheRow, WdMatchRow,
     },
     task_size::TaskSize,
@@ -6551,6 +6551,68 @@ impl Storage for StorageMySQL {
             )
             .await?;
         Ok(())
+    }
+
+    async fn catalog_get_manually_matched_ext_ids(
+        &self,
+        catalog_id: usize,
+    ) -> Result<std::collections::HashSet<String>> {
+        let sql = "SELECT `ext_id` FROM `entry` \
+            WHERE `catalog` = :catalog_id \
+              AND `q` IS NOT NULL AND `q` > 0 \
+              AND `user` > 0";
+        let rows: Vec<String> = self
+            .get_conn_ro()
+            .await?
+            .exec_iter(sql, params! { catalog_id })
+            .await?
+            .map_and_drop(from_row::<String>)
+            .await?;
+        Ok(rows.into_iter().collect())
+    }
+
+    async fn entry_load_for_migration(&self, catalog_id: usize) -> Result<Vec<GroupedEntry>> {
+        let sql = "SELECT `id`, `ext_id`, `ext_name`, `ext_desc`, `q`, `user`, `timestamp` \
+            FROM `entry` WHERE `catalog` = :catalog_id";
+        let rows = self
+            .get_conn_ro()
+            .await?
+            .exec_iter(sql, params! { catalog_id })
+            .await?
+            .map_and_drop(|row: Row| GroupedEntry {
+                id: row.get("id").unwrap_or(0),
+                ext_id: row.get::<String, _>("ext_id").unwrap_or_default(),
+                ext_name: row.get::<String, _>("ext_name").unwrap_or_default(),
+                ext_desc: row.get::<String, _>("ext_desc").unwrap_or_default(),
+                q: row.get_opt::<Option<isize>, _>("q").and_then(Result::ok).flatten(),
+                user: row
+                    .get_opt::<Option<usize>, _>("user")
+                    .and_then(Result::ok)
+                    .flatten(),
+                timestamp: row
+                    .get_opt::<Option<String>, _>("timestamp")
+                    .and_then(Result::ok)
+                    .flatten(),
+            })
+            .await?;
+        Ok(rows)
+    }
+
+    async fn entry_get_duplicate_qs_in_catalog(&self, catalog_id: usize) -> Result<Vec<isize>> {
+        let sql = "SELECT `q` FROM `entry` \
+            WHERE `catalog` = :catalog_id \
+              AND `user` > 0 \
+              AND `q` IS NOT NULL AND `q` > 0 \
+            GROUP BY `q` \
+            HAVING count(*) > 1";
+        let rows: Vec<isize> = self
+            .get_conn_ro()
+            .await?
+            .exec_iter(sql, params! { catalog_id })
+            .await?
+            .map_and_drop(from_row::<isize>)
+            .await?;
+        Ok(rows)
     }
 
     async fn overview_increment_noq(&self, catalog_id: usize, delta: usize) -> Result<()> {

@@ -202,6 +202,64 @@ impl Catalog {
             .await
     }
 
+    /// Pull every `(item, value)` pair where the item carries the
+    /// given Wikidata property, then auto-match any catalog entry
+    /// whose `ext_id` equals one of those values *and* hasn't been
+    /// manually matched yet. Returns the number of new matches set.
+    ///
+    /// Mirrors PHP `Catalog::syncFromSPARQL`. Used by the property-
+    /// migration pipeline (`CatalogMerger::migrate_property`) to
+    /// freshen the old catalog's matches against live Wikidata before
+    /// porting them to a successor catalog. Attribution uses
+    /// `USER_DATE_MATCH` (id 3) for parity with the PHP user — keeps
+    /// the post-migration audit trail consistent with rows that have
+    /// been around since the PHP era.
+    pub async fn sync_from_sparql(&self, property: usize) -> Result<usize> {
+        if property == 0 {
+            return Ok(0);
+        }
+        let id = self.get_valid_id()?;
+        let app = self.app()?.clone();
+
+        let already_matched = app
+            .storage()
+            .catalog_get_manually_matched_ext_ids(id)
+            .await?;
+
+        let client = crate::wdqs::build_client()?;
+        let sparql = format!("SELECT ?q ?v {{ ?q wdt:P{property} ?v }}");
+        let rows = crate::wdqs::run_tsv_query(&client, &sparql).await?;
+
+        let mut count = 0_usize;
+        for row in rows {
+            let Some(q_uri) = row.first() else { continue };
+            let value = row.get(1).map(|s| s.trim().to_string()).unwrap_or_default();
+            if value.is_empty() || already_matched.contains(&value) {
+                continue;
+            }
+            let Some(q_num) = crate::wdqs::entity_id_from_uri(q_uri, 'Q') else {
+                continue;
+            };
+            // The entry must already exist in the catalog with this
+            // ext_id — sync_from_sparql does not invent rows. Failure
+            // is non-fatal: the Wikidata side might have catalogued an
+            // ext_id we never imported.
+            let mut entry = match crate::entry::Entry::from_ext_id(id, &value, &app).await {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            let q_str = format!("Q{q_num}");
+            if entry
+                .set_match(&q_str, crate::app_state::USER_DATE_MATCH)
+                .await
+                .is_ok()
+            {
+                count += 1;
+            }
+        }
+        Ok(count)
+    }
+
     pub async fn references(&self, entry: &crate::entry::Entry) -> Vec<Reference> {
         let mut snaks = vec![];
         if let Some(source_item) = self.source_item {
