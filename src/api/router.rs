@@ -14,6 +14,7 @@ use axum::Router;
 use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
+use futures::future::BoxFuture;
 use std::sync::Arc;
 use tower_sessions::Session;
 
@@ -217,148 +218,234 @@ async fn wrap_autoclose(resp: Response) -> Response {
         .into_response()
 }
 
-#[allow(clippy::cognitive_complexity)]
+/// Erased async-fn signature every API handler is wrapped to. The
+/// HRTB on `'a` lets one `fn`-pointer type cover handlers that
+/// borrow from any of the three inputs for the future's lifetime.
+type ApiHandler =
+    for<'a> fn(&'a AppState, &'a Session, &'a Params) -> BoxFuture<'a, Result<Response, ApiError>>;
+
+/// Wrap a `(app)` / `(app, params)` / `(app, session, params)` /
+/// `(params)` handler into the unified `ApiHandler` shape. The form
+/// argument selects which of the four signatures is being adapted;
+/// each generates one `Box::pin(async move { … })` shim so the
+/// `const ROUTES` table stays one line per route.
+macro_rules! route {
+    // (app, session, params) — the full-arity form.
+    ($name:literal, $h:path) => {
+        ($name, ((|app, session, params| Box::pin(async move { $h(app, session, params).await })) as ApiHandler))
+    };
+    // (app, params) — most read-only handlers.
+    ($name:literal, $h:path, app_params) => {
+        ($name, ((|app, _, params| Box::pin(async move { $h(app, params).await })) as ApiHandler))
+    };
+    // (app) — handlers with no per-request input.
+    ($name:literal, $h:path, app_only) => {
+        ($name, ((|app, _, _| Box::pin(async move { $h(app).await })) as ApiHandler))
+    };
+    // (params) — exactly one handler (`dg_desc`) doesn't need app state.
+    ($name:literal, $h:path, params_only) => {
+        ($name, ((|_, _, params| Box::pin(async move { $h(params).await })) as ApiHandler))
+    };
+}
+
+/// One `Err` shim used by `upload_import_file` (the GET path is a
+/// hard-coded "you must POST multipart" error). Lifted to a real
+/// `fn` so the macro's `as ApiHandler` cast resolves.
+fn upload_import_file_get<'a>(
+    _: &'a AppState,
+    _: &'a Session,
+    _: &'a Params,
+) -> BoxFuture<'a, Result<Response, ApiError>> {
+    Box::pin(async {
+        Err(ApiError(
+            "upload_import_file must be POSTed as multipart/form-data".into(),
+        ))
+    })
+}
+
+/// Single source of truth for `/api.php?query=…` routing. Adding a
+/// new endpoint = one line here. The grouping comments mirror the
+/// previous match's section dividers so existing readers can find
+/// what they're looking for.
+#[rustfmt::skip]
+const ROUTES: &[(&str, ApiHandler)] = &[
+    // Catalog
+    route!("catalogs",                     catalog::query_catalogs, app_only),
+    route!("single_catalog",               catalog::query_single_catalog, app_params),
+    route!("catalog_details",              catalog::query_catalog_details, app_params),
+    route!("get_catalog_info",             catalog::query_get_catalog_info, app_params),
+    route!("catalog",                      catalog::query_catalog, app_params),
+    route!("edit_catalog",                 catalog::query_edit_catalog),
+    route!("catalog_overview",             catalog::query_catalog_overview, app_params),
+
+    // Entry
+    route!("get_entry",                    entry::query_get_entry, app_params),
+    route!("get_entry_by_extid",           entry::query_get_entry_by_extid, app_params),
+    route!("search",                       entry::query_search, app_params),
+    route!("random",                       entry::query_random, app_params),
+    route!("entries_query",                entry::query_entries_query, app_params),
+    route!("entries_via_property_value",   entry::query_entries_via_property_value, app_params),
+    route!("get_entries_by_q_or_value",    entry::query_get_entries_by_q_or_value, app_params),
+
+    // Matching — all DB-writing actions are gated behind OAuth
+    route!("match_q",                      matching::query_match_q),
+    route!("match_q_multi",                matching::query_match_q_multi),
+    route!("remove_q",                     matching::query_remove_q),
+    route!("remove_all_q",                 matching::query_remove_all_q),
+    route!("remove_all_multimatches",      matching::query_remove_all_multimatches),
+    route!("suggest",                      matching::query_suggest),
+
+    // Jobs
+    route!("get_jobs",                     jobs::query_get_jobs, app_params),
+    route!("start_new_job",                jobs::query_start_new_job),
+
+    // Issues
+    route!("get_issues",                   issues::query_get_issues, app_params),
+    route!("all_issues",                   issues::query_all_issues, app_params),
+    route!("resolve_issue",                issues::query_resolve_issue),
+
+    // User & auth
+    route!("get_user_info",                misc::query_get_user_info, app_params),
+
+    // Recent changes
+    route!("rc",                           rc::query_rc, app_params),
+    route!("rc_atom",                      rc::query_rc_atom, app_params),
+
+    // Data & analysis
+    route!("get_wd_props",                 data::query_get_wd_props, app_only),
+    route!("top_missing",                  data::query_top_missing, app_params),
+    route!("get_common_names",             data::query_get_common_names, app_params),
+    route!("same_names",                   data::query_same_names, app_only),
+    route!("random_person_batch",          data::query_random_person_batch, app_params),
+    route!("get_property_cache",           data::query_get_property_cache, app_only),
+    route!("mnm_unmatched_relations",      data::query_mnm_unmatched_relations, app_params),
+    route!("creation_candidates",          data::query_creation_candidates, app_params),
+
+    // Locations
+    route!("locations",                    locations::query_locations, app_params),
+    route!("get_locations_in_catalog",     locations::query_get_locations_in_catalog, app_params),
+
+    // Download & export
+    route!("download",                     download::query_download, app_params),
+    route!("download2",                    download::query_download2, app_params),
+
+    // Navigation
+    route!("redirect",                     navigation::query_redirect, app_params),
+    route!("proxy_entry_url",              navigation::query_proxy_entry_url, app_params),
+    route!("cersei_forward",               navigation::query_cersei_forward, app_params),
+
+    // Admin & config — writes require OAuth; admin checks go via require_catalog_admin
+    route!("update_overview",              admin::query_update_overview),
+    route!("update_ext_urls",              admin::query_update_ext_urls),
+    route!("add_aliases",                  admin::query_add_aliases),
+    route!("get_missing_properties",       admin::query_get_missing_properties, app_only),
+    route!("set_missing_properties_status",admin::query_set_missing_properties_status),
+    route!("get_top_groups",               catalog::query_get_top_groups, app_only),
+    route!("set_top_group",                catalog::query_set_top_group),
+    route!("remove_empty_top_group",       catalog::query_remove_empty_top_group),
+    route!("quick_compare_list",           admin::query_quick_compare_list, app_only),
+    route!("get_flickr_key",               admin::query_get_flickr_key, app_only),
+
+    // Per-feature endpoints, formerly all in `delegated.rs`.
+    route!("get_sync",                     sync::query_get_sync, app_params),
+    route!("sparql_list",                  sparql::query_sparql_list, app_params),
+    route!("quick_compare",                quick_compare::query_quick_compare, app_params),
+    route!("get_code_fragments",           code_fragments::query_get_code_fragments, app_params),
+    route!("save_code_fragment",           code_fragments::query_save_code_fragment),
+    route!("test_code_fragment",           lua::query_test_code_fragment),
+
+    // Large-catalogs endpoints (backed by the large_catalogs DB)
+    route!("lc_catalogs",                  large_catalogs::query_lc_catalogs, app_only),
+    route!("lc_bbox",                      large_catalogs::query_lc_bbox, app_params),
+    route!("lc_report",                    large_catalogs::query_lc_report, app_params),
+    route!("lc_report_list",               large_catalogs::query_lc_report_list, app_params),
+    route!("lc_rc",                        large_catalogs::query_lc_rc, app_params),
+    route!("lc_set_status",                large_catalogs::query_lc_set_status),
+
+    // Newly ported lightweight catalog endpoints
+    route!("batch_catalogs",               catalog::query_batch_catalogs, app_params),
+    route!("search_catalogs",              catalog::query_search_catalogs, app_params),
+    route!("catalog_type_counts",          catalog::query_catalog_type_counts, app_only),
+    route!("latest_catalogs",              catalog::query_latest_catalogs, app_params),
+    route!("catalogs_with_locations",      catalog::query_catalogs_with_locations, app_only),
+    route!("catalog_property_groups",      catalog::query_catalog_property_groups, app_only),
+    route!("check_wd_prop_usage",          catalog::query_check_wd_prop_usage, app_params),
+    route!("catalog_by_group",             catalog::query_catalog_by_group, app_params),
+
+    // Newly ported misc endpoints
+    route!("create",                       misc::query_create, app_params),
+    route!("user_edits",                   misc::query_user_edits, app_params),
+    route!("get_statement_text_groups",    misc::query_get_statement_text_groups, app_params),
+    route!("set_statement_text_q",         misc::query_set_statement_text_q),
+    route!("missingpages",                 misc::query_missingpages, app_params),
+    route!("sitestats",                    misc::query_sitestats, app_params),
+
+    // Distributed-game endpoints (also dispatched via action=… → query=dg_…)
+    route!("dg_desc",                      dg::query_dg_desc, params_only),
+    route!("dg_tiles",                     dg::query_dg_tiles, app_params),
+    route!("dg_log_action",                dg::query_dg_log_action, app_params),
+
+    route!("prep_new_item",                data::query_prep_new_item, app_params),
+    route!("autoscrape_test",              import::query_autoscrape_test, app_params),
+    route!("save_scraper",                 import::query_save_scraper, app_params),
+    route!("get_scraper",                  import::query_get_scraper, app_params),
+    ("upload_import_file", upload_import_file_get),
+    route!("import_source",                import::query_import_source),
+    route!("get_source_headers",           import::query_get_source_headers, app_params),
+    route!("test_import_source",           import::query_test_import_source, app_params),
+    route!("widar",                        widar::query_widar),
+];
+
 async fn dispatch(
     query: &str,
     app: &AppState,
     session: &Session,
     params: &Params,
 ) -> Result<Response, ApiError> {
-    match query {
-        // Catalog
-        "catalogs" => catalog::query_catalogs(app).await,
-        "single_catalog" => catalog::query_single_catalog(app, params).await,
-        "catalog_details" => catalog::query_catalog_details(app, params).await,
-        "get_catalog_info" => catalog::query_get_catalog_info(app, params).await,
-        "catalog" => catalog::query_catalog(app, params).await,
-        "edit_catalog" => catalog::query_edit_catalog(app, session, params).await,
-        "catalog_overview" => catalog::query_catalog_overview(app, params).await,
+    let handler = ROUTES
+        .iter()
+        .find(|(name, _)| *name == query)
+        .map(|(_, h)| *h)
+        .ok_or_else(|| ApiError(format!("Unknown query '{query}'")))?;
+    handler(app, session, params).await
+}
 
-        // Entry
-        "get_entry" => entry::query_get_entry(app, params).await,
-        "get_entry_by_extid" => entry::query_get_entry_by_extid(app, params).await,
-        "search" => entry::query_search(app, params).await,
-        "random" => entry::query_random(app, params).await,
-        "entries_query" => entry::query_entries_query(app, params).await,
-        "entries_via_property_value" => entry::query_entries_via_property_value(app, params).await,
-        "get_entries_by_q_or_value" => entry::query_get_entries_by_q_or_value(app, params).await,
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
 
-        // Matching — all DB-writing actions are gated behind OAuth
-        "match_q" => matching::query_match_q(app, session, params).await,
-        "match_q_multi" => matching::query_match_q_multi(app, session, params).await,
-        "remove_q" => matching::query_remove_q(app, session, params).await,
-        "remove_all_q" => matching::query_remove_all_q(app, session, params).await,
-        "remove_all_multimatches" => {
-            matching::query_remove_all_multimatches(app, session, params).await
+    /// Catches a copy-paste typo in the route table that would silently
+    /// shadow an existing route name and never call the second handler.
+    #[test]
+    fn route_names_are_unique() {
+        let mut seen: HashSet<&'static str> = HashSet::new();
+        for (name, _) in ROUTES {
+            assert!(seen.insert(name), "duplicate route registered: {name}");
         }
-        "suggest" => matching::query_suggest(app, session, params).await,
+    }
 
-        // Jobs
-        "get_jobs" => jobs::query_get_jobs(app, params).await,
-        "start_new_job" => jobs::query_start_new_job(app, session, params).await,
-
-        // Issues
-        "get_issues" => issues::query_get_issues(app, params).await,
-        "all_issues" => issues::query_all_issues(app, params).await,
-        "resolve_issue" => issues::query_resolve_issue(app, session, params).await,
-
-        // User & auth
-        "get_user_info" => misc::query_get_user_info(app, params).await,
-
-        // Recent changes
-        "rc" => rc::query_rc(app, params).await,
-        "rc_atom" => rc::query_rc_atom(app, params).await,
-
-        // Data & analysis
-        "get_wd_props" => data::query_get_wd_props(app).await,
-        "top_missing" => data::query_top_missing(app, params).await,
-        "get_common_names" => data::query_get_common_names(app, params).await,
-        "same_names" => data::query_same_names(app).await,
-        "random_person_batch" => data::query_random_person_batch(app, params).await,
-        "get_property_cache" => data::query_get_property_cache(app).await,
-        "mnm_unmatched_relations" => data::query_mnm_unmatched_relations(app, params).await,
-        "creation_candidates" => data::query_creation_candidates(app, params).await,
-
-        // Locations
-        "locations" => locations::query_locations(app, params).await,
-        "get_locations_in_catalog" => locations::query_get_locations_in_catalog(app, params).await,
-
-        // Download & export
-        "download" => download::query_download(app, params).await,
-        "download2" => download::query_download2(app, params).await,
-
-        // Navigation
-        "redirect" => navigation::query_redirect(app, params).await,
-        "proxy_entry_url" => navigation::query_proxy_entry_url(app, params).await,
-        "cersei_forward" => navigation::query_cersei_forward(app, params).await,
-
-        // Admin & config — writes require OAuth; admin checks go via require_catalog_admin
-        "update_overview" => admin::query_update_overview(app, session, params).await,
-        "update_ext_urls" => admin::query_update_ext_urls(app, session, params).await,
-        "add_aliases" => admin::query_add_aliases(app, session, params).await,
-        "get_missing_properties" => admin::query_get_missing_properties(app).await,
-        "set_missing_properties_status" => {
-            admin::query_set_missing_properties_status(app, session, params).await
+    /// Spot-check a handful of well-known endpoints — guards against an
+    /// accidental deletion that wouldn't show up in the build (the lookup
+    /// would just start returning "Unknown query" at runtime).
+    #[test]
+    fn route_table_contains_critical_endpoints() {
+        let names: HashSet<&'static str> = ROUTES.iter().map(|(n, _)| *n).collect();
+        for required in [
+            "catalogs",
+            "search",
+            "match_q",
+            "widar",
+            "get_jobs",
+            "rc",
+            "download2",
+            "upload_import_file",
+            "dg_desc",
+        ] {
+            assert!(
+                names.contains(required),
+                "ROUTES missing required endpoint: {required}"
+            );
         }
-        "get_top_groups" => catalog::query_get_top_groups(app).await,
-        "set_top_group" => catalog::query_set_top_group(app, session, params).await,
-        "remove_empty_top_group" => {
-            catalog::query_remove_empty_top_group(app, session, params).await
-        }
-        "quick_compare_list" => admin::query_quick_compare_list(app).await,
-        "get_flickr_key" => admin::query_get_flickr_key(app).await,
-
-        // Per-feature endpoints, formerly all in `delegated.rs`.
-        "get_sync" => sync::query_get_sync(app, params).await,
-        "sparql_list" => sparql::query_sparql_list(app, params).await,
-        "quick_compare" => quick_compare::query_quick_compare(app, params).await,
-        "get_code_fragments" => code_fragments::query_get_code_fragments(app, params).await,
-        "save_code_fragment" => code_fragments::query_save_code_fragment(app, session, params).await,
-        "test_code_fragment" => lua::query_test_code_fragment(app, session, params).await,
-
-        // Large-catalogs endpoints (backed by the large_catalogs DB)
-        "lc_catalogs" => large_catalogs::query_lc_catalogs(app).await,
-        "lc_bbox" => large_catalogs::query_lc_bbox(app, params).await,
-        "lc_report" => large_catalogs::query_lc_report(app, params).await,
-        "lc_report_list" => large_catalogs::query_lc_report_list(app, params).await,
-        "lc_rc" => large_catalogs::query_lc_rc(app, params).await,
-        "lc_set_status" => large_catalogs::query_lc_set_status(app, session, params).await,
-
-        // Newly ported lightweight catalog endpoints
-        "batch_catalogs" => catalog::query_batch_catalogs(app, params).await,
-        "search_catalogs" => catalog::query_search_catalogs(app, params).await,
-        "catalog_type_counts" => catalog::query_catalog_type_counts(app).await,
-        "latest_catalogs" => catalog::query_latest_catalogs(app, params).await,
-        "catalogs_with_locations" => catalog::query_catalogs_with_locations(app).await,
-        "catalog_property_groups" => catalog::query_catalog_property_groups(app).await,
-        "check_wd_prop_usage" => catalog::query_check_wd_prop_usage(app, params).await,
-        "catalog_by_group" => catalog::query_catalog_by_group(app, params).await,
-
-        // Newly ported misc endpoints
-        "create" => misc::query_create(app, params).await,
-        "user_edits" => misc::query_user_edits(app, params).await,
-        "get_statement_text_groups" => misc::query_get_statement_text_groups(app, params).await,
-        "set_statement_text_q" => misc::query_set_statement_text_q(app, session, params).await,
-        "missingpages" => misc::query_missingpages(app, params).await,
-        "sitestats" => misc::query_sitestats(app, params).await,
-
-        // Distributed-game endpoints (also dispatched via action=… → query=dg_…)
-        "dg_desc" => dg::query_dg_desc(params).await,
-        "dg_tiles" => dg::query_dg_tiles(app, params).await,
-        "dg_log_action" => dg::query_dg_log_action(app, params).await,
-
-        "prep_new_item" => data::query_prep_new_item(app, params).await,
-        "autoscrape_test" => import::query_autoscrape_test(app, params).await,
-        "save_scraper" => import::query_save_scraper(app, params).await,
-        "get_scraper" => import::query_get_scraper(app, params).await,
-        "upload_import_file" => Err(ApiError(
-            "upload_import_file must be POSTed as multipart/form-data".into(),
-        )),
-        "import_source" => import::query_import_source(app, session, params).await,
-        "get_source_headers" => import::query_get_source_headers(app, params).await,
-        "test_import_source" => import::query_test_import_source(app, params).await,
-        "widar" => widar::query_widar(app, session, params).await,
-
-        _ => Err(ApiError(format!("Unknown query '{query}'"))),
     }
 }
