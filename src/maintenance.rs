@@ -108,6 +108,63 @@ impl Maintenance {
         self.app.storage().maintenance_common_names_human().await
     }
 
+    /// Rebuild the `property_cache` table from Wikidata's authoritative
+    /// view of which items can serve as values for a handful of
+    /// "schema-pointing" properties (currently `P17` and `P31`). The
+    /// cache backs property-aware UIs and is read on hot paths, so we
+    /// can't afford a per-pageload SPARQL query.
+    ///
+    /// Mirrors PHP `Maintenance::updatePropertyCache`: pull the same
+    /// SPARQL twice (once per "prop-group" property), accumulate, gate
+    /// on the result count to defend against a partial outage wiping
+    /// the table, then `TRUNCATE` + chunked-`INSERT`.
+    pub async fn update_property_cache(&self) -> Result<()> {
+        // Tracks which Wikidata properties act as our "what kind of
+        // values does this property take?" pointers. P17 = country,
+        // P31 = instance of — both are richly populated and the labels
+        // they yield drive the property-cache-aware editors.
+        const PROP_GROUPS: &[usize] = &[17, 31];
+        // Sanity floor: a partial WDQS outage produces a small but
+        // non-empty result, which would silently shrink the cache.
+        // PHP picks 20 000; the same threshold has held up in
+        // practice across both implementations.
+        const MIN_EXPECTED_ROWS: usize = 20_000;
+
+        let client = crate::wdqs::build_client()?;
+        let mut rows: Vec<crate::storage::PropertyCacheRow> = Vec::new();
+        for &group in PROP_GROUPS {
+            let sparql = format!(
+                "SELECT ?p ?v ?vLabel {{ \
+                    ?p rdf:type wikibase:Property ; wdt:P{group} ?v . \
+                    SERVICE wikibase:label {{ bd:serviceParam wikibase:language 'en' }} \
+                }}"
+            );
+            let tsv_rows = crate::wdqs::run_tsv_query(&client, &sparql).await?;
+            log::info!(
+                "update_property_cache: P{group} returned {} row(s)",
+                tsv_rows.len()
+            );
+            for row in tsv_rows {
+                if let Some(parsed) = parse_property_cache_row(group, &row) {
+                    rows.push(parsed);
+                }
+            }
+        }
+
+        if rows.len() < MIN_EXPECTED_ROWS {
+            return Err(anyhow!(
+                "update_property_cache: only {} row(s) parsed (< {} expected); \
+                 refusing to truncate property_cache — likely a partial WDQS outage",
+                rows.len(),
+                MIN_EXPECTED_ROWS,
+            ));
+        }
+
+        self.app.storage().property_cache_replace(&rows).await?;
+        log::info!("update_property_cache: replaced cache with {} row(s)", rows.len());
+        Ok(())
+    }
+
     pub async fn create_match_person_dates_jobs_for_catalogs(&self) -> Result<()> {
         self.app
             .storage()
@@ -560,6 +617,27 @@ impl Maintenance {
     }
 }
 
+/// Decode one TSV row of `?p ?v ?vLabel` into the storage row.
+/// Returns `None` if either entity URI doesn't end with the expected
+/// numeric id — defensive against redirect IRIs and the occasional
+/// nonsense row.
+fn parse_property_cache_row(
+    prop_group: usize,
+    row: &[String],
+) -> Option<crate::storage::PropertyCacheRow> {
+    let p_uri = row.first()?;
+    let v_uri = row.get(1)?;
+    let label = row.get(2).cloned().unwrap_or_default();
+    let property = crate::wdqs::entity_id_from_uri(p_uri, 'P')?;
+    let item = crate::wdqs::entity_id_from_uri(v_uri, 'Q')?;
+    Some(crate::storage::PropertyCacheRow {
+        prop_group,
+        property,
+        item,
+        label,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -570,6 +648,54 @@ mod tests {
 
     const TEST_CATALOG_ID: usize = 5526;
     const TEST_ENTRY_ID: usize = 143962196;
+
+    #[test]
+    fn property_cache_row_parses_canonical_uris() {
+        let row = vec![
+            "http://www.wikidata.org/entity/P31".to_string(),
+            "http://www.wikidata.org/entity/Q5".to_string(),
+            "human".to_string(),
+        ];
+        let parsed = parse_property_cache_row(31, &row).expect("row should parse");
+        assert_eq!(parsed.prop_group, 31);
+        assert_eq!(parsed.property, 31);
+        assert_eq!(parsed.item, 5);
+        assert_eq!(parsed.label, "human");
+    }
+
+    #[test]
+    fn property_cache_row_drops_when_entity_id_missing() {
+        // Redirect IRIs occasionally come back from WDQS without a
+        // numeric Q on the end; those rows must be silently ignored
+        // rather than poisoning the cache with property=0/item=0
+        // entries.
+        let bad_p = vec![
+            "http://www.wikidata.org/entity/redirect-only".to_string(),
+            "http://www.wikidata.org/entity/Q5".to_string(),
+            "human".to_string(),
+        ];
+        assert!(parse_property_cache_row(31, &bad_p).is_none());
+
+        let bad_v = vec![
+            "http://www.wikidata.org/entity/P31".to_string(),
+            "http://example.com/no-qid".to_string(),
+            "x".to_string(),
+        ];
+        assert!(parse_property_cache_row(31, &bad_v).is_none());
+    }
+
+    #[test]
+    fn property_cache_row_tolerates_missing_label() {
+        // Label is best-effort — wikibase:label can produce a row
+        // without it (no English label). Don't drop the row; an empty
+        // label is what the cache will hold for it.
+        let row = vec![
+            "http://www.wikidata.org/entity/P31".to_string(),
+            "http://www.wikidata.org/entity/Q42".to_string(),
+        ];
+        let parsed = parse_property_cache_row(31, &row).expect("row should parse");
+        assert_eq!(parsed.label, "");
+    }
 
     #[tokio::test]
     #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]

@@ -9,30 +9,11 @@
 
 use crate::api::common::{self, ApiError, Params, ok};
 use crate::app_state::AppState;
+use crate::wdqs;
 use axum::response::Response;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::OnceLock;
-use std::time::Duration;
-
-/// WDQS endpoint. POSTs reach the production query service the same way
-/// the mediawiki crate's `sparql_query` does, but here we control the
-/// `Accept` header so we can ask for TSV instead of JSON.
-const WDQS_URL: &str = "https://query.wikidata.org/sparql";
-
-/// Per-attempt request budget. WDQS itself enforces a 60 s wall-clock
-/// limit on the query, so giving the client another 30 s of slack covers
-/// TLS handshake, body streaming and gzip de-framing. Anything longer
-/// just means we wait for a response that's already abandoned upstream.
-const SPARQL_TIMEOUT_SECS: u64 = 90;
-
-/// One retry per logical request. The whole-query path and each chunk in
-/// the chunked-fallback path both get this budget independently — that
-/// way a single transient timeout doesn't punish the user with a hard
-/// failure.
-const SPARQL_MAX_ATTEMPTS: usize = 2;
-
-const SPARQL_USER_AGENT: &str = "mix-n-match (https://mix-n-match.toolforge.org)";
 
 /// Axum-shape entry point for `?query=get_sync&catalog=…`.
 pub async fn query_get_sync(app: &AppState, params: &Params) -> Result<Response, ApiError> {
@@ -113,9 +94,9 @@ pub async fn get(app: &AppState, catalog_id: usize) -> Result<Value, ApiError> {
 ///    chunk gets its own retry budget; partial results are merged. This
 ///    is the resilient path for genuinely large properties.
 async fn fetch_wd_ext2q(wd_prop: usize) -> Result<HashMap<String, String>, ApiError> {
-    let client = build_sparql_client()?;
+    let client = wdqs::build_client().map_err(|e| ApiError(e.to_string()))?;
     let single = format!("SELECT ?q ?prop {{ ?q wdt:P{wd_prop} ?prop }}");
-    if let Ok(rows) = run_with_retry(&client, &single).await {
+    if let Ok(rows) = wdqs::run_tsv_query(&client, &single).await {
         return Ok(rows_to_ext2q(rows));
     }
 
@@ -126,7 +107,7 @@ async fn fetch_wd_ext2q(wd_prop: usize) -> Result<HashMap<String, String>, ApiEr
             "SELECT ?q ?prop {{ ?q wdt:P{wd_prop} ?prop . \
              FILTER(STRSTARTS(STR(?q), \"http://www.wikidata.org/entity/Q{digit}\")) }}"
         );
-        match run_with_retry(&client, &chunk).await {
+        match wdqs::run_tsv_query(&client, &chunk).await {
             Ok(rows) => {
                 for (ext_id, q) in rows_to_ext2q(rows) {
                     out.insert(ext_id, q);
@@ -147,129 +128,18 @@ async fn fetch_wd_ext2q(wd_prop: usize) -> Result<HashMap<String, String>, ApiEr
     Ok(out)
 }
 
-fn build_sparql_client() -> Result<reqwest::Client, ApiError> {
-    reqwest::Client::builder()
-        .timeout(Duration::from_secs(SPARQL_TIMEOUT_SECS))
-        .user_agent(SPARQL_USER_AGENT)
-        .build()
-        .map_err(|e| ApiError(format!("HTTP client init failed: {e}")))
-}
-
-async fn run_with_retry(
-    client: &reqwest::Client,
-    sparql: &str,
-) -> Result<Vec<(String, String)>, String> {
-    let mut last_err = String::from("unknown error");
-    for attempt in 0..SPARQL_MAX_ATTEMPTS {
-        match run_sparql_tsv(client, sparql).await {
-            Ok(rows) => return Ok(rows),
-            Err(e) => {
-                last_err = e;
-                if attempt + 1 < SPARQL_MAX_ATTEMPTS {
-                    // Short pause to dodge a momentary upstream blip; not
-                    // a real backoff — WDQS errors are usually all-or-
-                    // nothing, so a long sleep wouldn't help.
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-                }
-            }
-        }
-    }
-    Err(last_err)
-}
-
-async fn run_sparql_tsv(
-    client: &reqwest::Client,
-    sparql: &str,
-) -> Result<Vec<(String, String)>, String> {
-    let resp = client
-        .post(WDQS_URL)
-        .header(reqwest::header::ACCEPT, "text/tab-separated-values")
-        .form(&[("query", sparql)])
-        .send()
-        .await
-        .map_err(|e| format!("send: {e}"))?;
-    let status = resp.status();
-    if !status.is_success() {
-        return Err(format!("HTTP {status}"));
-    }
-    let body = resp
-        .text()
-        .await
-        .map_err(|e| format!("read body: {e}"))?;
-    Ok(parse_wdqs_tsv(&body))
-}
-
-/// Parse W3C SPARQL 1.1 TSV results
-/// (https://www.w3.org/TR/sparql11-results-csv-tsv/) for the fixed
-/// two-column `?q` / `?prop` projection. IRIs are wrapped in `<…>` and
-/// literals in `"…"` with `\t \n \r \" \\` escapes; we tolerate
-/// non-conforming variants by passing the raw cell through unchanged.
-fn parse_wdqs_tsv(body: &str) -> Vec<(String, String)> {
-    let mut iter = body.lines();
-    iter.next(); // skip the `?q\t?prop` header row
-    iter.filter_map(|line| {
-        if line.is_empty() {
-            return None;
-        }
-        let mut cols = line.splitn(2, '\t');
-        let q = unwrap_tsv_cell(cols.next()?);
-        let prop = unwrap_tsv_cell(cols.next()?);
-        Some((q, prop))
-    })
-    .collect()
-}
-
-fn unwrap_tsv_cell(cell: &str) -> String {
-    let cell = cell.trim();
-    if cell.starts_with('<') && cell.ends_with('>') && cell.len() >= 2 {
-        cell[1..cell.len() - 1].to_string()
-    } else if cell.starts_with('"') {
-        unescape_tsv_literal(cell)
-    } else {
-        cell.to_string()
-    }
-}
-
-/// Decode a SPARQL TSV literal: leading `"`, body with `\t \n \r \" \\`
-/// escapes, then either a closing `"` or a `"@lang` / `"^^<datatype>`
-/// suffix that we drop (the queries in this module only project plain
-/// strings, so the suffix carries no information we need).
-fn unescape_tsv_literal(cell: &str) -> String {
-    let mut chars = cell.chars();
-    chars.next(); // consume opening `"`
-    let mut out = String::with_capacity(cell.len());
-    while let Some(c) = chars.next() {
-        if c == '"' {
-            break;
-        }
-        if c == '\\' {
-            match chars.next() {
-                Some('t') => out.push('\t'),
-                Some('n') => out.push('\n'),
-                Some('r') => out.push('\r'),
-                Some('"') => out.push('"'),
-                Some('\\') => out.push('\\'),
-                Some(other) => {
-                    out.push('\\');
-                    out.push(other);
-                }
-                None => break,
-            }
-        } else {
-            out.push(c);
-        }
-    }
-    out
-}
-
-/// Project the parsed `(q-iri, prop-literal)` rows into the
+/// Project the parsed two-column `(q-iri, prop-literal)` rows into the
 /// `ext_id → Qid` map the comparison code expects. Rows whose `q-iri`
 /// doesn't end in a Q-number are silently dropped — WDQS occasionally
 /// emits redirect IRIs that don't fit the pattern.
-fn rows_to_ext2q(rows: Vec<(String, String)>) -> HashMap<String, String> {
+fn rows_to_ext2q(rows: Vec<Vec<String>>) -> HashMap<String, String> {
     let re = re_q();
     let mut out: HashMap<String, String> = HashMap::new();
-    for (q_url, prop_value) in rows {
+    for row in rows {
+        let mut iter = row.into_iter();
+        let (Some(q_url), Some(prop_value)) = (iter.next(), iter.next()) else {
+            continue;
+        };
         if let Some(caps) = re.captures(&q_url) {
             out.insert(prop_value, caps[1].to_string());
         }
@@ -339,75 +209,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_unwrap_tsv_cell_iri() {
-        assert_eq!(
-            unwrap_tsv_cell("<http://www.wikidata.org/entity/Q42>"),
-            "http://www.wikidata.org/entity/Q42"
-        );
-    }
-
-    #[test]
-    fn test_unwrap_tsv_cell_literal_plain() {
-        assert_eq!(unwrap_tsv_cell("\"abc-123\""), "abc-123");
-    }
-
-    #[test]
-    fn test_unwrap_tsv_cell_literal_with_escapes() {
-        // \t and \" must round-trip — these are the escapes the spec
-        // requires on the wire (literal tabs in cells would tear rows).
-        assert_eq!(unwrap_tsv_cell(r#""a\tb\"c""#), "a\tb\"c");
-        assert_eq!(unwrap_tsv_cell(r#""back\\slash""#), "back\\slash");
-    }
-
-    #[test]
-    fn test_unwrap_tsv_cell_literal_with_lang_tag_dropped() {
-        // Anything after the closing quote (lang tags, datatype IRIs)
-        // is intentionally discarded — our queries project plain strings.
-        assert_eq!(unwrap_tsv_cell(r#""hello"@en"#), "hello");
-    }
-
-    #[test]
-    fn test_unwrap_tsv_cell_unknown_passes_through() {
-        // Non-IRI, non-literal cells (numbers, booleans, blank nodes)
-        // are returned as-is so callers can inspect them.
-        assert_eq!(unwrap_tsv_cell("42"), "42");
-    }
-
-    #[test]
-    fn test_parse_wdqs_tsv_skips_header_and_blank_lines() {
-        let body = "?q\t?prop\n\
-                    <http://www.wikidata.org/entity/Q1>\t\"v1\"\n\
-                    <http://www.wikidata.org/entity/Q2>\t\"v2\"\n\
-                    \n";
-        let rows = parse_wdqs_tsv(body);
-        assert_eq!(
-            rows,
-            vec![
-                (
-                    "http://www.wikidata.org/entity/Q1".to_string(),
-                    "v1".to_string()
-                ),
-                (
-                    "http://www.wikidata.org/entity/Q2".to_string(),
-                    "v2".to_string()
-                ),
-            ]
-        );
-    }
-
-    #[test]
     fn test_rows_to_ext2q_extracts_qid_and_drops_malformed() {
+        // Generic TSV unescaping is exercised in the `wdqs` module's
+        // own tests; here we just verify the projection from raw rows
+        // to the `ext_id → Qid` map this endpoint depends on.
         let rows = vec![
-            (
+            vec![
                 "http://www.wikidata.org/entity/Q42".to_string(),
                 "ext-A".to_string(),
-            ),
-            (
+            ],
+            vec![
                 "http://www.wikidata.org/entity/Q9999".to_string(),
                 "ext-B".to_string(),
-            ),
+            ],
             // Missing trailing Q-number → must be silently dropped.
-            ("http://example.com/no-qid".to_string(), "ext-C".to_string()),
+            vec!["http://example.com/no-qid".to_string(), "ext-C".to_string()],
+            // Single-column row → can't be projected; dropped.
+            vec!["only-one".to_string()],
         ];
         let map = rows_to_ext2q(rows);
         assert_eq!(map.get("ext-A").map(String::as_str), Some("Q42"));

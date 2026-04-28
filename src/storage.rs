@@ -133,6 +133,25 @@ pub struct WdMatchRow {
     pub wd_prop: usize,
 }
 
+/// One row of the `property_cache` table — `(prop_group, property, item)`
+/// links a Wikidata property to one of the items it can take as a
+/// value, e.g. `(31, 31, 5, "human")` recording that P31's value Q5
+/// has English label "human". Used to render property-aware editors
+/// without making a Wikidata request per pageload.
+#[derive(Debug, Clone)]
+pub struct PropertyCacheRow {
+    /// The "what kind of values" property — e.g. 17 (P17, country) or
+    /// 31 (P31, instance of). Currently always one of those two.
+    pub prop_group: usize,
+    /// Numeric id of the cached property (the "?p" of the SPARQL).
+    pub property: usize,
+    /// Numeric id of one possible item-typed value for that property
+    /// (the "?v" of the SPARQL).
+    pub item: usize,
+    /// Plain-text English label for the item.
+    pub label: String,
+}
+
 /// One match the catalog merger should port from the source catalog to
 /// the target catalog. Produced by `entry_get_mergeable_matches`: the
 /// target row exists, isn't manually matched yet, and the source row
@@ -373,6 +392,11 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     /// pick — without it, the picker hits an empty table and the UI
     /// falls back to the "no candidates" error.
     async fn maintenance_common_names_human(&self) -> Result<()>;
+    /// Replace the entire `property_cache` table with the supplied row
+    /// set in a single TRUNCATE + chunked INSERT pass. The label is a
+    /// free-form English string from Wikidata's `wikibase:label`
+    /// service. Used by `Maintenance::update_property_cache`.
+    async fn property_cache_replace(&self, rows: &[PropertyCacheRow]) -> Result<()>;
     async fn maintenance_taxa(&self) -> Result<()>;
     async fn maintenance_common_aux(&self) -> Result<()>;
     async fn maintenance_artwork(&self) -> Result<()>;

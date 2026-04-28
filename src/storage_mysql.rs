@@ -23,7 +23,8 @@ use crate::{
     mysql_misc::MySQLMisc,
     prop_todo::PropTodo,
     storage::{
-        CatalogEntryListFilter, Download2Filter, MergeableMatch, OverviewTableRow, WdMatchRow,
+        CatalogEntryListFilter, Download2Filter, MergeableMatch, OverviewTableRow,
+        PropertyCacheRow, WdMatchRow,
     },
     task_size::TaskSize,
     taxon_matcher::{RankedNames, TAXON_RANKS, TaxonMatcher, TaxonNameField},
@@ -1682,6 +1683,48 @@ impl Storage for StorageMySQL {
         ];
         for sql in sqls {
             self.get_conn().await?.exec_drop(sql, ()).await?;
+        }
+        Ok(())
+    }
+
+    async fn property_cache_replace(&self, rows: &[PropertyCacheRow]) -> Result<()> {
+        // Refuse to wipe the table when there's nothing to put back —
+        // a transient SPARQL failure shouldn't leave the cache empty
+        // and break every property-aware UI for hours until the next
+        // run. The Maintenance caller's row-count gate is the primary
+        // defence; this is belt-and-braces.
+        if rows.is_empty() {
+            return Ok(());
+        }
+        // Per-batch row count. ~80 chars per VALUES tuple keeps each
+        // INSERT well under MySQL's default `max_allowed_packet`
+        // (~4 MB on toolforge), with plenty of headroom for long
+        // labels.
+        const BATCH_ROWS: usize = 1000;
+
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop("TRUNCATE `property_cache`", ()).await?;
+        for chunk in rows.chunks(BATCH_ROWS) {
+            // Manually build the multi-VALUES list — exec_batch in
+            // mysql_async fires N round-trips behind the scenes; one
+            // INSERT with N tuples is materially faster.
+            let placeholders =
+                std::iter::repeat_n("(?,?,?,?)", chunk.len()).join(",");
+            let sql = format!(
+                "INSERT INTO `property_cache` \
+                    (`prop_group`,`property`,`item`,`label`) \
+                 VALUES {placeholders}"
+            );
+            // mysql_async's positional Params::Positional flattens a
+            // Vec<Value> into one bind list — exactly what we need.
+            let mut bind: Vec<mysql_async::Value> = Vec::with_capacity(chunk.len() * 4);
+            for r in chunk {
+                bind.push(mysql_async::Value::UInt(r.prop_group as u64));
+                bind.push(mysql_async::Value::UInt(r.property as u64));
+                bind.push(mysql_async::Value::UInt(r.item as u64));
+                bind.push(mysql_async::Value::Bytes(r.label.as_bytes().to_vec()));
+            }
+            conn.exec_drop(sql, bind).await?;
         }
         Ok(())
     }
