@@ -21,9 +21,7 @@ pub async fn query_match_q(
 ) -> Result<Response, ApiError> {
     let eid = common::get_param_int(params, "entry", -1) as usize;
     let q = common::get_param_int(params, "q", -1);
-    let uid = auth::guard::require_user_from_params(app, session, params)
-        .await?
-        .mnm_user_id;
+    let uid = common::require_user_id(app, session, params).await?;
     let mut entry = crate::entry::Entry::from_id(eid, app).await?;
     entry.set_match(&format!("Q{q}"), uid).await?;
 
@@ -45,9 +43,7 @@ pub async fn query_match_q_multi(
     params: &Params,
 ) -> Result<Response, ApiError> {
     let catalog = common::get_catalog(params)?;
-    let uid = auth::guard::require_user_from_params(app, session, params)
-        .await?
-        .mnm_user_id;
+    let uid = common::require_user_id(app, session, params).await?;
     let data_str = common::get_param(params, "data", "[]");
     let data: Vec<serde_json::Value> = serde_json::from_str(&data_str).unwrap_or_default();
 

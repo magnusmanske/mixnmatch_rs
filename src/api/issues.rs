@@ -8,8 +8,8 @@ use tower_sessions::Session;
 
 pub async fn query_get_issues(app: &AppState, params: &Params) -> Result<Response, ApiError> {
     let itype = common::get_param(params, "type", "").trim().to_uppercase();
-    let limit = common::get_param_int(params, "limit", 50) as usize;
-    let offset = common::get_param_int(params, "offset", 0) as usize;
+    let limit = common::get_limit(params, 50, usize::MAX);
+    let offset = common::get_offset(params);
     let catalogs = common::get_param(params, "catalogs", "");
 
     // Optional client-supplied seed so subsequent paginated requests scan the

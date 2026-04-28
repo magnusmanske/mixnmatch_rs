@@ -87,8 +87,7 @@ pub async fn query_mnm_unmatched_relations(
         .storage()
         .api_get_mnm_unmatched_relations(property, offset, limit)
         .await?;
-    let mut data = common::entries_to_json_data(&entries, app).await?;
-    common::add_extended_entry_data(app, &mut data).await?;
+    let mut data = common::entries_with_extended_data(&entries, app).await?;
     let entry2cnt: serde_json::Map<String, serde_json::Value> = id_cnts
         .iter()
         .map(|(id, cnt)| (id.to_string(), serde_json::json!(cnt)))

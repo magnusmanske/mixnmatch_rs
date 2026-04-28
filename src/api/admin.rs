@@ -68,9 +68,7 @@ pub async fn query_add_aliases(
     session: &Session,
     params: &Params,
 ) -> Result<Response, ApiError> {
-    let uid = auth::guard::require_user_from_params(app, session, params)
-        .await?
-        .mnm_user_id;
+    let uid = common::require_user_id(app, session, params).await?;
     let text = common::get_param(params, "text", "").trim().to_string();
     let cid = common::get_param_int(params, "catalog", 0) as usize;
     if cid == 0 || text.is_empty() {
@@ -115,9 +113,7 @@ pub async fn query_set_missing_properties_status(
     session: &Session,
     params: &Params,
 ) -> Result<Response, ApiError> {
-    let uid = auth::guard::require_user_from_params(app, session, params)
-        .await?
-        .mnm_user_id;
+    let uid = common::require_user_id(app, session, params).await?;
     let row_id = common::get_param_int(params, "row_id", 0) as usize;
     if row_id == 0 {
         return Err(ApiError("Bad/missing row ID".into()));
