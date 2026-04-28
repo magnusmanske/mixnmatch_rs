@@ -114,6 +114,25 @@ impl OverviewTableRow {
     }
 }
 
+/// Pending row in the `wd_matches` table — joined with the entry it points
+/// at and the catalog's Wikidata property so the sync pipeline doesn't have
+/// to make extra round-trips to classify or push a single match.
+///
+/// Produced by `wd_matches_get_batch`; the caller decides what status to
+/// transition the row to next.
+#[derive(Debug, Clone)]
+pub struct WdMatchRow {
+    pub entry_id: usize,
+    pub catalog_id: usize,
+    pub ext_id: String,
+    /// `entry.q` (always `> 0` — the row only enters `wd_matches` once a
+    /// user has confirmed a positive match).
+    pub q_numeric: isize,
+    /// `catalog.wd_prop` numeric id (e.g. `213` for ISNI). Always `Some` —
+    /// the SQL filter rejects catalogs without a property.
+    pub wd_prop: usize,
+}
+
 #[async_trait]
 #[allow(clippy::too_many_arguments)]
 pub trait Storage: std::fmt::Debug + Send + Sync {
@@ -806,6 +825,17 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     ) -> Result<(serde_json::Value, serde_json::Value)>;
     async fn api_sitestats(&self, catalog: Option<usize>) -> Result<serde_json::Value>;
     async fn api_dg_tiles(&self, num: usize, type_filter: &str) -> Result<Vec<serde_json::Value>>;
+
+    // wd_matches sync (PHP RecentChangesWatcher::syncWdMatches /
+    // syncMatchesToWikidata). Both helpers join `wd_matches` against
+    // `entry` and `catalog` so callers get everything they need to
+    // classify or push the row in a single round-trip.
+    async fn wd_matches_get_batch(
+        &self,
+        status: &str,
+        limit: usize,
+    ) -> Result<Vec<WdMatchRow>>;
+    async fn wd_matches_set_status(&self, entry_id: usize, status: &str) -> Result<()>;
 }
 
 #[cfg(test)]
