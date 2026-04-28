@@ -853,74 +853,8 @@ impl Storage for StorageMySQL {
     // Autoscrape methods now live on a separate `impl AutoscrapeQueries
     // for StorageMySQL` block (further down).
 
-    // Auxiliary matcher
-
-    async fn auxiliary_matcher_match_via_aux(
-        &self,
-        catalog_id: usize,
-        offset: usize,
-        batch_size: usize,
-        extid_props: &[String],
-        blacklisted_catalogs: &[String],
-    ) -> Result<Vec<AuxiliaryResults>> {
-        let sql = format!(
-            "SELECT auxiliary.id,entry_id,0,aux_p,aux_name FROM entry,auxiliary
-        WHERE entry_id=entry.id AND catalog=:catalog_id
-        {}
-        AND in_wikidata=0
-        AND aux_p IN ({})
-        AND catalog NOT IN ({})
-        /* ORDER BY auxiliary.id */
-        LIMIT :batch_size OFFSET :offset",
-            MatchState::not_fully_matched().get_sql(),
-            extid_props.join(","),
-            blacklisted_catalogs.join(",")
-        );
-        let results = self
-            .get_conn_ro()
-            .await?
-            .exec_iter(sql, params! {catalog_id,offset,batch_size})
-            .await?
-            .map_and_drop(|row| {
-                let (aux_id, entry_id, q_numeric, property, value) =
-                    from_row::<(usize, usize, usize, usize, String)>(row);
-                AuxiliaryResults::new(aux_id, entry_id, q_numeric, property, value)
-            })
-            .await?;
-        Ok(results)
-    }
-
-    async fn auxiliary_matcher_add_auxiliary_to_wikidata(
-        &self,
-        blacklisted_properties: &[String],
-        catalog_id: usize,
-        offset: usize,
-        batch_size: usize,
-    ) -> Result<Vec<AuxiliaryResults>> {
-        let sql = format!(
-            "SELECT auxiliary.id,entry_id,q,aux_p,aux_name FROM entry,auxiliary
-            WHERE entry_id=entry.id AND catalog=:catalog_id
-            {}
-            AND in_wikidata=0
-            AND aux_p NOT IN ({})
-            AND (aux_p!=17 OR `type`!='Q5')
-            ORDER BY auxiliary.id LIMIT :batch_size OFFSET :offset",
-            MatchState::fully_matched().get_sql(),
-            blacklisted_properties.join(",")
-        );
-        let results = self
-            .get_conn_ro()
-            .await?
-            .exec_iter(sql.clone(), params! {catalog_id,offset,batch_size})
-            .await?
-            .map_and_drop(|row| {
-                let (aux_id, entry_id, q_numeric, property, value) =
-                    from_row::<(usize, usize, usize, usize, String)>(row);
-                AuxiliaryResults::new(aux_id, entry_id, q_numeric, property, value)
-            })
-            .await?;
-        Ok(results)
-    }
+    // Auxiliary-matcher methods now live on `impl AuxiliaryMatcherQueries
+    // for StorageMySQL` (further down in this file).
 
     // Maintenance
 
@@ -2545,215 +2479,8 @@ impl Storage for StorageMySQL {
     // CERSEI methods now live on a separate `impl CerseiQueries for
     // StorageMySQL` block (further down).
 
-    // MetaEntry support
-
-    async fn meta_entry_get_mnm_relations(&self, entry_id: usize) -> Result<Vec<MetaMnmRelation>> {
-        let sql =
-            "SELECT `property`, `target_entry_id` FROM `mnm_relation` WHERE `entry_id`=:entry_id";
-        let ret = self
-            .get_conn_ro()
-            .await?
-            .exec_iter(sql, params! { entry_id })
-            .await?
-            .map_and_drop(|row| {
-                let property: usize = row.get::<Option<usize>, _>(0).flatten().unwrap_or_default();
-                let target_entry_id: usize =
-                    row.get::<Option<usize>, _>(1).flatten().unwrap_or_default();
-                MetaMnmRelation {
-                    property,
-                    target: MnmLink::EntryId(target_entry_id),
-                }
-            })
-            .await?;
-        Ok(ret)
-    }
-
-    async fn meta_entry_get_issues(&self, entry_id: usize) -> Result<Vec<MetaIssue>> {
-        let sql = "SELECT `id`, `type`, `json`, `status`, `user_id`, `resolved_ts`, `catalog` FROM `issues` WHERE `entry_id`=:entry_id";
-        let ret = self
-            .get_conn_ro()
-            .await?
-            .exec_iter(sql, params! { entry_id })
-            .await?
-            .map_and_drop(|row| {
-                let id: Option<usize> = row.get(0);
-                let issue_type: String = row
-                    .get::<Option<String>, _>(1)
-                    .flatten()
-                    .unwrap_or_default();
-                let json_str: String = row
-                    .get::<Option<String>, _>(2)
-                    .flatten()
-                    .unwrap_or_default();
-                let status: String = row
-                    .get::<Option<String>, _>(3)
-                    .flatten()
-                    .unwrap_or_default();
-                let user_id: Option<usize> = row.get::<Option<usize>, _>(4).flatten();
-                let resolved_ts: Option<String> = row.get::<Option<String>, _>(5).flatten();
-                let catalog_id: usize =
-                    row.get::<Option<usize>, _>(6).flatten().unwrap_or_default();
-                MetaIssue {
-                    id,
-                    issue_type,
-                    json: serde_json::from_str(&json_str).unwrap_or_default(),
-                    status,
-                    user_id,
-                    resolved_ts,
-                    catalog_id,
-                }
-            })
-            .await?;
-        Ok(ret)
-    }
-
-    async fn meta_entry_get_kv_entries(&self, entry_id: usize) -> Result<Vec<MetaKvEntry>> {
-        let sql = "SELECT `kv_key`, `kv_value` FROM `kv_entry` WHERE `entry_id`=:entry_id";
-        let ret = self
-            .get_conn_ro()
-            .await?
-            .exec_iter(sql, params! { entry_id })
-            .await?
-            .map_and_drop(|row| {
-                let key: String = row
-                    .get::<Option<String>, _>(0)
-                    .flatten()
-                    .unwrap_or_default();
-                let value: String = row
-                    .get::<Option<String>, _>(1)
-                    .flatten()
-                    .unwrap_or_default();
-                MetaKvEntry { key, value }
-            })
-            .await?;
-        Ok(ret)
-    }
-
-    async fn meta_entry_get_log_entries(&self, entry_id: usize) -> Result<Vec<MetaLogEntry>> {
-        let sql = "SELECT `id`, `action`, `user`, `timestamp`, `q` FROM `log` WHERE `entry_id`=:entry_id ORDER BY `id`";
-        let ret = self
-            .get_conn_ro()
-            .await?
-            .exec_iter(sql, params! { entry_id })
-            .await?
-            .map_and_drop(|row| {
-                let id: Option<usize> = row.get(0);
-                let action: String = row
-                    .get::<Option<String>, _>(1)
-                    .flatten()
-                    .unwrap_or_default();
-                let user: Option<usize> = row.get::<Option<usize>, _>(2).flatten();
-                let timestamp: Option<String> = row.get::<Option<String>, _>(3).flatten();
-                let q: Option<isize> = row.get::<Option<isize>, _>(4).flatten();
-                MetaLogEntry {
-                    id,
-                    action,
-                    user,
-                    timestamp,
-                    q,
-                }
-            })
-            .await?;
-        Ok(ret)
-    }
-
-    async fn meta_entry_get_statement_text(
-        &self,
-        entry_id: usize,
-    ) -> Result<Vec<MetaStatementText>> {
-        let sql = "SELECT `id`, `property`, `text`, `in_wikidata`, `entry_is_matched`, `q` FROM `statement_text` WHERE `entry_id`=:entry_id";
-        let ret = self
-            .get_conn_ro()
-            .await?
-            .exec_iter(sql, params! { entry_id })
-            .await?
-            .map_and_drop(|row| {
-                let id: Option<usize> = row.get(0);
-                let property: usize = row.get::<Option<usize>, _>(1).flatten().unwrap_or_default();
-                let text: String = row
-                    .get::<Option<String>, _>(2)
-                    .flatten()
-                    .unwrap_or_default();
-                let in_wikidata: bool = row.get::<Option<bool>, _>(3).flatten().unwrap_or_default();
-                let entry_is_matched: bool =
-                    row.get::<Option<bool>, _>(4).flatten().unwrap_or_default();
-                let q: Option<ItemId> = row.get::<Option<ItemId>, _>(5).flatten();
-                MetaStatementText {
-                    id,
-                    property,
-                    text,
-                    in_wikidata,
-                    entry_is_matched,
-                    q,
-                }
-            })
-            .await?;
-        Ok(ret)
-    }
-
-    async fn meta_entry_delete_auxiliary(&self, entry_id: usize) -> Result<()> {
-        self.get_conn()
-            .await?
-            .exec_drop(
-                "DELETE FROM `auxiliary` WHERE `entry_id`=:entry_id",
-                params! { entry_id },
-            )
-            .await?;
-        Ok(())
-    }
-
-    async fn meta_entry_delete_aliases(&self, entry_id: usize) -> Result<()> {
-        self.get_conn()
-            .await?
-            .exec_drop(
-                "DELETE FROM `aliases` WHERE `entry_id`=:entry_id",
-                params! { entry_id },
-            )
-            .await?;
-        Ok(())
-    }
-
-    async fn meta_entry_delete_descriptions(&self, entry_id: usize) -> Result<()> {
-        self.get_conn()
-            .await?
-            .exec_drop(
-                "DELETE FROM `descriptions` WHERE `entry_id`=:entry_id",
-                params! { entry_id },
-            )
-            .await?;
-        Ok(())
-    }
-
-    async fn meta_entry_delete_mnm_relations(&self, entry_id: usize) -> Result<()> {
-        self.get_conn()
-            .await?
-            .exec_drop(
-                "DELETE FROM `mnm_relation` WHERE `entry_id`=:entry_id",
-                params! { entry_id },
-            )
-            .await?;
-        Ok(())
-    }
-
-    async fn meta_entry_delete_kv_entries(&self, entry_id: usize) -> Result<()> {
-        self.get_conn()
-            .await?
-            .exec_drop(
-                "DELETE FROM `kv_entry` WHERE `entry_id`=:entry_id",
-                params! { entry_id },
-            )
-            .await?;
-        Ok(())
-    }
-
-    async fn meta_entry_set_kv_entry(&self, entry_id: usize, key: &str, value: &str) -> Result<()> {
-        let sql = "REPLACE INTO `kv_entry` (`entry_id`, `kv_key`, `kv_value`) VALUES (:entry_id, :key, :value)";
-        self.get_conn()
-            .await?
-            .exec_drop(sql, params! { entry_id, key, value })
-            .await?;
-        Ok(())
-    }
+    // MetaEntry methods now live on `impl MetaEntryQueries for StorageMySQL`
+    // (further down in this file).
 
     // ===== API support methods =====
 
@@ -6541,6 +6268,292 @@ impl crate::storage::CerseiQueries for StorageMySQL {
                 sql,
                 params! {ext_name, ext_desc, type_name, ext_url, entry_id},
             )
+            .await?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl crate::storage::AuxiliaryMatcherQueries for StorageMySQL {
+    async fn auxiliary_matcher_match_via_aux(
+        &self,
+        catalog_id: usize,
+        offset: usize,
+        batch_size: usize,
+        extid_props: &[String],
+        blacklisted_catalogs: &[String],
+    ) -> Result<Vec<AuxiliaryResults>> {
+        let sql = format!(
+            "SELECT auxiliary.id,entry_id,0,aux_p,aux_name FROM entry,auxiliary
+        WHERE entry_id=entry.id AND catalog=:catalog_id
+        {}
+        AND in_wikidata=0
+        AND aux_p IN ({})
+        AND catalog NOT IN ({})
+        /* ORDER BY auxiliary.id */
+        LIMIT :batch_size OFFSET :offset",
+            MatchState::not_fully_matched().get_sql(),
+            extid_props.join(","),
+            blacklisted_catalogs.join(",")
+        );
+        let results = self
+            .get_conn_ro()
+            .await?
+            .exec_iter(sql, params! {catalog_id,offset,batch_size})
+            .await?
+            .map_and_drop(|row| {
+                let (aux_id, entry_id, q_numeric, property, value) =
+                    from_row::<(usize, usize, usize, usize, String)>(row);
+                AuxiliaryResults::new(aux_id, entry_id, q_numeric, property, value)
+            })
+            .await?;
+        Ok(results)
+    }
+
+    async fn auxiliary_matcher_add_auxiliary_to_wikidata(
+        &self,
+        blacklisted_properties: &[String],
+        catalog_id: usize,
+        offset: usize,
+        batch_size: usize,
+    ) -> Result<Vec<AuxiliaryResults>> {
+        let sql = format!(
+            "SELECT auxiliary.id,entry_id,q,aux_p,aux_name FROM entry,auxiliary
+            WHERE entry_id=entry.id AND catalog=:catalog_id
+            {}
+            AND in_wikidata=0
+            AND aux_p NOT IN ({})
+            AND (aux_p!=17 OR `type`!='Q5')
+            ORDER BY auxiliary.id LIMIT :batch_size OFFSET :offset",
+            MatchState::fully_matched().get_sql(),
+            blacklisted_properties.join(",")
+        );
+        let results = self
+            .get_conn_ro()
+            .await?
+            .exec_iter(sql.clone(), params! {catalog_id,offset,batch_size})
+            .await?
+            .map_and_drop(|row| {
+                let (aux_id, entry_id, q_numeric, property, value) =
+                    from_row::<(usize, usize, usize, usize, String)>(row);
+                AuxiliaryResults::new(aux_id, entry_id, q_numeric, property, value)
+            })
+            .await?;
+        Ok(results)
+    }
+}
+
+#[async_trait]
+impl crate::storage::MetaEntryQueries for StorageMySQL {
+    async fn meta_entry_get_mnm_relations(&self, entry_id: usize) -> Result<Vec<MetaMnmRelation>> {
+        let sql =
+            "SELECT `property`, `target_entry_id` FROM `mnm_relation` WHERE `entry_id`=:entry_id";
+        let ret = self
+            .get_conn_ro()
+            .await?
+            .exec_iter(sql, params! { entry_id })
+            .await?
+            .map_and_drop(|row| {
+                let property: usize = row.get::<Option<usize>, _>(0).flatten().unwrap_or_default();
+                let target_entry_id: usize =
+                    row.get::<Option<usize>, _>(1).flatten().unwrap_or_default();
+                MetaMnmRelation {
+                    property,
+                    target: MnmLink::EntryId(target_entry_id),
+                }
+            })
+            .await?;
+        Ok(ret)
+    }
+
+    async fn meta_entry_get_issues(&self, entry_id: usize) -> Result<Vec<MetaIssue>> {
+        let sql = "SELECT `id`, `type`, `json`, `status`, `user_id`, `resolved_ts`, `catalog` FROM `issues` WHERE `entry_id`=:entry_id";
+        let ret = self
+            .get_conn_ro()
+            .await?
+            .exec_iter(sql, params! { entry_id })
+            .await?
+            .map_and_drop(|row| {
+                let id: Option<usize> = row.get(0);
+                let issue_type: String = row
+                    .get::<Option<String>, _>(1)
+                    .flatten()
+                    .unwrap_or_default();
+                let json_str: String = row
+                    .get::<Option<String>, _>(2)
+                    .flatten()
+                    .unwrap_or_default();
+                let status: String = row
+                    .get::<Option<String>, _>(3)
+                    .flatten()
+                    .unwrap_or_default();
+                let user_id: Option<usize> = row.get::<Option<usize>, _>(4).flatten();
+                let resolved_ts: Option<String> = row.get::<Option<String>, _>(5).flatten();
+                let catalog_id: usize =
+                    row.get::<Option<usize>, _>(6).flatten().unwrap_or_default();
+                MetaIssue {
+                    id,
+                    issue_type,
+                    json: serde_json::from_str(&json_str).unwrap_or_default(),
+                    status,
+                    user_id,
+                    resolved_ts,
+                    catalog_id,
+                }
+            })
+            .await?;
+        Ok(ret)
+    }
+
+    async fn meta_entry_get_kv_entries(&self, entry_id: usize) -> Result<Vec<MetaKvEntry>> {
+        let sql = "SELECT `kv_key`, `kv_value` FROM `kv_entry` WHERE `entry_id`=:entry_id";
+        let ret = self
+            .get_conn_ro()
+            .await?
+            .exec_iter(sql, params! { entry_id })
+            .await?
+            .map_and_drop(|row| {
+                let key: String = row
+                    .get::<Option<String>, _>(0)
+                    .flatten()
+                    .unwrap_or_default();
+                let value: String = row
+                    .get::<Option<String>, _>(1)
+                    .flatten()
+                    .unwrap_or_default();
+                MetaKvEntry { key, value }
+            })
+            .await?;
+        Ok(ret)
+    }
+
+    async fn meta_entry_get_log_entries(&self, entry_id: usize) -> Result<Vec<MetaLogEntry>> {
+        let sql = "SELECT `id`, `action`, `user`, `timestamp`, `q` FROM `log` WHERE `entry_id`=:entry_id ORDER BY `id`";
+        let ret = self
+            .get_conn_ro()
+            .await?
+            .exec_iter(sql, params! { entry_id })
+            .await?
+            .map_and_drop(|row| {
+                let id: Option<usize> = row.get(0);
+                let action: String = row
+                    .get::<Option<String>, _>(1)
+                    .flatten()
+                    .unwrap_or_default();
+                let user: Option<usize> = row.get::<Option<usize>, _>(2).flatten();
+                let timestamp: Option<String> = row.get::<Option<String>, _>(3).flatten();
+                let q: Option<isize> = row.get::<Option<isize>, _>(4).flatten();
+                MetaLogEntry {
+                    id,
+                    action,
+                    user,
+                    timestamp,
+                    q,
+                }
+            })
+            .await?;
+        Ok(ret)
+    }
+
+    async fn meta_entry_get_statement_text(
+        &self,
+        entry_id: usize,
+    ) -> Result<Vec<MetaStatementText>> {
+        let sql = "SELECT `id`, `property`, `text`, `in_wikidata`, `entry_is_matched`, `q` FROM `statement_text` WHERE `entry_id`=:entry_id";
+        let ret = self
+            .get_conn_ro()
+            .await?
+            .exec_iter(sql, params! { entry_id })
+            .await?
+            .map_and_drop(|row| {
+                let id: Option<usize> = row.get(0);
+                let property: usize = row.get::<Option<usize>, _>(1).flatten().unwrap_or_default();
+                let text: String = row
+                    .get::<Option<String>, _>(2)
+                    .flatten()
+                    .unwrap_or_default();
+                let in_wikidata: bool = row.get::<Option<bool>, _>(3).flatten().unwrap_or_default();
+                let entry_is_matched: bool =
+                    row.get::<Option<bool>, _>(4).flatten().unwrap_or_default();
+                let q: Option<ItemId> = row.get::<Option<ItemId>, _>(5).flatten();
+                MetaStatementText {
+                    id,
+                    property,
+                    text,
+                    in_wikidata,
+                    entry_is_matched,
+                    q,
+                }
+            })
+            .await?;
+        Ok(ret)
+    }
+
+    async fn meta_entry_delete_auxiliary(&self, entry_id: usize) -> Result<()> {
+        self.get_conn()
+            .await?
+            .exec_drop(
+                "DELETE FROM `auxiliary` WHERE `entry_id`=:entry_id",
+                params! { entry_id },
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn meta_entry_delete_aliases(&self, entry_id: usize) -> Result<()> {
+        self.get_conn()
+            .await?
+            .exec_drop(
+                "DELETE FROM `aliases` WHERE `entry_id`=:entry_id",
+                params! { entry_id },
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn meta_entry_delete_descriptions(&self, entry_id: usize) -> Result<()> {
+        self.get_conn()
+            .await?
+            .exec_drop(
+                "DELETE FROM `descriptions` WHERE `entry_id`=:entry_id",
+                params! { entry_id },
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn meta_entry_delete_mnm_relations(&self, entry_id: usize) -> Result<()> {
+        self.get_conn()
+            .await?
+            .exec_drop(
+                "DELETE FROM `mnm_relation` WHERE `entry_id`=:entry_id",
+                params! { entry_id },
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn meta_entry_delete_kv_entries(&self, entry_id: usize) -> Result<()> {
+        self.get_conn()
+            .await?
+            .exec_drop(
+                "DELETE FROM `kv_entry` WHERE `entry_id`=:entry_id",
+                params! { entry_id },
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn meta_entry_set_kv_entry(
+        &self,
+        entry_id: usize,
+        key: &str,
+        value: &str,
+    ) -> Result<()> {
+        let sql = "REPLACE INTO `kv_entry` (`entry_id`, `kv_key`, `kv_value`) VALUES (:entry_id, :key, :value)";
+        self.get_conn()
+            .await?
+            .exec_drop(sql, params! { entry_id, key, value })
             .await?;
         Ok(())
     }

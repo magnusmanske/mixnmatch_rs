@@ -389,6 +389,62 @@ pub trait AutoscrapeQueries: std::fmt::Debug + Send + Sync {
     async fn autoscrape_finish(&self, autoscrape_id: usize, last_run_urls: usize) -> Result<()>;
 }
 
+/// ISP-segregated sub-trait covering meta-entry reads/deletes.
+/// Used by the entry-detail API endpoints (`/api.php?query=get_entry`)
+/// and the entry-deletion / kv-entry write paths.
+#[async_trait]
+pub trait MetaEntryQueries: std::fmt::Debug + Send + Sync {
+    async fn meta_entry_get_mnm_relations(
+        &self,
+        entry_id: usize,
+    ) -> Result<Vec<crate::meta_entry::MetaMnmRelation>>;
+    async fn meta_entry_get_issues(
+        &self,
+        entry_id: usize,
+    ) -> Result<Vec<crate::meta_entry::MetaIssue>>;
+    async fn meta_entry_get_kv_entries(
+        &self,
+        entry_id: usize,
+    ) -> Result<Vec<crate::meta_entry::MetaKvEntry>>;
+    async fn meta_entry_get_log_entries(
+        &self,
+        entry_id: usize,
+    ) -> Result<Vec<crate::meta_entry::MetaLogEntry>>;
+    async fn meta_entry_get_statement_text(
+        &self,
+        entry_id: usize,
+    ) -> Result<Vec<crate::meta_entry::MetaStatementText>>;
+    async fn meta_entry_delete_auxiliary(&self, entry_id: usize) -> Result<()>;
+    async fn meta_entry_delete_aliases(&self, entry_id: usize) -> Result<()>;
+    async fn meta_entry_delete_descriptions(&self, entry_id: usize) -> Result<()>;
+    async fn meta_entry_delete_mnm_relations(&self, entry_id: usize) -> Result<()>;
+    async fn meta_entry_delete_kv_entries(&self, entry_id: usize) -> Result<()>;
+    async fn meta_entry_set_kv_entry(&self, entry_id: usize, key: &str, value: &str)
+    -> Result<()>;
+}
+
+/// ISP-segregated sub-trait covering the auxiliary-matcher's two
+/// page-through queries. Used by `auxiliary_matcher::finder` and
+/// `auxiliary_matcher::sync`.
+#[async_trait]
+pub trait AuxiliaryMatcherQueries: std::fmt::Debug + Send + Sync {
+    async fn auxiliary_matcher_match_via_aux(
+        &self,
+        catalog_id: usize,
+        offset: usize,
+        batch_size: usize,
+        extid_props: &[String],
+        blacklisted_catalogs: &[String],
+    ) -> Result<Vec<AuxiliaryResults>>;
+    async fn auxiliary_matcher_add_auxiliary_to_wikidata(
+        &self,
+        blacklisted_properties: &[String],
+        catalog_id: usize,
+        offset: usize,
+        batch_size: usize,
+    ) -> Result<Vec<AuxiliaryResults>>;
+}
+
 /// ISP-segregated sub-trait covering the CERSEI sync flow.
 /// Used by `cersei.rs`.
 #[async_trait]
@@ -414,6 +470,8 @@ pub trait Storage:
     + TaxonQueries
     + AutoscrapeQueries
     + CerseiQueries
+    + MetaEntryQueries
+    + AuxiliaryMatcherQueries
     + std::fmt::Debug
     + Send
     + Sync
@@ -556,23 +614,8 @@ pub trait Storage:
     // Autoscrape methods now live on the `AutoscrapeQueries` sub-trait
     // above; `Storage` inherits them via supertrait bound.
 
-    // Auxiliary matcher
-
-    async fn auxiliary_matcher_match_via_aux(
-        &self,
-        catalog_id: usize,
-        offset: usize,
-        batch_size: usize,
-        extid_props: &[String],
-        blacklisted_catalogs: &[String],
-    ) -> Result<Vec<AuxiliaryResults>>;
-    async fn auxiliary_matcher_add_auxiliary_to_wikidata(
-        &self,
-        blacklisted_properties: &[String],
-        catalog_id: usize,
-        offset: usize,
-        batch_size: usize,
-    ) -> Result<Vec<AuxiliaryResults>>;
+    // Auxiliary-matcher methods now live on `AuxiliaryMatcherQueries`
+    // sub-trait above; `Storage` inherits them via supertrait bound.
 
     // Maintenance
 
@@ -850,33 +893,8 @@ pub trait Storage:
     // CERSEI methods now live on the `CerseiQueries` sub-trait above;
     // `Storage` inherits them via supertrait bound.
 
-    // MetaEntry support
-    async fn meta_entry_get_mnm_relations(
-        &self,
-        entry_id: usize,
-    ) -> Result<Vec<crate::meta_entry::MetaMnmRelation>>;
-    async fn meta_entry_get_issues(
-        &self,
-        entry_id: usize,
-    ) -> Result<Vec<crate::meta_entry::MetaIssue>>;
-    async fn meta_entry_get_kv_entries(
-        &self,
-        entry_id: usize,
-    ) -> Result<Vec<crate::meta_entry::MetaKvEntry>>;
-    async fn meta_entry_get_log_entries(
-        &self,
-        entry_id: usize,
-    ) -> Result<Vec<crate::meta_entry::MetaLogEntry>>;
-    async fn meta_entry_get_statement_text(
-        &self,
-        entry_id: usize,
-    ) -> Result<Vec<crate::meta_entry::MetaStatementText>>;
-    async fn meta_entry_delete_auxiliary(&self, entry_id: usize) -> Result<()>;
-    async fn meta_entry_delete_aliases(&self, entry_id: usize) -> Result<()>;
-    async fn meta_entry_delete_descriptions(&self, entry_id: usize) -> Result<()>;
-    async fn meta_entry_delete_mnm_relations(&self, entry_id: usize) -> Result<()>;
-    async fn meta_entry_delete_kv_entries(&self, entry_id: usize) -> Result<()>;
-    async fn meta_entry_set_kv_entry(&self, entry_id: usize, key: &str, value: &str) -> Result<()>;
+    // MetaEntry methods now live on `MetaEntryQueries` sub-trait
+    // above; `Storage` inherits them via supertrait bound.
 
     // API support methods
 
