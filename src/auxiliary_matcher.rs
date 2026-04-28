@@ -1,5 +1,6 @@
 use crate::app_state::AppState;
 use crate::app_state::USER_AUX_MATCH;
+use crate::util::wikidata_props as wp;
 use crate::catalog::Catalog;
 use crate::coordinates::CoordinateLocation;
 use crate::entry::Entry;
@@ -147,7 +148,7 @@ impl AuxiliaryMatcher {
         Self {
             properties_using_items: vec![],
             properties_that_have_external_ids: vec![],
-            properties_with_coordinates: vec!["P625".to_string()], // TODO load dynamically like the ones above
+            properties_with_coordinates: vec![wp::P_COORDINATES.to_string()], // TODO load dynamically like the ones above
             app: app.clone(),
             catalogs: HashMap::new(),
             properties: EntityContainer::new(),
@@ -509,7 +510,7 @@ impl AuxiliaryMatcher {
         if let Some(entity) = entities.get_entity(aux.q()) {
             if META_ITEMS
                 .iter()
-                .any(|q| entity.has_target_entity("P31", q))
+                .any(|q| entity.has_target_entity(wp::P_INSTANCE_OF, q))
             {
                 return false; // Don't edit items that are META items
             }

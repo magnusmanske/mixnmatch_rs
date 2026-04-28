@@ -1,6 +1,7 @@
 use crate::app_state::AppState;
 use crate::app_state::USER_AUTO;
 use crate::app_state::USER_DATE_MATCH;
+use crate::util::wikidata_props as wp;
 use crate::catalog::Catalog;
 use crate::entry::Entry;
 use crate::entry_query::EntryQuery;
@@ -52,8 +53,8 @@ impl DateMatchField {
 
     const fn get_property(&self) -> &'static str {
         match self {
-            DateMatchField::Born => "P569",
-            DateMatchField::Died => "P570",
+            DateMatchField::Born => wp::P_DATE_OF_BIRTH,
+            DateMatchField::Died => wp::P_DATE_OF_DEATH,
         }
     }
 }
