@@ -21,9 +21,11 @@
 //! + `new`, and the integration tests.
 
 mod dates;
+pub mod matchers;
 mod strategies;
 
 pub use dates::{DateMatchField, DateStringLength};
+pub use matchers::{MATCHERS, Matcher, run_matcher_for_action};
 
 use crate::app_state::AppState;
 use crate::job::Job;

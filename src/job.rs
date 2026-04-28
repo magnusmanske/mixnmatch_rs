@@ -1,7 +1,5 @@
 use crate::app_state::AppState;
 use crate::automatch::AutoMatch;
-use crate::automatch::DateMatchField;
-use crate::automatch::DateStringLength;
 use crate::autoscrape::Autoscrape;
 use crate::auxiliary_matcher::AuxiliaryMatcher;
 use crate::coordinate_matcher::CoordinateMatcher;
@@ -477,27 +475,22 @@ impl Job {
 type JobHandlerFn =
     for<'a> fn(&'a mut Job, usize) -> BoxFuture<'a, Result<()>>;
 
-/// `(action, |job, cat| ... am.<method>(cat).await)` — for the 13 AutoMatch
-/// actions whose body is uniformly "instantiate, set_current_job, call one
-/// method with catalog_id".
-macro_rules! automatch_simple {
-    ($action:literal, $method:ident) => {
+/// Build a `(action, handler)` entry that delegates to the
+/// [`automatch::Matcher`] registry. Each `automatch_*` /
+/// `match_on_*` action is implemented as a Strategy unit struct in
+/// `automatch/matchers.rs`; the dispatcher just looks it up there.
+/// Keeping per-action entries here (rather than one wildcard "any
+/// matcher") preserves the single-source-of-truth property of
+/// `JOB_HANDLER_REGISTRY` — every action is grep-able to one
+/// place.
+macro_rules! matcher_action {
+    ($action:literal) => {
         ($action, ((|job, catalog_id| Box::pin(async move {
             let mut am = AutoMatch::new(&job.app);
             am.set_current_job(job);
-            am.$method(catalog_id).await
-        })) as JobHandlerFn))
-    };
-}
-
-/// Same shape but the AutoMatch method takes extra const args
-/// (`match_on_birthdate` / `match_on_deathdate`).
-macro_rules! automatch_single_date {
-    ($action:literal, $field:expr) => {
-        ($action, ((|job, catalog_id| Box::pin(async move {
-            let mut am = AutoMatch::new(&job.app);
-            am.set_current_job(job);
-            am.match_person_by_single_date(catalog_id, $field, DateStringLength::Day).await
+            crate::automatch::run_matcher_for_action($action, &mut am, catalog_id)
+                .await
+                .ok_or_else(|| anyhow!("Matcher registry missing action: {}", $action))?
         })) as JobHandlerFn))
     };
 }
@@ -525,20 +518,20 @@ macro_rules! maintenance_with_cat {
 /// Single-source-of-truth dispatch table. Add new actions here.
 #[rustfmt::skip]
 const JOB_HANDLER_REGISTRY: &[(&str, JobHandlerFn)] = &[
-    // --- AutoMatch ---
-    automatch_simple!("automatch",                          automatch_simple),
-    automatch_simple!("automatch_by_search",                automatch_by_search),
-    automatch_simple!("automatch_by_sitelink",              automatch_by_sitelink),
-    automatch_simple!("automatch_complex",                  automatch_complex),
-    automatch_simple!("automatch_creations",                automatch_creations),
-    automatch_simple!("automatch_from_other_catalogs",      automatch_from_other_catalogs),
-    automatch_simple!("automatch_people_with_birth_year",   automatch_people_with_birth_year),
-    automatch_simple!("automatch_people_with_initials",     automatch_people_with_initials),
-    automatch_simple!("automatch_sparql",                   automatch_with_sparql),
-    automatch_simple!("match_person_dates",                 match_person_by_dates),
-    automatch_simple!("purge_automatches",                  purge_automatches),
-    automatch_single_date!("match_on_birthdate",            DateMatchField::Born),
-    automatch_single_date!("match_on_deathdate",            DateMatchField::Died),
+    // --- AutoMatch (delegated to automatch::matchers Strategy registry) ---
+    matcher_action!("automatch"),
+    matcher_action!("automatch_by_search"),
+    matcher_action!("automatch_by_sitelink"),
+    matcher_action!("automatch_complex"),
+    matcher_action!("automatch_creations"),
+    matcher_action!("automatch_from_other_catalogs"),
+    matcher_action!("automatch_people_with_birth_year"),
+    matcher_action!("automatch_people_with_initials"),
+    matcher_action!("automatch_sparql"),
+    matcher_action!("match_person_dates"),
+    matcher_action!("purge_automatches"),
+    matcher_action!("match_on_birthdate"),
+    matcher_action!("match_on_deathdate"),
 
     // --- Maintenance (no-arg) ---
     maintenance_no_arg!("automatch_people_via_year_born",          automatch_people_via_year_born),
