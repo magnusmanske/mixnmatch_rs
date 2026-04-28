@@ -1,4 +1,4 @@
-import { mnm_notify, widar } from './store.js';
+import { widar } from './store.js';
 
 export default {
 	name: 'catalog-actions-dropdown',
@@ -10,21 +10,6 @@ export default {
 		getSearchCatalogPath: function () {
 			const me = this;
 			return "/search/?include=" + me.catalog.id;
-			/*			var exclude = [] ;
-						$.each ( get_all_catalogs() , function ( k , v ) {
-							if ( v.id != me.catalog.id ) exclude.push ( v.id ) ;
-						} ) ;
-						return "/search/ /"+exclude.join(',') ;*/
-		},
-		click: function (mode, mode2) {
-			mnm_notify("Not implemented yet!", 'warning'); return false;
-			/*
-						var path ;
-						if ( typeof mode2 == 'undefined' ) path ='/' + mode + '/' + catalog.id ;
-						else path = '/' + mode + '/' + catalog.id + '/' + mode2 ;
-						router.push ( path ) ;
-						return false ;
-			*/
 		}
 	},
 	template: `
@@ -41,7 +26,6 @@ export default {
 		<router-link :to='"/list/"+catalog.id+"/na"' class="dropdown-item" style="padding:2px"
 			tt="not_applicable"></router-link>
 		<div class="dropdown-divider"></div>
-		<!--<a v-if="catalog.nowd>0" style="padding:2px" class="alert-danger dropdown-item" href="#" @click.prevent="click('create_missing')" tt="create_missing"></a>-->
 		<router-link :to='"/import/"+catalog.id' class="dropdown-item" style="padding:2px"
 			tt="import_or_update_catalog"></router-link>
 		<router-link :to='"/site_stats/"+catalog.id' class="dropdown-item" style="padding:2px"
