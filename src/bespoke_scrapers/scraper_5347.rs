@@ -47,10 +47,7 @@ impl BespokeScraper for BespokeScraper5347 {
 }
 
 impl BespokeScraper5347 {
-    pub(crate) fn parse_item(
-        catalog_id: usize,
-        p: &serde_json::Value,
-    ) -> Option<ExtendedEntry> {
+    pub(crate) fn parse_item(catalog_id: usize, p: &serde_json::Value) -> Option<ExtendedEntry> {
         let id = Self::stringify(p.get("id")?)?;
         if id.is_empty() {
             return None;
@@ -62,20 +59,32 @@ impl BespokeScraper5347 {
             return None;
         }
 
-        let dob = p.get("date_of_birth").and_then(|x| x.as_str()).unwrap_or("");
-        let dod = p.get("date_of_death").and_then(|x| x.as_str()).unwrap_or("");
-        let pob = p.get("place_of_birth").and_then(|x| x.as_str()).unwrap_or("");
-        let pob_country = p
+        let dob = p
+            .get("date_of_birth")
+            .and_then(|x| x.as_str())
+            .unwrap_or("");
+        let dod = p
+            .get("date_of_death")
+            .and_then(|x| x.as_str())
+            .unwrap_or("");
+        let pob = p
+            .get("place_of_birth")
+            .and_then(|x| x.as_str())
+            .unwrap_or("");
+        let place_of_birth_country = p
             .get("place_of_birth_country")
             .and_then(|x| x.as_str())
             .unwrap_or("");
-        let pod = p.get("place_of_death").and_then(|x| x.as_str()).unwrap_or("");
-        let pod_country = p
+        let pod = p
+            .get("place_of_death")
+            .and_then(|x| x.as_str())
+            .unwrap_or("");
+        let place_of_death_country = p
             .get("place_of_death_country")
             .and_then(|x| x.as_str())
             .unwrap_or("");
         let ext_desc = format!(
-            "born {dob} in {pob} [{pob_country}]; died {dod} in {pod} [{pod_country}]"
+            "born {dob} in {pob} [{place_of_birth_country}]; died {dod} in {pod} [{place_of_death_country}]"
         );
 
         let mut aux: HashSet<AuxiliaryRow> = HashSet::new();
@@ -88,7 +97,11 @@ impl BespokeScraper5347 {
             }
             _ => {}
         }
-        if let Some(gnd) = p.get("gnd").and_then(|x| x.as_str()).filter(|s| !s.is_empty()) {
+        if let Some(gnd) = p
+            .get("gnd")
+            .and_then(|x| x.as_str())
+            .filter(|s| !s.is_empty())
+        {
             aux.insert(AuxiliaryRow::new(227, gnd.to_string()));
         }
 
@@ -160,8 +173,14 @@ mod tests {
             "born 1883-05-18 in Berlin [DE]; died 1969-07-05 in Boston [US]"
         );
         assert_eq!(ee.entry.ext_url, "https://bauhaus.community/person/100");
-        assert!(ee.aux.contains(&AuxiliaryRow::new(21, "Q6581097".to_string())));
-        assert!(ee.aux.contains(&AuxiliaryRow::new(227, "118542842".to_string())));
+        assert!(
+            ee.aux
+                .contains(&AuxiliaryRow::new(21, "Q6581097".to_string()))
+        );
+        assert!(
+            ee.aux
+                .contains(&AuxiliaryRow::new(227, "118542842".to_string()))
+        );
         assert_eq!(ee.born, Some(PersonDate::year_month_day(1883, 5, 18)));
         assert_eq!(ee.died, Some(PersonDate::year_month_day(1969, 7, 5)));
     }
@@ -172,7 +191,10 @@ mod tests {
             "id": 1, "given_names": "Anni", "surname": "Albers", "gender": 2
         });
         let ee = BespokeScraper5347::parse_item(5347, &p).unwrap();
-        assert!(ee.aux.contains(&AuxiliaryRow::new(21, "Q6581072".to_string())));
+        assert!(
+            ee.aux
+                .contains(&AuxiliaryRow::new(21, "Q6581072".to_string()))
+        );
     }
 
     #[test]
@@ -181,7 +203,10 @@ mod tests {
             "id": 1, "given_names": "X", "surname": "Y", "gender": "1"
         });
         let ee = BespokeScraper5347::parse_item(5347, &p).unwrap();
-        assert!(ee.aux.contains(&AuxiliaryRow::new(21, "Q6581097".to_string())));
+        assert!(
+            ee.aux
+                .contains(&AuxiliaryRow::new(21, "Q6581097".to_string()))
+        );
     }
 
     #[test]

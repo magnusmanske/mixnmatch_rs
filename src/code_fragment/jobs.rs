@@ -36,7 +36,7 @@ pub enum LuaJobOutcome {
 /// Treat null and empty-after-trim Lua bodies the same way: as "no code
 /// registered". Some legacy rows have `lua=''` rather than a missing row.
 fn lua_code_present(code: &Option<String>) -> bool {
-    code.as_deref().map_or(false, |c| !c.trim().is_empty())
+    code.as_deref().is_some_and(|c| !c.trim().is_empty())
 }
 
 /// Run the `update_person_dates` job for a catalog using Lua.
@@ -379,6 +379,8 @@ mod tests {
 
     #[test]
     fn lua_code_present_treats_real_code_as_present() {
-        assert!(lua_code_present(&Some("function f() return 1 end".to_string())));
+        assert!(lua_code_present(&Some(
+            "function f() return 1 end".to_string()
+        )));
     }
 }
