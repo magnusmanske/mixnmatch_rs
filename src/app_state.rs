@@ -230,39 +230,17 @@ impl AppState {
     }
 }
 
-/// Read-only view of the application's runtime services. Lets a leaf
-/// type take a generic context (or a `&dyn AppContext`) instead of the
-/// concrete `AppState`, which means tests can substitute a mock and
-/// production passes a real `AppState`.
-///
-/// New code should prefer `&impl AppContext` over `&AppState` at
-/// boundaries; existing call sites can keep using `&AppState` until
-/// they're migrated, since `AppState` automatically satisfies the
-/// trait.
-///
-/// `wikidata_mut` is intentionally **not** in this trait: the only
-/// caller (Wikidata edit pipeline) needs the concrete type. Splitting
-/// the immutable read surface from the mutable bot-edit surface is
-/// the second half of the DIP fix; this trait covers the first half.
-pub trait AppContext: std::fmt::Debug + Send + Sync {
-    fn storage(&self) -> &Arc<Box<dyn Storage>>;
+/// Wikidata access surface: the Wikidata API client, the terms-replica
+/// client (`wdt`), and the WDRC change-tracking handle. Consumers that
+/// only query Wikidata (no storage, no HTTP, no config) can bound on
+/// this trait alone.
+pub trait WikidataContext: std::fmt::Debug + Send + Sync {
     fn wikidata(&self) -> &Wikidata;
     fn wdt(&self) -> &Wikidata;
     fn wdrc(&self) -> &WDRC;
-    fn http_client(&self) -> &reqwest::Client;
-    fn task_specific_usize(&self) -> &HashMap<String, usize>;
-    fn import_file_path(&self) -> &str;
-    fn flickr_key_path(&self) -> &str;
-    fn toolforge_php_command(&self) -> &str;
-    fn html_dir_override(&self) -> Option<&Path>;
-    fn oauth_config(&self) -> Option<&Arc<OauthConfig>>;
-    fn large_catalogs(&self) -> &crate::large_catalogs::LargeCatalogs;
 }
 
-impl AppContext for AppState {
-    fn storage(&self) -> &Arc<Box<dyn Storage>> {
-        AppState::storage(self)
-    }
+impl WikidataContext for AppState {
     fn wikidata(&self) -> &Wikidata {
         AppState::wikidata(self)
     }
@@ -272,9 +250,38 @@ impl AppContext for AppState {
     fn wdrc(&self) -> &WDRC {
         AppState::wdrc(self)
     }
+}
+
+/// External-services surface: the database storage handle and the shared
+/// HTTP client. Most background-job code only needs these two.
+pub trait ExternalServicesContext: std::fmt::Debug + Send + Sync {
+    fn storage(&self) -> &Arc<Box<dyn Storage>>;
+    fn http_client(&self) -> &reqwest::Client;
+}
+
+impl ExternalServicesContext for AppState {
+    fn storage(&self) -> &Arc<Box<dyn Storage>> {
+        AppState::storage(self)
+    }
     fn http_client(&self) -> &reqwest::Client {
         AppState::http_client(self)
     }
+}
+
+/// Static runtime configuration: paths, flags, feature toggles, and
+/// rarely-changing process-level settings. API handlers and the OAuth
+/// flow bind on this; background jobs rarely need it.
+pub trait RuntimeConfig: std::fmt::Debug + Send + Sync {
+    fn task_specific_usize(&self) -> &HashMap<String, usize>;
+    fn import_file_path(&self) -> &str;
+    fn flickr_key_path(&self) -> &str;
+    fn toolforge_php_command(&self) -> &str;
+    fn html_dir_override(&self) -> Option<&Path>;
+    fn oauth_config(&self) -> Option<&Arc<OauthConfig>>;
+    fn large_catalogs(&self) -> &crate::large_catalogs::LargeCatalogs;
+}
+
+impl RuntimeConfig for AppState {
     fn task_specific_usize(&self) -> &HashMap<String, usize> {
         AppState::task_specific_usize(self)
     }
@@ -297,6 +304,23 @@ impl AppContext for AppState {
         AppState::large_catalogs(self)
     }
 }
+
+/// Full read-only view of the application's runtime services. Composed
+/// of the three sub-traits above; a leaf type that needs everything can
+/// bound on `AppContext`, while one that only queries Wikidata can bound
+/// on `WikidataContext` alone. `wikidata_mut` is intentionally absent:
+/// the only caller (Wikidata edit pipeline) needs the concrete type.
+///
+/// New code should prefer `&impl <SubTrait>` (smallest set) or
+/// `&impl AppContext` (full set) over `&AppState` at boundaries.
+/// Existing call sites keep `&AppState`; since `AppState` satisfies
+/// all three sub-traits it automatically satisfies `AppContext` too.
+pub trait AppContext:
+    WikidataContext + ExternalServicesContext + RuntimeConfig + std::fmt::Debug + Send + Sync
+{
+}
+
+impl AppContext for AppState {}
 
 impl AppState {
 
@@ -578,26 +602,31 @@ mod tests {
     use super::*;
 
     /// Compile-time + minimal-runtime check that `AppState` correctly
-    /// satisfies the `AppContext` trait surface. Existing leaf code keeps
-    /// using `&AppState`; new code is expected to take `&impl AppContext`
-    /// so it can be tested with a mock. This test proves the upcast
-    /// compiles, and that a generic-over-AppContext function can be
-    /// instantiated with a real AppState.
+    /// satisfies all three sub-traits and the composed `AppContext`.
+    /// Also verifies that `dyn SubTrait` vtables are usable at
+    /// heap-erased (dynamic dispatch) boundaries.
     #[test]
     #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     fn app_state_satisfies_app_context() {
         fn takes_context<C: AppContext>(c: &C) -> usize {
-            // Trivial sanity: we can reach the storage handle through the
-            // trait, no different from how a real consumer would.
+            // Trivial sanity: storage is reachable through the full trait.
             Arc::strong_count(c.storage())
         }
         let app = get_test_app();
         let _ = takes_context(&app);
 
-        // dyn AppContext also works (heap-erased boundary form).
+        // Each sub-trait vtable works independently.
         let app2 = get_test_app();
-        let dyn_ctx: &dyn AppContext = &app2;
-        assert!(dyn_ctx.toolforge_php_command().starts_with("php"));
+        let dyn_ext: &dyn ExternalServicesContext = &app2;
+        let _ = Arc::strong_count(dyn_ext.storage());
+
+        let app3 = get_test_app();
+        let dyn_cfg: &dyn RuntimeConfig = &app3;
+        assert!(dyn_cfg.toolforge_php_command().starts_with("php"));
+
+        // AppContext (marker) coercion still compiles.
+        let app4 = get_test_app();
+        let _dyn_ctx: &dyn AppContext = &app4;
     }
 
     #[test]
