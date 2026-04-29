@@ -1,4 +1,4 @@
-use crate::app_state::AppState;
+use crate::app_state::ExternalServicesContext;
 use crate::auth;
 use crate::entry::Entry;
 use axum::Json;
@@ -63,7 +63,7 @@ pub fn get_offset(params: &Params) -> usize {
 /// wrapper around `auth::guard::require_user_from_params` for handlers that
 /// only need the numeric id, not the full `AuthedUser` struct.
 pub async fn require_user_id(
-    app: &AppState,
+    app: &dyn ExternalServicesContext,
     session: &Session,
     params: &Params,
 ) -> Result<usize, ApiError> {
@@ -134,7 +134,7 @@ pub fn ok(data: Value) -> Response {
 
 /// Convert a slice of Entry objects into the standard `{"entries": {...}, "users": {...}}` JSON structure.
 /// Entries are keyed by their id. Users are looked up from the entry user fields.
-pub async fn entries_to_json_data(entries: &[Entry], app: &AppState) -> Result<Value, ApiError> {
+pub async fn entries_to_json_data(entries: &[Entry], app: &dyn ExternalServicesContext) -> Result<Value, ApiError> {
     let mut entries_map = serde_json::Map::new();
     let mut user_ids = HashSet::new();
     for entry in entries {
@@ -161,7 +161,7 @@ pub async fn entries_to_json_data(entries: &[Entry], app: &AppState) -> Result<V
 /// separately when no further mutations to `data` are needed before the response.
 pub async fn entries_with_extended_data(
     entries: &[Entry],
-    app: &AppState,
+    app: &dyn ExternalServicesContext,
 ) -> Result<Value, ApiError> {
     let mut data = entries_to_json_data(entries, app).await?;
     add_extended_entry_data(app, &mut data).await?;
@@ -218,7 +218,7 @@ fn apply_kv(entries: &mut Value, rows: anyhow::Result<HashMap<usize, Vec<(String
     });
 }
 
-pub async fn add_extended_entry_data(app: &AppState, data: &mut Value) -> Result<(), ApiError> {
+pub async fn add_extended_entry_data(app: &dyn ExternalServicesContext, data: &mut Value) -> Result<(), ApiError> {
     let entries = match data.get_mut("entries") {
         Some(e) if e.is_object() => e,
         _ => return Ok(()),
@@ -272,7 +272,7 @@ pub async fn add_extended_entry_data(app: &AppState, data: &mut Value) -> Result
 // User lookup
 // ---------------------------------------------------------------------------
 
-pub async fn get_users(app: &AppState, user_ids: &HashSet<usize>) -> Result<Value, ApiError> {
+pub async fn get_users(app: &dyn ExternalServicesContext, user_ids: &HashSet<usize>) -> Result<Value, ApiError> {
     if user_ids.is_empty() {
         return Ok(json!({}));
     }
@@ -407,8 +407,8 @@ mod tests {
             type_name: Some("Q5".into()),
             ..Default::default()
         };
-        // `entries_to_json_data` is async and takes &AppState only to
-        // resolve user names; for a single entry with user=None the
+        // `entries_to_json_data` is async and takes &dyn ExternalServicesContext
+        // to resolve user names; for a single entry with user=None the
         // user lookup is skipped, so we can test the serialisation
         // shape without a DB by mirroring the map-building step.
         let mut entries_map = serde_json::Map::new();

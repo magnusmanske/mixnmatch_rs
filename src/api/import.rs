@@ -2,7 +2,7 @@
 //! plus the scraper builder (`autoscrape_test`, `save_scraper`).
 
 use crate::api::common::{self, ApiError, Params, json_resp, ok};
-use crate::app_state::AppState;
+use crate::app_state::{AppContext, ExternalServicesContext};
 use axum::response::Response;
 use tower_sessions::Session;
 
@@ -16,7 +16,7 @@ fn parse_update_info(params: &Params) -> Result<serde_json::Value, ApiError> {
 }
 
 pub async fn query_get_source_headers(
-    app: &AppState,
+    app: &dyn AppContext,
     params: &Params,
 ) -> Result<Response, ApiError> {
     let update_info = parse_update_info(params)?;
@@ -28,7 +28,7 @@ pub async fn query_get_source_headers(
 }
 
 pub async fn query_test_import_source(
-    app: &AppState,
+    app: &dyn AppContext,
     params: &Params,
 ) -> Result<Response, ApiError> {
     let update_info = parse_update_info(params)?;
@@ -62,7 +62,7 @@ pub async fn query_test_import_source(
 }
 
 pub async fn query_import_source(
-    app: &AppState,
+    app: &dyn AppContext,
     _session: &Session,
     params: &Params,
 ) -> Result<Response, ApiError> {
@@ -160,7 +160,7 @@ pub async fn query_import_source(
 /// Look up or create the target catalog from the wizard's `meta` block.
 /// Used when the "new catalog" wizard submits without an existing id.
 async fn resolve_or_create_catalog(
-    app: &AppState,
+    app: &dyn ExternalServicesContext,
     meta: &serde_json::Value,
     user_id: usize,
 ) -> Result<usize, ApiError> {
@@ -202,17 +202,14 @@ async fn resolve_or_create_catalog(
         .map_err(|e| ApiError(format!("create catalog: {e}")))
 }
 
-pub async fn query_autoscrape_test(
-    app: &AppState,
-    params: &Params,
-) -> Result<Response, ApiError> {
+pub async fn query_autoscrape_test(params: &Params) -> Result<Response, ApiError> {
     let json_str = common::get_param(params, "json", "");
     if json_str.is_empty() {
         return Err(ApiError("missing 'json' parameter".into()));
     }
     let json: serde_json::Value = serde_json::from_str(&json_str)
         .map_err(|e| ApiError(format!("invalid scraper JSON: {e}")))?;
-    let res = crate::autoscrape::Autoscrape::test_fetch(app, &json)
+    let res = crate::autoscrape::Autoscrape::test_fetch(&json)
         .await
         .map_err(|e| ApiError(e.to_string()))?;
     // `data.html` feeds the client-side regex preview, `data.url` is the
@@ -229,7 +226,7 @@ pub async fn query_autoscrape_test(
     })))
 }
 
-pub async fn query_save_scraper(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+pub async fn query_save_scraper(app: &dyn ExternalServicesContext, params: &Params) -> Result<Response, ApiError> {
     let scraper_str = common::get_param(params, "scraper", "");
     let options_str = common::get_param(params, "options", "{}");
     let levels_str = common::get_param(params, "levels", "[]");
@@ -330,7 +327,7 @@ pub async fn query_save_scraper(app: &AppState, params: &Params) -> Result<Respo
 /// Replaces the previous frontend approach of piggybacking on
 /// `catalog_overview`, which returned a JSON array that the frontend then
 /// tried to index by catalog id as if it were a map.
-pub async fn query_get_scraper(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+pub async fn query_get_scraper(app: &dyn ExternalServicesContext, params: &Params) -> Result<Response, ApiError> {
     let catalog_id = common::get_param_int(params, "catalog", 0);
     if catalog_id <= 0 {
         return Err(ApiError("missing or invalid 'catalog' parameter".into()));

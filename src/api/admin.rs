@@ -1,7 +1,7 @@
 //! Admin / config endpoints. All write paths gate behind `auth::guard`.
 
 use crate::api::common::{self, ApiError, Params, ok};
-use crate::app_state::AppState;
+use crate::app_state::{ExternalServicesContext, RuntimeConfig};
 use crate::auth;
 use axum::response::Response;
 use futures::stream::{self, StreamExt};
@@ -12,7 +12,7 @@ use tower_sessions::Session;
 const CATALOG_REFRESH_FANOUT: usize = 4;
 
 pub async fn query_update_overview(
-    app: &AppState,
+    app: &dyn ExternalServicesContext,
     session: &Session,
     params: &Params,
 ) -> Result<Response, ApiError> {
@@ -42,7 +42,7 @@ pub async fn query_update_overview(
 }
 
 pub async fn query_update_ext_urls(
-    app: &AppState,
+    app: &dyn ExternalServicesContext,
     session: &Session,
     params: &Params,
 ) -> Result<Response, ApiError> {
@@ -64,7 +64,7 @@ pub async fn query_update_ext_urls(
 }
 
 pub async fn query_add_aliases(
-    app: &AppState,
+    app: &dyn ExternalServicesContext,
     session: &Session,
     params: &Params,
 ) -> Result<Response, ApiError> {
@@ -103,13 +103,13 @@ pub async fn query_add_aliases(
     Ok(ok(serde_json::json!({})))
 }
 
-pub async fn query_get_missing_properties(app: &AppState) -> Result<Response, ApiError> {
+pub async fn query_get_missing_properties(app: &dyn ExternalServicesContext) -> Result<Response, ApiError> {
     let data = app.storage().api_get_missing_properties_raw().await?;
     Ok(ok(serde_json::json!(data)))
 }
 
 pub async fn query_set_missing_properties_status(
-    app: &AppState,
+    app: &dyn ExternalServicesContext,
     session: &Session,
     params: &Params,
 ) -> Result<Response, ApiError> {
@@ -129,12 +129,12 @@ pub async fn query_set_missing_properties_status(
     Ok(ok(serde_json::json!({})))
 }
 
-pub async fn query_quick_compare_list(app: &AppState) -> Result<Response, ApiError> {
+pub async fn query_quick_compare_list(app: &dyn ExternalServicesContext) -> Result<Response, ApiError> {
     let data = app.storage().api_get_quick_compare_list().await?;
     Ok(ok(serde_json::json!(data)))
 }
 
-pub async fn query_get_flickr_key(app: &AppState) -> Result<Response, ApiError> {
+pub async fn query_get_flickr_key(app: &dyn RuntimeConfig) -> Result<Response, ApiError> {
     // Read off the reactor — local fs reads are usually fast, but on the
     // tool host this file lives on NFS, where occasional latency spikes can
     // stall the runtime if read inline. Path is supplied via

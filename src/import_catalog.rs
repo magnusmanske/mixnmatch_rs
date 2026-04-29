@@ -1,4 +1,4 @@
-use crate::app_state::AppState;
+use crate::app_state::{AppContext, ExternalServicesContext};
 use crate::entry::Entry;
 use crate::meta_entry::MetaEntry;
 use crate::DbId;
@@ -58,7 +58,7 @@ pub struct ImportResult {
 ///
 /// This is the CLI entry point; user-id validation is skipped.
 pub async fn import_from_file(
-    app: &AppState,
+    app: &dyn AppContext,
     catalog_id: DbId,
     path: &Path,
     mode: ImportMode,
@@ -74,7 +74,7 @@ pub async fn import_from_file(
 /// `importing_user_id` is the `import_file.user` value; entry user fields
 /// are validated against it.
 pub async fn import_from_import_file(
-    app: &AppState,
+    app: &dyn AppContext,
     catalog_id: DbId,
     uuid: &str,
     mode: ImportMode,
@@ -106,7 +106,7 @@ pub async fn import_from_import_file(
 /// validated: it must be `None`, `Some(0)` (auto-match), or `Some(uid)`.
 /// When `None` (CLI mode), the check is skipped.
 pub async fn import_meta_entries(
-    app: &AppState,
+    app: &dyn AppContext,
     catalog_id: DbId,
     entries: Vec<MetaEntry>,
     mode: ImportMode,
@@ -180,7 +180,7 @@ enum EntryAction {
 }
 
 async fn import_single_entry(
-    app: &AppState,
+    app: &dyn AppContext,
     catalog_id: DbId,
     meta: &MetaEntry,
 ) -> Result<EntryAction> {
@@ -221,7 +221,7 @@ async fn import_single_entry(
 /// Fully-matched entries are never deleted.
 /// Returns the number of deleted entries.
 async fn delete_absent_entries(
-    app: &AppState,
+    app: &dyn ExternalServicesContext,
     catalog_id: DbId,
     keep_ext_ids: &HashSet<String>,
 ) -> Result<usize> {

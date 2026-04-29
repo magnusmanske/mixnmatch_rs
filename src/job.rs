@@ -1,4 +1,4 @@
-use crate::app_state::AppState;
+use crate::app_state::{AppState, ExternalServicesContext};
 use crate::automatch::AutoMatch;
 use crate::autoscrape::Autoscrape;
 use crate::auxiliary_matcher::AuxiliaryMatcher;
@@ -269,7 +269,7 @@ impl Job {
 
     //TODO test
     pub async fn queue_simple_job(
-        app: &AppState,
+        app: &dyn ExternalServicesContext,
         catalog_id: usize,
         action: &str,
         depends_on: Option<usize>,

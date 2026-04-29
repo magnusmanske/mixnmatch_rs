@@ -411,7 +411,7 @@ const ROUTES: &[(&str, ApiHandler)] = &[
     route!("dg_log_action",                dg::query_dg_log_action, app_params),
 
     route!("prep_new_item",                data::query_prep_new_item, app_params),
-    route!("autoscrape_test",              import::query_autoscrape_test, app_params),
+    route!("autoscrape_test",              import::query_autoscrape_test, params_only),
     route!("save_scraper",                 import::query_save_scraper, app_params),
     route!("get_scraper",                  import::query_get_scraper, app_params),
     ("upload_import_file", upload_import_file_get),

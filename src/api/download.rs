@@ -2,11 +2,11 @@
 //! offload formatting to `spawn_blocking` to keep the async reactor responsive.
 
 use crate::api::common::{self, ApiError, Params, get_users};
-use crate::app_state::AppState;
+use crate::app_state::ExternalServicesContext;
 use axum::response::{IntoResponse, Response};
 use std::collections::HashSet;
 
-pub async fn query_download(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+pub async fn query_download(app: &dyn ExternalServicesContext, params: &Params) -> Result<Response, ApiError> {
     let cid = common::get_catalog(params)?;
     let cat = crate::catalog::Catalog::from_id(cid, app).await?;
     let filename = cat
@@ -87,7 +87,7 @@ pub async fn query_download(app: &AppState, params: &Params) -> Result<Response,
 /// The result columns are ordered deterministically (matching the SQL
 /// SELECT list); both TSV and JSON share that ordering, so downstream
 /// consumers can rely on column position.
-pub async fn query_download2(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+pub async fn query_download2(app: &dyn ExternalServicesContext, params: &Params) -> Result<Response, ApiError> {
     let catalogs: String = common::get_param(params, "catalogs", "")
         .chars()
         .filter(|c| c.is_ascii_digit() || *c == ',')

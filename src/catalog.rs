@@ -1,4 +1,4 @@
-use crate::app_state::{AppState, ExternalServicesContext};
+use crate::app_state::{AppContext, ExternalServicesContext};
 use crate::entry::EntryWriter;
 use crate::auxiliary_data::AuxiliaryRow;
 use crate::util::wikidata_props as wp;
@@ -29,12 +29,12 @@ pub struct Catalog {
 
 impl Catalog {
     /// Returns a Catalog object for a given ID.
-    pub async fn from_id(catalog_id: usize, app: &impl ExternalServicesContext) -> Result<Self> {
+    pub async fn from_id(catalog_id: usize, app: &dyn ExternalServicesContext) -> Result<Self> {
         app.storage().get_catalog_from_id(catalog_id).await
     }
 
     /// Returns a Catalog object for a given name.
-    pub async fn from_name(name: &str, app: &impl ExternalServicesContext) -> Result<Self> {
+    pub async fn from_name(name: &str, app: &dyn ExternalServicesContext) -> Result<Self> {
         app.storage().get_catalog_from_name(name).await
     }
 
@@ -57,7 +57,7 @@ impl Catalog {
         })
     }
 
-    pub async fn create_catalog(&mut self, app: &AppState) -> Result<()> {
+    pub async fn create_catalog(&mut self, app: &dyn ExternalServicesContext) -> Result<()> {
         self.id = Some(app.storage().create_catalog(self).await?);
         Ok(())
     }
@@ -153,7 +153,7 @@ impl Catalog {
         self.taxon_run
     }
 
-    pub async fn delete(&mut self, app: &AppState) -> Result<()> {
+    pub async fn delete(&mut self, app: &dyn ExternalServicesContext) -> Result<()> {
         app.storage()
             .delete_catalog(self.get_valid_id()?)
             .await?;
@@ -162,14 +162,14 @@ impl Catalog {
     }
 
     /// Returns a `HashMap` of key-value pairs for the catalog.
-    pub async fn get_key_value_pairs(&self, app: &AppState) -> Result<HashMap<String, String>> {
+    pub async fn get_key_value_pairs(&self, app: &dyn ExternalServicesContext) -> Result<HashMap<String, String>> {
         app.storage()
             .get_catalog_key_value_pairs(self.get_valid_id()?)
             .await
     }
 
     //TODO test
-    pub async fn refresh_overview_table(&self, app: &AppState) -> Result<()> {
+    pub async fn refresh_overview_table(&self, app: &dyn ExternalServicesContext) -> Result<()> {
         app.storage()
             .catalog_refresh_overview_table(self.get_valid_id()?)
             .await
@@ -187,7 +187,7 @@ impl Catalog {
     /// `USER_DATE_MATCH` (id 3) for parity with the PHP user — keeps
     /// the post-migration audit trail consistent with rows that have
     /// been around since the PHP era.
-    pub async fn sync_from_sparql(&self, app: &AppState, property: usize) -> Result<usize> {
+    pub async fn sync_from_sparql(&self, app: &dyn AppContext, property: usize) -> Result<usize> {
         if property == 0 {
             return Ok(0);
         }
@@ -232,7 +232,7 @@ impl Catalog {
         Ok(count)
     }
 
-    pub async fn references(&self, app: &AppState, entry: &crate::entry::Entry) -> Vec<Reference> {
+    pub async fn references(&self, app: &dyn ExternalServicesContext, entry: &crate::entry::Entry) -> Vec<Reference> {
         let mut snaks = vec![];
         if let Some(source_item) = self.source_item {
             let value = format!("Q{source_item}");
@@ -271,7 +271,7 @@ impl Catalog {
     }
 
     // TODO test
-    pub async fn set_taxon_run(&mut self, app: &AppState, new_taxon_run: bool) -> Result<()> {
+    pub async fn set_taxon_run(&mut self, app: &dyn ExternalServicesContext, new_taxon_run: bool) -> Result<()> {
         if self.taxon_run != new_taxon_run {
             app.storage()
                 .set_catalog_taxon_run(self.get_valid_id()?, new_taxon_run)
@@ -286,7 +286,7 @@ impl Catalog {
     /// # Returns
     ///
     /// * `Result<bool>` - A result indicating whether the `has_person_date` field was changed to "yes".
-    pub async fn check_and_set_person_date(&mut self, app: &AppState) -> Result<bool> {
+    pub async fn check_and_set_person_date(&mut self, app: &dyn ExternalServicesContext) -> Result<bool> {
         let has_new_dates = if self.has_person_date != "yes"
             && app
                 .storage()
@@ -303,7 +303,7 @@ impl Catalog {
 
     pub async fn set_has_person_date(
         &mut self,
-        app: &AppState,
+        app: &dyn ExternalServicesContext,
         new_has_person_date: &str,
     ) -> Result<()> {
         app.storage()
@@ -313,7 +313,7 @@ impl Catalog {
         Ok(())
     }
 
-    pub async fn number_of_entries(&self, app: &AppState) -> Result<usize> {
+    pub async fn number_of_entries(&self, app: &dyn ExternalServicesContext) -> Result<usize> {
         app.storage()
             .number_of_entries_in_catalog(self.get_valid_id()?)
             .await

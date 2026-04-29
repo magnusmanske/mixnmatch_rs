@@ -1,5 +1,5 @@
 use crate::api::common::{ApiError, Params};
-use crate::app_state::AppState;
+use crate::app_state::{AppState, ExternalServicesContext};
 use crate::auth::session::{SessionData, SessionState, load, normalize_username};
 use tower_sessions::Session;
 
@@ -53,7 +53,7 @@ pub struct AuthedUser {
 /// mirrors PHP `API::check_and_get_user_id` which compares the claimed name
 /// against `Widar::get_username()`.
 pub async fn require_user(
-    app: &AppState,
+    app: &dyn ExternalServicesContext,
     session: &Session,
     claimed_username: Option<&str>,
 ) -> Result<AuthedUser, ApiError> {
@@ -98,7 +98,7 @@ pub async fn require_user(
 /// Convenience wrapper for the common case of extracting the claim from
 /// request parameters. Prefer this in API handlers to keep call sites terse.
 pub async fn require_user_from_params(
-    app: &AppState,
+    app: &dyn ExternalServicesContext,
     session: &Session,
     params: &Params,
 ) -> Result<AuthedUser, ApiError> {
@@ -107,7 +107,7 @@ pub async fn require_user_from_params(
 
 /// Convenience wrapper matching `require_user_from_params` but for admin-only actions.
 pub async fn require_catalog_admin_from_params(
-    app: &AppState,
+    app: &dyn ExternalServicesContext,
     session: &Session,
     params: &Params,
 ) -> Result<AuthedUser, ApiError> {
@@ -116,7 +116,7 @@ pub async fn require_catalog_admin_from_params(
 
 /// Require a logged-in catalog admin. Mirrors PHP `API::ensure_user_is_catalog_admin`.
 pub async fn require_catalog_admin(
-    app: &AppState,
+    app: &dyn ExternalServicesContext,
     session: &Session,
     claimed_username: Option<&str>,
 ) -> Result<AuthedUser, ApiError> {
@@ -148,7 +148,7 @@ pub async fn require_catalog_admin(
 /// catalog; creators can edit only the ones they own. Reads the `username`
 /// form field as the claim (same shape as `require_catalog_admin_from_params`).
 pub async fn require_catalog_admin_or_owner_from_params(
-    app: &AppState,
+    app: &dyn ExternalServicesContext,
     session: &Session,
     params: &Params,
     catalog_id: usize,

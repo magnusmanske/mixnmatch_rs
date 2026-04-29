@@ -104,7 +104,8 @@ pub struct Autoscrape {
     utf8_encode: bool,
     levels: Vec<AutoscrapeLevel>,
     scraper: AutoscrapeScraper,
-    app: AppState,
+    // None only for the test_fetch path, which never calls methods that need app.
+    app: Option<AppState>,
     job: Option<Job>,
     urls_loaded: usize,
     entry_batch: Vec<ExtendedEntry>,
@@ -133,7 +134,7 @@ impl Autoscrape {
             .first()
             .ok_or(AutoscrapeError::NoAutoscrapeForCatalog(catalog_id))?;
         let json: Value = serde_json::from_str(json)?;
-        let mut ret = Self::new_basic(id, catalog_id, app, &json)?;
+        let mut ret = Self::new_basic(id, catalog_id, Some(app), &json)?;
         Self::initialize_with_options(json, &mut ret)?;
         Ok(ret)
     }
@@ -142,8 +143,8 @@ impl Autoscrape {
         self.catalog_id
     }
 
-    pub const fn app(&self) -> &AppState {
-        &self.app
+    fn app_ref(&self) -> &AppState {
+        self.app.as_ref().expect("Autoscrape: app accessed in context where it was not set (test_fetch path)")
     }
 
     pub fn levels(&self) -> &[AutoscrapeLevel] {
@@ -311,8 +312,8 @@ impl Autoscrape {
             .iter()
             .map(|e| e.entry.ext_id.to_owned())
             .collect();
-        let existing_ext_ids = self
-            .app
+        let app = self.app_ref().clone();
+        let existing_ext_ids = app
             .storage()
             .get_entry_ids_for_ext_ids(self.catalog_id, &ext_ids)
             .await?;
@@ -325,7 +326,7 @@ impl Autoscrape {
                     // TODO update?
                 }
                 None => {
-                    let _ = ex.insert_new(&self.app).await;
+                    let _ = ex.insert_new(&app).await;
                 }
             }
         }
@@ -363,7 +364,7 @@ impl Autoscrape {
     //TODO test
     pub async fn start(&mut self) -> Result<()> {
         let autoscrape_id = self.autoscrape_id;
-        self.app.storage().autoscrape_start(autoscrape_id).await?;
+        self.app_ref().storage().autoscrape_start(autoscrape_id).await?;
         if let Some(json) = self.get_last_job_data().await {
             if let Some(arr) = json.as_array() {
                 if arr.len() == self.levels.len() {
@@ -381,16 +382,16 @@ impl Autoscrape {
         let _ = self.add_batch().await; // Flush
         let autoscrape_id = self.autoscrape_id;
         let last_run_urls = self.urls_loaded;
-        self.app
+        self.app_ref()
             .storage()
             .autoscrape_finish(autoscrape_id, last_run_urls)
             .await?;
-        let catalog = Catalog::from_id(self.catalog_id, &self.app).await?;
-        let _ = catalog.refresh_overview_table(&self.app).await;
+        let catalog = Catalog::from_id(self.catalog_id, self.app_ref()).await?;
+        let _ = catalog.refresh_overview_table(self.app_ref()).await;
         let _ = self.clear_offset().await;
         let _ =
-            Job::queue_simple_job(&self.app, self.catalog_id, "automatch_by_search", None).await;
-        let _ = Job::queue_simple_job(&self.app, self.catalog_id, "microsync", None).await;
+            Job::queue_simple_job(self.app_ref(), self.catalog_id, "automatch_by_search", None).await;
+        let _ = Job::queue_simple_job(self.app_ref(), self.catalog_id, "microsync", None).await;
         Ok(())
     }
 
@@ -410,13 +411,13 @@ impl Autoscrape {
     fn new_basic(
         id: &usize,
         catalog_id: usize,
-        app: &AppState,
+        app: Option<&AppState>,
         json: &Value,
     ) -> Result<Autoscrape> {
         let ret = Self {
             autoscrape_id: *id,
             catalog_id,
-            app: app.clone(),
+            app: app.cloned(),
             simple_space: false,
             skip_failed: false,
             utf8_encode: false,
@@ -439,10 +440,10 @@ impl Autoscrape {
     /// structured `diagnostics` blob the frontend can render to help the
     /// user see where a "zero results" test went wrong (bad fetch, block
     /// regex mismatch, entry regex mismatch, …). No state is persisted.
-    pub async fn test_fetch(app: &AppState, json: &Value) -> Result<TestFetchResult> {
+    pub async fn test_fetch(json: &Value) -> Result<TestFetchResult> {
         // Compile errors (malformed regex, bad scraper JSON) still bubble
         // up as hard errors — the UI will surface them as the test status.
-        let mut autoscrape = Self::new_basic(&0, 0, app, json)?;
+        let mut autoscrape = Self::new_basic(&0, 0, None, json)?;
         Self::initialize_with_options(json.clone(), &mut autoscrape)?;
         autoscrape.init().await;
         let url = autoscrape.get_current_url().await;

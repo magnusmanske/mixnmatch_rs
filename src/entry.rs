@@ -1,4 +1,4 @@
-use crate::app_state::{AppState, ExternalServicesContext, USER_AUTO};
+use crate::app_state::{AppContext, AppState, ExternalServicesContext, USER_AUTO};
 use crate::auxiliary_data::AuxiliaryRow;
 use crate::catalog::Catalog;
 use crate::coordinates::CoordinateLocation;
@@ -152,15 +152,14 @@ pub struct Entry {
 /// three-way split (model / repo / writer) and the only piece
 /// tractable in one commit.
 ///
-/// The repo holds a borrowed `&AppState`, so it's cheap to
-/// construct per call (`EntryRepo(&app).find(id).await`) without
-/// any cloning. Future work can swap the inner type for `&dyn
-/// AppContext` to break the AppState concrete dependency.
+/// The repo holds a borrowed `&dyn ExternalServicesContext`, so it's
+/// cheap to construct per call (`EntryRepo::new(&app).find(id).await`)
+/// without any cloning.
 #[derive(Debug)]
 pub struct EntryRepo<'a>(pub &'a dyn ExternalServicesContext);
 
 impl<'a> EntryRepo<'a> {
-    pub fn new(app: &'a (impl ExternalServicesContext + 'a)) -> Self {
+    pub fn new(app: &'a dyn ExternalServicesContext) -> Self {
         Self(app)
     }
 
@@ -198,12 +197,12 @@ impl<'a> EntryRepo<'a> {
 /// ```
 #[derive(Debug)]
 pub struct EntryWriter<'a> {
-    ctx: &'a AppState,
+    ctx: &'a dyn AppContext,
     entry: &'a mut Entry,
 }
 
 impl<'a> EntryWriter<'a> {
-    pub fn new(ctx: &'a AppState, entry: &'a mut Entry) -> Self {
+    pub fn new(ctx: &'a dyn AppContext, entry: &'a mut Entry) -> Self {
         Self { ctx, entry }
     }
 
@@ -215,7 +214,7 @@ impl<'a> EntryWriter<'a> {
 
     /// The application context used for all storage / Wikidata
     /// round-trips made through this writer.
-    pub fn ctx(&self) -> &AppState {
+    pub fn ctx(&self) -> &dyn AppContext {
         self.ctx
     }
 
@@ -521,7 +520,7 @@ impl<'a> EntryWriter<'a> {
 // directly or stay as private helpers — either works.
 
 async fn write_auxiliary(
-    ctx: &AppState,
+    ctx: &dyn AppContext,
     entry_id: DbId,
     prop_numeric: PropertyId,
     value: Option<String>,
@@ -547,7 +546,7 @@ async fn write_auxiliary(
 }
 
 async fn write_person_dates(
-    ctx: &AppState,
+    ctx: &dyn AppContext,
     entry_id: DbId,
     born: &Option<PersonDate>,
     died: &Option<PersonDate>,
@@ -587,7 +586,7 @@ async fn write_person_dates(
 // helpers Entry's getters now use.
 
 async fn build_item_from_entry(
-    ctx: &AppState,
+    ctx: &dyn AppContext,
     entry: &Entry,
     item: &mut ItemEntity,
 ) -> Result<()> {
@@ -615,7 +614,7 @@ async fn build_item_from_entry(
 }
 
 async fn add_auxiliary_to_item(
-    ctx: &AppState,
+    ctx: &dyn AppContext,
     entry: &Entry,
     references: Vec<Reference>,
     item: &mut ItemEntity,
@@ -641,7 +640,7 @@ async fn add_auxiliary_to_item(
 }
 
 async fn add_person_dates_to_item(
-    ctx: &AppState,
+    ctx: &dyn AppContext,
     entry: &Entry,
     references: &[Reference],
     item: &mut ItemEntity,
@@ -669,7 +668,7 @@ async fn add_person_dates_to_item(
 }
 
 async fn add_coordinates_to_item(
-    ctx: &AppState,
+    ctx: &dyn AppContext,
     entry: &Entry,
     references: &[Reference],
     item: &mut ItemEntity,
@@ -683,7 +682,7 @@ async fn add_coordinates_to_item(
 }
 
 async fn add_descriptions_to_item(
-    ctx: &AppState,
+    ctx: &dyn AppContext,
     entry: &Entry,
     language: String,
     use_ext_desc: bool,
@@ -703,7 +702,7 @@ async fn add_descriptions_to_item(
 }
 
 async fn add_name_and_aliases_to_item(
-    ctx: &AppState,
+    ctx: &dyn AppContext,
     entry: &Entry,
     language: &str,
     item: &mut ItemEntity,
@@ -756,12 +755,12 @@ fn add_own_id_to_item(
     }
 }
 
-async fn read_creation_time(ctx: &AppState, entry_id: DbId) -> Option<String> {
+async fn read_creation_time(ctx: &dyn AppContext, entry_id: DbId) -> Option<String> {
     ctx.storage().entry_get_creation_time(entry_id).await
 }
 
 async fn read_person_dates(
-    ctx: &AppState,
+    ctx: &dyn AppContext,
     entry_id: DbId,
 ) -> Result<(Option<PersonDate>, Option<PersonDate>)> {
     let (born_str, died_str) = ctx.storage().entry_get_person_dates(entry_id).await?;
@@ -770,25 +769,25 @@ async fn read_person_dates(
     Ok((born, died))
 }
 
-async fn read_aliases(ctx: &AppState, entry_id: DbId) -> Result<Vec<LocaleString>> {
+async fn read_aliases(ctx: &dyn AppContext, entry_id: DbId) -> Result<Vec<LocaleString>> {
     ctx.storage().entry_get_aliases(entry_id).await
 }
 
 async fn read_language_descriptions(
-    ctx: &AppState,
+    ctx: &dyn AppContext,
     entry_id: DbId,
 ) -> Result<HashMap<String, String>> {
     ctx.storage().entry_get_language_descriptions(entry_id).await
 }
 
 async fn read_coordinate_location(
-    ctx: &AppState,
+    ctx: &dyn AppContext,
     entry_id: DbId,
 ) -> Result<Option<CoordinateLocation>> {
     ctx.storage().entry_get_coordinate_location(entry_id).await
 }
 
-async fn read_aux(ctx: &AppState, entry_id: DbId) -> Result<Vec<AuxiliaryRow>> {
+async fn read_aux(ctx: &dyn AppContext, entry_id: DbId) -> Result<Vec<AuxiliaryRow>> {
     ctx.storage().entry_get_aux(entry_id).await
 }
 
@@ -796,7 +795,7 @@ async fn read_aux(ctx: &AppState, entry_id: DbId) -> Result<Vec<AuxiliaryRow>> {
 /// vec if there's no row (or the row is malformed). Mirrors the PHP
 /// behaviour: `entry_get_multi_matches` returns 0 or 1 rows; any other
 /// shape is silently flattened to empty.
-async fn read_multi_match(ctx: &AppState, entry_id: DbId) -> Result<Vec<String>> {
+async fn read_multi_match(ctx: &dyn AppContext, entry_id: DbId) -> Result<Vec<String>> {
     let rows: Vec<String> = ctx.storage().entry_get_multi_matches(entry_id).await?;
     if rows.len() != 1 {
         return Ok(vec![]);
@@ -810,7 +809,7 @@ async fn read_multi_match(ctx: &AppState, entry_id: DbId) -> Result<Vec<String>>
     Ok(ret)
 }
 
-async fn write_alias(ctx: &AppState, entry_id: DbId, s: &LocaleString) -> Result<()> {
+async fn write_alias(ctx: &dyn AppContext, entry_id: DbId, s: &LocaleString) -> Result<()> {
     ctx.storage()
         .entry_add_alias(entry_id, s.language(), s.value())
         .await?;
@@ -818,7 +817,7 @@ async fn write_alias(ctx: &AppState, entry_id: DbId, s: &LocaleString) -> Result
 }
 
 async fn write_auxiliary_in_wikidata(
-    ctx: &AppState,
+    ctx: &dyn AppContext,
     aux_id: DbId,
     in_wikidata: bool,
 ) -> Result<()> {
@@ -828,7 +827,7 @@ async fn write_auxiliary_in_wikidata(
 }
 
 async fn write_mnm_relation(
-    ctx: &AppState,
+    ctx: &dyn AppContext,
     entry_id: DbId,
     prop_numeric: PropertyId,
     target_entry_id: DbId,
@@ -839,7 +838,7 @@ async fn write_mnm_relation(
 }
 
 async fn write_match_status(
-    ctx: &AppState,
+    ctx: &dyn AppContext,
     entry_id: DbId,
     status: &str,
     is_matched: bool,
@@ -851,7 +850,7 @@ async fn write_match_status(
 }
 
 async fn write_language_description(
-    ctx: &AppState,
+    ctx: &dyn AppContext,
     entry_id: DbId,
     language: &str,
     text: Option<String>,
@@ -876,7 +875,7 @@ async fn write_language_description(
 /// Both `set_multi_match` and `remove_multi_match` route through
 /// here — the latter calls it with an empty list, which trips the
 /// remove branch.
-async fn write_multi_match(ctx: &AppState, entry_id: DbId, items: &[String]) -> Result<()> {
+async fn write_multi_match(ctx: &dyn AppContext, entry_id: DbId, items: &[String]) -> Result<()> {
     let qs_numeric: Vec<String> = items
         .iter()
         .filter_map(|q| AppState::item2numeric(q))
@@ -895,7 +894,7 @@ async fn write_multi_match(ctx: &AppState, entry_id: DbId, items: &[String]) -> 
 }
 
 async fn write_coordinate_location(
-    ctx: &AppState,
+    ctx: &dyn AppContext,
     entry_id: DbId,
     cl: &Option<CoordinateLocation>,
 ) -> Result<()> {
@@ -926,7 +925,7 @@ impl Entry {
     /// `maintenance/`, `auxiliary_matcher/`, etc. don't all need to
     /// change in lockstep with the repo extraction.
     //TODO test
-    pub async fn from_id(entry_id: DbId, app: &impl ExternalServicesContext) -> Result<Self> {
+    pub async fn from_id(entry_id: DbId, app: &dyn ExternalServicesContext) -> Result<Self> {
         EntryRepo::new(app).find(entry_id).await
     }
 
@@ -943,14 +942,14 @@ impl Entry {
     ///
     /// **Prefer [`EntryRepo::find_by_ext_id`]** for new code.
     //TODO test
-    pub async fn from_ext_id(catalog_id: DbId, ext_id: &str, app: &impl ExternalServicesContext) -> Result<Entry> {
+    pub async fn from_ext_id(catalog_id: DbId, ext_id: &str, app: &dyn ExternalServicesContext) -> Result<Entry> {
         EntryRepo::new(app).find_by_ext_id(catalog_id, ext_id).await
     }
 
     /// **Prefer [`EntryRepo::find_many`]** for new code.
     pub async fn multiple_from_ids(
         entry_ids: &[DbId],
-        app: &impl ExternalServicesContext,
+        app: &dyn ExternalServicesContext,
     ) -> Result<HashMap<DbId, Self>> {
         EntryRepo::new(app).find_many(entry_ids).await
     }
@@ -1171,7 +1170,7 @@ mod tests {
         let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
         let writer = EntryWriter::new(&app, &mut entry);
         // The writer's ctx accessor returns the borrowed context unchanged.
-        let _: &AppState = writer.ctx();
+        let _: &dyn AppContext = writer.ctx();
     }
 
     #[tokio::test]
