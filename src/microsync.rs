@@ -5,6 +5,7 @@ use crate::entry::Entry;
 use crate::job::{Job, Jobbable};
 use crate::maintenance::Maintenance;
 use crate::match_state::MatchState;
+use crate::util::wikidata_props as wp;
 use anyhow::Result;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -328,11 +329,10 @@ impl Microsync {
         );
         let client = wikimisc::wikidata::Wikidata::new().reqwest_client()?;
         let json = client.get(&url).send().await?.json::<Value>().await?;
-        let url2 =
-            json["entities"][format!("P{property}")]["claims"]["P1630"][0]["mainsnak"]["datavalue"]
-                ["value"]
-                .as_str()
-                .map_or_else(String::new, |url_tmp| url_tmp.to_string());
+        let url2 = json["entities"][format!("P{property}")]["claims"][wp::P_FORMATTER_URL][0]
+            ["mainsnak"]["datavalue"]["value"]
+            .as_str()
+            .map_or_else(String::new, |url_tmp| url_tmp.to_string());
         Ok(url2)
     }
 

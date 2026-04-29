@@ -1,5 +1,6 @@
 use crate::app_state::AppState;
-use anyhow::{Result, anyhow};
+use crate::storage::IssueQueries;
+use anyhow::Result;
 use futures::future::join_all;
 use mysql_async::Row;
 use serde_json::Value;
@@ -100,18 +101,11 @@ pub struct Issue {
     pub user_id: Option<usize>,
     pub resolved_ts: Option<String>,
     pub catalog_id: usize,
-    app: Option<AppState>,
 }
 
 impl Issue {
-    pub async fn new(
-        entry_id: usize,
-        issue_type: IssueType,
-        json: Value,
-        app: &AppState,
-    ) -> Result<Self> {
-        Ok(Self {
-            app: Some(app.clone()),
+    pub fn new(entry_id: usize, issue_type: IssueType, json: Value) -> Self {
+        Self {
             id: None,
             entry_id,
             issue_type,
@@ -120,17 +114,14 @@ impl Issue {
             user_id: None,
             resolved_ts: None,
             catalog_id: 0,
-        })
+        }
     }
 
-    pub async fn insert(&self) -> Result<()> {
-        self.app
-            .clone()
-            .ok_or(anyhow!("No app state provided"))?
-            .storage()
-            .issue_insert(self)
-            .await?;
-        Ok(())
+    /// Persist this issue. Takes the narrow `&dyn IssueQueries` view of
+    /// storage rather than the full `AppState`, so callers and tests can
+    /// supply a fake that implements only the issue-related methods.
+    pub async fn insert(&self, queries: &dyn IssueQueries) -> Result<()> {
+        queries.issue_insert(self).await
     }
 
     pub fn from_row(row: &Row) -> Option<Self> {
@@ -148,7 +139,6 @@ impl Issue {
             user_id,
             resolved_ts,
             catalog_id: row.get("catalog")?,
-            app: None,
         })
     }
 
@@ -194,60 +184,75 @@ impl Issue {
 
     pub async fn fix_wd_duplicates(app: &AppState) -> Result<()> {
         let issues = app.storage().get_open_wd_duplicates().await?;
-        let mut items = issues
-            .iter()
-            .filter_map(|issue| issue.json.as_array())
-            .flatten()
-            .filter_map(|q| q.as_str())
-            .map(|q| q.to_string())
-            .collect::<Vec<_>>();
-        items.sort();
-        items.dedup();
+        let items = collect_unique_qids(&issues);
         let redirected_from_to: HashMap<String, String> = app
             .wikidata()
             .get_redirected_items(&items)
             .await?
             .into_iter()
             .collect();
-        let resolved_ids: Vec<usize> = issues
-            .iter()
-            .filter_map(|issue| {
-                let issue_items: Vec<String> = issue
-                    .json
-                    .as_array()?
-                    .iter()
-                    .filter_map(|q| q.as_str().map(|q| q.to_string()))
-                    .collect();
-                // This will leave duplicates with three or more items alone!
-                match &issue_items.as_slice() {
-                    &[q1, q2] => {
-                        if redirected_from_to.get(q1) == Some(q2)
-                            || redirected_from_to.get(q2) == Some(q1)
-                        {
-                            Some(issue.id)
-                        } else {
-                            None
-                        }
-                    }
-                    _ => None,
-                }
-            })
-            .flatten()
-            .collect();
+        let resolved_ids = resolved_duplicate_ids(&issues, &redirected_from_to);
         if resolved_ids.is_empty() {
             return Ok(());
         }
 
+        let queries: &dyn IssueQueries = app.storage().as_ref().as_ref();
         let mut futures = Vec::new();
         for id in resolved_ids {
-            let future = app
-                .storage()
-                .set_issue_status(id, IssueStatus::ResolvedOnWikidata);
-            futures.push(future);
+            futures.push(queries.set_issue_status(id, IssueStatus::ResolvedOnWikidata));
         }
         let _results = join_all(futures).await;
         Ok(())
     }
+}
+
+/// All distinct Q-strings referenced by any of the given duplicate-issue
+/// payloads. Sorted + deduped so the upstream Wikidata redirect lookup
+/// makes one query per unique QID.
+fn collect_unique_qids(issues: &[Issue]) -> Vec<String> {
+    let mut items: Vec<String> = issues
+        .iter()
+        .filter_map(|issue| issue.json.as_array())
+        .flatten()
+        .filter_map(|q| q.as_str())
+        .map(|q| q.to_string())
+        .collect();
+    items.sort();
+    items.dedup();
+    items
+}
+
+/// Pick out the issue ids that can now be auto-resolved: a WD_DUPLICATE
+/// pair is moot once one Q has been redirected to the other. Three-or-more
+/// duplicates are left alone — the redirect map can't disambiguate which
+/// of the items is the canonical survivor.
+fn resolved_duplicate_ids(
+    issues: &[Issue],
+    redirected_from_to: &HashMap<String, String>,
+) -> Vec<usize> {
+    issues
+        .iter()
+        .filter_map(|issue| {
+            let issue_items: Vec<String> = issue
+                .json
+                .as_array()?
+                .iter()
+                .filter_map(|q| q.as_str().map(|q| q.to_string()))
+                .collect();
+            match issue_items.as_slice() {
+                [q1, q2] => {
+                    if redirected_from_to.get(q1) == Some(q2)
+                        || redirected_from_to.get(q2) == Some(q1)
+                    {
+                        issue.id
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -353,5 +358,72 @@ mod tests {
             format!("{}", IssueError::NoIssueWithId(42)),
             "No issue with ID 42"
         );
+    }
+
+    fn make_issue(id: usize, qids: &[&str]) -> Issue {
+        let mut issue = Issue::new(
+            42,
+            IssueType::WdDuplicate,
+            serde_json::json!(qids.iter().collect::<Vec<_>>()),
+        );
+        issue.id = Some(id);
+        issue
+    }
+
+    #[test]
+    fn collect_unique_qids_sorts_and_dedups() {
+        let issues = vec![
+            make_issue(1, &["Q5", "Q10"]),
+            make_issue(2, &["Q5", "Q10", "Q20"]),
+            make_issue(3, &["Q20", "Q5"]),
+        ];
+        assert_eq!(
+            collect_unique_qids(&issues),
+            vec!["Q10".to_string(), "Q20".to_string(), "Q5".to_string()]
+        );
+    }
+
+    #[test]
+    fn collect_unique_qids_handles_empty() {
+        assert!(collect_unique_qids(&[]).is_empty());
+    }
+
+    #[test]
+    fn resolved_duplicate_ids_picks_pair_when_redirect_matches_either_direction() {
+        let issues = vec![
+            make_issue(1, &["Q10", "Q20"]),
+            make_issue(2, &["Q30", "Q40"]),
+        ];
+        let mut redirects = HashMap::new();
+        redirects.insert("Q10".to_string(), "Q20".to_string());
+        redirects.insert("Q40".to_string(), "Q30".to_string());
+        let mut resolved = resolved_duplicate_ids(&issues, &redirects);
+        resolved.sort();
+        assert_eq!(resolved, vec![1, 2]);
+    }
+
+    #[test]
+    fn resolved_duplicate_ids_skips_when_no_redirect_links_pair() {
+        let issues = vec![make_issue(1, &["Q10", "Q20"])];
+        let mut redirects = HashMap::new();
+        redirects.insert("Q10".to_string(), "Q99".to_string()); // unrelated target
+        assert!(resolved_duplicate_ids(&issues, &redirects).is_empty());
+    }
+
+    #[test]
+    fn resolved_duplicate_ids_skips_when_three_or_more_qids() {
+        // Three-or-more duplicates can't be auto-resolved by a pairwise
+        // redirect map: even if A→B is a redirect, the third item C might
+        // still be a real distinct duplicate, so a human has to pick.
+        let issues = vec![make_issue(1, &["Q10", "Q20", "Q30"])];
+        let mut redirects = HashMap::new();
+        redirects.insert("Q10".to_string(), "Q20".to_string());
+        assert!(resolved_duplicate_ids(&issues, &redirects).is_empty());
+    }
+
+    #[test]
+    fn resolved_duplicate_ids_handles_empty_redirect_map() {
+        let issues = vec![make_issue(1, &["Q10", "Q20"])];
+        assert!(resolved_duplicate_ids(&issues, &HashMap::new()).is_empty());
     }
 }

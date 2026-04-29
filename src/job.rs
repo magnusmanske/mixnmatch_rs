@@ -664,22 +664,33 @@ const JOB_HANDLER_REGISTRY: &[(&str, JobHandlerFn)] = &[
     })) as JobHandlerFn),
 
     // --- Lua-with-PHP-fallback handlers ---
+    //
+    // Fallback policy: PHP is used only when no Lua code is registered for
+    // the catalog (signalled by `LuaJobOutcome::NoLuaCode`). If Lua exists
+    // but fails at runtime, the error is returned — falling back to PHP
+    // there would mask the bug.
     ("update_person_dates", (|job, catalog_id| Box::pin(async move {
-        match code_fragment::run_person_dates_job(catalog_id, &job.app).await {
-            Ok(()) => Ok(()),
-            Err(_) => PhpWrapper::update_person_dates(catalog_id, &job.app),
+        match code_fragment::run_person_dates_job(catalog_id, &job.app).await? {
+            code_fragment::LuaJobOutcome::Done => Ok(()),
+            code_fragment::LuaJobOutcome::NoLuaCode => {
+                PhpWrapper::update_person_dates(catalog_id, &job.app)
+            }
         }
     })) as JobHandlerFn),
     ("generate_aux_from_description", (|job, catalog_id| Box::pin(async move {
-        match code_fragment::run_aux_from_desc_job(catalog_id, &job.app).await {
-            Ok(()) => Ok(()),
-            Err(_) => PhpWrapper::generate_aux_from_description(catalog_id, &job.app),
+        match code_fragment::run_aux_from_desc_job(catalog_id, &job.app).await? {
+            code_fragment::LuaJobOutcome::Done => Ok(()),
+            code_fragment::LuaJobOutcome::NoLuaCode => {
+                PhpWrapper::generate_aux_from_description(catalog_id, &job.app)
+            }
         }
     })) as JobHandlerFn),
     ("update_descriptions_from_url", (|job, catalog_id| Box::pin(async move {
-        match code_fragment::run_desc_from_html_job(catalog_id, &job.app).await {
-            Ok(()) => Ok(()),
-            Err(_) => PhpWrapper::update_descriptions_from_url(catalog_id, &job.app),
+        match code_fragment::run_desc_from_html_job(catalog_id, &job.app).await? {
+            code_fragment::LuaJobOutcome::Done => Ok(()),
+            code_fragment::LuaJobOutcome::NoLuaCode => {
+                PhpWrapper::update_descriptions_from_url(catalog_id, &job.app)
+            }
         }
     })) as JobHandlerFn),
 

@@ -1,7 +1,13 @@
 pub use crate::storage::Storage;
 
+mod autoscrape_queries;
 mod builders;
+mod cersei_queries;
+mod coordinate_matcher_queries;
+mod issue_queries;
+mod job_queries;
 mod row_mappers;
+mod taxon_queries;
 mod util;
 
 use crate::{
@@ -10,12 +16,9 @@ use crate::{
     auxiliary_data::AuxiliaryRow,
     auxiliary_matcher::AuxiliaryResults,
     catalog::Catalog,
-    coordinates::{CoordinateLocation, LocationRow},
+    coordinates::CoordinateLocation,
     entry::{Entry, EntryError},
     entry_query::EntryQuery,
-    issue::{Issue, IssueStatus},
-    job_row::JobRow,
-    job_status::JobStatus,
     match_state::MatchState,
     meta_entry::{MetaIssue, MetaKvEntry, MetaLogEntry, MetaMnmRelation, MetaStatementText},
     mnm_link::MnmLink,
@@ -23,12 +26,11 @@ use crate::{
     prop_todo::PropTodo,
     storage::{
         AutomatchSearchRow, AutoscrapeQueries, CandidateDatesRow, CatalogEntryListFilter,
-        CurrentScraper, DescriptionAuxRule, Download2Filter, EXT_URL_UNIQUE_SEPARATOR,
-        GroupedEntry, MergeableMatch, OverviewTableRow, PersonDateMatchRow, PropertyCacheRow,
+        DescriptionAuxRule, Download2Filter, EXT_URL_UNIQUE_SEPARATOR, GroupedEntry,
+        MergeableMatch, OverviewTableRow, PersonDateMatchRow, PropertyCacheRow,
         ResultInOriginalCatalog, ResultInOtherCatalog, WdMatchRow,
     },
-    task_size::TaskSize,
-    taxon_matcher::{RankedNames, TAXON_RANKS, TaxonMatcher, TaxonNameField},
+    taxon_matcher::TaxonNameField,
     update_catalog::UpdateInfo,
 };
 use anyhow::{Result, anyhow};
@@ -65,11 +67,15 @@ impl StorageMySQL {
         }
     }
 
-    fn get_conn(&self) -> GetConn {
+    /// `pub(super)` so per-trait impl blocks living in sibling submodules
+    /// (e.g. `storage_mysql::issue_queries`) can borrow a writable
+    /// connection without re-implementing the pool plumbing.
+    pub(super) fn get_conn(&self) -> GetConn {
         self.pool.get_conn()
     }
 
-    fn get_conn_ro(&self) -> GetConn {
+    /// Read-only counterpart of `get_conn`. Same `pub(super)` rationale.
+    pub(super) fn get_conn_ro(&self) -> GetConn {
         self.pool_ro.get_conn()
     }
 
@@ -94,7 +100,7 @@ impl StorageMySQL {
         Ok(true)
     }
 
-    async fn match_taxa_get_ranked_names_batch_get_results(
+    pub(super) async fn match_taxa_get_ranked_names_batch_get_results(
         &self,
         ranks: &[&str],
         field: &TaxonNameField,
@@ -5762,530 +5768,6 @@ impl Storage for StorageMySQL {
 }
 
 #[async_trait]
-impl crate::storage::CoordinateMatcherQueries for StorageMySQL {
-    async fn get_coordinate_matcher_rows(
-        &self,
-        catalog_id: &Option<usize>,
-        bad_catalogs: &[usize],
-        max_results: usize,
-    ) -> Result<Vec<LocationRow>> {
-        let sql = Self::coordinate_matcher_main_query_sql(catalog_id, bad_catalogs, max_results);
-        let mut conn = self.get_conn_ro().await?;
-        let rows: Vec<LocationRow> = conn
-            .exec_iter(sql, ())
-            .await?
-            .map_and_drop(|row| Self::location_row_from_row(&row))
-            .await?
-            .iter()
-            .filter_map(|row| row.to_owned())
-            .collect();
-        Ok(rows)
-    }
-
-    async fn get_all_catalogs_key_value_pairs(&self) -> Result<Vec<(usize, String, String)>> {
-        let sql = r#"SELECT `catalog_id`,`kv_key`,`kv_value` FROM `kv_catalog`"#;
-        let mut conn = self.get_conn_ro().await?;
-        let results = conn
-            .exec_iter(sql, ())
-            .await?
-            .map_and_drop(from_row::<(usize, String, String)>)
-            .await?;
-        Ok(results)
-    }
-}
-
-#[async_trait]
-impl crate::storage::IssueQueries for StorageMySQL {
-    async fn issues_close_for_inactive_catalogs(&self) -> Result<usize> {
-        // Use a correlated EXISTS so MySQL can short-circuit per row;
-        // a JOIN here would force a temp table on a multi-million-row
-        // `issues` join `entry`.
-        let sql = "UPDATE `issues` SET `status` = 'INACTIVE_CATALOG' \
-            WHERE `status` = 'OPEN' \
-              AND EXISTS ( \
-                SELECT 1 FROM `entry` \
-                INNER JOIN `catalog` ON `catalog`.`id` = `entry`.`catalog` \
-                WHERE `entry`.`id` = `issues`.`entry_id` \
-                  AND `catalog`.`active` != 1 \
-              )";
-        let mut conn = self.get_conn().await?;
-        conn.exec_drop(sql, ()).await?;
-        Ok(conn.affected_rows() as usize)
-    }
-
-    async fn issues_close_jan01_mismatches(&self) -> Result<usize> {
-        // Match the PHP heuristic verbatim: the JSON payload of a
-        // MISMATCH_DATES issue stores the MnM date as `mnm_time` and
-        // ends with `-01-01` exactly when the entry's date is
-        // year-only / Jan 1 placeholder. Anything more elaborate
-        // (e.g. JSON_EXTRACT) needs a JSON column and we still have
-        // varchar.
-        let sql = "UPDATE `issues` SET `status` = 'JAN01' \
-            WHERE `status` = 'OPEN' \
-              AND `type` = 'MISMATCH_DATES' \
-              AND `json` LIKE '%mnm_time%-01-01%'";
-        let mut conn = self.get_conn().await?;
-        conn.exec_drop(sql, ()).await?;
-        Ok(conn.affected_rows() as usize)
-    }
-
-    async fn issues_delete_invalid_q_matches(&self) -> Result<usize> {
-        // Q ≤ 0 with a positive `user` means the entry is flagged as
-        // N/A (Q=0) or "no Wikidata" (Q=-1) by a human — neither has a
-        // corresponding Wikidata item, so any open issue against the
-        // entry is meaningless and should be removed outright (not
-        // just closed — re-running the issue scanner won't recreate
-        // these for the same row).
-        let sql = "DELETE FROM `issues` \
-            WHERE `status` = 'OPEN' \
-              AND EXISTS ( \
-                SELECT 1 FROM `entry` \
-                WHERE `entry`.`id` = `issues`.`entry_id` \
-                  AND `entry`.`q` <= 0 \
-                  AND `entry`.`user` > 0 \
-              )";
-        let mut conn = self.get_conn().await?;
-        conn.exec_drop(sql, ()).await?;
-        Ok(conn.affected_rows() as usize)
-    }
-
-    async fn get_open_wd_duplicates(&self) -> Result<Vec<Issue>> {
-        let sql = r"SELECT * FROM `issues` WHERE `status`='OPEN' and `type`='WD_DUPLICATE'";
-        let mut conn = self.get_conn_ro().await?;
-        let ret = conn
-            .exec_iter(sql, ())
-            .await?
-            .map_and_drop(|row| Issue::from_row(&row))
-            .await?
-            .into_iter()
-            .flatten()
-            .collect();
-        Ok(ret)
-    }
-
-    async fn issue_insert(&self, issue: &Issue) -> Result<()> {
-        let sql = "INSERT IGNORE INTO `issues` (`entry_id`,`type`,`json`,`random`,`catalog`)
-        SELECT :entry_id,:issue_type,:json,rand(),`catalog` FROM `entry` WHERE `id`=:entry_id";
-        let params = params! {
-            "entry_id" => issue.entry_id,
-            "issue_type" => issue.issue_type.to_str(),
-            "json" => issue.json.to_string(),
-            "catalog" => issue.catalog_id,
-        };
-        self.get_conn().await?.exec_drop(sql, params).await?;
-        Ok(())
-    }
-
-    async fn set_issue_status(&self, issue_id: usize, status: IssueStatus) -> Result<()> {
-        let sql = "UPDATE `issues` SET `status`=:status WHERE `id`=:issue_id";
-        let params = params! {
-            "issue_id" => issue_id,
-            "status" => status.to_str(),
-        };
-        self.get_conn().await?.exec_drop(sql, params).await?;
-        Ok(())
-    }
-}
-
-#[async_trait]
-impl crate::storage::TaxonQueries for StorageMySQL {
-    async fn set_catalog_taxon_run(&self, catalog_id: usize, taxon_run: bool) -> Result<()> {
-        let taxon_run = taxon_run as u16;
-        let sql =
-            "UPDATE `catalog` SET `taxon_run`=1 WHERE `id`=:catalog_id AND `taxon_run`=:taxon_run";
-        let mut conn = self.get_conn().await?;
-        conn.exec_drop(sql, params! {catalog_id, taxon_run}).await?;
-        Ok(())
-    }
-
-    async fn match_taxa_get_ranked_names_batch(
-        &self,
-        ranks: &[&str],
-        field: &TaxonNameField,
-        catalog_id: usize,
-        batch_size: usize,
-        offset: usize,
-    ) -> Result<(usize, RankedNames)> {
-        let results = self
-            .match_taxa_get_ranked_names_batch_get_results(
-                ranks, field, catalog_id, batch_size, offset,
-            )
-            .await?;
-        let mut ranked_names: RankedNames = HashMap::new();
-        for result in &results {
-            let entry_id = result.0;
-            let taxon_name = match TaxonMatcher::rewrite_taxon_name(catalog_id, &result.1) {
-                Some(s) => s,
-                None => continue,
-            };
-            let type_name = &result.2;
-            let rank = match TAXON_RANKS.get(type_name.as_str()) {
-                Some(rank) => format!(" ; wdt:P105 {rank}"),
-                None => "".to_string(),
-            };
-            ranked_names
-                .entry(rank)
-                .or_default()
-                .push((entry_id, taxon_name));
-        }
-        Ok((results.len(), ranked_names))
-    }
-}
-
-#[async_trait]
-impl crate::storage::AutoscrapeQueries for StorageMySQL {
-    async fn autoscrape_get_for_catalog(&self, catalog_id: usize) -> Result<Vec<(usize, String)>> {
-        Ok(self
-            .get_conn_ro()
-            .await?
-            .exec_iter(
-                "SELECT `id`,`json` FROM `autoscrape` WHERE `catalog`=:catalog_id",
-                params! {catalog_id},
-            )
-            .await?
-            .map_and_drop(from_row::<(usize, String)>)
-            .await?)
-    }
-
-    /// Returns a list of (ext_id,entry_id) values for the given catalog_id and ext_ids.
-    async fn get_entry_ids_for_ext_ids(
-        &self,
-        catalog_id: usize,
-        ext_ids: &[String],
-    ) -> Result<Vec<(String, usize)>> {
-        let eq = EntryQuery::default()
-            .with_catalog_id(catalog_id)
-            .with_ext_ids(ext_ids.to_vec());
-        let sql = "SELECT ext_id,id FROM entry WHERE".to_string();
-        let (sql, parts) = Self::get_entry_query_sql_where(&eq, sql, vec![])?;
-        let ret = self
-            .get_conn_ro()
-            .await?
-            .exec_iter(sql, parts)
-            .await?
-            .map_and_drop(from_row::<(String, usize)>)
-            .await?;
-        Ok(ret)
-    }
-
-    async fn autoscrape_start(&self, autoscrape_id: usize) -> Result<()> {
-        let sql = "UPDATE `autoscrape` SET `status`='RUNNING'`last_run_min`=NULL,`last_run_urls`=NULL WHERE `id`=:autoscrape_id";
-        if let Ok(mut conn) = self.get_conn().await {
-            let _ = conn.exec_drop(sql, params! {autoscrape_id}).await; // Ignore error
-        }
-        Ok(())
-    }
-
-    async fn autoscrape_finish(&self, autoscrape_id: usize, last_run_urls: usize) -> Result<()> {
-        let sql = "UPDATE `autoscrape` SET `status`='OK',`last_run_min`=NULL,`last_run_urls`=:last_run_urls WHERE `id`=:autoscrape_id";
-        if let Ok(mut conn) = self.get_conn().await {
-            let _ = conn
-                .exec_drop(sql, params! {autoscrape_id,last_run_urls})
-                .await;
-        }
-        Ok(())
-    }
-}
-
-#[async_trait]
-impl crate::storage::CerseiQueries for StorageMySQL {
-    /// Get current scrapers from database
-    async fn get_cersei_scrapers(&self) -> Result<HashMap<usize, CurrentScraper>> {
-        let mut conn = self.get_conn_ro().await?;
-        let sql = "SELECT * FROM `cersei`";
-        let rows: Vec<Row> = conn.query(sql).await?;
-
-        let mut scrapers = HashMap::new();
-        for row in rows {
-            let scraper = CurrentScraper {
-                cersei_scraper_id: row
-                    .get::<Option<usize>, _>("cersei_scraper_id")
-                    .flatten()
-                    .unwrap_or(0),
-                catalog_id: row
-                    .get::<Option<usize>, _>("catalog_id")
-                    .flatten()
-                    .unwrap_or(0),
-                last_sync: row.get::<Option<String>, _>("last_sync").flatten(),
-            };
-            scrapers.insert(scraper.cersei_scraper_id, scraper);
-        }
-
-        Ok(scrapers)
-    }
-
-    async fn add_cersei_catalog(&self, catalog_id: usize, scraper_id: usize) -> Result<()> {
-        let mut conn = self.get_conn().await?;
-        let sql = "INSERT INTO `cersei` (`catalog_id`, `cersei_scraper_id`) VALUES (:catalog_id, :scraper_id)";
-        conn.exec_drop(sql, params! {catalog_id, scraper_id})
-            .await?;
-        Ok(())
-    }
-
-    async fn update_cersei_last_update(&self, scraper_id: usize, last_sync: &str) -> Result<()> {
-        self.get_conn()
-            .await?
-            .exec_drop(
-                "UPDATE `cersei` SET `last_sync`=:last_sync WHERE `cersei_scraper_id`=:scraper_id",
-                params! {last_sync, scraper_id},
-            )
-            .await?;
-        Ok(())
-    }
-
-    async fn entry_update_cersei(
-        &self,
-        entry_id: usize,
-        ext_name: &str,
-        ext_desc: &str,
-        type_name: &str,
-        ext_url: &str,
-    ) -> Result<()> {
-        let type_name = crate::entry::normalize_entry_type(Some(type_name));
-        let sql = "UPDATE `entry` \
-            SET `ext_name`=SUBSTR(:ext_name,1,127), `ext_desc`=SUBSTR(:ext_desc,1,254), \
-                `type`=:type_name, `ext_url`=:ext_url \
-            WHERE `id`=:entry_id \
-            AND (`ext_name`!=SUBSTR(:ext_name,1,127) OR `ext_desc`!=SUBSTR(:ext_desc,1,254) \
-                 OR `type`!=:type_name OR `ext_url`!=:ext_url)";
-        self.get_conn()
-            .await?
-            .exec_drop(
-                sql,
-                params! {ext_name, ext_desc, type_name, ext_url, entry_id},
-            )
-            .await?;
-        Ok(())
-    }
-}
-
-#[async_trait]
-impl crate::storage::JobQueries for StorageMySQL {
-    async fn jobs_get_tasks(&self) -> Result<HashMap<String, TaskSize>> {
-        let sql = "SELECT `action`,`size` FROM `job_sizes`";
-        let mut conn = self.get_conn_ro().await?;
-        let ret = conn
-            .exec_iter(sql, ())
-            .await?
-            .map_and_drop(from_row::<(String, String)>)
-            .await?
-            .into_iter()
-            .map(|(name, size)| (name, TaskSize::new(&size)))
-            .filter(|(_name, size)| size.is_some())
-            .map(|(name, size)| (name, size.unwrap()))
-            .collect();
-        Ok(ret)
-    }
-
-    /// Resets all RUNNING jobs of certain types to TODO. Used when bot restarts.
-    //TODO test
-    async fn reset_running_jobs(&self) -> Result<()> {
-        let sql = format!(
-            "UPDATE /* reset_running_jobs */ `jobs` SET `status`='{}' WHERE `status`='{}'",
-            JobStatus::Todo.as_str(),
-            JobStatus::Running.as_str()
-        );
-        let mut conn = self.get_conn().await?;
-        conn.exec_drop(sql, ()).await?;
-        Ok(())
-    }
-
-    async fn kill_long_running_queries(&self, threshold_secs: u64) -> Result<Vec<u64>> {
-        // Toolforge ToolsDB only exposes the caller's own connections via
-        // information_schema.processlist, but filter by CURRENT_USER() anyway
-        // for defence in depth in case the DB user ever gains PROCESS privilege.
-        let select_sql = "SELECT /* kill_long_running_queries */ ID \
-             FROM information_schema.processlist \
-             WHERE USER=SUBSTRING_INDEX(CURRENT_USER(),'@',1) \
-               AND COMMAND='Query' \
-               AND TIME >= :t \
-               AND ID != CONNECTION_ID()";
-        let mut conn = self.get_conn().await?;
-        let ids: Vec<u64> = conn
-            .exec_iter(select_sql, params! { "t" => threshold_secs })
-            .await?
-            .map_and_drop(from_row::<u64>)
-            .await?;
-        for id in &ids {
-            // KILL doesn't accept parameters; the id came from the server so it's trusted.
-            let _ = conn.exec_drop(format!("KILL QUERY {id}"), ()).await;
-        }
-        Ok(ids)
-    }
-
-    /// Resets all FAILED jobs of certain types to TODO. Used when bot restarts.
-    //TODO test
-    async fn reset_failed_jobs(&self) -> Result<()> {
-        let sql = format!(
-            "UPDATE `jobs` SET `status`='{}' WHERE `status`='{}'",
-            JobStatus::Todo.as_str(),
-            JobStatus::Failed.as_str()
-        );
-        let mut conn = self.get_conn().await?;
-        conn.exec_drop(sql, ()).await?;
-        Ok(())
-    }
-
-    async fn jobs_queue_simple_job(
-        &self,
-        catalog_id: usize,
-        action: &str,
-        depends_on: Option<usize>,
-        status: &str,
-        timestamp: String,
-    ) -> Result<usize> {
-        let sql = "INSERT INTO `jobs` (catalog,action,status,depends_on,last_ts) VALUES (:catalog_id,:action,:status,:depends_on,:timestamp)
-            ON DUPLICATE KEY UPDATE status=:status,depends_on=:depends_on,last_ts=:timestamp";
-        let mut conn = self.get_conn().await?;
-        conn.exec_drop(sql, params! {catalog_id,action,depends_on,status,timestamp})
-            .await?;
-        let last_id = conn
-            .last_insert_id()
-            .ok_or(EntryError::EntryInsertFailed)? as usize;
-        Ok(last_id)
-    }
-
-    async fn jobs_reset_json(&self, job_id: usize, timestamp: String) -> Result<()> {
-        let sql = "UPDATE `jobs` SET `json`=NULL,last_ts=:timestamp WHERE `id`=:job_id";
-        let mut conn = self.get_conn().await?;
-        conn.exec_drop(sql, params! {job_id, timestamp}).await?;
-        Ok(())
-    }
-
-    async fn jobs_set_json(
-        &self,
-        job_id: usize,
-        json_string: String,
-        timestamp: &str,
-    ) -> Result<()> {
-        let sql = "UPDATE `jobs` SET `json`=:json_string,last_ts=:timestamp WHERE `id`=:job_id";
-        let mut conn = self.get_conn().await?;
-        conn.exec_drop(sql, params! {job_id, json_string, timestamp})
-            .await?;
-        Ok(())
-    }
-
-    async fn jobs_row_from_id(&self, job_id: usize) -> Result<JobRow> {
-        let sql = r"SELECT id,action,catalog,json,depends_on,status,last_ts,note,repeat_after_sec,next_ts,user_id FROM `jobs` WHERE `id`=:job_id";
-        let mut conn = self.get_conn().await?;
-        let row = conn
-            .exec_iter(sql, params! {job_id})
-            .await?
-            .map_and_drop(
-                from_row::<(
-                    usize,
-                    String,
-                    usize,
-                    Option<String>,
-                    Option<usize>,
-                    String,
-                    String,
-                    Option<String>,
-                    Option<usize>,
-                    String,
-                    usize,
-                )>,
-            )
-            .await?
-            .pop()
-            .ok_or(anyhow!("No job with ID {}", job_id))?;
-        let job_row = JobRow::from_row(row);
-        Ok(job_row)
-    }
-
-    async fn jobs_set_status(
-        &self,
-        status: &JobStatus,
-        job_id: usize,
-        timestamp: String,
-    ) -> Result<()> {
-        let status_str = status.as_str();
-        let sql = "UPDATE `jobs` SET `status`=:status_str,`last_ts`=:timestamp,`note`=NULL WHERE `id`=:job_id";
-        let mut conn = self.get_conn().await?;
-        conn.exec_drop(sql, params! {job_id,timestamp,status_str})
-            .await?;
-        Ok(())
-    }
-
-    async fn jobs_set_note(
-        &self,
-        note: Option<String>,
-        job_id: usize,
-    ) -> Result<Option<String>> {
-        let note_cloned = note
-            .clone()
-            .map(|s| s.get(..127).unwrap_or(&s).to_string());
-        let sql = "UPDATE `jobs` SET `note`=substr(:note,1,250) WHERE `id`=:job_id";
-        let mut conn = self.get_conn().await?;
-        conn.exec_drop(sql, params! {job_id,note}).await?;
-        Ok(note_cloned)
-    }
-
-    async fn jobs_update_next_ts(&self, job_id: usize, next_ts: String) -> Result<()> {
-        let sql = "UPDATE `jobs` SET `next_ts`=:next_ts WHERE `id`=:job_id";
-        let mut conn = self.get_conn().await?;
-        conn.exec_drop(sql, params! {job_id,next_ts}).await?;
-        Ok(())
-    }
-
-    async fn jobs_get_next_job(
-        &self,
-        status: JobStatus,
-        depends_on: Option<JobStatus>,
-        no_actions: &[String],
-        next_ts: Option<String>,
-    ) -> Option<usize> {
-        let sql = Self::jobs_get_next_job_construct_sql(status, depends_on, no_actions, next_ts);
-        let mut conn = self.get_conn().await.ok()?;
-        conn.exec_iter(sql, ())
-            .await
-            .ok()?
-            .map_and_drop(from_row::<usize>)
-            .await
-            .ok()?
-            .pop()
-    }
-
-    async fn jobs_get_next_job_by_actions(
-        &self,
-        status: JobStatus,
-        only_actions: &[String],
-    ) -> Option<usize> {
-        if only_actions.is_empty() {
-            return None;
-        }
-        // Action names come from our own task-size config (never user input),
-        // but belt-and-braces: filter to ASCII word chars before interpolating.
-        let safe: Vec<String> = only_actions
-            .iter()
-            .filter(|a| a.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
-            .cloned()
-            .collect();
-        if safe.is_empty() {
-            return None;
-        }
-        let actions = safe.join("','");
-        let sql = format!(
-            "SELECT /* jobs_get_next_job_by_actions */ `id` FROM `jobs` \
-             WHERE `status`='{status}' \
-             AND NOT EXISTS (SELECT * FROM catalog WHERE catalog.id=jobs.catalog AND active!=1) \
-             AND `depends_on` IS NULL \
-             AND `action` IN ('{actions}') \
-             ORDER BY `last_ts` LIMIT 1",
-            status = status.as_str(),
-        );
-        let mut conn = self.get_conn().await.ok()?;
-        conn.exec_iter(sql, ())
-            .await
-            .ok()?
-            .map_and_drop(from_row::<usize>)
-            .await
-            .ok()?
-            .pop()
-    }
-}
-
-#[async_trait]
 impl crate::storage::AuxiliaryMatcherQueries for StorageMySQL {
     async fn auxiliary_matcher_match_via_aux(
         &self,
@@ -6641,6 +6123,7 @@ impl StorageMySQL {
 mod tests {
     use super::*;
     use crate::app_state::get_test_app;
+    use crate::job_status::JobStatus;
 
     #[test]
     fn normalize_wd_prop_zero_and_none_become_none() {
@@ -7073,6 +6556,8 @@ async fn test_match_via_auxiliary() {
 mod tests {
 
     use super::*;
+    use crate::issue::{Issue, IssueType};
+    use crate::job_status::JobStatus;
     use mysql_async::from_row;
     use serde_json::json;
 
@@ -7115,10 +6600,11 @@ mod tests {
             .unwrap();
         assert_eq!(issues_for_entry, 0);
 
-        let issue = Issue::new(entry_id, IssueType::Mismatch, json!("!"), &mnm)
+        let issue = Issue::new(entry_id, IssueType::Mismatch, json!("!"));
+        issue
+            .insert(mnm.app.storage().as_ref().as_ref())
             .await
             .unwrap();
-        issue.insert().await.unwrap();
 
         let issues_for_entry = *mnm
             .app

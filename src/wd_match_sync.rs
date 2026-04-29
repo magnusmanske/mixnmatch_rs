@@ -168,16 +168,9 @@ async fn classify_batch(app: &AppState, rows: &[WdMatchRow]) -> Result<ClassifyS
             // can't be inserted — the status flip is the load-bearing part,
             // the issue row is a UI hint.
             let payload = json!({ "wd": wd_values, "mnm": row.ext_id });
-            match Issue::new(row.entry_id, IssueType::Multiple, payload, app).await {
-                Ok(issue) => {
-                    if let Err(e) = issue.insert().await {
-                        warn!("wd_matches: issue insert failed for entry {}: {e}", row.entry_id);
-                    }
-                }
-                Err(e) => warn!(
-                    "wd_matches: issue construction failed for entry {}: {e}",
-                    row.entry_id
-                ),
+            let issue = Issue::new(row.entry_id, IssueType::Multiple, payload);
+            if let Err(e) = issue.insert(app.storage().as_ref().as_ref()).await {
+                warn!("wd_matches: issue insert failed for entry {}: {e}", row.entry_id);
             }
         }
 

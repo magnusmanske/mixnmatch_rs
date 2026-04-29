@@ -19,14 +19,41 @@ use log::warn;
 
 const ENTRY_BATCH_SIZE: usize = 5000;
 
+/// Outcome of a Lua-backed job runner. The dispatcher uses this to decide
+/// whether to fall back to the PHP implementation: only `NoLuaCode` may
+/// trigger a fallback. A genuine Lua execution failure is returned as
+/// `Err(_)` and must propagate — falling back to PHP would mask the bug.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LuaJobOutcome {
+    /// Lua code existed and the job ran to completion (entry-level errors
+    /// were logged and skipped, not propagated).
+    Done,
+    /// No Lua code fragment is registered for this catalog (row absent or
+    /// `lua` column is null/empty). Caller may fall back to PHP.
+    NoLuaCode,
+}
+
+/// Treat null and empty-after-trim Lua bodies the same way: as "no code
+/// registered". Some legacy rows have `lua=''` rather than a missing row.
+fn lua_code_present(code: &Option<String>) -> bool {
+    code.as_deref().map_or(false, |c| !c.trim().is_empty())
+}
+
 /// Run the `update_person_dates` job for a catalog using Lua.
-/// Returns `Ok(())` on success, or an error if no Lua code fragment exists.
-pub async fn run_person_dates_job(catalog_id: usize, app: &AppState) -> Result<()> {
-    let lua_code = app
+///
+/// Returns:
+/// - `Ok(LuaJobOutcome::Done)` if the Lua code existed and ran to completion.
+/// - `Ok(LuaJobOutcome::NoLuaCode)` if no Lua code is registered — caller may fall back to PHP.
+/// - `Err(_)` if Lua existed but failed at the storage / job-orchestration level.
+pub async fn run_person_dates_job(catalog_id: usize, app: &AppState) -> Result<LuaJobOutcome> {
+    let lua_code_opt = app
         .storage()
         .get_code_fragment_lua("PERSON_DATE", catalog_id)
-        .await?
-        .ok_or_else(|| anyhow!("No Lua code fragment for PERSON_DATE catalog {catalog_id}"))?;
+        .await?;
+    if !lua_code_present(&lua_code_opt) {
+        return Ok(LuaJobOutcome::NoLuaCode);
+    }
+    let lua_code = lua_code_opt.unwrap_or_default();
 
     // Clear existing person dates for this catalog
     app.storage()
@@ -82,17 +109,21 @@ pub async fn run_person_dates_job(catalog_id: usize, app: &AppState) -> Result<(
         .touch_code_fragment("PERSON_DATE", catalog_id)
         .await?;
 
-    Ok(())
+    Ok(LuaJobOutcome::Done)
 }
 
 /// Run the `generate_aux_from_description` job for a catalog using Lua.
-/// Returns `Ok(())` on success, or an error if no Lua code fragment exists.
-pub async fn run_aux_from_desc_job(catalog_id: usize, app: &AppState) -> Result<()> {
-    let lua_code = app
+///
+/// See [`run_person_dates_job`] for return-value semantics.
+pub async fn run_aux_from_desc_job(catalog_id: usize, app: &AppState) -> Result<LuaJobOutcome> {
+    let lua_code_opt = app
         .storage()
         .get_code_fragment_lua("AUX_FROM_DESC", catalog_id)
-        .await?
-        .ok_or_else(|| anyhow!("No Lua code fragment for AUX_FROM_DESC catalog {catalog_id}"))?;
+        .await?;
+    if !lua_code_present(&lua_code_opt) {
+        return Ok(LuaJobOutcome::NoLuaCode);
+    }
+    let lua_code = lua_code_opt.unwrap_or_default();
 
     let mut offset = 0;
     loop {
@@ -131,18 +162,23 @@ pub async fn run_aux_from_desc_job(catalog_id: usize, app: &AppState) -> Result<
         .touch_code_fragment("AUX_FROM_DESC", catalog_id)
         .await?;
 
-    Ok(())
+    Ok(LuaJobOutcome::Done)
 }
 
 /// Run the `update_descriptions_from_url` job for a catalog using Lua.
 /// Fetches HTML from each entry's `ext_url`, runs DESC_FROM_HTML Lua code,
 /// applies results.
-pub async fn run_desc_from_html_job(catalog_id: usize, app: &AppState) -> Result<()> {
-    let lua_code = app
+///
+/// See [`run_person_dates_job`] for return-value semantics.
+pub async fn run_desc_from_html_job(catalog_id: usize, app: &AppState) -> Result<LuaJobOutcome> {
+    let lua_code_opt = app
         .storage()
         .get_code_fragment_lua("DESC_FROM_HTML", catalog_id)
-        .await?
-        .ok_or_else(|| anyhow!("No Lua code fragment for DESC_FROM_HTML catalog {catalog_id}"))?;
+        .await?;
+    if !lua_code_present(&lua_code_opt) {
+        return Ok(LuaJobOutcome::NoLuaCode);
+    }
+    let lua_code = lua_code_opt.unwrap_or_default();
     let client = app.http_client().clone();
 
     let mut offset = 0;
@@ -161,7 +197,8 @@ pub async fn run_desc_from_html_job(catalog_id: usize, app: &AppState) -> Result
         offset += batch_len;
     }
 
-    finalize_desc_from_html(app, catalog_id).await
+    finalize_desc_from_html(app, catalog_id).await?;
+    Ok(LuaJobOutcome::Done)
 }
 
 async fn fetch_html(client: &reqwest::Client, url: &str) -> Option<String> {
@@ -320,3 +357,28 @@ pub(super) async fn apply_command(cmd: &LuaCommand, entry: &mut Entry) -> Result
 // by paths that go through `entry_to_lua_entry`. (No-op at runtime.)
 #[allow(dead_code)]
 fn _force_lua_entry_use(_e: &LuaEntry) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lua_code_present_treats_none_as_absent() {
+        assert!(!lua_code_present(&None));
+    }
+
+    #[test]
+    fn lua_code_present_treats_empty_string_as_absent() {
+        assert!(!lua_code_present(&Some(String::new())));
+    }
+
+    #[test]
+    fn lua_code_present_treats_whitespace_only_as_absent() {
+        assert!(!lua_code_present(&Some("   \n\t ".to_string())));
+    }
+
+    #[test]
+    fn lua_code_present_treats_real_code_as_present() {
+        assert!(lua_code_present(&Some("function f() return 1 end".to_string())));
+    }
+}

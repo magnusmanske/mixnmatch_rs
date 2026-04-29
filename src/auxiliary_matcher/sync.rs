@@ -255,28 +255,22 @@ impl AuxiliaryMatcher {
                     if let Ok(entry) = Entry::from_id(aux.entry_id, &self.app).await {
                         let _ = entry.set_auxiliary_in_wikidata(aux.aux_id, true).await;
                     }
-                } else if let Ok(issue) = Issue::new(
-                    aux.entry_id,
-                    IssueType::Mismatch,
-                    json!([search_results[0], aux.q()]),
-                    &self.app,
-                )
-                .await
-                {
-                    let _ = issue.insert().await;
+                } else {
+                    let issue = Issue::new(
+                        aux.entry_id,
+                        IssueType::Mismatch,
+                        json!([search_results[0], aux.q()]),
+                    );
+                    let _ = issue.insert(self.app.storage().as_ref().as_ref()).await;
                 };
             }
             std::cmp::Ordering::Greater => {
-                if let Ok(issue) = Issue::new(
+                let issue = Issue::new(
                     aux.entry_id,
                     IssueType::Multiple,
                     json!({"wd": search_results,"app": aux.value,}),
-                    &self.app,
-                )
-                .await
-                {
-                    let _ = issue.insert().await;
-                };
+                );
+                let _ = issue.insert(self.app.storage().as_ref().as_ref()).await;
             }
         }
         true
@@ -394,7 +388,7 @@ impl AuxiliaryMatcher {
                 let _ = self.properties.load_entity(&mw_api, prop.to_owned()).await;
             }
             if let Some(prop_entity) = self.properties.get_entity(prop) {
-                let p9073 = prop_entity.values_for_property("P9073");
+                let p9073 = prop_entity.values_for_property(wp::P_APPLICABLE_STATED_IN);
                 #[allow(clippy::collapsible_match)]
                 if let Some(value) = p9073.first() {
                     /* trunk-ignore(clippy/collapsible_match) */
