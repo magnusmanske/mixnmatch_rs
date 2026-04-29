@@ -275,45 +275,392 @@ impl<'a> EntryWriter<'a> {
         Ok(true)
     }
 
+    /// Remove the wrapped entry's match and decrement the catalog
+    /// overview counters. **Canonical implementation.** `Entry::unmatch`
+    /// forwards here.
     pub async fn unmatch(&mut self) -> Result<()> {
-        self.entry.unmatch().await
+        // Snapshot the pre-unmatch (user, q) so the overview shift runs
+        // against the bucket the row was in *before* we cleared the
+        // fields. Without this, the overview drifts: counters stay
+        // elevated until the next full Refresh.
+        let old_entry = self.entry.clone();
+        let entry_id = self.entry.get_valid_id()?;
+        self.ctx.storage().entry_unmatch(entry_id).await?;
+        self.entry.user = None;
+        self.entry.timestamp = None;
+        self.entry.q = None;
+        self.ctx
+            .storage()
+            .update_overview_table(&old_entry, None, None)
+            .await?;
+        Ok(())
     }
 
+    /// Set or clear the auxiliary value for `(entry, prop_numeric)`.
+    /// **Canonical implementation.** `Entry::set_auxiliary` forwards to
+    /// the shared helper [`write_auxiliary`].
     pub async fn set_auxiliary(
         &mut self,
         prop_numeric: PropertyId,
         value: Option<String>,
     ) -> Result<()> {
-        self.entry.set_auxiliary(prop_numeric, value).await
+        write_auxiliary(self.ctx, self.entry.get_valid_id()?, prop_numeric, value).await
     }
 
+    /// Update the entry's person dates (P569 / P570) where they differ
+    /// from the stored pair. **Canonical implementation.**
+    /// `Entry::set_person_dates` forwards to the shared helper
+    /// [`write_person_dates`].
     pub async fn set_person_dates(
         &mut self,
         born: &Option<PersonDate>,
         died: &Option<PersonDate>,
     ) -> Result<()> {
-        self.entry.set_person_dates(born, died).await
+        write_person_dates(self.ctx, self.entry.get_valid_id()?, born, died).await
     }
 
+    /// Update the entry's coordinate location (P625) where it differs
+    /// from the stored value. **Canonical implementation.**
+    /// `Entry::set_coordinate_location` forwards to the shared helper
+    /// [`write_coordinate_location`].
     pub async fn set_coordinate_location(&mut self, cl: &Option<CoordinateLocation>) -> Result<()> {
-        self.entry.set_coordinate_location(cl).await
+        write_coordinate_location(self.ctx, self.entry.get_valid_id()?, cl).await
     }
 
+    /// Update `ext_name` locally and in the database. **Canonical
+    /// implementation.** `Entry::set_ext_name` forwards here.
     pub async fn set_ext_name(&mut self, ext_name: &str) -> Result<()> {
-        self.entry.set_ext_name(ext_name).await
+        if self.entry.ext_name == ext_name {
+            return Ok(());
+        }
+        let entry_id = self.entry.get_valid_id()?;
+        self.entry.ext_name = ext_name.to_string();
+        self.ctx
+            .storage()
+            .entry_set_ext_name(ext_name, entry_id)
+            .await
     }
 
+    /// Update `ext_desc` locally and in the database. **Canonical
+    /// implementation.** `Entry::set_ext_desc` forwards here.
     pub async fn set_ext_desc(&mut self, ext_desc: &str) -> Result<()> {
-        self.entry.set_ext_desc(ext_desc).await
+        if self.entry.ext_desc == ext_desc {
+            return Ok(());
+        }
+        let entry_id = self.entry.get_valid_id()?;
+        self.entry.ext_desc = ext_desc.to_string();
+        self.ctx
+            .storage()
+            .entry_set_ext_desc(ext_desc, entry_id)
+            .await
     }
 
+    /// Update `ext_id` locally and in the database. **Canonical
+    /// implementation.** `Entry::set_ext_id` forwards here.
+    pub async fn set_ext_id(&mut self, ext_id: &str) -> Result<()> {
+        if self.entry.ext_id == ext_id {
+            return Ok(());
+        }
+        let entry_id = self.entry.get_valid_id()?;
+        self.entry.ext_id = ext_id.to_string();
+        self.ctx
+            .storage()
+            .entry_set_ext_id(ext_id, entry_id)
+            .await
+    }
+
+    /// Update `ext_url` locally and in the database. **Canonical
+    /// implementation.** `Entry::set_ext_url` forwards here.
+    pub async fn set_ext_url(&mut self, ext_url: &str) -> Result<()> {
+        if self.entry.ext_url == ext_url {
+            return Ok(());
+        }
+        let entry_id = self.entry.get_valid_id()?;
+        self.entry.ext_url = ext_url.to_string();
+        self.ctx
+            .storage()
+            .entry_set_ext_url(ext_url, entry_id)
+            .await
+    }
+
+    /// Update `type_name` locally and in the database. **Canonical
+    /// implementation.** `Entry::set_type_name` forwards here.
     pub async fn set_type_name(&mut self, type_name: Option<String>) -> Result<()> {
-        self.entry.set_type_name(type_name).await
+        if self.entry.type_name == type_name {
+            return Ok(());
+        }
+        let entry_id = self.entry.get_valid_id()?;
+        self.entry.type_name.clone_from(&type_name);
+        self.ctx
+            .storage()
+            .entry_set_type_name(type_name, entry_id)
+            .await
     }
 
+    /// Add a localised alias for the entry. **Canonical implementation.**
+    /// `Entry::add_alias` forwards to the shared helper [`write_alias`].
     pub async fn add_alias(&self, s: &LocaleString) -> Result<()> {
-        self.entry.add_alias(s).await
+        write_alias(self.ctx, self.entry.get_valid_id()?, s).await
     }
+
+    /// Update the entry's `is_matched` flag in `entry`/`person_dates`.
+    /// Forwards to [`write_match_status`].
+    pub async fn set_match_status(&self, status: &str, is_matched: bool) -> Result<()> {
+        write_match_status(self.ctx, self.entry.get_valid_id()?, status, is_matched).await
+    }
+
+    /// Set or clear a language description. Forwards to
+    /// [`write_language_description`].
+    pub async fn set_language_description(
+        &self,
+        language: &str,
+        text: Option<String>,
+    ) -> Result<()> {
+        write_language_description(self.ctx, self.entry.get_valid_id()?, language, text).await
+    }
+
+    /// Replace the entry's multi-match list. Forwards to
+    /// [`write_multi_match`].
+    pub async fn set_multi_match(&self, items: &[String]) -> Result<()> {
+        write_multi_match(self.ctx, self.entry.get_valid_id()?, items).await
+    }
+
+    /// Remove the entry's multi-match row entirely.
+    pub async fn remove_multi_match(&self) -> Result<()> {
+        // `write_multi_match` with an empty input takes the remove branch.
+        write_multi_match(self.ctx, self.entry.get_valid_id()?, &[]).await
+    }
+
+    /// Set the auto-match (q[0]) and, if more candidates remain,
+    /// also write the multi-match list. **Canonical implementation.**
+    /// `Entry::set_auto_and_multi_match` forwards here.
+    pub async fn set_auto_and_multi_match(&mut self, items: &[String]) -> Result<()> {
+        let mut qs_numeric: Vec<ItemId> = items
+            .iter()
+            .filter_map(|q| AppState::item2numeric(q))
+            .collect();
+        if qs_numeric.is_empty() {
+            return Ok(());
+        }
+        qs_numeric.sort();
+        qs_numeric.dedup();
+        if self.entry.q == Some(qs_numeric[0]) {
+            return Ok(()); // Automatch already there; skip multimatch.
+        }
+        self.set_match(&format!("Q{}", qs_numeric[0]), USER_AUTO).await?;
+        if qs_numeric.len() > 1 {
+            self.set_multi_match(items).await?;
+        }
+        Ok(())
+    }
+
+    /// Insert the wrapped entry into the database. `id` must be `None`
+    /// before the call. **Canonical implementation.**
+    /// `Entry::insert_as_new` forwards here.
+    pub async fn insert_as_new(&mut self) -> Result<EntryId> {
+        if self.entry.id.is_some() {
+            return Err(EntryError::TryingToInsertExistingEntry.into());
+        }
+        let storage = self.ctx.storage().clone();
+        self.entry.id = storage.entry_insert_as_new(self.entry).await?;
+        // Bump the cached overview counters so they don't drift below
+        // reality when the autoscrape pipeline matches one of these
+        // freshly-inserted rows. `entry_insert_as_new` uses
+        // `INSERT IGNORE`, so id=Some(0) means the row already
+        // existed — skip the bump in that case.
+        if matches!(self.entry.id, Some(id) if id > 0) {
+            let _ = storage
+                .overview_apply_insert(self.entry.catalog, self.entry.user, self.entry.q)
+                .await;
+        }
+        Ok(self.entry.id)
+    }
+
+    /// Delete the wrapped entry and its associated rows; resets `id`
+    /// to `None` on success. **Canonical implementation.**
+    /// `Entry::delete` forwards here.
+    pub async fn delete(&mut self) -> Result<()> {
+        // Snapshot the bucket coordinates *before* the DELETE — once
+        // the row is gone we can't classify which overview column to
+        // debit.
+        let catalog = self.entry.catalog;
+        let user = self.entry.user;
+        let q = self.entry.q;
+        let storage = self.ctx.storage().clone();
+        storage.entry_delete(self.entry.get_valid_id()?).await?;
+        let _ = storage.overview_apply_delete(catalog, user, q).await;
+        self.entry.id = None;
+        Ok(())
+    }
+}
+
+// ── Private writer helpers ───────────────────────────────────────────
+//
+// Each `write_*` function holds the canonical body for one writer that
+// used to take `&self` on `Entry`. Both `EntryWriter::method` and the
+// `Entry::method` facade route through the helper, so the body lives
+// in exactly one place. When the `Entry::method` facades are deleted
+// (the audit's end goal), these can either move into `impl EntryWriter`
+// directly or stay as private helpers — either works.
+
+async fn write_auxiliary(
+    ctx: &AppState,
+    entry_id: DbId,
+    prop_numeric: PropertyId,
+    value: Option<String>,
+) -> Result<()> {
+    match value {
+        Some(value) => {
+            // Empty strings are ignored — the storage layer's INSERT
+            // would coerce them to NULL anyway, but the comparison is
+            // cheap and self-documenting.
+            if !value.is_empty() {
+                ctx.storage()
+                    .entry_set_auxiliary(entry_id, prop_numeric, value)
+                    .await?;
+            }
+        }
+        None => {
+            ctx.storage()
+                .entry_remove_auxiliary(entry_id, prop_numeric)
+                .await?;
+        }
+    }
+    Ok(())
+}
+
+async fn write_person_dates(
+    ctx: &AppState,
+    entry_id: DbId,
+    born: &Option<PersonDate>,
+    died: &Option<PersonDate>,
+) -> Result<()> {
+    // Read the currently stored pair and compare; only write if it
+    // actually changed. Avoids overview-table churn on no-op imports.
+    let (born_str, died_str) = ctx.storage().entry_get_person_dates(entry_id).await?;
+    let already_born = born_str.as_deref().and_then(PersonDate::from_db_string);
+    let already_died = died_str.as_deref().and_then(PersonDate::from_db_string);
+    if already_born == *born && already_died == *died {
+        return Ok(());
+    }
+    if born.is_none() && died.is_none() {
+        ctx.storage().entry_delete_person_dates(entry_id).await?;
+    } else {
+        let born = born.map(|d| d.to_db_string()).unwrap_or_default();
+        let died = died.map(|d| d.to_db_string()).unwrap_or_default();
+        ctx.storage()
+            .entry_set_person_dates(entry_id, born, died)
+            .await?;
+    }
+    Ok(())
+}
+
+async fn write_alias(ctx: &AppState, entry_id: DbId, s: &LocaleString) -> Result<()> {
+    ctx.storage()
+        .entry_add_alias(entry_id, s.language(), s.value())
+        .await?;
+    Ok(())
+}
+
+async fn write_auxiliary_in_wikidata(
+    ctx: &AppState,
+    aux_id: DbId,
+    in_wikidata: bool,
+) -> Result<()> {
+    ctx.storage()
+        .entry_set_auxiliary_in_wikidata(in_wikidata, aux_id)
+        .await
+}
+
+async fn write_mnm_relation(
+    ctx: &AppState,
+    entry_id: DbId,
+    prop_numeric: PropertyId,
+    target_entry_id: DbId,
+) -> Result<()> {
+    ctx.storage()
+        .add_mnm_relation(entry_id, prop_numeric, target_entry_id)
+        .await
+}
+
+async fn write_match_status(
+    ctx: &AppState,
+    entry_id: DbId,
+    status: &str,
+    is_matched: bool,
+) -> Result<()> {
+    let is_matched = if is_matched { 1 } else { 0 };
+    ctx.storage()
+        .entry_set_match_status(entry_id, status, is_matched)
+        .await
+}
+
+async fn write_language_description(
+    ctx: &AppState,
+    entry_id: DbId,
+    language: &str,
+    text: Option<String>,
+) -> Result<()> {
+    match text {
+        Some(text) => {
+            ctx.storage()
+                .entry_set_language_description(entry_id, language, text)
+                .await?;
+        }
+        None => {
+            ctx.storage()
+                .entry_remove_language_description(entry_id, language)
+                .await?;
+        }
+    }
+    Ok(())
+}
+
+/// Set or clear the multi-match list for an entry. Empty input or
+/// more than 10 candidates → remove the multi-match row entirely.
+/// Both `set_multi_match` and `remove_multi_match` route through
+/// here — the latter calls it with an empty list, which trips the
+/// remove branch.
+async fn write_multi_match(ctx: &AppState, entry_id: DbId, items: &[String]) -> Result<()> {
+    let qs_numeric: Vec<String> = items
+        .iter()
+        .filter_map(|q| AppState::item2numeric(q))
+        .map(|q| q.to_string())
+        .collect();
+    if qs_numeric.is_empty() || qs_numeric.len() > 10 {
+        ctx.storage().entry_remove_multi_match(entry_id).await?;
+        return Ok(());
+    }
+    let candidates = qs_numeric.join(",");
+    let candidates_count = qs_numeric.len();
+    ctx.storage()
+        .entry_set_multi_match(entry_id, candidates, candidates_count)
+        .await?;
+    Ok(())
+}
+
+async fn write_coordinate_location(
+    ctx: &AppState,
+    entry_id: DbId,
+    cl: &Option<CoordinateLocation>,
+) -> Result<()> {
+    let existing_cl = ctx.storage().entry_get_coordinate_location(entry_id).await?;
+    if existing_cl == *cl {
+        return Ok(());
+    }
+    match cl {
+        Some(cl) => {
+            ctx.storage()
+                .entry_set_coordinate_location(entry_id, cl.lat(), cl.lon(), cl.precision())
+                .await?;
+        }
+        None => {
+            ctx.storage()
+                .entry_remove_coordinate_location(entry_id)
+                .await?;
+        }
+    }
+    Ok(())
 }
 
 impl Entry {
@@ -354,39 +701,20 @@ impl Entry {
     }
 
     /// Inserts the current entry into the database. id must be None.
+    /// Facade — body lives in [`EntryWriter::insert_as_new`].
     //TODO test
     pub async fn insert_as_new(&mut self) -> Result<EntryId> {
-        if self.id.is_some() {
-            return Err(EntryError::TryingToInsertExistingEntry.into());
-        }
-        let storage = self.app()?.storage().clone();
-        self.id = storage.entry_insert_as_new(self).await?;
-        // Bump the cached overview counters so they don't drift below
-        // reality when the autoscrape pipeline matches one of these
-        // freshly-inserted rows. `entry_insert_as_new` uses
-        // `INSERT IGNORE`, so id=Some(0) means the row already
-        // existed — skip the bump in that case.
-        if matches!(self.id, Some(id) if id > 0) {
-            let _ = storage
-                .overview_apply_insert(self.catalog, self.user, self.q)
-                .await;
-        }
-        Ok(self.id)
+        let ctx = self.app()?.clone();
+        EntryWriter::new(&ctx, self).insert_as_new().await
     }
 
-    /// Deletes the entry and all of its associated data in the database. Resets the local ID to 0
+    /// Deletes the entry and all of its associated data in the
+    /// database. Resets the local ID to None. Facade — body lives in
+    /// [`EntryWriter::delete`].
     //TODO test
     pub async fn delete(&mut self) -> Result<()> {
-        // Snapshot the bucket coordinates *before* the DELETE — once the
-        // row is gone we can't classify which overview column to debit.
-        let catalog = self.catalog;
-        let user = self.user;
-        let q = self.q;
-        let storage = self.app()?.storage().clone();
-        storage.entry_delete(self.get_valid_id()?).await?;
-        let _ = storage.overview_apply_delete(catalog, user, q).await;
-        self.id = None;
-        Ok(())
+        let ctx = self.app()?.clone();
+        EntryWriter::new(&ctx, self).delete().await
     }
 
     /// Helper function for `from_row()`.
@@ -452,51 +780,43 @@ impl Entry {
         &self.ext_desc
     }
 
-    /// Updates `ext_name` locally and in the database
+    /// Updates `ext_name` locally and in the database. Facade — body
+    /// lives in [`EntryWriter::set_ext_name`].
     //TODO test
     pub async fn set_ext_name(&mut self, ext_name: &str) -> Result<()> {
-        if self.ext_name != ext_name {
-            self.get_valid_id()?;
-            self.ext_name = ext_name.to_string();
-            self.app()?
-                .storage()
-                .entry_set_ext_name(ext_name, self.get_valid_id()?)
-                .await?;
-        }
-        Ok(())
+        let ctx = self.app()?.clone();
+        EntryWriter::new(&ctx, self).set_ext_name(ext_name).await
     }
 
+    /// Mark an auxiliary row as already-in-Wikidata. Facade — body
+    /// lives in [`write_auxiliary_in_wikidata`].
     //TODO test
     pub async fn set_auxiliary_in_wikidata(&self, aux_id: DbId, in_wikidata: bool) -> Result<()> {
-        self.app()?
-            .storage()
-            .entry_set_auxiliary_in_wikidata(in_wikidata, aux_id)
-            .await
+        write_auxiliary_in_wikidata(self.app()?, aux_id, in_wikidata).await
     }
 
+    /// Add an `mnm_relation` row linking this entry to another via a
+    /// property. Facade — body lives in [`write_mnm_relation`].
     pub async fn add_mnm_relation(
         &self,
         prop_numeric: PropertyId,
         target_entry_id: DbId,
     ) -> Result<()> {
-        self.app()?
-            .storage()
-            .add_mnm_relation(self.get_valid_id()?, prop_numeric, target_entry_id)
-            .await
+        write_mnm_relation(
+            self.app()?,
+            self.get_valid_id()?,
+            prop_numeric,
+            target_entry_id,
+        )
+        .await
     }
 
-    /// Updates `ext_desc` locally and in the database
+    /// Updates `ext_desc` locally and in the database. Facade — body
+    /// lives in [`EntryWriter::set_ext_desc`].
     //TODO test
     pub async fn set_ext_desc(&mut self, ext_desc: &str) -> Result<()> {
-        if self.ext_desc != ext_desc {
-            self.get_valid_id()?;
-            self.ext_desc = ext_desc.to_string();
-            self.app()?
-                .storage()
-                .entry_set_ext_desc(ext_desc, self.get_valid_id()?)
-                .await?;
-        }
-        Ok(())
+        let ctx = self.app()?.clone();
+        EntryWriter::new(&ctx, self).set_ext_desc(ext_desc).await
     }
 
     pub async fn add_to_item(&self, item: &mut ItemEntity) -> Result<()> {
@@ -760,70 +1080,38 @@ impl Entry {
         aq.len() == bq.len() && aq.iter().all(|s| bq.contains(s))
     }
 
-    /// Updates `ext_id` locally and in the database
+    /// Updates `ext_id` locally and in the database. Facade — body
+    /// lives in [`EntryWriter::set_ext_id`].
     //TODO test
     pub async fn set_ext_id(&mut self, ext_id: &str) -> Result<()> {
-        if self.ext_id != ext_id {
-            self.get_valid_id()?;
-            self.ext_id = ext_id.to_string();
-            self.app()?
-                .storage()
-                .entry_set_ext_id(ext_id, self.get_valid_id()?)
-                .await?;
-        }
-        Ok(())
+        let ctx = self.app()?.clone();
+        EntryWriter::new(&ctx, self).set_ext_id(ext_id).await
     }
 
-    /// Updates `ext_url` locally and in the database
+    /// Updates `ext_url` locally and in the database. Facade — body
+    /// lives in [`EntryWriter::set_ext_url`].
     //TODO test
     pub async fn set_ext_url(&mut self, ext_url: &str) -> Result<()> {
-        if self.ext_url != ext_url {
-            self.ext_url = ext_url.to_string();
-            self.app()?
-                .storage()
-                .entry_set_ext_url(ext_url, self.get_valid_id()?)
-                .await?;
-        }
-        Ok(())
+        let ctx = self.app()?.clone();
+        EntryWriter::new(&ctx, self).set_ext_url(ext_url).await
     }
 
-    /// Updates `type_name` locally and in the database
+    /// Updates `type_name` locally and in the database. Facade — body
+    /// lives in [`EntryWriter::set_type_name`].
     //TODO test
     pub async fn set_type_name(&mut self, type_name: Option<String>) -> Result<()> {
-        if self.type_name != type_name {
-            self.type_name.clone_from(&type_name);
-            self.app()?
-                .storage()
-                .entry_set_type_name(type_name, self.get_valid_id()?)
-                .await?;
-        }
-        Ok(())
+        let ctx = self.app()?.clone();
+        EntryWriter::new(&ctx, self).set_type_name(type_name).await
     }
 
-    /// Update person dates in the database, where necessary
+    /// Update person dates in the database, where necessary. Facade —
+    /// body lives in [`write_person_dates`].
     pub async fn set_person_dates(
         &self,
         born: &Option<PersonDate>,
         died: &Option<PersonDate>,
     ) -> Result<()> {
-        let (already_born, already_died) = self.get_person_dates().await?;
-        if already_born != *born || already_died != *died {
-            let entry_id = self.id.ok_or(anyhow!("Entry ID not found"))?;
-            if born.is_none() && died.is_none() {
-                self.app()?
-                    .storage()
-                    .entry_delete_person_dates(entry_id)
-                    .await?;
-            } else {
-                let born = born.map(|d| d.to_db_string()).unwrap_or_default();
-                let died = died.map(|d| d.to_db_string()).unwrap_or_default();
-                self.app()?
-                    .storage()
-                    .entry_set_person_dates(entry_id, born, died)
-                    .await?;
-            }
-        }
-        Ok(())
+        write_person_dates(self.app()?, self.get_valid_id()?, born, died).await
     }
 
     /// Returns the birth and death date of a person as a tuple (born,died)
@@ -839,28 +1127,15 @@ impl Entry {
         Ok((born, died))
     }
 
+    /// Set or clear a language description. Facade — body lives in
+    /// [`write_language_description`].
     //TODO test
     pub async fn set_language_description(
         &self,
         language: &str,
         text: Option<String>,
     ) -> Result<()> {
-        let entry_id = self.get_valid_id()?;
-        match text {
-            Some(text) => {
-                self.app()?
-                    .storage()
-                    .entry_set_language_description(entry_id, language, text)
-                    .await?;
-            }
-            None => {
-                self.app()?
-                    .storage()
-                    .entry_remove_language_description(entry_id, language)
-                    .await?;
-            }
-        }
-        Ok(())
+        write_language_description(self.app()?, self.get_valid_id()?, language, text).await
     }
 
     /// Returns a `LocaleString` Vec of all aliases of the entry
@@ -872,14 +1147,10 @@ impl Entry {
             .await
     }
 
+    /// Add a localised alias for the entry. Facade — body lives in
+    /// [`write_alias`].
     pub async fn add_alias(&self, s: &LocaleString) -> Result<()> {
-        let language = s.language();
-        let label = s.value();
-        self.app()?
-            .storage()
-            .entry_add_alias(self.get_valid_id()?, language, label)
-            .await?;
-        Ok(())
+        write_alias(self.app()?, self.get_valid_id()?, s).await
     }
 
     /// Returns a language:text `HashMap` of all language descriptions of the entry
@@ -891,53 +1162,21 @@ impl Entry {
             .await
     }
 
+    /// Set or clear the auxiliary value for `(entry, prop_numeric)`.
+    /// Facade — body lives in [`write_auxiliary`].
     //TODO test
     pub async fn set_auxiliary(
         &self,
         prop_numeric: PropertyId,
         value: Option<String>,
     ) -> Result<()> {
-        let entry_id = self.get_valid_id()?;
-        match value {
-            Some(value) => {
-                if !value.is_empty() {
-                    self.app()?
-                        .storage()
-                        .entry_set_auxiliary(entry_id, prop_numeric, value)
-                        .await?;
-                }
-            }
-            None => {
-                self.app()?
-                    .storage()
-                    .entry_remove_auxiliary(entry_id, prop_numeric)
-                    .await?;
-            }
-        }
-        Ok(())
+        write_auxiliary(self.app()?, self.get_valid_id()?, prop_numeric, value).await
     }
 
-    /// Update coordinate location in the database, where necessary
+    /// Update coordinate location in the database, where necessary.
+    /// Facade — body lives in [`write_coordinate_location`].
     pub async fn set_coordinate_location(&self, cl: &Option<CoordinateLocation>) -> Result<()> {
-        let existing_cl = self.get_coordinate_location().await?;
-        if existing_cl != *cl {
-            let entry_id = self.get_valid_id()?;
-            match cl {
-                Some(cl) => {
-                    self.app()?
-                        .storage()
-                        .entry_set_coordinate_location(entry_id, cl.lat(), cl.lon(), cl.precision())
-                        .await?;
-                }
-                None => {
-                    self.app()?
-                        .storage()
-                        .entry_remove_coordinate_location(entry_id)
-                        .await?;
-                }
-            }
-        }
-        Ok(())
+        write_coordinate_location(self.app()?, self.get_valid_id()?, cl).await
     }
 
     /// Returns the coordinate locationm or None
@@ -975,33 +1214,20 @@ impl Entry {
         EntryWriter::new(&ctx, self).set_match(q, user_id).await
     }
 
-    // Removes the current match from the entry, and marks the entry as unmatched in other tables.
+    /// Removes the current match from the entry, and marks the entry as
+    /// unmatched in other tables. Facade — body lives in
+    /// [`EntryWriter::unmatch`].
     pub async fn unmatch(&mut self) -> Result<()> {
-        // Snapshot old (user, q) so the overview shift runs against the
-        // pre-unmatch bucket. Without this the overview drifts: the
-        // catalog's `manual`/`na`/`nowd`/`autoq` counter stays elevated
-        // until the next full Refresh.
-        let old_entry = self.clone();
-        let entry_id = self.get_valid_id()?;
-        self.app()?.storage().entry_unmatch(entry_id).await?;
-        self.user = None;
-        self.timestamp = None;
-        self.q = None;
-        self.app()?
-            .storage()
-            .update_overview_table(&old_entry, None, None)
-            .await?;
-        Ok(())
+        let ctx = self.app()?.clone();
+        EntryWriter::new(&ctx, self).unmatch().await
     }
 
     /// Updates the entry matching status in multiple tables.
     //TODO test
+    /// Update the entry's `is_matched` flag in `entry`/`person_dates`.
+    /// Facade — body lives in [`write_match_status`].
     pub async fn set_match_status(&self, status: &str, is_matched: bool) -> Result<()> {
-        let is_matched = if is_matched { 1 } else { 0 };
-        self.app()?
-            .storage()
-            .entry_set_match_status(self.get_valid_id()?, status, is_matched)
-            .await
+        write_match_status(self.app()?, self.get_valid_id()?, status, is_matched).await
     }
 
     /// Retrieves the multi-matches for an entry
@@ -1025,55 +1251,26 @@ impl Entry {
         }
     }
 
-    /// Sets auto-match and multi-match for an entry
+    /// Sets auto-match and multi-match for an entry. Facade — body
+    /// lives in [`EntryWriter::set_auto_and_multi_match`].
     pub async fn set_auto_and_multi_match(&mut self, items: &[String]) -> Result<()> {
-        let mut qs_numeric: Vec<ItemId> = items
-            .iter()
-            .filter_map(|q| AppState::item2numeric(q))
-            .collect();
-        if qs_numeric.is_empty() {
-            return Ok(());
-        }
-        qs_numeric.sort();
-        qs_numeric.dedup();
-        if self.q == Some(qs_numeric[0]) {
-            return Ok(()); // Automatch exists, skipping multimatch
-        }
-        self.set_match(&format!("Q{}", qs_numeric[0]), USER_AUTO)
-            .await?;
-        if qs_numeric.len() > 1 {
-            self.set_multi_match(items).await?;
-        }
-        Ok(())
-    }
-
-    /// Sets multi-matches for an entry
-    pub async fn set_multi_match(&self, items: &[String]) -> Result<()> {
-        let entry_id = self.get_valid_id()?;
-        let app = self.app()?;
-        let qs_numeric: Vec<String> = items
-            .iter()
-            .filter_map(|q| AppState::item2numeric(q))
-            .map(|q| q.to_string())
-            .collect();
-        if qs_numeric.is_empty() || qs_numeric.len() > 10 {
-            return self.remove_multi_match().await;
-        }
-        let candidates = qs_numeric.join(",");
-        let candidates_count = qs_numeric.len();
-
-        app.storage()
-            .entry_set_multi_match(entry_id, candidates, candidates_count)
-            .await?;
-        Ok(())
-    }
-
-    /// Removes multi-matches for an entry, eg when the entry has been fully matched.
-    pub async fn remove_multi_match(&self) -> Result<()> {
-        self.app()?
-            .storage()
-            .entry_remove_multi_match(self.get_valid_id()?)
+        let ctx = self.app()?.clone();
+        EntryWriter::new(&ctx, self)
+            .set_auto_and_multi_match(items)
             .await
+    }
+
+    /// Sets multi-matches for an entry. Facade — body lives in
+    /// [`write_multi_match`].
+    pub async fn set_multi_match(&self, items: &[String]) -> Result<()> {
+        write_multi_match(self.app()?, self.get_valid_id()?, items).await
+    }
+
+    /// Removes multi-matches for an entry, e.g. when the entry has been
+    /// fully matched. Facade — `write_multi_match` with an empty input
+    /// takes the remove branch.
+    pub async fn remove_multi_match(&self) -> Result<()> {
+        write_multi_match(self.app()?, self.get_valid_id()?, &[]).await
     }
 
     /// Checks if the entry is unmatched
