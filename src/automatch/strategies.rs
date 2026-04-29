@@ -643,7 +643,7 @@ fn json_array_of_strings_to_vec_item_ids(json: &serde_json::Value) -> Vec<usize>
     match json.as_array() {
         Some(array) => array
             .iter()
-            .map(|item| item.as_str().unwrap()[1..].parse().unwrap())
+            .filter_map(|item| item.as_str()?.get(1..)?.parse().ok())
             .collect(),
         None => Vec::new(),
     }

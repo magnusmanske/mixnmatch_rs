@@ -486,7 +486,10 @@ impl AutoMatch {
         el_chunk: &[(usize, String)],
         entries: &mut std::collections::HashMap<usize, Entry>,
     ) {
-        let q = api.extract_entity_from_uri(&row[0]).unwrap();
+        let q = match api.extract_entity_from_uri(&row[0]) {
+            Ok(q) => q,
+            Err(_) => return,
+        };
         let q_label = &row[1];
         let entry_candidates: Vec<usize> = el_chunk
             .iter()
