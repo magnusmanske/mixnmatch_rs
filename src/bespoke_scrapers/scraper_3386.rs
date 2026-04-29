@@ -73,7 +73,7 @@ impl BespokeScraper3386 {
             Some(alt) => (
                 alt.to_string(),
                 html_name_flipped.clone(),
-                vec![LocaleString::new("", html_name_flipped)],
+                vec![LocaleString::new("", &html_name_flipped)],
             ),
             None => (html_name_flipped, String::new(), vec![]),
         };
@@ -205,10 +205,7 @@ mod tests {
         assert_eq!(ee.entry.ext_name, "Thomas of Aquino");
         assert_eq!(ee.entry.ext_desc, "Thomas Aquinas");
         assert_eq!(ee.aliases.len(), 1);
-        assert_eq!(
-            ee.aliases[0],
-            LocaleString::new("", "Thomas Aquinas".to_string())
-        );
+        assert_eq!(ee.aliases[0], LocaleString::new("", "Thomas Aquinas"));
     }
 
     #[test]
