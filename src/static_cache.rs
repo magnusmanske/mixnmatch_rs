@@ -126,7 +126,7 @@ impl StaticCache {
     ///
     /// Anything not in the cache (memory mode) or not on disk under root
     /// (disk mode) returns 404.
-    pub fn serve(&self, uri: &Uri) -> Response<Body> {
+    pub async fn serve(&self, uri: &Uri) -> Response<Body> {
         let key = match resolve_request_key(uri) {
             Some(k) => k,
             None => return not_found(),
@@ -137,7 +137,7 @@ impl StaticCache {
             Self::Disk {
                 root,
                 canonical_root,
-            } => serve_from_disk(root, canonical_root, &key),
+            } => serve_from_disk(root, canonical_root, &key).await,
         }
     }
 }
@@ -181,12 +181,15 @@ fn serve_from_memory(files: &HashMap<String, CachedFile>, key: &str) -> Response
     }
 }
 
-fn serve_from_disk(root: &Path, canonical_root: &Path, key: &str) -> Response<Body> {
+async fn serve_from_disk(root: &Path, canonical_root: &Path, key: &str) -> Response<Body> {
     let candidate = root.join(key);
     // Resolve symlinks/`..` so we can verify the final path is still under
     // the configured root. If canonicalize fails the file doesn't exist or
-    // we can't read it — either way, 404.
-    let resolved = match candidate.canonicalize() {
+    // we can't read it — either way, 404. Both syscalls go through
+    // `tokio::fs` so they don't pin the executor thread on slow storage
+    // (NFS on Toolforge); under the hood tokio dispatches them to its
+    // blocking pool.
+    let resolved = match tokio::fs::canonicalize(&candidate).await {
         Ok(p) => p,
         Err(_) => return not_found(),
     };
@@ -194,7 +197,7 @@ fn serve_from_disk(root: &Path, canonical_root: &Path, key: &str) -> Response<Bo
         // Symlink (or some other resolution) escaped the html root.
         return not_found();
     }
-    let bytes = match std::fs::read(&resolved) {
+    let bytes = match tokio::fs::read(&resolved).await {
         Ok(b) => b,
         Err(_) => return not_found(),
     };
@@ -306,62 +309,62 @@ mod tests {
         );
     }
 
-    #[test]
-    fn serves_root_as_index_html() {
+    #[tokio::test]
+    async fn serves_root_as_index_html() {
         let (_tmp, root) = make_tree();
         let cache = StaticCache::load(&root).unwrap();
-        let resp = cache.serve(&Uri::from_static("/"));
+        let resp = cache.serve(&Uri::from_static("/")).await;
         assert_eq!(resp.status(), StatusCode::OK);
         let ct = resp.headers().get(header::CONTENT_TYPE).unwrap();
         assert!(ct.to_str().unwrap().starts_with("text/html"));
     }
 
-    #[test]
-    fn serves_nested_file_with_charset() {
+    #[tokio::test]
+    async fn serves_nested_file_with_charset() {
         let (_tmp, root) = make_tree();
         let cache = StaticCache::load(&root).unwrap();
-        let resp = cache.serve(&Uri::from_static("/sub/a.js"));
+        let resp = cache.serve(&Uri::from_static("/sub/a.js")).await;
         assert_eq!(resp.status(), StatusCode::OK);
         let ct = resp.headers().get(header::CONTENT_TYPE).unwrap();
         assert!(ct.to_str().unwrap().contains("charset=utf-8"));
     }
 
-    #[test]
-    fn missing_file_returns_404() {
+    #[tokio::test]
+    async fn missing_file_returns_404() {
         let (_tmp, root) = make_tree();
         let cache = StaticCache::load(&root).unwrap();
-        let resp = cache.serve(&Uri::from_static("/nope.css"));
+        let resp = cache.serve(&Uri::from_static("/nope.css")).await;
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
-    #[test]
-    fn rejects_parent_traversal() {
+    #[tokio::test]
+    async fn rejects_parent_traversal() {
         let (_tmp, root) = make_tree();
         let cache = StaticCache::load(&root).unwrap();
-        let resp = cache.serve(&Uri::from_static("/../etc/passwd"));
+        let resp = cache.serve(&Uri::from_static("/../etc/passwd")).await;
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
     // ── Live (disk) mode ───────────────────────────────────────────────
 
-    #[test]
-    fn live_serves_root_as_index_html() {
+    #[tokio::test]
+    async fn live_serves_root_as_index_html() {
         let (_tmp, root) = make_tree();
         let cache = StaticCache::live(&root).unwrap();
-        let resp = cache.serve(&Uri::from_static("/"));
+        let resp = cache.serve(&Uri::from_static("/")).await;
         assert_eq!(resp.status(), StatusCode::OK);
         let ct = resp.headers().get(header::CONTENT_TYPE).unwrap();
         assert!(ct.to_str().unwrap().starts_with("text/html"));
     }
 
-    #[test]
-    fn live_picks_up_edits_after_load() {
+    #[tokio::test]
+    async fn live_picks_up_edits_after_load() {
         let (_tmp, root) = make_tree();
         let cache = StaticCache::live(&root).unwrap();
         // Edit the file after the cache is constructed; live mode should
         // see the change on the next request (no in-memory snapshot).
         fs::write(root.join("index.html"), b"<!doctype html>updated").unwrap();
-        let resp = cache.serve(&Uri::from_static("/"));
+        let resp = cache.serve(&Uri::from_static("/")).await;
         assert_eq!(resp.status(), StatusCode::OK);
         // We can't easily read the body without an axum runtime, but the
         // 200 + content-type round-trip is enough to confirm disk access.
@@ -369,37 +372,37 @@ mod tests {
         assert!(ct.to_str().unwrap().starts_with("text/html"));
     }
 
-    #[test]
-    fn live_sets_no_store_cache_header() {
+    #[tokio::test]
+    async fn live_sets_no_store_cache_header() {
         let (_tmp, root) = make_tree();
         let cache = StaticCache::live(&root).unwrap();
-        let resp = cache.serve(&Uri::from_static("/"));
+        let resp = cache.serve(&Uri::from_static("/")).await;
         let cc = resp.headers().get(header::CACHE_CONTROL).unwrap();
         assert_eq!(cc.to_str().unwrap(), "no-store");
     }
 
-    #[test]
-    fn memory_sets_max_age_cache_header() {
+    #[tokio::test]
+    async fn memory_sets_max_age_cache_header() {
         let (_tmp, root) = make_tree();
         let cache = StaticCache::load(&root).unwrap();
-        let resp = cache.serve(&Uri::from_static("/"));
+        let resp = cache.serve(&Uri::from_static("/")).await;
         let cc = resp.headers().get(header::CACHE_CONTROL).unwrap();
         assert!(cc.to_str().unwrap().contains("max-age"));
     }
 
-    #[test]
-    fn live_missing_file_returns_404() {
+    #[tokio::test]
+    async fn live_missing_file_returns_404() {
         let (_tmp, root) = make_tree();
         let cache = StaticCache::live(&root).unwrap();
-        let resp = cache.serve(&Uri::from_static("/nope.css"));
+        let resp = cache.serve(&Uri::from_static("/nope.css")).await;
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
-    #[test]
-    fn live_rejects_parent_traversal() {
+    #[tokio::test]
+    async fn live_rejects_parent_traversal() {
         let (_tmp, root) = make_tree();
         let cache = StaticCache::live(&root).unwrap();
-        let resp = cache.serve(&Uri::from_static("/../etc/passwd"));
+        let resp = cache.serve(&Uri::from_static("/../etc/passwd")).await;
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 }

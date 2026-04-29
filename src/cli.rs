@@ -366,7 +366,15 @@ impl ShellCommands {
                 HeaderName::from_static("x-requested-with"),
             ]);
 
-        let api_router = crate::api::router(app);
+        // The session and CORS middleware are scoped to the API router
+        // only — static asset requests are public and don't need either,
+        // and on Toolforge each layer adds noticeable per-request overhead
+        // (cookie parsing, response cookie refresh, CORS header injection)
+        // that compounds across the dozens of ES-module fetches the SPA
+        // makes on first load.
+        let api_router = crate::api::router(app)
+            .layer(session_layer)
+            .layer(cors);
 
         // Serve the in-memory snapshot as the fallback handler. Every miss
         // returns 404 — we don't fall back to disk, because anything a
@@ -374,13 +382,11 @@ impl ShellCommands {
         let static_cache_for_handler = static_cache.clone();
         let static_handler = get(move |uri: axum::http::Uri| {
             let cache = static_cache_for_handler.clone();
-            async move { cache.serve(&uri) }
+            async move { cache.serve(&uri).await }
         });
 
         let router: Router = api_router
             .fallback(static_handler)
-            .layer(session_layer)
-            .layer(cors)
             .layer(axum::middleware::from_fn(collapse_slashes_in_path));
 
         let scheme = if tls { "https" } else { "http" };
