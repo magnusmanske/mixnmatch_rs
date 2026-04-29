@@ -62,9 +62,7 @@ const DEFAULT_COORDINATE_PRECISION: f64 = 1.0 / 3600.0;
 /// ourselves and fill in a concrete precision (the stored value if we have
 /// one, otherwise the arcsecond default).
 fn build_p625_snak(lat: f64, lon: f64, precision: Option<f64>) -> Snak {
-    use wikimisc::wikibase::{
-        Coordinate, DataValue, DataValueType, SnakDataType, SnakType,
-    };
+    use wikimisc::wikibase::{Coordinate, DataValue, DataValueType, SnakDataType, SnakType};
     Snak::new(
         SnakDataType::GlobeCoordinate,
         wp::P_COORDINATES,
@@ -189,7 +187,11 @@ impl<'a> EntryRepo<'a> {
     /// Load an entry by `(catalog_id, ext_id)`. The pair is unique
     /// per the storage contract.
     pub async fn find_by_ext_id(&self, catalog_id: DbId, ext_id: &str) -> Result<Entry> {
-        let mut ret = self.0.storage().entry_from_ext_id(catalog_id, ext_id).await?;
+        let mut ret = self
+            .0
+            .storage()
+            .entry_from_ext_id(catalog_id, ext_id)
+            .await?;
         ret.set_app(self.0);
         Ok(ret)
     }
@@ -274,10 +276,7 @@ impl<'a> EntryWriter<'a> {
         self.entry.set_person_dates(born, died).await
     }
 
-    pub async fn set_coordinate_location(
-        &mut self,
-        cl: &Option<CoordinateLocation>,
-    ) -> Result<()> {
+    pub async fn set_coordinate_location(&mut self, cl: &Option<CoordinateLocation>) -> Result<()> {
         self.entry.set_coordinate_location(cl).await
     }
 
@@ -324,9 +323,7 @@ impl Entry {
     /// **Prefer [`EntryRepo::find_by_ext_id`]** for new code.
     //TODO test
     pub async fn from_ext_id(catalog_id: DbId, ext_id: &str, app: &AppState) -> Result<Entry> {
-        EntryRepo::new(app)
-            .find_by_ext_id(catalog_id, ext_id)
-            .await
+        EntryRepo::new(app).find_by_ext_id(catalog_id, ext_id).await
     }
 
     /// **Prefer [`EntryRepo::find_many`]** for new code.
@@ -500,7 +497,8 @@ impl Entry {
         self.add_to_item_own_id(&catalog, &references, item);
         self.add_to_item_type(&references, item);
         self.add_to_item_name_and_aliases(&language, item).await?;
-        self.add_to_item_descriptions(language, use_desc, item).await?;
+        self.add_to_item_descriptions(language, use_desc, item)
+            .await?;
         self.add_to_item_coordinates(&references, item).await?;
         self.add_to_item_person_dates(&references, item).await?;
         self.add_to_item_auxiliary(references, item).await?;
@@ -536,12 +534,20 @@ impl Entry {
     ) -> Result<()> {
         let (born, died) = self.get_person_dates().await?;
         if let Some(pd) = born {
-            let snak = Snak::new_time(wp::P_DATE_OF_BIRTH, &pd.to_wikidata_time(), pd.wikidata_precision());
+            let snak = Snak::new_time(
+                wp::P_DATE_OF_BIRTH,
+                &pd.to_wikidata_time(),
+                pd.wikidata_precision(),
+            );
             let claim = Statement::new_normal(snak, vec![], references.to_owned());
             Self::add_claim_or_references(item, claim);
         }
         if let Some(pd) = died {
-            let snak = Snak::new_time(wp::P_DATE_OF_DEATH, &pd.to_wikidata_time(), pd.wikidata_precision());
+            let snak = Snak::new_time(
+                wp::P_DATE_OF_DEATH,
+                &pd.to_wikidata_time(),
+                pd.wikidata_precision(),
+            );
             let claim = Statement::new_normal(snak, vec![], references.to_owned());
             Self::add_claim_or_references(item, claim);
         }
@@ -804,7 +810,11 @@ impl Entry {
     /// Returns the birth and death date of a person as a tuple (born,died)
     pub async fn get_person_dates(&self) -> Result<(Option<PersonDate>, Option<PersonDate>)> {
         let entry_id = self.get_valid_id()?;
-        let (born_str, died_str) = self.app()?.storage().entry_get_person_dates(entry_id).await?;
+        let (born_str, died_str) = self
+            .app()?
+            .storage()
+            .entry_get_person_dates(entry_id)
+            .await?;
         let born = born_str.as_deref().and_then(PersonDate::from_db_string);
         let died = died_str.as_deref().and_then(PersonDate::from_db_string);
         Ok((born, died))
@@ -1097,7 +1107,10 @@ mod tests {
         assert_eq!(via_repo.catalog, via_static.catalog);
         assert_eq!(via_repo.ext_id, via_static.ext_id);
         assert_eq!(via_repo.ext_name, via_static.ext_name);
-        assert!(via_repo.app.is_some(), "repo should set app on returned entry");
+        assert!(
+            via_repo.app.is_some(),
+            "repo should set app on returned entry"
+        );
     }
 
     #[tokio::test]
@@ -1111,9 +1124,7 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert!(entries.contains_key(&TEST_ENTRY_ID));
         assert!(
-            entries
-                .values()
-                .all(|e| e.app.is_some()),
+            entries.values().all(|e| e.app.is_some()),
             "repo should set app on every returned entry"
         );
     }
@@ -1127,7 +1138,7 @@ mod tests {
     /// to the database.
     #[test]
     fn entry_writer_sets_app_when_missing() {
-        let mut entry = Entry {
+        let entry = Entry {
             id: Some(1),
             catalog: 1,
             ext_id: "x".into(),
@@ -1163,24 +1174,15 @@ mod tests {
         let entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
         let born = Some(PersonDate::year_month_day(1974, 5, 24));
         let died = Some(PersonDate::year_month_day(2000, 1, 1));
-        assert_eq!(
-            entry.get_person_dates().await.unwrap(),
-            (born, died)
-        );
+        assert_eq!(entry.get_person_dates().await.unwrap(), (born, died));
 
         // Remove died
         entry.set_person_dates(&born, &None).await.unwrap();
-        assert_eq!(
-            entry.get_person_dates().await.unwrap(),
-            (born, None)
-        );
+        assert_eq!(entry.get_person_dates().await.unwrap(), (born, None));
 
         // Remove born
         entry.set_person_dates(&None, &died).await.unwrap();
-        assert_eq!(
-            entry.get_person_dates().await.unwrap(),
-            (None, died)
-        );
+        assert_eq!(entry.get_person_dates().await.unwrap(), (None, died));
 
         // Remove entire row
         entry.set_person_dates(&None, &None).await.unwrap();
@@ -1188,10 +1190,7 @@ mod tests {
 
         // Set back to original and check
         entry.set_person_dates(&born, &died).await.unwrap();
-        assert_eq!(
-            entry.get_person_dates().await.unwrap(),
-            (born, died)
-        );
+        assert_eq!(entry.get_person_dates().await.unwrap(), (born, died));
     }
 
     #[tokio::test]
@@ -1710,11 +1709,13 @@ mod tests {
     fn entry_deserializes_either_type_or_type_name() {
         // Canonical key.
         let canonical: Entry =
-            serde_json::from_str(r#"{"catalog":1,"ext_id":"x","ext_name":"n","type":"Q5"}"#).unwrap();
+            serde_json::from_str(r#"{"catalog":1,"ext_id":"x","ext_name":"n","type":"Q5"}"#)
+                .unwrap();
         assert_eq!(canonical.type_name.as_deref(), Some("Q5"));
         // Legacy alias for older import files produced before the rename.
         let legacy: Entry =
-            serde_json::from_str(r#"{"catalog":1,"ext_id":"x","ext_name":"n","type_name":"Q5"}"#).unwrap();
+            serde_json::from_str(r#"{"catalog":1,"ext_id":"x","ext_name":"n","type_name":"Q5"}"#)
+                .unwrap();
         assert_eq!(legacy.type_name.as_deref(), Some("Q5"));
     }
 
@@ -1750,7 +1751,10 @@ mod tests {
         let precision = json
             .pointer("/datavalue/value/precision")
             .expect("precision key must be present in JSON");
-        assert!(precision.is_number(), "precision must serialize as a number, got {precision:?}");
+        assert!(
+            precision.is_number(),
+            "precision must serialize as a number, got {precision:?}"
+        );
     }
 
     // ----- Claim/reference dedup (no DB, no network) -----
