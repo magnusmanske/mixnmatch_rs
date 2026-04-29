@@ -1,0 +1,27 @@
+{
+  "entities": {
+    "P214": {
+      "id": "P214",
+      "type": "property",
+      "datatype": "external-id",
+      "claims": {
+        "P1630": [
+          {
+            "mainsnak": {
+              "snaktype": "value",
+              "property": "P1630",
+              "datavalue": {
+                "value": "https://viaf.org/viaf/$1",
+                "type": "string"
+              },
+              "datatype": "string"
+            },
+            "type": "statement",
+            "rank": "preferred"
+          }
+        ]
+      }
+    }
+  },
+  "success": 1
+}

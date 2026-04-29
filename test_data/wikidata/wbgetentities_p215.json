@@ -1,0 +1,11 @@
+{
+  "entities": {
+    "P215": {
+      "id": "P215",
+      "type": "property",
+      "datatype": "external-id",
+      "claims": {}
+    }
+  },
+  "success": 1
+}
