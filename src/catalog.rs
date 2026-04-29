@@ -25,29 +25,17 @@ pub struct Catalog {
     source_item: Option<usize>,
     has_person_date: String,
     taxon_run: bool,
-    app: Option<AppState>,
 }
 
 impl Catalog {
     /// Returns a Catalog object for a given ID.
     pub async fn from_id(catalog_id: usize, app: &AppState) -> Result<Self> {
-        let mut ret = app.storage().get_catalog_from_id(catalog_id).await?;
-        ret.set_mnm(app);
-        Ok(ret)
+        app.storage().get_catalog_from_id(catalog_id).await
     }
 
     /// Returns a Catalog object for a given name.
     pub async fn from_name(name: &str, app: &AppState) -> Result<Self> {
-        let mut ret = app.storage().get_catalog_from_name(name).await?;
-        ret.set_mnm(app);
-        Ok(ret)
-    }
-
-    pub fn new(app: &AppState) -> Self {
-        Self {
-            app: Some(app.clone()),
-            ..Default::default()
-        }
+        app.storage().get_catalog_from_name(name).await
     }
 
     pub fn from_mysql_row(row: &mysql_async::Row) -> Option<Self> {
@@ -66,12 +54,11 @@ impl Catalog {
             source_item: row.get("source_item")?,
             has_person_date: row.get("has_person_date")?,
             taxon_run: row.get("taxon_run")?,
-            app: None,
         })
     }
 
-    pub async fn create_catalog(&mut self) -> Result<()> {
-        self.id = Some(self.app()?.storage().create_catalog(self).await?);
+    pub async fn create_catalog(&mut self, app: &AppState) -> Result<()> {
+        self.id = Some(app.storage().create_catalog(self).await?);
         Ok(())
     }
 
@@ -166,9 +153,8 @@ impl Catalog {
         self.taxon_run
     }
 
-    pub async fn delete(&mut self) -> Result<()> {
-        self.app()?
-            .storage()
+    pub async fn delete(&mut self, app: &AppState) -> Result<()> {
+        app.storage()
             .delete_catalog(self.get_valid_id()?)
             .await?;
         self.id = None;
@@ -176,30 +162,15 @@ impl Catalog {
     }
 
     /// Returns a `HashMap` of key-value pairs for the catalog.
-    pub async fn get_key_value_pairs(&self) -> Result<HashMap<String, String>> {
-        self.app()?
-            .storage()
+    pub async fn get_key_value_pairs(&self, app: &AppState) -> Result<HashMap<String, String>> {
+        app.storage()
             .get_catalog_key_value_pairs(self.get_valid_id()?)
             .await
     }
 
-    /// Sets the `MixNMatch` object. Automatically done when created via `from_id()`.
     //TODO test
-    pub fn set_mnm(&mut self, app: &AppState) {
-        self.app = Some(app.clone());
-    }
-
-    fn app(&self) -> Result<&AppState> {
-        self.app.as_ref().map_or_else(
-            || Err(anyhow!("Catalog {}: app not set", self.get_valid_id()?)),
-            Ok,
-        )
-    }
-
-    //TODO test
-    pub async fn refresh_overview_table(&self) -> Result<()> {
-        self.app()?
-            .storage()
+    pub async fn refresh_overview_table(&self, app: &AppState) -> Result<()> {
+        app.storage()
             .catalog_refresh_overview_table(self.get_valid_id()?)
             .await
     }
@@ -216,12 +187,11 @@ impl Catalog {
     /// `USER_DATE_MATCH` (id 3) for parity with the PHP user — keeps
     /// the post-migration audit trail consistent with rows that have
     /// been around since the PHP era.
-    pub async fn sync_from_sparql(&self, property: usize) -> Result<usize> {
+    pub async fn sync_from_sparql(&self, app: &AppState, property: usize) -> Result<usize> {
         if property == 0 {
             return Ok(0);
         }
         let id = self.get_valid_id()?;
-        let app = self.app()?.clone();
 
         let already_matched = app
             .storage()
@@ -246,12 +216,12 @@ impl Catalog {
             // ext_id — sync_from_sparql does not invent rows. Failure
             // is non-fatal: the Wikidata side might have catalogued an
             // ext_id we never imported.
-            let mut entry = match crate::entry::Entry::from_ext_id(id, &value, &app).await {
+            let mut entry = match crate::entry::Entry::from_ext_id(id, &value, app).await {
                 Ok(e) => e,
                 Err(_) => continue,
             };
             let q_str = format!("Q{q_num}");
-            if EntryWriter::new(&app, &mut entry)
+            if EntryWriter::new(app, &mut entry)
                 .set_match(&q_str, crate::app_state::USER_DATE_MATCH)
                 .await
                 .is_ok()
@@ -301,10 +271,9 @@ impl Catalog {
     }
 
     // TODO test
-    pub async fn set_taxon_run(&mut self, new_taxon_run: bool) -> Result<()> {
+    pub async fn set_taxon_run(&mut self, app: &AppState, new_taxon_run: bool) -> Result<()> {
         if self.taxon_run != new_taxon_run {
-            self.app()?
-                .storage()
+            app.storage()
                 .set_catalog_taxon_run(self.get_valid_id()?, new_taxon_run)
                 .await?;
             self.taxon_run = new_taxon_run;
@@ -317,15 +286,14 @@ impl Catalog {
     /// # Returns
     ///
     /// * `Result<bool>` - A result indicating whether the `has_person_date` field was changed to "yes".
-    pub async fn check_and_set_person_date(&mut self) -> Result<bool> {
+    pub async fn check_and_set_person_date(&mut self, app: &AppState) -> Result<bool> {
         let has_new_dates = if self.has_person_date != "yes"
-            && self
-                .app()?
+            && app
                 .storage()
                 .do_catalog_entries_have_person_date(self.get_valid_id()?)
                 .await?
         {
-            self.set_has_person_date("yes").await?;
+            self.set_has_person_date(app, "yes").await?;
             true
         } else {
             false
@@ -333,22 +301,22 @@ impl Catalog {
         Ok(has_new_dates)
     }
 
-    pub async fn set_has_person_date(&mut self, new_has_person_date: &str) -> Result<()> {
-        self.app()?
-            .storage()
+    pub async fn set_has_person_date(
+        &mut self,
+        app: &AppState,
+        new_has_person_date: &str,
+    ) -> Result<()> {
+        app.storage()
             .set_has_person_date(self.get_valid_id()?, new_has_person_date)
             .await?;
         self.has_person_date = new_has_person_date.to_string();
         Ok(())
     }
 
-    pub async fn number_of_entries(&self) -> Result<usize> {
-        let ret = self
-            .app()?
-            .storage()
+    pub async fn number_of_entries(&self, app: &AppState) -> Result<usize> {
+        app.storage()
             .number_of_entries_in_catalog(self.get_valid_id()?)
-            .await?;
-        Ok(ret)
+            .await
     }
 }
 

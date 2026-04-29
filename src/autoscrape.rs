@@ -386,7 +386,7 @@ impl Autoscrape {
             .autoscrape_finish(autoscrape_id, last_run_urls)
             .await?;
         let catalog = Catalog::from_id(self.catalog_id, &self.app).await?;
-        let _ = catalog.refresh_overview_table().await;
+        let _ = catalog.refresh_overview_table(&self.app).await;
         let _ = self.clear_offset().await;
         let _ =
             Job::queue_simple_job(&self.app, self.catalog_id, "automatch_by_search", None).await;

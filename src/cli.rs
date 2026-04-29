@@ -452,10 +452,8 @@ impl ShellCommands {
             Some(Commands::DeleteCatalog { config, id, really }) => {
                 let _ = really; // To suppress warning, flag is not actually used
                 let app = Self::path2app(config)?;
-                crate::catalog::Catalog::from_id(*id, &app)
-                    .await?
-                    .delete()
-                    .await?;
+                let mut catalog = crate::catalog::Catalog::from_id(*id, &app).await?;
+                catalog.delete(&app).await?;
             }
             Some(Commands::CreateUnmatched {
                 config,

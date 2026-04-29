@@ -123,10 +123,8 @@ impl Maintenance {
             .get_catalogs_with_person_dates_without_flag()
             .await?;
         for catalog_id in catalog_ids {
-            Catalog::from_id(catalog_id, &self.app)
-                .await?
-                .set_has_person_date("yes")
-                .await?;
+            let mut catalog = Catalog::from_id(catalog_id, &self.app).await?;
+            catalog.set_has_person_date(&self.app, "yes").await?;
             Job::queue_simple_job(&self.app, catalog_id, "match_person_dates", None).await?;
             Job::queue_simple_job(&self.app, catalog_id, "match_on_birthdate", None).await?;
             Job::queue_simple_job(&self.app, catalog_id, "match_on_deathdate", None).await?;

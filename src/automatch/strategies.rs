@@ -31,7 +31,7 @@ impl AutoMatch {
 
     pub async fn automatch_with_sparql(&mut self, catalog_id: usize) -> Result<()> {
         let catalog = Catalog::from_id(catalog_id, &self.app).await?;
-        let sparql = Self::read_automatch_sparql(&catalog).await?;
+        let sparql = Self::read_automatch_sparql(&catalog, &self.app).await?;
 
         // Try the unbatched query first — fast path when WDQS is healthy
         // and the result is small enough to stream. If the streaming query
@@ -52,8 +52,8 @@ impl AutoMatch {
     /// Pull the user-supplied SPARQL fragment out of the catalog's kv_pairs
     /// and shape it into a complete `SELECT ?q ?qLabel WHERE { ... }` query
     /// when the user only supplied the WHERE body.
-    async fn read_automatch_sparql(catalog: &Catalog) -> Result<String> {
-        let kv_pairs = catalog.get_key_value_pairs().await?;
+    async fn read_automatch_sparql(catalog: &Catalog, app: &crate::app_state::AppState) -> Result<String> {
+        let kv_pairs = catalog.get_key_value_pairs(app).await?;
         let sparql_part = kv_pairs
             .get("automatch_sparql")
             .ok_or_else(|| anyhow!("No automatch_sparql key in catalog"))?;
