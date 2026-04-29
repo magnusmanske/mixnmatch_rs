@@ -60,6 +60,7 @@ pub mod scraper_5522;
 pub mod scraper_6545;
 pub mod scraper_6600;
 pub mod scraper_6601;
+pub mod scraper_6717;
 pub mod scraper_6479;
 pub mod scraper_6794;
 pub mod scraper_6975;
@@ -104,6 +105,7 @@ pub use scraper_5522::BespokeScraper5522;
 pub use scraper_6545::BespokeScraper6545;
 pub use scraper_6600::BespokeScraper6600;
 pub use scraper_6601::BespokeScraper6601;
+pub use scraper_6717::BespokeScraper6717;
 pub use scraper_6479::BespokeScraper6479;
 pub use scraper_6794::BespokeScraper6794;
 pub use scraper_6975::BespokeScraper6975;
@@ -171,6 +173,7 @@ const SCRAPER_REGISTRY: &[(usize, ScraperRunFn)] = &[
     scraper_entry!(6545, BespokeScraper6545),
     scraper_entry!(6600, BespokeScraper6600),
     scraper_entry!(6601, BespokeScraper6601),
+    scraper_entry!(6717, BespokeScraper6717),
     scraper_entry!(6794, BespokeScraper6794),
     scraper_entry!(6975, BespokeScraper6975),
     scraper_entry!(6976, BespokeScraper6976),
@@ -339,7 +342,7 @@ mod tests {
         for expected in &[
             53_usize, 85, 121, 122, 722, 1178, 1223, 1379, 1619, 2670, 2849, 2964, 3386, 3387,
             3862, 4097, 4098, 4361, 4589, 4600, 4679, 4681, 4825, 4966, 5100, 5103, 5311, 5347,
-            5522, 6479, 6545, 6600, 6601, 6794, 6975, 6976, 7043, 7433, 7696, 7697, 7700,
+            5522, 6479, 6545, 6600, 6601, 6717, 6794, 6975, 6976, 7043, 7433, 7696, 7697, 7700,
         ] {
             assert!(
                 ids.contains(expected),
