@@ -19,7 +19,8 @@
 mod cleanup;
 mod wikidata_sync;
 
-use crate::app_state::{AppState, USER_DATE_MATCH};
+use crate::app_state::{AppContext, AppState, USER_DATE_MATCH};
+use std::sync::Arc;
 use crate::catalog::Catalog;
 use crate::entry::{Entry, EntryWriter};
 use crate::job::Job;
@@ -27,12 +28,17 @@ use anyhow::Result;
 
 #[derive(Debug, Clone)]
 pub struct Maintenance {
-    pub(super) app: AppState,
+    pub(super) app: Arc<dyn AppContext>,
 }
 
 impl Maintenance {
     pub fn new(app: &AppState) -> Self {
-        Self { app: app.clone() }
+        let app: Arc<dyn AppContext> = Arc::new(app.clone());
+        Self { app }
+    }
+
+    pub fn from_arc(app: Arc<dyn AppContext>) -> Self {
+        Self { app }
     }
 
     pub async fn common_names_birth_year(&self) -> Result<()> {
@@ -91,8 +97,8 @@ impl Maintenance {
         results.sort();
         results.dedup();
         for (entry_id, q) in results {
-            if let Ok(mut entry) = Entry::from_id(entry_id, &self.app).await {
-                let _ = EntryWriter::new(&self.app, &mut entry)
+            if let Ok(mut entry) = Entry::from_id(entry_id, self.app.as_ref()).await {
+                let _ = EntryWriter::new(self.app.as_ref(), &mut entry)
                     .set_match(&format!("Q{q}"), USER_DATE_MATCH)
                     .await;
             };
@@ -123,11 +129,11 @@ impl Maintenance {
             .get_catalogs_with_person_dates_without_flag()
             .await?;
         for catalog_id in catalog_ids {
-            let mut catalog = Catalog::from_id(catalog_id, &self.app).await?;
-            catalog.set_has_person_date(&self.app, "yes").await?;
-            Job::queue_simple_job(&self.app, catalog_id, "match_person_dates", None).await?;
-            Job::queue_simple_job(&self.app, catalog_id, "match_on_birthdate", None).await?;
-            Job::queue_simple_job(&self.app, catalog_id, "match_on_deathdate", None).await?;
+            let mut catalog = Catalog::from_id(catalog_id, self.app.as_ref()).await?;
+            catalog.set_has_person_date(self.app.as_ref(), "yes").await?;
+            Job::queue_simple_job(self.app.as_ref(), catalog_id, "match_person_dates", None).await?;
+            Job::queue_simple_job(self.app.as_ref(), catalog_id, "match_on_birthdate", None).await?;
+            Job::queue_simple_job(self.app.as_ref(), catalog_id, "match_on_deathdate", None).await?;
         }
         Ok(())
     }

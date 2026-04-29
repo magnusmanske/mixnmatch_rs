@@ -1,4 +1,5 @@
-use crate::app_state::AppState;
+use crate::app_state::{AppContext, AppState};
+use std::sync::Arc;
 use crate::catalog::Catalog;
 use crate::datasource::DataSource;
 use crate::entry::Entry;
@@ -81,14 +82,15 @@ impl Jobbable for UpdateCatalog {
 
 #[derive(Debug, Clone)]
 pub struct UpdateCatalog {
-    app: AppState,
+    app: Arc<dyn AppContext>,
     job: Option<Job>,
 }
 
 impl UpdateCatalog {
     pub fn new(app: &AppState) -> Self {
+        let app: Arc<dyn AppContext> = Arc::new(app.clone());
         Self {
-            app: app.clone(),
+            app,
             job: None,
         }
     }
@@ -163,7 +165,7 @@ impl UpdateCatalog {
         datasource: &mut DataSource,
         batch_size: usize,
     ) -> Result<Vec<StringRecord>> {
-        let mut reader = datasource.get_reader(&self.app).await?;
+        let mut reader = datasource.get_reader(self.app.as_ref()).await?;
         let mut row_cache = vec![];
         while let Some(result) = reader.records().next() {
             let result = match Self::update_from_tabbed_file_check_result(result, datasource)? {
@@ -185,8 +187,8 @@ impl UpdateCatalog {
     ) -> Result<DataSource> {
         let update_info = self.get_update_info(catalog_id).await?;
         let json = update_info.json()?;
-        let catalog = Catalog::from_id(catalog_id, &self.app).await?;
-        let entries_already_in_catalog = catalog.number_of_entries(&self.app).await?;
+        let catalog = Catalog::from_id(catalog_id, self.app.as_ref()).await?;
+        let entries_already_in_catalog = catalog.number_of_entries(self.app.as_ref()).await?;
         let mut datasource = DataSource::new(catalog_id, &json)?;
         datasource.offset = self.get_last_job_offset().await;
         datasource.just_add = entries_already_in_catalog == 0 || datasource.just_add;
@@ -256,18 +258,18 @@ impl UpdateCatalog {
             Some(ext_id) => ext_id,
             None => return Ok(()), // TODO ???
         };
-        match Entry::from_ext_id(datasource.catalog_id, ext_id, &self.app).await {
+        match Entry::from_ext_id(datasource.catalog_id, ext_id, self.app.as_ref()).await {
             Ok(mut entry) => {
                 if !datasource.just_add {
                     let mut extended_entry = ExtendedEntry::from_row(row, datasource)?;
                     extended_entry
-                        .update_existing(&mut entry, &self.app)
+                        .update_existing(&mut entry, self.app.as_ref())
                         .await?;
                 }
             }
             _ => {
                 let mut extended_entry = ExtendedEntry::from_row(row, datasource)?;
-                extended_entry.insert_new(&self.app).await?;
+                extended_entry.insert_new(self.app.as_ref()).await?;
             }
         }
         Ok(())

@@ -308,7 +308,7 @@ impl Maintenance {
         if catalog_id == 0 {
             return Err(anyhow!("catalog id must be positive"));
         }
-        let cat = Catalog::from_id(catalog_id, &self.app).await?;
+        let cat = Catalog::from_id(catalog_id, self.app.as_ref()).await?;
         if !cat.is_active() {
             return Err(anyhow!("catalog {catalog_id} is not active"));
         }
@@ -358,7 +358,7 @@ impl Maintenance {
             if wd_q == our_q {
                 continue;
             }
-            let mut entry = match Entry::from_id(entry_id, &self.app).await {
+            let mut entry = match Entry::from_id(entry_id, self.app.as_ref()).await {
                 Ok(e) => e,
                 Err(e) => {
                     log::warn!("overwrite_from_wikidata: cannot load entry {entry_id}: {e}");
@@ -366,7 +366,7 @@ impl Maintenance {
                 }
             };
             let q_str = format!("Q{wd_q}");
-            if let Err(e) = EntryWriter::new(&self.app, &mut entry)
+            if let Err(e) = EntryWriter::new(self.app.as_ref(), &mut entry)
                 .set_match(&q_str, USER_AUX_MATCH)
                 .await
             {
@@ -482,7 +482,7 @@ impl Maintenance {
         // same query, so it lives there as the single source of truth.
         let ext_id_props: HashSet<usize> =
             crate::auxiliary_matcher::AuxiliaryMatcher::get_properties_that_have_external_ids(
-                &self.app,
+                self.app.as_ref(),
             )
             .await?
             .into_iter()

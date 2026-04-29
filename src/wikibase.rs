@@ -1,4 +1,4 @@
-use crate::{app_state::AppState, catalog::Catalog, extended_entry::ExtendedEntry};
+use crate::{app_state::ExternalServicesContext, catalog::Catalog, extended_entry::ExtendedEntry};
 use anyhow::{Result, anyhow};
 use mediawiki::Api;
 use serde_json::Value;
@@ -187,7 +187,7 @@ pub enum WikiBaseUser {
 }
 
 impl WikiBaseUser {
-    pub async fn new_from_id(user_id: usize, app: &AppState) -> Option<Self> {
+    pub async fn new_from_id(user_id: usize, app: &dyn ExternalServicesContext) -> Option<Self> {
         match user_id {
             0 => Some(Self::Automatch),
             2 => Some(Self::User {
@@ -260,7 +260,7 @@ impl WikiBase {
 
     pub async fn generate_entry_item(
         &self,
-        app: &AppState,
+        app: &dyn ExternalServicesContext,
         ext_entry: &ExtendedEntry,
         catalog_item: &str,
     ) -> Option<ItemEntity> {
@@ -402,7 +402,7 @@ impl WikiBase {
     // Returns the equivalent Wikibase item for the catalog, or tries to create one.
     pub async fn get_or_create_catalog(
         &mut self,
-        app: &AppState,
+        app: &dyn ExternalServicesContext,
         catalog_id: usize,
     ) -> Result<String> {
         if let Some(catalog_item) = self.get_catalog_item_from_old_id(catalog_id).await {
@@ -461,7 +461,7 @@ impl WikiBase {
 
     pub async fn generate_catalog_item(
         &self,
-        app: &AppState,
+        app: &dyn ExternalServicesContext,
         catalog: &Catalog,
     ) -> Option<ItemEntity> {
         let mut item = ItemEntity::new_missing();

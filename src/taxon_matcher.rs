@@ -1,5 +1,5 @@
-use crate::app_state::AppState;
-use crate::app_state::USER_AUX_MATCH;
+use crate::app_state::{AppContext, AppState, USER_AUX_MATCH};
+use std::sync::Arc;
 use crate::catalog::Catalog;
 use crate::entry::{Entry, EntryWriter};
 use crate::job::Job;
@@ -65,14 +65,15 @@ impl Jobbable for TaxonMatcher {
 
 #[derive(Debug, Clone)]
 pub struct TaxonMatcher {
-    app: AppState,
+    app: Arc<dyn AppContext>,
     job: Option<Job>,
 }
 
 impl TaxonMatcher {
     pub fn new(app: &AppState) -> Self {
+        let app: Arc<dyn AppContext> = Arc::new(app.clone());
         Self {
-            app: app.clone(),
+            app,
             job: None,
         }
     }
@@ -99,7 +100,7 @@ impl TaxonMatcher {
 
     /// Tries to find full matches for entries that are a taxon
     pub async fn match_taxa(&mut self, catalog_id: usize) -> Result<()> {
-        let mut catalog = Catalog::from_id(catalog_id, &self.app).await?;
+        let mut catalog = Catalog::from_id(catalog_id, self.app.as_ref()).await?;
         let mw_api = self.app.wikidata().get_mw_api().await?;
         let use_desc = USE_DESCRIPTIONS_FOR_TAXON_NAME_CATALOGS.contains(&catalog_id);
         let mut ranks: Vec<&str> = TAXON_RANKS.clone().into_values().collect();
@@ -137,7 +138,7 @@ impl TaxonMatcher {
         let _ = self.clear_offset().await;
 
         // Update catalog as "done at least once" if necessary
-        catalog.set_taxon_run(&self.app, true).await?;
+        catalog.set_taxon_run(self.app.as_ref(), true).await?;
         Ok(())
     }
 
@@ -199,13 +200,13 @@ impl TaxonMatcher {
                     std::cmp::Ordering::Less => {}
                     std::cmp::Ordering::Equal => {
                         if let Some(q) = qs.first() {
-                            let mut entry = Entry::from_id(*entry_id, &self.app).await?;
-                            let _ = EntryWriter::new(&self.app, &mut entry).set_match(q, USER_AUX_MATCH).await;
+                            let mut entry = Entry::from_id(*entry_id, self.app.as_ref()).await?;
+                            let _ = EntryWriter::new(self.app.as_ref(), &mut entry).set_match(q, USER_AUX_MATCH).await;
                         }
                     }
                     std::cmp::Ordering::Greater => {
-                        let mut entry = Entry::from_id(*entry_id, &self.app).await?;
-                        let _ = EntryWriter::new(&self.app, &mut entry).set_multi_match(&qs).await;
+                        let mut entry = Entry::from_id(*entry_id, self.app.as_ref()).await?;
+                        let _ = EntryWriter::new(self.app.as_ref(), &mut entry).set_multi_match(&qs).await;
                     }
                 }
             }

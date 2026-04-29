@@ -6,7 +6,7 @@
 //! orphans, ext_url drift) and rewrite or remove the offending rows.
 
 use super::Maintenance;
-use crate::app_state::{AppState, USER_AUX_MATCH};
+use crate::app_state::{AppState, USER_AUX_MATCH}; // AppState kept for item2numeric static calls
 use crate::auxiliary_matcher::AuxiliaryMatcher;
 use crate::catalog::Catalog;
 use crate::entry::{Entry, EntryWriter};
@@ -243,7 +243,7 @@ impl Maintenance {
     }
 
     async fn unmatch_one(&self, entry_id: usize) -> bool {
-        let mut entry = match Entry::from_id(entry_id, &self.app).await {
+        let mut entry = match Entry::from_id(entry_id, self.app.as_ref()).await {
             Ok(e) => e,
             Err(e) => {
                 log::warn!(
@@ -252,7 +252,7 @@ impl Maintenance {
                 return false;
             }
         };
-        if let Err(e) = EntryWriter::new(&self.app, &mut entry).unmatch().await {
+        if let Err(e) = EntryWriter::new(self.app.as_ref(), &mut entry).unmatch().await {
             log::warn!(
                 "sanity_check_date_matches_are_human: unmatch failed for entry {entry_id}: {e}"
             );
@@ -403,9 +403,9 @@ impl Maintenance {
             Err(_) => return,
         };
         if let Some(entry_id) = inventory_number2entry_id.get(&id) {
-            if let Ok(mut entry) = Entry::from_id(*entry_id, &self.app).await {
+            if let Ok(mut entry) = Entry::from_id(*entry_id, self.app.as_ref()).await {
                 if !entry.is_fully_matched() {
-                    let _ = EntryWriter::new(&self.app, &mut entry)
+                    let _ = EntryWriter::new(self.app.as_ref(), &mut entry)
                         .set_match(&q, USER_AUX_MATCH)
                         .await;
                 }
@@ -418,8 +418,8 @@ impl Maintenance {
         catalog_id: usize,
         mw_api: &mediawiki::Api,
     ) -> Result<Vec<serde_json::Value>> {
-        let catalog = Catalog::from_id(catalog_id, &self.app).await?;
-        let kv_catalog = catalog.get_key_value_pairs(&self.app).await?;
+        let catalog = Catalog::from_id(catalog_id, self.app.as_ref()).await?;
+        let kv_catalog = catalog.get_key_value_pairs(self.app.as_ref()).await?;
         let collection_q = kv_catalog
             .get("collection")
             .ok_or_else(|| anyhow!("Catalog {catalog_id} does not have a 'collection' key"))?;
@@ -467,7 +467,7 @@ impl Maintenance {
         total_matched: &mut usize,
         catalogs_to_microsync: &mut HashSet<usize>,
     ) {
-        let entries = match Entry::multiple_from_ids(entry_ids, &self.app).await {
+        let entries = match Entry::multiple_from_ids(entry_ids, self.app.as_ref()).await {
             Ok(map) => map,
             Err(e) => {
                 log::warn!("crossmatch_via_aux: cannot load entries for P{prop} group: {e}");
@@ -504,14 +504,14 @@ impl Maintenance {
         }
         let q_str = format!("Q{q}");
         for (entry_id, catalog_id) in unmatched_entries {
-            let mut entry = match Entry::from_id(entry_id, &self.app).await {
+            let mut entry = match Entry::from_id(entry_id, self.app.as_ref()).await {
                 Ok(e) => e,
                 Err(e) => {
                     log::warn!("crossmatch_via_aux: re-load failed for entry {entry_id}: {e}");
                     continue;
                 }
             };
-            if EntryWriter::new(&self.app, &mut entry)
+            if EntryWriter::new(self.app.as_ref(), &mut entry)
                 .set_match(&q_str, USER_AUX_MATCH)
                 .await
                 .is_ok()
@@ -588,7 +588,7 @@ impl Maintenance {
         // entry_set_match_cleanup already covers the most important
         // bookkeeping.
         for catalog_id in catalogs_to_microsync {
-            if let Err(e) = Job::queue_simple_job(&self.app, catalog_id, "microsync", None).await
+            if let Err(e) = Job::queue_simple_job(self.app.as_ref(), catalog_id, "microsync", None).await
             {
                 log::warn!(
                     "crossmatch_via_aux: failed to queue microsync for catalog {catalog_id}: {e}"

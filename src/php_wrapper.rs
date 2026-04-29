@@ -1,4 +1,4 @@
-use crate::app_state::AppState;
+use crate::app_state::{AppState, RuntimeConfig};
 use anyhow::Result;
 use chrono::Utc;
 use log::info;
@@ -8,7 +8,7 @@ use std::process::Command;
 pub struct PhpWrapper;
 
 impl PhpWrapper {
-    fn new_command(script: &str, app: &AppState) -> Command {
+    fn new_command(script: &str, app: &dyn RuntimeConfig) -> Command {
         let root_dir = AppState::tool_root_dir();
         let mut ret = if AppState::is_on_toolforge() {
             let mut ret = Command::new(app.toolforge_php_command());
@@ -22,7 +22,7 @@ impl PhpWrapper {
         ret
     }
 
-    fn run_command_with_catalog_id(catalog_id: usize, command: &str, app: &AppState) -> Result<()> {
+    fn run_command_with_catalog_id(catalog_id: usize, command: &str, app: &dyn RuntimeConfig) -> Result<()> {
         info!("PHP: {command} {catalog_id} START [{}]", Utc::now());
         let output = Self::new_command(command, app)
             .arg(format!("{catalog_id}"))
@@ -32,19 +32,19 @@ impl PhpWrapper {
         Ok(())
     }
 
-    pub fn update_person_dates(catalog_id: usize, app: &AppState) -> Result<()> {
+    pub fn update_person_dates(catalog_id: usize, app: &dyn RuntimeConfig) -> Result<()> {
         Self::run_command_with_catalog_id(catalog_id, "person_dates/update_person_dates.php", app)
     }
 
-    pub fn generate_aux_from_description(catalog_id: usize, app: &AppState) -> Result<()> {
+    pub fn generate_aux_from_description(catalog_id: usize, app: &dyn RuntimeConfig) -> Result<()> {
         Self::run_command_with_catalog_id(catalog_id, "generate_aux_from_description.php", app)
     }
 
-    pub fn update_descriptions_from_url(catalog_id: usize, app: &AppState) -> Result<()> {
+    pub fn update_descriptions_from_url(catalog_id: usize, app: &dyn RuntimeConfig) -> Result<()> {
         Self::run_command_with_catalog_id(catalog_id, "update_descriptions_from_url.php", app)
     }
 
-    pub fn import_aux_from_url(catalog_id: usize, app: &AppState) -> Result<()> {
+    pub fn import_aux_from_url(catalog_id: usize, app: &dyn RuntimeConfig) -> Result<()> {
         Self::run_command_with_catalog_id(catalog_id, "import_aux_from_url.php", app)
     }
 }
