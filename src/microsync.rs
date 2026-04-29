@@ -334,14 +334,14 @@ impl Microsync {
         base_url: &str,
         property: usize,
     ) -> Result<String> {
-        let url =
-            format!("{base_url}?action=wbgetentities&ids=P{property}&format=json");
+        let url = format!("{base_url}?action=wbgetentities&ids=P{property}&format=json");
         let client = wikimisc::wikidata::Wikidata::new().reqwest_client()?;
         let json = client.get(&url).send().await?.json::<Value>().await?;
-        let url2 = json["entities"][format!("P{property}")]["claims"][wp::P_FORMATTER_URL][0]
-            ["mainsnak"]["datavalue"]["value"]
-            .as_str()
-            .map_or_else(String::new, |url_tmp| url_tmp.to_string());
+        let url2 =
+            json["entities"][format!("P{property}")]["claims"][wp::P_FORMATTER_URL][0]["mainsnak"]
+                ["datavalue"]["value"]
+                .as_str()
+                .map_or_else(String::new, |url_tmp| url_tmp.to_string());
         Ok(url2)
     }
 
@@ -683,12 +683,12 @@ mod tests {
             p.push(name);
             std::fs::read_to_string(&p)
                 .unwrap_or_else(|e| panic!("missing fixture {}: {e}", p.display()))
-            }
+        }
 
         let server = MockServer::start().await;
 
         let cases = [
-            (214usize, "wbgetentities_p214.json"),
+            (214_usize, "wbgetentities_p214.json"),
             (215, "wbgetentities_p215.json"),
             (0, "wbgetentities_p0.json"),
         ];
