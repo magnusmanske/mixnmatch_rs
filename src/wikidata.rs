@@ -330,10 +330,22 @@ impl Wikidata {
         query: &str,
         srlimit: Option<usize>,
     ) -> Result<Vec<String>> {
+        Self::search_with_limit_against(WIKIDATA_API_URL, query, srlimit).await
+    }
+
+    /// Test seam for [`Self::search_with_limit`]: lets a unit test point the
+    /// search call at a `wiremock::MockServer` instead of the live Wikidata
+    /// API. Production callers go through `search_with_limit`, which fixes
+    /// `base_url` to [`WIKIDATA_API_URL`].
+    pub(crate) async fn search_with_limit_against(
+        base_url: &str,
+        query: &str,
+        srlimit: Option<usize>,
+    ) -> Result<Vec<String>> {
         if query.is_empty() {
             return Ok(vec![]);
         }
-        let ret = Self::search_with_limit_run_query(query, srlimit)
+        let ret = Self::search_with_limit_run_query(base_url, query, srlimit)
             .await?
             .iter()
             .filter_map(|result| {
@@ -425,11 +437,22 @@ impl Wikidata {
     /// "Scholarly article" items are excluded from results, unless specifically asked for with Q13442814
     /// Common "meta items" such as disambiguation items are excluded as well
     pub async fn search_with_type_api(&self, name: &str, type_q: &str) -> Result<Vec<String>> {
+        Self::search_with_type_against(WIKIDATA_API_URL, name, type_q).await
+    }
+
+    /// Test seam for [`Self::search_with_type_api`]. Production fixes
+    /// `base_url` to [`WIKIDATA_API_URL`]; tests inject a `wiremock`
+    /// server URI to stay hermetic.
+    pub(crate) async fn search_with_type_against(
+        base_url: &str,
+        name: &str,
+        type_q: &str,
+    ) -> Result<Vec<String>> {
         if name.is_empty() {
             return Ok(vec![]);
         }
         if type_q.is_empty() {
-            return self.search_with_limit(name, None).await;
+            return Self::search_with_limit_against(base_url, name, None).await;
         }
         let mut query = format!("{name} haswbstatement:P31={type_q}");
         if type_q != "Q13442814" {
@@ -441,7 +464,7 @@ impl Wikidata {
             .map(|q| format!(" -haswbstatement:P31={q}"))
             .collect();
         query += &meta_items.join("");
-        self.search_with_limit(&query, None).await
+        Self::search_with_limit_against(base_url, &query, None).await
     }
 
     /// Queries SPARQL and returns a filename with the result as CSV.
@@ -452,6 +475,7 @@ impl Wikidata {
     }
 
     async fn search_with_limit_run_query(
+        base_url: &str,
         query: &str,
         srlimit: Option<usize>,
     ) -> Result<Vec<Value>> {
@@ -459,7 +483,7 @@ impl Wikidata {
         let query = encode(query);
         let srlimit = srlimit.unwrap_or(10);
         let url = format!(
-            "{WIKIDATA_API_URL}?action=query&list=search&format=json&srsearch={query}&srlimit={srlimit}"
+            "{base_url}?action=query&list=search&format=json&srsearch={query}&srlimit={srlimit}"
         );
         let v = wikimisc::wikidata::Wikidata::new()
             .reqwest_client()?
@@ -500,7 +524,14 @@ mod tests {
         assert_eq!(Wikidata::sql_placeholders(3), "?,?,?".to_string());
     }
 
+    /// Live MediaWiki login smoke test. Mocking the full
+    /// `mediawiki::api::Api` token+credentials dance with `wiremock` is
+    /// fragile and offers no protection against the real failure mode this
+    /// test guards against (bad credentials in `config.json`). Mark
+    /// `#[ignore]` so it joins the rest of the live-services tests behind
+    /// `cargo test -- --ignored`.
     #[tokio::test]
+    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_api_log_in() {
         let mut wd = get_test_wd();
         wd.api_log_in().await.unwrap();
@@ -508,22 +539,106 @@ mod tests {
         assert!(api.user().logged_in());
     }
 
+    /// Hermetic version of the search test: a `wiremock` server stands in
+    /// for `https://www.wikidata.org/w/api.php`. Asserts:
+    ///
+    /// * Empty input short-circuits to an empty `Vec` without hitting the API
+    ///   (verified by the absence of any registered mock — wiremock would
+    ///   return 404 for an unmatched request, which would bubble up as an
+    ///   error and fail the test).
+    /// * A normal `srsearch=...` query returns the `query.search[].title`
+    ///   field as a `Vec<String>`.
+    /// * The typed-search wrapper layers in the `-haswbstatement:P31=...`
+    ///   meta-item exclusions and parses the same response shape.
     #[tokio::test]
     async fn test_wd_search() {
-        let wd = get_test_wd();
-        assert!(wd.search_api("").await.unwrap().is_empty());
+        use std::path::PathBuf;
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        fn fixture(name: &str) -> String {
+            let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+            p.push("test_data");
+            p.push("wikidata");
+            p.push(name);
+            std::fs::read_to_string(&p)
+                .unwrap_or_else(|e| panic!("missing fixture {}: {e}", p.display()))
+            }
+
+        let server = MockServer::start().await;
+
+        // Plain search: srsearch="Magnus Manske haswbstatement:P31=Q5"
+        Mock::given(method("GET"))
+            .and(path("/"))
+            .and(query_param("action", "query"))
+            .and(query_param("list", "search"))
+            .and(query_param(
+                "srsearch",
+                "Magnus Manske haswbstatement:P31=Q5",
+            ))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(fixture("search_magnus_manske_p31_q5.json"))
+                    .insert_header("content-type", "application/json"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        // Typed search adds " -haswbstatement:P31=Q13442814" plus six META_ITEMS
+        // exclusions. Hard-code the exact srsearch the production code builds so
+        // the test catches accidental re-ordering of those exclusions.
+        let typed_query = "Magnus Manske haswbstatement:P31=Q5 \
+             -haswbstatement:P31=Q13442814 \
+             -haswbstatement:P31=Q4167410 \
+             -haswbstatement:P31=Q11266439 \
+             -haswbstatement:P31=Q4167836 \
+             -haswbstatement:P31=Q13406463 \
+             -haswbstatement:P31=Q22808320 \
+             -haswbstatement:P31=Q17362920"
+            .replace("             ", "");
+        Mock::given(method("GET"))
+            .and(path("/"))
+            .and(query_param("action", "query"))
+            .and(query_param("list", "search"))
+            .and(query_param("srsearch", typed_query.as_str()))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(fixture("search_magnus_manske_q5_typed.json"))
+                    .insert_header("content-type", "application/json"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let base = server.uri();
+
+        // Empty input must NOT hit the network — production short-circuits.
+        assert!(
+            Wikidata::search_with_limit_against(&base, "", None)
+                .await
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(
-            wd.search_api("Magnus Manske haswbstatement:P31=Q5")
+            Wikidata::search_with_limit_against(
+                &base,
+                "Magnus Manske haswbstatement:P31=Q5",
+                None,
+            )
+            .await
+            .unwrap(),
+            vec!["Q13520818".to_string()]
+        );
+        assert_eq!(
+            Wikidata::search_with_type_against(&base, "Magnus Manske", "Q5")
                 .await
                 .unwrap(),
             vec!["Q13520818".to_string()]
         );
-        assert_eq!(
-            wd.search_with_type_api("Magnus Manske", "Q5")
-                .await
-                .unwrap(),
-            vec!["Q13520818".to_string()]
-        );
+        // `expect(1)` on each mock guarantees both production code paths
+        // were exercised exactly once and that the empty-string call did
+        // NOT touch the wire.
     }
 
     #[tokio::test]

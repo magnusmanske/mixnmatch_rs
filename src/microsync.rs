@@ -324,9 +324,18 @@ impl Microsync {
     }
 
     async fn get_formatter_url_for_prop(property: usize) -> Result<String> {
-        let url = format!(
-            "https://www.wikidata.org/w/api.php?action=wbgetentities&ids=P{property}&format=json"
-        );
+        Self::get_formatter_url_for_prop_against(crate::wikidata::WIKIDATA_API_URL, property).await
+    }
+
+    /// Test seam: production fixes `base_url` to the Wikidata API; tests
+    /// inject a `wiremock` server URI so the unit suite stays hermetic
+    /// (no flaky 429s, no internet required).
+    pub(crate) async fn get_formatter_url_for_prop_against(
+        base_url: &str,
+        property: usize,
+    ) -> Result<String> {
+        let url =
+            format!("{base_url}?action=wbgetentities&ids=P{property}&format=json");
         let client = wikimisc::wikidata::Wikidata::new().reqwest_client()?;
         let json = client.get(&url).send().await?.json::<Value>().await?;
         let url2 = json["entities"][format!("P{property}")]["claims"][wp::P_FORMATTER_URL][0]
@@ -650,20 +659,77 @@ mod tests {
         assert!(results.is_empty());
     }
 
+    /// Hermetic version of the formatter-URL test: a `wiremock` server stands in
+    /// for `https://www.wikidata.org/w/api.php`. Fixture files in
+    /// `test_data/wikidata/` capture canonical responses for the three property
+    /// shapes the production code has to handle:
+    ///
+    /// * `P214` — has a `P1630` formatter URL claim (typical case).
+    /// * `P215` — exists but has no `P1630` claim (returns empty string).
+    /// * `P0`   — does not exist; API returns an `error` payload (also empty).
+    ///
+    /// The previous test hit the live API and intermittently failed with HTTP
+    /// 429 when Wikidata throttled the test runner.
     #[tokio::test]
     async fn test_get_formatter_url_for_prop() {
+        use std::path::PathBuf;
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        fn fixture(name: &str) -> String {
+            let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+            p.push("test_data");
+            p.push("wikidata");
+            p.push(name);
+            std::fs::read_to_string(&p)
+                .unwrap_or_else(|e| panic!("missing fixture {}: {e}", p.display()))
+            }
+
+        let server = MockServer::start().await;
+
+        let cases = [
+            (214usize, "wbgetentities_p214.json"),
+            (215, "wbgetentities_p215.json"),
+            (0, "wbgetentities_p0.json"),
+        ];
+        for (prop, file) in cases {
+            Mock::given(method("GET"))
+                .and(path("/"))
+                .and(query_param("action", "wbgetentities"))
+                .and(query_param("ids", format!("P{prop}")))
+                .and(query_param("format", "json"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_string(fixture(file))
+                        .insert_header("content-type", "application/json"),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+
+        let base = server.uri();
         assert_eq!(
-            Microsync::get_formatter_url_for_prop(214).await.unwrap(),
+            Microsync::get_formatter_url_for_prop_against(&base, 214)
+                .await
+                .unwrap(),
             "https://viaf.org/viaf/$1".to_string()
         );
         assert_eq!(
-            Microsync::get_formatter_url_for_prop(215).await.unwrap(),
+            Microsync::get_formatter_url_for_prop_against(&base, 215)
+                .await
+                .unwrap(),
             "".to_string()
         );
         assert_eq!(
-            Microsync::get_formatter_url_for_prop(0).await.unwrap(),
+            Microsync::get_formatter_url_for_prop_against(&base, 0)
+                .await
+                .unwrap(),
             "".to_string()
         );
+        // `expect(1)` on each mock + dropping the server here verifies that
+        // every registered route was hit exactly once — catches accidental
+        // production-code path changes that would silently bypass the mock.
     }
 
     #[tokio::test]
