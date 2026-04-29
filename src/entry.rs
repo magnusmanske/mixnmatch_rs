@@ -598,7 +598,7 @@ async fn build_item_from_entry(
     // copied into a newly-created item's description. Default is on;
     // catalog admins can opt out via kv_catalog.
     let use_desc = catalog
-        .get_key_value_pairs()
+        .get_key_value_pairs(ctx)
         .await
         .unwrap_or_default()
         .get("use_description_for_new")

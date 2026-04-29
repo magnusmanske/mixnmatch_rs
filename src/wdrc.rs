@@ -118,7 +118,7 @@ impl WDRC {
                     .await?;
                 for catalog_id in catalog_ids {
                     let catalog = Catalog::from_id(catalog_id, app).await?;
-                    let _ = catalog.refresh_overview_table().await;
+                    let _ = catalog.refresh_overview_table(app).await;
                 }
             }
         }

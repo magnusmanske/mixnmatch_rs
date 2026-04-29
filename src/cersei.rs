@@ -133,7 +133,7 @@ impl CerseiSync {
             }
 
             // Create new catalog
-            let mut catalog = Catalog::new(&self.app);
+            let mut catalog = Catalog::default();
             catalog.set_name(Some(name.clone()));
             catalog.set_url(Some(scraper.url.clone()));
             catalog.set_wd_prop(scraper.property);
@@ -141,7 +141,7 @@ impl CerseiSync {
             catalog.set_note(&note);
             catalog.set_owner(6);
             catalog.set_active(true);
-            catalog.create_catalog().await?;
+            catalog.create_catalog(&self.app).await?;
 
             // Link cersei and catalog
             self.app
@@ -183,7 +183,7 @@ impl CerseiSync {
     /// Set human dates flag for catalog
     async fn set_human_dates_flag(&self, catalog_id: usize) -> Result<bool> {
         let mut catalog = Catalog::from_id(catalog_id, &self.app).await?;
-        let has_new_dates = catalog.check_and_set_person_date().await?;
+        let has_new_dates = catalog.check_and_set_person_date(&self.app).await?;
         Ok(has_new_dates)
     }
 

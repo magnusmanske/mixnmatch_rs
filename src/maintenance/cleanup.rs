@@ -419,7 +419,7 @@ impl Maintenance {
         mw_api: &mediawiki::Api,
     ) -> Result<Vec<serde_json::Value>> {
         let catalog = Catalog::from_id(catalog_id, &self.app).await?;
-        let kv_catalog = catalog.get_key_value_pairs().await?;
+        let kv_catalog = catalog.get_key_value_pairs(&self.app).await?;
         let collection_q = kv_catalog
             .get("collection")
             .ok_or_else(|| anyhow!("Catalog {catalog_id} does not have a 'collection' key"))?;

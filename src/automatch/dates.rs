@@ -429,7 +429,7 @@ impl AutoMatch {
     }
 
     async fn automatch_complex_get_sparql_parts(&self, catalog: &Catalog) -> Result<String> {
-        let key_value_pairs = catalog.get_key_value_pairs().await?;
+        let key_value_pairs = catalog.get_key_value_pairs(&self.app).await?;
         let property_roots = key_value_pairs
             .get("automatch_complex")
             .ok_or_else(|| anyhow!("No automatch_complex key in catalog"))?;

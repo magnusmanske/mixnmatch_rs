@@ -186,7 +186,7 @@ impl UpdateCatalog {
         let update_info = self.get_update_info(catalog_id).await?;
         let json = update_info.json()?;
         let catalog = Catalog::from_id(catalog_id, &self.app).await?;
-        let entries_already_in_catalog = catalog.number_of_entries().await?;
+        let entries_already_in_catalog = catalog.number_of_entries(&self.app).await?;
         let mut datasource = DataSource::new(catalog_id, &json)?;
         datasource.offset = self.get_last_job_offset().await;
         datasource.just_add = entries_already_in_catalog == 0 || datasource.just_add;

@@ -274,7 +274,7 @@ impl CatalogMerger {
         info!("migrate_property: anchoring on P{property}");
 
         let synced = old_cat
-            .sync_from_sparql(property)
+            .sync_from_sparql(&self.app, property)
             .await
             .unwrap_or_else(|e| {
                 // Failure here is recoverable: we just skip the
