@@ -252,8 +252,27 @@ impl<'a> EntryWriter<'a> {
         self.ctx
     }
 
+    /// Set a match for the wrapped entry and update related rows.
+    /// **This is the canonical implementation.** `Entry::set_match` now
+    /// forwards here — when this PR's sister PRs migrate the remaining
+    /// writers (`unmatch`, `set_auxiliary`, …) into this same shape,
+    /// the `Entry::app: Option<AppState>` field can be dropped.
     pub async fn set_match(&mut self, q: &str, user_id: DbId) -> Result<bool> {
-        self.entry.set_match(q, user_id).await
+        self.entry.get_valid_id()?;
+        let q_numeric = AppState::item2numeric(q)
+            .ok_or_else(|| anyhow!("'{}' is not a valid item", &q))?;
+        let timestamp = TimeStamp::now();
+        if self
+            .ctx
+            .storage()
+            .entry_set_match(self.entry, user_id, q_numeric, &timestamp)
+            .await?
+        {
+            self.entry.user = Some(user_id);
+            self.entry.timestamp = Some(timestamp);
+            self.entry.q = Some(q_numeric);
+        }
+        Ok(true)
     }
 
     pub async fn unmatch(&mut self) -> Result<()> {
@@ -946,24 +965,14 @@ impl Entry {
         }
     }
 
-    /// Sets a match for the entry, and marks the entry as matched in other tables.
+    /// Sets a match for the entry, and marks the entry as matched in
+    /// other tables. Facade — the body now lives in
+    /// [`EntryWriter::set_match`]. `clone()` on `AppState` is cheap
+    /// (Arc-internals); the local owns the context for the duration of
+    /// the writer call so we don't conflict with `&mut self`.
     pub async fn set_match(&mut self, q: &str, user_id: DbId) -> Result<bool> {
-        self.get_valid_id()?;
-        let q_numeric = AppState::item2numeric(q).ok_or(anyhow!("'{}' is not a valid item", &q))?;
-
-        let timestamp = TimeStamp::now();
-        if self
-            .app()?
-            .storage()
-            .entry_set_match(self, user_id, q_numeric, &timestamp)
-            .await?
-        {
-            self.user = Some(user_id);
-            self.timestamp = Some(timestamp);
-            self.q = Some(q_numeric);
-        }
-
-        Ok(true)
+        let ctx = self.app()?.clone();
+        EntryWriter::new(&ctx, self).set_match(q, user_id).await
     }
 
     // Removes the current match from the entry, and marks the entry as unmatched in other tables.

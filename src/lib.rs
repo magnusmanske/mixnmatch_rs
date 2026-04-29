@@ -99,6 +99,7 @@ pub mod wdqs;
 pub mod wdrc;
 pub mod wikidata;
 pub mod wikidata_commands;
+pub mod wikidata_writer;
 
 /*
 ssh magnus@login.toolforge.org -L 3309:wikidatawiki.web.db.svc.eqiad.wmflabs:3306 -N &

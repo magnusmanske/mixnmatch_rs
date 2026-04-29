@@ -5861,23 +5861,29 @@ impl crate::storage::MetaEntryQueries for StorageMySQL {
             .exec_iter(sql, params! { entry_id })
             .await?
             .map_and_drop(|row| {
-                let id: Option<usize> = row.get(0);
+                // Named columns so a SELECT reorder doesn't silently
+                // break decoding. SQL: `id, type, json, status, user_id,
+                // resolved_ts, catalog`.
+                let id: Option<usize> = row.get("id");
                 let issue_type: String = row
-                    .get::<Option<String>, _>(1)
+                    .get::<Option<String>, _>("type")
                     .flatten()
                     .unwrap_or_default();
                 let json_str: String = row
-                    .get::<Option<String>, _>(2)
+                    .get::<Option<String>, _>("json")
                     .flatten()
                     .unwrap_or_default();
                 let status: String = row
-                    .get::<Option<String>, _>(3)
+                    .get::<Option<String>, _>("status")
                     .flatten()
                     .unwrap_or_default();
-                let user_id: Option<usize> = row.get::<Option<usize>, _>(4).flatten();
-                let resolved_ts: Option<String> = row.get::<Option<String>, _>(5).flatten();
-                let catalog_id: usize =
-                    row.get::<Option<usize>, _>(6).flatten().unwrap_or_default();
+                let user_id: Option<usize> = row.get::<Option<usize>, _>("user_id").flatten();
+                let resolved_ts: Option<String> =
+                    row.get::<Option<String>, _>("resolved_ts").flatten();
+                let catalog_id: usize = row
+                    .get::<Option<usize>, _>("catalog")
+                    .flatten()
+                    .unwrap_or_default();
                 MetaIssue {
                     id,
                     issue_type,
@@ -5901,11 +5907,11 @@ impl crate::storage::MetaEntryQueries for StorageMySQL {
             .await?
             .map_and_drop(|row| {
                 let key: String = row
-                    .get::<Option<String>, _>(0)
+                    .get::<Option<String>, _>("kv_key")
                     .flatten()
                     .unwrap_or_default();
                 let value: String = row
-                    .get::<Option<String>, _>(1)
+                    .get::<Option<String>, _>("kv_value")
                     .flatten()
                     .unwrap_or_default();
                 MetaKvEntry { key, value }
@@ -5922,14 +5928,15 @@ impl crate::storage::MetaEntryQueries for StorageMySQL {
             .exec_iter(sql, params! { entry_id })
             .await?
             .map_and_drop(|row| {
-                let id: Option<usize> = row.get(0);
+                let id: Option<usize> = row.get("id");
                 let action: String = row
-                    .get::<Option<String>, _>(1)
+                    .get::<Option<String>, _>("action")
                     .flatten()
                     .unwrap_or_default();
-                let user: Option<usize> = row.get::<Option<usize>, _>(2).flatten();
-                let timestamp: Option<String> = row.get::<Option<String>, _>(3).flatten();
-                let q: Option<isize> = row.get::<Option<isize>, _>(4).flatten();
+                let user: Option<usize> = row.get::<Option<usize>, _>("user").flatten();
+                let timestamp: Option<String> =
+                    row.get::<Option<String>, _>("timestamp").flatten();
+                let q: Option<isize> = row.get::<Option<isize>, _>("q").flatten();
                 MetaLogEntry {
                     id,
                     action,
@@ -5953,16 +5960,24 @@ impl crate::storage::MetaEntryQueries for StorageMySQL {
             .exec_iter(sql, params! { entry_id })
             .await?
             .map_and_drop(|row| {
-                let id: Option<usize> = row.get(0);
-                let property: usize = row.get::<Option<usize>, _>(1).flatten().unwrap_or_default();
-                let text: String = row
-                    .get::<Option<String>, _>(2)
+                let id: Option<usize> = row.get("id");
+                let property: usize = row
+                    .get::<Option<usize>, _>("property")
                     .flatten()
                     .unwrap_or_default();
-                let in_wikidata: bool = row.get::<Option<bool>, _>(3).flatten().unwrap_or_default();
-                let entry_is_matched: bool =
-                    row.get::<Option<bool>, _>(4).flatten().unwrap_or_default();
-                let q: Option<ItemId> = row.get::<Option<ItemId>, _>(5).flatten();
+                let text: String = row
+                    .get::<Option<String>, _>("text")
+                    .flatten()
+                    .unwrap_or_default();
+                let in_wikidata: bool = row
+                    .get::<Option<bool>, _>("in_wikidata")
+                    .flatten()
+                    .unwrap_or_default();
+                let entry_is_matched: bool = row
+                    .get::<Option<bool>, _>("entry_is_matched")
+                    .flatten()
+                    .unwrap_or_default();
+                let q: Option<ItemId> = row.get::<Option<ItemId>, _>("q").flatten();
                 MetaStatementText {
                     id,
                     property,

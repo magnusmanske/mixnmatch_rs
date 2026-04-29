@@ -392,68 +392,15 @@ impl ReferenceFixer {
 
     /// Try to turn a P854 URL snak into [(P248 stated-in,) Pxxx external-id].
     fn improved_reference_snak(&self, snak: &Value) -> Option<Vec<Value>> {
-        if snak.get("snaktype").and_then(|v| v.as_str()) != Some("value") {
-            return None;
-        }
-        let dv = snak.get("datavalue")?;
-        if dv.get("type").and_then(|v| v.as_str()) != Some("string") {
-            return None;
-        }
-        let url = dv.get("value").and_then(|v| v.as_str())?;
-
-        // Collect property → distinct-values-set across all matching
-        // patterns. Multiple patterns may fire for the same property
-        // (e.g. www./no-www variants); multiple properties firing is
-        // ambiguous and bails.
-        let mut matches: HashMap<String, std::collections::BTreeSet<String>> = HashMap::new();
-        for (re, property) in &self.url_patterns {
-            let cap = match re.captures(url) {
-                Some(c) => c,
-                None => continue,
-            };
-            let raw = match cap.get(1) {
-                Some(m) => m.as_str(),
-                None => continue,
-            };
-            let cleaned = clean_captured_id(raw);
-            if cleaned.is_empty() {
-                continue;
-            }
-            matches.entry(property.clone()).or_default().insert(cleaned);
-        }
-        if matches.len() != 1 {
-            return None;
-        }
-        let (property, values) = matches.into_iter().next().unwrap();
-        if values.len() != 1 {
-            return None;
-        }
-        let value = values.into_iter().next().unwrap();
-
-        let mut out: Vec<Value> = Vec::new();
-        if let Some(si) = self.stated_in.get(&property) {
-            if let Some(num) = si.strip_prefix('Q').and_then(|s| s.parse::<u64>().ok()) {
-                out.push(json!({
-                    "snaktype": "value",
-                    "property": wp::P_STATED_IN,
-                    "datavalue": {
-                        "value": {
-                            "entity-type": "item",
-                            "numeric-id": num,
-                            "id": si,
-                        },
-                        "type": "wikibase-entityid",
-                    },
-                    "datatype": "wikibase-item",
-                }));
+        let parsed = StringUrlSnak::from_json(snak)?;
+        let (property, value) = unique_property_match(parsed.url, &self.url_patterns)?;
+        let mut out = Vec::new();
+        if let Some(qid) = self.stated_in.get(&property) {
+            if let Some(snak) = build_stated_in_snak(qid) {
+                out.push(snak);
             }
         }
-        out.push(json!({
-            "snaktype": "value",
-            "property": property,
-            "datavalue": { "value": value, "type": "string" },
-            "datatype": "external-id",
-        }));
+        out.push(build_external_id_snak(&property, &value));
         Some(out)
     }
 
@@ -654,6 +601,92 @@ fn formatter_url_to_regex(url: &str) -> Option<String> {
     Some(format!("^{pattern}$"))
 }
 
+/// A `snaktype=value`, `datavalue.type=string` snak whose value is a URL —
+/// the only shape `improved_reference_snak` can act on. Borrowing parser:
+/// the URL string is referenced from the input `Value` so we don't pay
+/// for a clone on every queue item.
+struct StringUrlSnak<'a> {
+    url: &'a str,
+}
+
+impl<'a> StringUrlSnak<'a> {
+    /// Validate the snak's shape and return its URL, or `None` for any
+    /// snak that's `novalue` / `somevalue`, has a non-string datavalue,
+    /// or is missing a field. Each rejection is a documented case the
+    /// caller doesn't need to handle.
+    fn from_json(snak: &'a Value) -> Option<Self> {
+        if snak.get("snaktype").and_then(Value::as_str)? != "value" {
+            return None;
+        }
+        let dv = snak.get("datavalue")?;
+        if dv.get("type").and_then(Value::as_str)? != "string" {
+            return None;
+        }
+        let url = dv.get("value").and_then(Value::as_str)?;
+        Some(Self { url })
+    }
+}
+
+/// Run `url` against every `(regex, property)` pair, collecting cleaned
+/// capture-1 values into a property→set map. Returns `Some((property, value))`
+/// only when exactly one property matched and its set has exactly one
+/// element — i.e., the URL maps unambiguously to a single external id.
+/// Multiple patterns may fire for the same property (www / no-www
+/// variants); multiple *properties* firing is ambiguous and bails.
+fn unique_property_match(
+    url: &str,
+    url_patterns: &[(Regex, String)],
+) -> Option<(String, String)> {
+    let mut matches: HashMap<String, std::collections::BTreeSet<String>> = HashMap::new();
+    for (re, property) in url_patterns {
+        let Some(cap) = re.captures(url) else { continue };
+        let Some(raw) = cap.get(1).map(|m| m.as_str()) else { continue };
+        let cleaned = clean_captured_id(raw);
+        if cleaned.is_empty() {
+            continue;
+        }
+        matches.entry(property.clone()).or_default().insert(cleaned);
+    }
+    if matches.len() != 1 {
+        return None;
+    }
+    let (property, values) = matches.into_iter().next()?;
+    if values.len() != 1 {
+        return None;
+    }
+    Some((property, values.into_iter().next()?))
+}
+
+/// Build a P248 stated-in snak pointing at `qid`. Returns `None` if `qid`
+/// isn't `Q\d+` — every value in `stated_in` is supposed to be, but the
+/// SPARQL query that populates it could in principle return junk.
+fn build_stated_in_snak(qid: &str) -> Option<Value> {
+    let num = qid.strip_prefix('Q')?.parse::<u64>().ok()?;
+    Some(json!({
+        "snaktype": "value",
+        "property": wp::P_STATED_IN,
+        "datavalue": {
+            "value": {
+                "entity-type": "item",
+                "numeric-id": num,
+                "id": qid,
+            },
+            "type": "wikibase-entityid",
+        },
+        "datatype": "wikibase-item",
+    }))
+}
+
+/// Build the typed external-id snak for `(property, value)`.
+fn build_external_id_snak(property: &str, value: &str) -> Value {
+    json!({
+        "snaktype": "value",
+        "property": property,
+        "datavalue": { "value": value, "type": "string" },
+        "datatype": "external-id",
+    })
+}
+
 /// Tidy a captured ID: URL-decode, strip trailing `&query-string`,
 /// trailing slash, and the long `_(Dizionario_Biografico)` suffix used
 /// by P1986. Trimmed at the end.
@@ -678,6 +711,76 @@ fn clean_captured_id(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn string_url_snak_accepts_value_snak_with_string_datavalue() {
+        let snak = json!({
+            "snaktype": "value",
+            "property": "P854",
+            "datavalue": {"type": "string", "value": "https://example.com/x"},
+        });
+        let parsed = StringUrlSnak::from_json(&snak).unwrap();
+        assert_eq!(parsed.url, "https://example.com/x");
+    }
+
+    #[test]
+    fn string_url_snak_rejects_novalue_and_wrong_datatype() {
+        // novalue snak — no URL to act on.
+        let snak = json!({"snaktype": "novalue", "property": "P854"});
+        assert!(StringUrlSnak::from_json(&snak).is_none());
+        // value snak with non-string datavalue — also unactionable.
+        let snak = json!({
+            "snaktype": "value",
+            "property": "P854",
+            "datavalue": {"type": "wikibase-entityid", "value": {"id": "Q1"}},
+        });
+        assert!(StringUrlSnak::from_json(&snak).is_none());
+        // missing datavalue — malformed.
+        let snak = json!({"snaktype": "value", "property": "P854"});
+        assert!(StringUrlSnak::from_json(&snak).is_none());
+    }
+
+    #[test]
+    fn unique_property_match_bails_on_multiple_properties() {
+        let patterns = vec![
+            (
+                Regex::new(r"^https?://a\.test/(\w+)$").unwrap(),
+                "P100".into(),
+            ),
+            (
+                Regex::new(r"^https?://a\.test/(\w+)$").unwrap(),
+                "P200".into(),
+            ),
+        ];
+        assert!(unique_property_match("https://a.test/foo", &patterns).is_none());
+    }
+
+    #[test]
+    fn unique_property_match_collapses_duplicate_pattern_for_same_property() {
+        // www / no-www variant of the same property must NOT cause
+        // ambiguity bail — the BTreeSet collapses identical capture values.
+        let patterns = vec![
+            (
+                Regex::new(r"^https?://(?:www\.)?a\.test/(\w+)$").unwrap(),
+                "P100".into(),
+            ),
+            (
+                Regex::new(r"^https?://a\.test/(\w+)$").unwrap(),
+                "P100".into(),
+            ),
+        ];
+        let got = unique_property_match("https://a.test/foo", &patterns);
+        assert_eq!(got, Some(("P100".into(), "foo".into())));
+    }
+
+    #[test]
+    fn build_stated_in_snak_rejects_non_q_id() {
+        assert!(build_stated_in_snak("garbage").is_none());
+        assert!(build_stated_in_snak("P648").is_none());
+        let snak = build_stated_in_snak("Q1201876").unwrap();
+        assert_eq!(snak["datavalue"]["value"]["numeric-id"], 1201876);
+        assert_eq!(snak["datavalue"]["value"]["id"], "Q1201876");
+    }
 
     #[test]
     fn formatter_url_to_regex_rejects_unusable_templates() {
