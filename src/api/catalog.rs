@@ -224,40 +224,6 @@ fn kv_value_means_delete(v: &serde_json::Value) -> bool {
     }
 }
 
-#[cfg(test)]
-mod kv_tests {
-    use super::kv_value_means_delete;
-    use serde_json::json;
-
-    #[test]
-    fn deletes_on_null() {
-        assert!(kv_value_means_delete(&serde_json::Value::Null));
-    }
-
-    #[test]
-    fn deletes_on_empty_or_whitespace_string() {
-        assert!(kv_value_means_delete(&json!("")));
-        assert!(kv_value_means_delete(&json!("   ")));
-        assert!(kv_value_means_delete(&json!("\n\t  ")));
-    }
-
-    #[test]
-    fn deletes_on_empty_json_array_literals() {
-        assert!(kv_value_means_delete(&json!("[]")));
-        assert!(kv_value_means_delete(&json!("  []  ")));
-        assert!(kv_value_means_delete(&json!([])));
-    }
-
-    #[test]
-    fn keeps_real_values() {
-        assert!(!kv_value_means_delete(&json!("SELECT ?q ?qLabel WHERE {}")));
-        assert!(!kv_value_means_delete(&json!("[[5,10]]")));
-        assert!(!kv_value_means_delete(&json!([[5, 10]])));
-        assert!(!kv_value_means_delete(&json!("0")));
-        assert!(!kv_value_means_delete(&json!("1")));
-    }
-}
-
 pub async fn query_catalog_overview(app: &AppState, params: &Params) -> Result<Response, ApiError> {
     let catalogs_str = common::get_param(params, "catalogs", "");
     let ids: Vec<usize> = catalogs_str
@@ -380,4 +346,38 @@ pub async fn query_remove_empty_top_group(
     let gid = common::get_param_int(params, "group_id", 0) as usize;
     app.storage().api_remove_empty_top_group(gid).await?;
     Ok(ok(serde_json::json!({})))
+}
+
+#[cfg(test)]
+mod kv_tests {
+    use super::kv_value_means_delete;
+    use serde_json::json;
+
+    #[test]
+    fn deletes_on_null() {
+        assert!(kv_value_means_delete(&serde_json::Value::Null));
+    }
+
+    #[test]
+    fn deletes_on_empty_or_whitespace_string() {
+        assert!(kv_value_means_delete(&json!("")));
+        assert!(kv_value_means_delete(&json!("   ")));
+        assert!(kv_value_means_delete(&json!("\n\t  ")));
+    }
+
+    #[test]
+    fn deletes_on_empty_json_array_literals() {
+        assert!(kv_value_means_delete(&json!("[]")));
+        assert!(kv_value_means_delete(&json!("  []  ")));
+        assert!(kv_value_means_delete(&json!([])));
+    }
+
+    #[test]
+    fn keeps_real_values() {
+        assert!(!kv_value_means_delete(&json!("SELECT ?q ?qLabel WHERE {}")));
+        assert!(!kv_value_means_delete(&json!("[[5,10]]")));
+        assert!(!kv_value_means_delete(&json!([[5, 10]])));
+        assert!(!kv_value_means_delete(&json!("0")));
+        assert!(!kv_value_means_delete(&json!("1")));
+    }
 }

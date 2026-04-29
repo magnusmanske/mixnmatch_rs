@@ -1,6 +1,4 @@
-use crate::{
-    app_state::AppState, entry::Entry, extended_entry::ExtendedEntry,
-};
+use crate::{app_state::AppState, entry::Entry, extended_entry::ExtendedEntry};
 use anyhow::Result;
 use async_trait::async_trait;
 use futures::future::BoxFuture;
@@ -32,12 +30,9 @@ macro_rules! scraper_boilerplate {
     };
 }
 
-pub mod scraper_53;
-pub mod scraper_85;
+pub mod scraper_1178;
 pub mod scraper_121;
 pub mod scraper_122;
-pub mod scraper_722;
-pub mod scraper_1178;
 pub mod scraper_1223;
 pub mod scraper_1379;
 pub mod scraper_1619;
@@ -45,16 +40,19 @@ pub mod scraper_2670;
 pub mod scraper_4825;
 pub mod scraper_5100;
 pub mod scraper_5103;
+pub mod scraper_53;
 pub mod scraper_5311;
 pub mod scraper_6479;
 pub mod scraper_6794;
 pub mod scraper_6975;
 pub mod scraper_6976;
 pub mod scraper_7043;
+pub mod scraper_722;
 pub mod scraper_7433;
 pub mod scraper_7696;
 pub mod scraper_7697;
 pub mod scraper_7700;
+pub mod scraper_85;
 
 pub use scraper_53::BespokeScraper53;
 pub use scraper_85::BespokeScraper85;
@@ -93,7 +91,10 @@ type ScraperRunFn = for<'a> fn(&'a AppState) -> BoxFuture<'a, Result<()>>;
 /// Factor of three less per-scraper boilerplate vs the old match arm.
 macro_rules! scraper_entry {
     ($id:literal, $ty:ty) => {
-        ($id, (|app| Box::pin(async move { <$ty>::new(app).run().await })) as ScraperRunFn)
+        (
+            $id,
+            (|app| Box::pin(async move { <$ty>::new(app).run().await })) as ScraperRunFn,
+        )
     };
 }
 
@@ -282,7 +283,7 @@ mod tests {
         // the registry entry is forgotten, this fails.
         let ids: Vec<usize> = SCRAPER_REGISTRY.iter().map(|(id, _)| *id).collect();
         for expected in &[
-            53usize, 85, 121, 122, 722, 1178, 1223, 1379, 1619, 2670, 4825, 5100, 5103, 5311,
+            53_usize, 85, 121, 122, 722, 1178, 1223, 1379, 1619, 2670, 4825, 5100, 5103, 5311,
             6479, 6794, 6975, 6976, 7043, 7433, 7696, 7697, 7700,
         ] {
             assert!(
