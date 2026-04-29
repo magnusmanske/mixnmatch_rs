@@ -849,10 +849,8 @@ pub(super) fn get_new_description(old_desc: &str, new_parts: &[String]) -> Strin
     }
 
     let d = parts.join("; ");
-    // Remove HTML tags
-    let d = regex::Regex::new(r"<.+?>").unwrap().replace_all(&d, " ");
-    // Collapse whitespace
-    let d = regex::Regex::new(r"\s+").unwrap().replace_all(&d, " ");
+    let d = RE_HTML_TAGS.replace_all(&d, " ");
+    let d = RE_WHITESPACE.replace_all(&d, " ");
     d.trim().to_string()
 }
 

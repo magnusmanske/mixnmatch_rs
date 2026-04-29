@@ -374,7 +374,8 @@ impl Job {
             Some(sec) => sec as i64,
             None => return Ok(String::new()),
         };
-        let seconds = Duration::try_seconds(seconds).unwrap();
+        let seconds = Duration::try_seconds(seconds)
+            .ok_or_else(|| anyhow!("repeat_after_sec out of range: {seconds}"))?;
         let utc = TimeStamp::str2utc(&self.data().await?.last_ts)
             .ok_or(anyhow!("Can't parse timestamp in last_ts"))?
             .checked_add_signed(seconds)
