@@ -11,7 +11,7 @@ use super::{
     run_desc_from_html, run_person_date, validate_born_died,
 };
 use super::{LuaCommand, LuaEntry};
-use crate::app_state::AppState;
+use crate::app_state::{AppContext, ExternalServicesContext};
 use crate::entry::{Entry, EntryWriter};
 use crate::person_date::PersonDate;
 use anyhow::{Result, anyhow};
@@ -45,7 +45,7 @@ fn lua_code_present(code: &Option<String>) -> bool {
 /// - `Ok(LuaJobOutcome::Done)` if the Lua code existed and ran to completion.
 /// - `Ok(LuaJobOutcome::NoLuaCode)` if no Lua code is registered — caller may fall back to PHP.
 /// - `Err(_)` if Lua existed but failed at the storage / job-orchestration level.
-pub async fn run_person_dates_job(catalog_id: usize, app: &AppState) -> Result<LuaJobOutcome> {
+pub async fn run_person_dates_job(catalog_id: usize, app: &dyn ExternalServicesContext) -> Result<LuaJobOutcome> {
     let lua_code_opt = app
         .storage()
         .get_code_fragment_lua("PERSON_DATE", catalog_id)
@@ -115,7 +115,7 @@ pub async fn run_person_dates_job(catalog_id: usize, app: &AppState) -> Result<L
 /// Run the `generate_aux_from_description` job for a catalog using Lua.
 ///
 /// See [`run_person_dates_job`] for return-value semantics.
-pub async fn run_aux_from_desc_job(catalog_id: usize, app: &AppState) -> Result<LuaJobOutcome> {
+pub async fn run_aux_from_desc_job(catalog_id: usize, app: &dyn AppContext) -> Result<LuaJobOutcome> {
     let lua_code_opt = app
         .storage()
         .get_code_fragment_lua("AUX_FROM_DESC", catalog_id)
@@ -169,7 +169,7 @@ pub async fn run_aux_from_desc_job(catalog_id: usize, app: &AppState) -> Result<
 /// applies results.
 ///
 /// See [`run_person_dates_job`] for return-value semantics.
-pub async fn run_desc_from_html_job(catalog_id: usize, app: &AppState) -> Result<LuaJobOutcome> {
+pub async fn run_desc_from_html_job(catalog_id: usize, app: &dyn AppContext) -> Result<LuaJobOutcome> {
     let lua_code_opt = app
         .storage()
         .get_code_fragment_lua("DESC_FROM_HTML", catalog_id)
@@ -207,7 +207,7 @@ async fn fetch_html(client: &reqwest::Client, url: &str) -> Option<String> {
 }
 
 async fn process_desc_from_html_entry(
-    app: &AppState,
+    app: &dyn AppContext,
     client: &reqwest::Client,
     lua_code: &str,
     entry: &Entry,
@@ -231,7 +231,7 @@ async fn process_desc_from_html_entry(
     apply_desc_from_html_result(app, &mut entry_clone, &result).await;
 }
 
-async fn apply_desc_from_html_result(app: &AppState, entry: &mut Entry, result: &DescFromHtmlResult) {
+async fn apply_desc_from_html_result(app: &dyn AppContext, entry: &mut Entry, result: &DescFromHtmlResult) {
     apply_person_dates_from_result(app, entry, &result.born, &result.died).await;
     apply_location_from_result(app, entry, result.location).await;
     apply_aux_from_result(app, entry, &result.aux).await;
@@ -243,7 +243,7 @@ async fn apply_desc_from_html_result(app: &AppState, entry: &mut Entry, result: 
     }
 }
 
-async fn apply_person_dates_from_result(app: &AppState, entry: &mut Entry, born: &str, died: &str) {
+async fn apply_person_dates_from_result(app: &dyn AppContext, entry: &mut Entry, born: &str, died: &str) {
     if born.is_empty() && died.is_empty() {
         return;
     }
@@ -254,14 +254,14 @@ async fn apply_person_dates_from_result(app: &AppState, entry: &mut Entry, born:
     }
 }
 
-async fn apply_location_from_result(app: &AppState, entry: &mut Entry, location: Option<(f64, f64)>) {
+async fn apply_location_from_result(app: &dyn AppContext, entry: &mut Entry, location: Option<(f64, f64)>) {
     if let Some((lat, lon)) = location {
         let cl = crate::coordinates::CoordinateLocation::new(lat, lon);
         let _ = EntryWriter::new(app, entry).set_coordinate_location(&Some(cl)).await;
     }
 }
 
-async fn apply_aux_from_result(app: &AppState, entry: &mut Entry, aux: &[(String, String)]) {
+async fn apply_aux_from_result(app: &dyn AppContext, entry: &mut Entry, aux: &[(String, String)]) {
     for (prop_str, value) in aux {
         let prop_str = prop_str.trim_start_matches('P');
         if let Ok(prop_numeric) = prop_str.parse::<usize>() {
@@ -270,7 +270,7 @@ async fn apply_aux_from_result(app: &AppState, entry: &mut Entry, aux: &[(String
     }
 }
 
-async fn apply_change_name(app: &AppState, entry: &mut Entry, change: Option<&(String, String)>) {
+async fn apply_change_name(app: &dyn AppContext, entry: &mut Entry, change: Option<&(String, String)>) {
     if let Some((from, to)) = change {
         if from != to {
             let _ = EntryWriter::new(app, entry).set_ext_name(to).await;
@@ -278,13 +278,13 @@ async fn apply_change_name(app: &AppState, entry: &mut Entry, change: Option<&(S
     }
 }
 
-async fn apply_change_type(app: &AppState, entry: &mut Entry, change: Option<&(String, String)>) {
+async fn apply_change_type(app: &dyn AppContext, entry: &mut Entry, change: Option<&(String, String)>) {
     if let Some((_from, to)) = change {
         let _ = EntryWriter::new(app, entry).set_type_name(Some(to.clone())).await;
     }
 }
 
-async fn apply_descriptions_from_result(app: &AppState, entry: &mut Entry, descriptions: &[String]) {
+async fn apply_descriptions_from_result(app: &dyn AppContext, entry: &mut Entry, descriptions: &[String]) {
     if descriptions.is_empty() {
         return;
     }
@@ -294,7 +294,7 @@ async fn apply_descriptions_from_result(app: &AppState, entry: &mut Entry, descr
     }
 }
 
-async fn finalize_desc_from_html(app: &AppState, catalog_id: usize) -> Result<()> {
+async fn finalize_desc_from_html(app: &dyn ExternalServicesContext, catalog_id: usize) -> Result<()> {
     app.storage()
         .touch_code_fragment("DESC_FROM_HTML", catalog_id)
         .await?;
@@ -310,7 +310,7 @@ async fn finalize_desc_from_html(app: &AppState, catalog_id: usize) -> Result<()
 }
 
 /// Apply a [`LuaCommand`] to an entry in the database.
-pub(super) async fn apply_command(app: &AppState, cmd: &LuaCommand, entry: &mut Entry) -> Result<()> {
+pub(super) async fn apply_command(app: &dyn AppContext, cmd: &LuaCommand, entry: &mut Entry) -> Result<()> {
     match cmd {
         LuaCommand::SetAux {
             property, value, ..

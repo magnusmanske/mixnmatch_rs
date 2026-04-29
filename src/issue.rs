@@ -1,4 +1,4 @@
-use crate::app_state::AppState;
+use crate::app_state::AppContext;
 use crate::storage::IssueQueries;
 use anyhow::Result;
 use futures::future::join_all;
@@ -152,7 +152,7 @@ impl Issue {
     /// Each step is best-effort: a transient failure in one pass
     /// surfaces a `warn!` but doesn't keep the rest from running, so
     /// one stuck step can't starve the others on every cron tick.
-    pub async fn sweep_open(app: &AppState) -> Result<()> {
+    pub async fn sweep_open(app: &dyn AppContext) -> Result<()> {
         macro_rules! run_step {
             ($label:literal, $call:expr) => {
                 match $call.await {
@@ -182,7 +182,7 @@ impl Issue {
         Ok(())
     }
 
-    pub async fn fix_wd_duplicates(app: &AppState) -> Result<()> {
+    pub async fn fix_wd_duplicates(app: &dyn AppContext) -> Result<()> {
         let issues = app.storage().get_open_wd_duplicates().await?;
         let items = collect_unique_qids(&issues);
         let redirected_from_to: HashMap<String, String> = app

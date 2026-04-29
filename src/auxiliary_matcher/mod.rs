@@ -15,7 +15,7 @@
 mod finder;
 mod sync;
 
-use crate::app_state::AppState;
+use crate::app_state::{AppState, WikidataContext};
 use crate::catalog::Catalog;
 use crate::coordinates::CoordinateLocation;
 use crate::job::Job;
@@ -175,7 +175,7 @@ impl AuxiliaryMatcher {
     }
 
     //TODO test
-    pub(super) async fn get_properties_using_items(app: &AppState) -> Result<Vec<String>> {
+    pub(super) async fn get_properties_using_items(app: &dyn WikidataContext) -> Result<Vec<String>> {
         let mw_api = app.wikidata().get_mw_api().await?;
         let sparql = "SELECT ?p WHERE { ?p rdf:type wikibase:Property; wikibase:propertyType wikibase:WikibaseItem }";
         let sparql_results = mw_api.sparql_query(sparql).await?;
@@ -188,7 +188,7 @@ impl AuxiliaryMatcher {
     /// only care about external-ID props (e.g. `update_aux_candidates`)
     /// can reuse the same query without going through the matcher.
     pub(crate) async fn get_properties_that_have_external_ids(
-        app: &AppState,
+        app: &dyn WikidataContext,
     ) -> Result<Vec<String>> {
         let mw_api = app.wikidata().get_mw_api().await?;
         let sparql = "SELECT ?p WHERE { ?p rdf:type wikibase:Property; wikibase:propertyType wikibase:ExternalId }";
