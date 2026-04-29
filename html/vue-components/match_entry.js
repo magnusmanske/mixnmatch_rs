@@ -9,6 +9,7 @@ export default {
         return {
             catalog: {}, mnm_entries: [], wp_entries: [], wd_entries: [],
             loaded_wp: false, loaded_mnm: false, loaded_wd: false,
+            wp_failed: false,
             loaded_sparql: false, sparql_entries: [], last_id: ''
         };
     },
@@ -19,6 +20,7 @@ export default {
         loadDataWikipedia: async function () {
             const me = this;
             me.loaded_wp = false;
+            me.wp_failed = false;
             me.wp_entries = [];
             try {
                 var d = await mnm_fetch_json('https://' + me.catalog.search_wp + '.wikipedia.org/w/api.php', {
@@ -139,8 +141,12 @@ export default {
                 });
             }).catch(function () {}).then(function () { me.loaded_wd = true });
 
-            me.loadDataWikipedia();
-            me.checkSPARQL();
+            me.loadDataWikipedia().catch(function (e) {
+                console.error('Wikipedia search failed:', e);
+                me.wp_failed = true;
+                me.loaded_wp = true;
+            });
+            me.checkSPARQL().catch(function (e) { console.error('SPARQL lookup failed:', e); });
 
         },
         wikipediaSearch: function () {
@@ -332,7 +338,10 @@ export default {
 						<h4 class="card-title" tt='wikipedia_search_results' :tt1='catalog.search_wp'></h4>
 						<div class="card-text">
 							<div v-if="loaded_wp">
-								<div v-if="wp_entries.length>0" class="results_overflow_box">
+								<div v-if="wp_failed" class="text-muted fst-italic">
+									Wikipedia search unavailable (the API returned an error). Try reloading the entry.
+								</div>
+								<div v-else-if="wp_entries.length>0" class="results_overflow_box">
 									<table class="table table-sm table-striped">
 										<tbody>
 											<tr v-for="e in wp_entries">
