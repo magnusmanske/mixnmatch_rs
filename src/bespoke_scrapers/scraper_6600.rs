@@ -196,7 +196,7 @@ mod tests {
     }
 
     #[test]
-    fn test_6600_parse_artist_no_artistInfo_skipped() {
+    fn test_6600_parse_artist_no_artist_info_skipped() {
         let item = serde_json::json!({"title": "Untitled"});
         assert!(BespokeScraper6600::parse_artist(6600, &item).is_none());
     }
