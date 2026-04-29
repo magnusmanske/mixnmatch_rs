@@ -1,4 +1,4 @@
-use crate::app_state::AppState;
+use crate::app_state::{AppContext, ExternalServicesContext, RuntimeConfig};
 use crate::autoscrape::Autoscrape;
 use crate::update_catalog::UpdateCatalogError;
 use anyhow::Result;
@@ -177,7 +177,7 @@ impl DataSource {
     }
 
     //TODO test
-    pub async fn get_reader(&mut self, app: &AppState) -> Result<csv::Reader<File>> {
+    pub async fn get_reader(&mut self, app: &dyn AppContext) -> Result<csv::Reader<File>> {
         let mut builder = csv::ReaderBuilder::new();
         let builder = builder.flexible(true).has_headers(false);
         let delim = self
@@ -207,7 +207,7 @@ impl DataSource {
     /// columns be present, because this is called *before* the user has
     /// mapped them.
     pub async fn read_headers_and_preview(
-        app: &AppState,
+        app: &dyn AppContext,
         update_info: &serde_json::Value,
         max_rows: usize,
     ) -> Result<(Vec<String>, Vec<Vec<String>>)> {
@@ -272,7 +272,7 @@ impl DataSource {
     /// many of them yield a non-empty ext_id in the column mapped to `id`.
     /// Cheap dry-run for the Review step.
     pub async fn count_rows(
-        app: &AppState,
+        app: &dyn AppContext,
         update_info: &serde_json::Value,
         max_rows: usize,
     ) -> Result<(usize, usize, usize)> {
@@ -341,7 +341,7 @@ impl DataSource {
     }
 
     async fn location_and_delimiter(
-        app: &AppState,
+        app: &dyn AppContext,
         update_info: &serde_json::Value,
     ) -> Result<(u8, DataSourceLocation)> {
         // data_format in the update_info wins; fall back to import_file.type for
@@ -394,7 +394,7 @@ impl DataSource {
         Ok(())
     }
 
-    pub fn get_source_location(&self, app: &AppState) -> Result<DataSourceLocation> {
+    pub fn get_source_location(&self, app: &dyn RuntimeConfig) -> Result<DataSourceLocation> {
         if let Some(url) = self.json.get("source_url") {
             if let Some(url) = url.as_str() {
                 return Ok(DataSourceLocation::Url(url.to_string()));
@@ -410,7 +410,7 @@ impl DataSource {
     }
 
     //TODO test
-    async fn get_source_type(&self, app: &AppState) -> Result<DataSourceType> {
+    async fn get_source_type(&self, app: &dyn ExternalServicesContext) -> Result<DataSourceType> {
         if let Some(s) = self.json.get("data_format") {
             return Ok(DataSourceType::from_str(s.as_str().unwrap_or("")));
         };

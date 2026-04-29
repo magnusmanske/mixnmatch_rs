@@ -1,4 +1,4 @@
-use crate::{DbId, ItemId, app_state::AppState};
+use crate::{DbId, ItemId, app_state::{AppState, ExternalServicesContext}};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
@@ -32,7 +32,7 @@ impl MnmLink {
     }
 
     /// Try to resolve this link to an entry ID using the given AppState.
-    pub async fn resolve_entry_id(&self, app: &AppState) -> Result<Option<DbId>> {
+    pub async fn resolve_entry_id(&self, app: &dyn ExternalServicesContext) -> Result<Option<DbId>> {
         match self {
             Self::EntryId(id) => Ok(Some(*id)),
             Self::CatalogExtId { catalog, ext_id } => {

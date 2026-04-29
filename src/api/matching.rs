@@ -1,7 +1,7 @@
 //! Matching mutation endpoints. All write paths gate behind `auth::guard`.
 
 use crate::api::common::{self, ApiError, Params, json_resp, ok};
-use crate::app_state::AppState;
+use crate::app_state::{AppContext, ExternalServicesContext};
 use crate::auth;
 use crate::entry::EntryWriter;
 use axum::response::{IntoResponse, Response};
@@ -16,7 +16,7 @@ use tower_sessions::Session;
 const WRITE_FANOUT: usize = 3;
 
 pub async fn query_match_q(
-    app: &AppState,
+    app: &dyn AppContext,
     session: &Session,
     params: &Params,
 ) -> Result<Response, ApiError> {
@@ -41,7 +41,7 @@ pub async fn query_match_q(
 }
 
 pub async fn query_match_q_multi(
-    app: &AppState,
+    app: &dyn ExternalServicesContext,
     session: &Session,
     params: &Params,
 ) -> Result<Response, ApiError> {
@@ -99,7 +99,7 @@ pub async fn query_match_q_multi(
 }
 
 pub async fn query_remove_q(
-    app: &AppState,
+    app: &dyn AppContext,
     session: &Session,
     params: &Params,
 ) -> Result<Response, ApiError> {
@@ -111,7 +111,7 @@ pub async fn query_remove_q(
 }
 
 pub async fn query_remove_all_q(
-    app: &AppState,
+    app: &dyn ExternalServicesContext,
     session: &Session,
     params: &Params,
 ) -> Result<Response, ApiError> {
@@ -125,7 +125,7 @@ pub async fn query_remove_all_q(
 }
 
 pub async fn query_remove_all_multimatches(
-    app: &AppState,
+    app: &dyn ExternalServicesContext,
     session: &Session,
     params: &Params,
 ) -> Result<Response, ApiError> {
@@ -136,7 +136,7 @@ pub async fn query_remove_all_multimatches(
 }
 
 pub async fn query_suggest(
-    app: &AppState,
+    app: &dyn ExternalServicesContext,
     session: &Session,
     params: &Params,
 ) -> Result<Response, ApiError> {

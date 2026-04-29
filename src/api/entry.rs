@@ -2,7 +2,7 @@
 //! "entries by Q or aux value" composite endpoint.
 
 use crate::api::common::{self, ApiError, Params, ok};
-use crate::app_state::AppState;
+use crate::app_state::ExternalServicesContext;
 use axum::response::Response;
 use futures::stream::{self, StreamExt};
 use std::sync::OnceLock;
@@ -16,7 +16,7 @@ fn re_q_match() -> &'static regex::Regex {
     RE.get_or_init(|| regex::Regex::new(r"^\s*[Qq]?(\d+)\s*$").expect("valid regex"))
 }
 
-pub async fn query_get_entry(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+pub async fn query_get_entry(app: &dyn ExternalServicesContext, params: &Params) -> Result<Response, ApiError> {
     let catalog = common::get_param_int(params, "catalog", 0) as usize;
     let entry_ids_str = common::get_param(params, "entry", "");
     let ext_ids_str = common::get_param(params, "ext_ids", "");
@@ -53,7 +53,7 @@ pub async fn query_get_entry(app: &AppState, params: &Params) -> Result<Response
 }
 
 pub async fn query_get_entry_by_extid(
-    app: &AppState,
+    app: &dyn ExternalServicesContext,
     params: &Params,
 ) -> Result<Response, ApiError> {
     let catalog = common::get_catalog(params)?;
@@ -62,7 +62,7 @@ pub async fn query_get_entry_by_extid(
     Ok(ok(common::entries_with_extended_data(&[entry], app).await?))
 }
 
-pub async fn query_search(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+pub async fn query_search(app: &dyn ExternalServicesContext, params: &Params) -> Result<Response, ApiError> {
     let what = common::get_param(params, "what", "");
     let max_results = common::get_param_int(params, "max", 100) as usize;
     let desc_search = common::get_param_int(params, "description_search", 0) != 0;
@@ -115,7 +115,7 @@ pub async fn query_search(app: &AppState, params: &Params) -> Result<Response, A
     Ok(ok(data))
 }
 
-pub async fn query_random(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+pub async fn query_random(app: &dyn ExternalServicesContext, params: &Params) -> Result<Response, ApiError> {
     let catalog = common::get_param_int(params, "catalog", 0) as usize;
     let submode = common::get_param(params, "submode", "");
     let entry_type = common::get_param(params, "type", "");
@@ -163,7 +163,7 @@ pub async fn query_random(app: &AppState, params: &Params) -> Result<Response, A
     Ok(ok(data))
 }
 
-pub async fn query_entries_query(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+pub async fn query_entries_query(app: &dyn ExternalServicesContext, params: &Params) -> Result<Response, ApiError> {
     use crate::match_state::MatchState;
     let offset = common::get_param_int(params, "offset", 0) as usize;
     let ms = MatchState {
@@ -180,7 +180,7 @@ pub async fn query_entries_query(app: &AppState, params: &Params) -> Result<Resp
 }
 
 pub async fn query_entries_via_property_value(
-    app: &AppState,
+    app: &dyn ExternalServicesContext,
     params: &Params,
 ) -> Result<Response, ApiError> {
     let property: usize = common::get_param(params, "property", "")
@@ -204,7 +204,7 @@ pub async fn query_entries_via_property_value(
 }
 
 pub async fn query_get_entries_by_q_or_value(
-    app: &AppState,
+    app: &dyn ExternalServicesContext,
     params: &Params,
 ) -> Result<Response, ApiError> {
     let q_str = common::get_param(params, "q", "");

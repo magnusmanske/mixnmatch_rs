@@ -1,4 +1,4 @@
-use crate::app_state::AppState;
+use crate::app_state::AppContext;
 use crate::auxiliary_data::AuxiliaryRow;
 use crate::coordinates::CoordinateLocation;
 use crate::datasource::DataSource;
@@ -33,7 +33,7 @@ pub struct ExtendedEntry {
 }
 
 impl ExtendedEntry {
-    pub async fn load_extended_data(&mut self, app: &AppState) -> Result<()> {
+    pub async fn load_extended_data(&mut self, app: &dyn AppContext) -> Result<()> {
         let ew = EntryWriter::new(app, &mut self.entry);
         self.aux = ew.get_aux().await?.into_iter().collect();
         self.location = ew.get_coordinate_location().await?;
@@ -104,7 +104,7 @@ impl ExtendedEntry {
     }
 
     //TODO test
-    pub async fn update_existing(&mut self, entry: &mut Entry, app: &AppState) -> Result<()> {
+    pub async fn update_existing(&mut self, entry: &mut Entry, app: &dyn AppContext) -> Result<()> {
         self.update_existing_basic_values(app, entry).await?;
         if self.born.is_some() || self.died.is_some() {
             EntryWriter::new(app, entry)
@@ -124,7 +124,7 @@ impl ExtendedEntry {
 
     async fn update_existing_basic_values(
         &mut self,
-        app: &AppState,
+        app: &dyn AppContext,
         entry: &mut Entry,
     ) -> Result<()> {
         let mut ew = EntryWriter::new(app, entry);
@@ -151,7 +151,7 @@ impl ExtendedEntry {
     // Adds new aliases to the existing DB entry.
     // Does NOT remove ones that don't exist anymore.
     //TODO test
-    pub async fn sync_aliases(&self, app: &AppState, entry: &mut Entry) -> Result<()> {
+    pub async fn sync_aliases(&self, app: &dyn AppContext, entry: &mut Entry) -> Result<()> {
         let ew = EntryWriter::new(app, entry);
         let existing = ew.get_aliases().await?;
         for alias in &self.aliases {
@@ -165,7 +165,7 @@ impl ExtendedEntry {
     // Adds/replaces new aux values on the existing DB entry.
     // Does NOT remove ones that don't exist anymore.
     //TODO test
-    pub async fn sync_auxiliary(&self, app: &AppState, entry: &mut Entry) -> Result<()> {
+    pub async fn sync_auxiliary(&self, app: &dyn AppContext, entry: &mut Entry) -> Result<()> {
         let mut ew = EntryWriter::new(app, entry);
         let existing: HashSet<AuxiliaryRow> = ew.get_aux().await?.into_iter().collect();
         for aux in &self.aux {
@@ -180,7 +180,7 @@ impl ExtendedEntry {
     // Adds/replaces new language descriptions on the existing DB entry.
     // Does NOT remove ones that don't exist anymore.
     //TODO test
-    pub async fn sync_descriptions(&self, app: &AppState, entry: &mut Entry) -> Result<()> {
+    pub async fn sync_descriptions(&self, app: &dyn AppContext, entry: &mut Entry) -> Result<()> {
         let ew = EntryWriter::new(app, entry);
         let existing = ew.get_language_descriptions().await?;
         for (language, value) in &self.descriptions {
@@ -194,7 +194,7 @@ impl ExtendedEntry {
 
     /// Inserts a new entry and its associated data into the database
     //TODO test
-    pub async fn insert_new(&mut self, app: &AppState) -> Result<()> {
+    pub async fn insert_new(&mut self, app: &dyn AppContext) -> Result<()> {
         let mut ew = EntryWriter::new(app, &mut self.entry);
         ew.insert_as_new().await?;
 

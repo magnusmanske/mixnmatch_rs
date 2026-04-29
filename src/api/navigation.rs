@@ -1,7 +1,7 @@
 //! Small navigation handlers: external redirects, entry-URL proxy, CERSEI shortcut.
 
 use crate::api::common::{self, ApiError, Params};
-use crate::app_state::AppState;
+use crate::app_state::ExternalServicesContext;
 use axum::response::{IntoResponse, Response};
 use std::sync::OnceLock;
 
@@ -12,7 +12,7 @@ fn proxy_client() -> &'static reqwest::Client {
     CLIENT.get_or_init(reqwest::Client::new)
 }
 
-pub async fn query_redirect(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+pub async fn query_redirect(app: &dyn ExternalServicesContext, params: &Params) -> Result<Response, ApiError> {
     let catalog = common::get_catalog(params)?;
     let ext_id = common::get_param(params, "ext_id", "");
     let entry = crate::entry::Entry::from_ext_id(catalog, &ext_id, app).await?;
@@ -27,7 +27,7 @@ pub async fn query_redirect(app: &AppState, params: &Params) -> Result<Response,
         .into_response())
 }
 
-pub async fn query_proxy_entry_url(app: &AppState, params: &Params) -> Result<Response, ApiError> {
+pub async fn query_proxy_entry_url(app: &dyn ExternalServicesContext, params: &Params) -> Result<Response, ApiError> {
     let eid = common::get_param_int(params, "entry_id", 0) as usize;
     let entry = crate::entry::Entry::from_id(eid, app).await?;
     let body = proxy_client()
@@ -46,7 +46,7 @@ pub async fn query_proxy_entry_url(app: &AppState, params: &Params) -> Result<Re
 }
 
 pub async fn query_cersei_forward(
-    app: &AppState,
+    app: &dyn ExternalServicesContext,
     params: &Params,
 ) -> Result<Response, ApiError> {
     let sid = common::get_param_int(params, "scraper", 0) as usize;

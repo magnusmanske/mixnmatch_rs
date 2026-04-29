@@ -1,4 +1,4 @@
-use crate::app_state::AppState;
+use crate::app_state::{AppContext, ExternalServicesContext};
 use crate::auxiliary_data::AuxiliaryRow;
 use crate::coordinates::CoordinateLocation;
 use crate::entry::{Entry, EntryWriter};
@@ -95,13 +95,13 @@ pub struct MetaEntry {
 
 impl MetaEntry {
     /// Load a complete MetaEntry from storage for a given entry ID.
-    pub async fn from_entry_id(entry_id: DbId, app: &AppState) -> Result<Self> {
+    pub async fn from_entry_id(entry_id: DbId, app: &dyn ExternalServicesContext) -> Result<Self> {
         let entry = Entry::from_id(entry_id, app).await?;
         Self::from_entry(&entry, app).await
     }
 
     /// Load a complete MetaEntry from an already-loaded Entry.
-    pub async fn from_entry(entry: &Entry, app: &AppState) -> Result<Self> {
+    pub async fn from_entry(entry: &Entry, app: &dyn ExternalServicesContext) -> Result<Self> {
         let entry_id = entry.id.ok_or_else(|| anyhow!("Entry has no id"))?;
         let storage = app.storage();
 
@@ -166,23 +166,23 @@ impl MetaEntry {
         })
     }
 
-    async fn load_mnm_relations(entry_id: DbId, app: &AppState) -> Result<Vec<MetaMnmRelation>> {
+    async fn load_mnm_relations(entry_id: DbId, app: &dyn ExternalServicesContext) -> Result<Vec<MetaMnmRelation>> {
         app.storage().meta_entry_get_mnm_relations(entry_id).await
     }
 
-    async fn load_issues(entry_id: DbId, app: &AppState) -> Result<Vec<MetaIssue>> {
+    async fn load_issues(entry_id: DbId, app: &dyn ExternalServicesContext) -> Result<Vec<MetaIssue>> {
         app.storage().meta_entry_get_issues(entry_id).await
     }
 
-    async fn load_kv_entries(entry_id: DbId, app: &AppState) -> Result<Vec<MetaKvEntry>> {
+    async fn load_kv_entries(entry_id: DbId, app: &dyn ExternalServicesContext) -> Result<Vec<MetaKvEntry>> {
         app.storage().meta_entry_get_kv_entries(entry_id).await
     }
 
-    async fn load_log_entries(entry_id: DbId, app: &AppState) -> Result<Vec<MetaLogEntry>> {
+    async fn load_log_entries(entry_id: DbId, app: &dyn ExternalServicesContext) -> Result<Vec<MetaLogEntry>> {
         app.storage().meta_entry_get_log_entries(entry_id).await
     }
 
-    async fn load_statement_text(entry_id: DbId, app: &AppState) -> Result<Vec<MetaStatementText>> {
+    async fn load_statement_text(entry_id: DbId, app: &dyn ExternalServicesContext) -> Result<Vec<MetaStatementText>> {
         app.storage().meta_entry_get_statement_text(entry_id).await
     }
 
@@ -203,7 +203,7 @@ impl MetaEntry {
 
     /// Create a new entry (and all associated data) from this MetaEntry.
     /// Returns the new entry ID.
-    pub async fn create_in_storage(&self, app: &AppState) -> Result<DbId> {
+    pub async fn create_in_storage(&self, app: &dyn AppContext) -> Result<DbId> {
         let mut entry = Entry::new_from_catalog_and_ext_id(self.entry.catalog, &self.entry.ext_id);
         // clone_from reuses the destination's existing String/Option<String>
         // allocation when the lengths line up — cheaper than a fresh clone
@@ -234,7 +234,7 @@ impl MetaEntry {
 
     /// Update an existing entry with data from this MetaEntry.
     /// The entry must already exist in storage.
-    pub async fn update_in_storage(&self, app: &AppState) -> Result<()> {
+    pub async fn update_in_storage(&self, app: &dyn AppContext) -> Result<()> {
         let entry_id = self
             .entry
             .id
@@ -291,7 +291,7 @@ impl MetaEntry {
     }
 
     /// Write all associated data for an entry (used by both create and update).
-    async fn write_associated_data(&self, entry_id: DbId, app: &AppState) -> Result<()> {
+    async fn write_associated_data(&self, entry_id: DbId, app: &dyn ExternalServicesContext) -> Result<()> {
         let storage = app.storage();
 
         // Auxiliary
