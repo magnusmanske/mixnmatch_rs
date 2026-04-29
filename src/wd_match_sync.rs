@@ -23,7 +23,7 @@
 //!   ext_id, so the issues page has everything it needs without a second
 //!   query.
 
-use crate::app_state::AppState;
+use crate::app_state::{AppContext, ExternalServicesContext, WikidataContext};
 use crate::auth::config::OauthConfig;
 use crate::auth::flow::{TokenPair, wikidata_create_string_claim};
 use crate::issue::{Issue, IssueType};
@@ -132,7 +132,7 @@ impl std::fmt::Display for ClassifyStats {
 /// Both buckets need re-checking: `UNKNOWN` is the freshly-queued bucket
 /// every confirmed match lands in; `DIFFERENT` re-runs because a previous
 /// classification may have happened before WD picked up the value.
-pub async fn classify_pending(app: &AppState, batch_size: usize) -> Result<ClassifyStats> {
+pub async fn classify_pending(app: &dyn AppContext, batch_size: usize) -> Result<ClassifyStats> {
     let mut stats = ClassifyStats::default();
     for status in ["UNKNOWN", "DIFFERENT"] {
         let rows = app.storage().wd_matches_get_batch(status, batch_size).await?;
@@ -155,7 +155,7 @@ pub async fn classify_pending(app: &AppState, batch_size: usize) -> Result<Class
 /// Classify a single batch of rows. Loads the corresponding items from
 /// Wikidata in one `wbgetentities` round-trip, then transitions each
 /// row's status without further network traffic.
-async fn classify_batch(app: &AppState, rows: &[WdMatchRow]) -> Result<ClassifyStats> {
+async fn classify_batch(app: &dyn AppContext, rows: &[WdMatchRow]) -> Result<ClassifyStats> {
     let entities = load_items_for_rows(app, rows).await?;
     let mut stats = ClassifyStats::default();
     for row in rows {
@@ -192,7 +192,7 @@ async fn classify_batch(app: &AppState, rows: &[WdMatchRow]) -> Result<ClassifyS
     Ok(stats)
 }
 
-async fn load_items_for_rows(app: &AppState, rows: &[WdMatchRow]) -> Result<EntityContainer> {
+async fn load_items_for_rows(app: &dyn WikidataContext, rows: &[WdMatchRow]) -> Result<EntityContainer> {
     // Dedup before hitting WD — a single Q can legitimately appear in
     // multiple rows when several catalogs share the same target item.
     let qs: Vec<String> = rows
@@ -342,7 +342,7 @@ impl std::fmt::Display for PushStats {
 /// classifier last ran (someone else added the value, or the property
 /// got a different one) is reclassified rather than being clobbered.
 /// Network/API errors leave the row in `WD_MISSING` for the next run.
-pub async fn push_wd_missing(app: &AppState, batch_size: usize) -> Result<PushStats> {
+pub async fn push_wd_missing(app: &dyn AppContext, batch_size: usize) -> Result<PushStats> {
     let cfg = app
         .oauth_config()
         .ok_or_else(|| anyhow!("OAuth config not loaded; cannot push wd_matches"))?
@@ -369,7 +369,7 @@ pub async fn push_wd_missing(app: &AppState, batch_size: usize) -> Result<PushSt
 }
 
 async fn push_one(
-    app: &AppState,
+    app: &dyn ExternalServicesContext,
     cfg: &OauthConfig,
     access: &TokenPair,
     row: &WdMatchRow,
@@ -464,7 +464,7 @@ fn build_summary(row: &WdMatchRow) -> String {
     )
 }
 
-async fn update_status_best_effort(app: &AppState, row: &WdMatchRow, status: WdMatchStatus) {
+async fn update_status_best_effort(app: &dyn ExternalServicesContext, row: &WdMatchRow, status: WdMatchStatus) {
     if let Err(e) = app
         .storage()
         .wd_matches_set_status(row.entry_id, status.as_str())

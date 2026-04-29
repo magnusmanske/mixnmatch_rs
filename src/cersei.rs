@@ -5,7 +5,8 @@ use std::collections::HashMap;
 use std::thread;
 use std::time::Duration;
 
-use crate::app_state::AppState;
+use crate::app_state::{AppContext, AppState};
+use std::sync::Arc;
 use crate::catalog::Catalog;
 use crate::entry::{Entry, EntryWriter};
 use crate::extended_entry::ExtendedEntry;
@@ -65,14 +66,15 @@ pub struct CerseiRelationsResponse {
 
 #[derive(Debug)]
 pub struct CerseiSync {
-    app: AppState,
+    app: Arc<dyn AppContext>,
     http_client: reqwest::Client,
 }
 
 impl CerseiSync {
     pub fn new(app: &AppState) -> Result<Self> {
+        let app: Arc<dyn AppContext> = Arc::new(app.clone());
         Ok(Self {
-            app: app.clone(),
+            app,
             http_client: crate::autoscrape::Autoscrape::reqwest_client_external()?,
         })
     }
@@ -124,7 +126,7 @@ impl CerseiSync {
 
             // Check if catalog with that name exists
             loop {
-                let catalog_with_name_exists = Catalog::from_name(&name, &self.app).await.is_ok();
+                let catalog_with_name_exists = Catalog::from_name(&name, self.app.as_ref()).await.is_ok();
                 if catalog_with_name_exists {
                     name = format!("{name} [CERSEI]");
                 } else {
@@ -141,7 +143,7 @@ impl CerseiSync {
             catalog.set_note(&note);
             catalog.set_owner(6);
             catalog.set_active(true);
-            catalog.create_catalog(&self.app).await?;
+            catalog.create_catalog(self.app.as_ref()).await?;
 
             // Link cersei and catalog
             self.app
@@ -182,20 +184,20 @@ impl CerseiSync {
 
     /// Set human dates flag for catalog
     async fn set_human_dates_flag(&self, catalog_id: usize) -> Result<bool> {
-        let mut catalog = Catalog::from_id(catalog_id, &self.app).await?;
-        let has_new_dates = catalog.check_and_set_person_date(&self.app).await?;
+        let mut catalog = Catalog::from_id(catalog_id, self.app.as_ref()).await?;
+        let has_new_dates = catalog.check_and_set_person_date(self.app.as_ref()).await?;
         Ok(has_new_dates)
     }
 
     /// Queue a job (simplified - you may need to adapt based on your job queue system)
     async fn queue_job(&self, catalog_id: usize, job_type: &str) -> Result<()> {
-        crate::job::Job::queue_simple_job(&self.app, catalog_id, job_type, None).await?;
+        crate::job::Job::queue_simple_job(self.app.as_ref(), catalog_id, job_type, None).await?;
         Ok(())
     }
 
     /// Add a new entry to the database
     async fn add_new_entry(&self, entry: &mut Entry) -> Result<usize> {
-        EntryWriter::new(&self.app, entry).insert_as_new().await?;
+        EntryWriter::new(self.app.as_ref(), entry).insert_as_new().await?;
         entry.get_valid_id()
     }
 
@@ -311,7 +313,7 @@ impl CerseiSync {
                         .await?;
 
                     if ne.born.is_some() || ne.died.is_some() {
-                        EntryWriter::new(&self.app, &mut ne.entry).set_person_dates(&ne.born, &ne.died).await?;
+                        EntryWriter::new(self.app.as_ref(), &mut ne.entry).set_person_dates(&ne.born, &ne.died).await?;
                     }
                 } else {
                     // Create new entry
@@ -323,7 +325,7 @@ impl CerseiSync {
 
                             // Set person dates if available
                             if ne.born.is_some() || ne.died.is_some() {
-                                EntryWriter::new(&self.app, &mut ne.entry).set_person_dates(&ne.born, &ne.died).await?;
+                                EntryWriter::new(self.app.as_ref(), &mut ne.entry).set_person_dates(&ne.born, &ne.died).await?;
                             }
                         }
                         Err(_e) => {

@@ -14,7 +14,8 @@
 //! but run the job in a way that's easy to disable (remove the
 //! "reference_fixer" job row).
 
-use crate::app_state::AppState;
+use crate::app_state::{AppContext, AppState};
+use std::sync::Arc;
 use crate::util::wikidata_props as wp;
 use crate::wdqs::WDQS_URL;
 use anyhow::{Result, anyhow};
@@ -80,7 +81,7 @@ const HARDCODED_PATTERNS: &[(&str, &str)] = &[
 /// build the URL-pattern / stated-in maps.
 #[derive(Debug)]
 pub struct ReferenceFixer {
-    app: AppState,
+    app: Arc<dyn AppContext>,
     http: reqwest::Client,
     /// Compiled (regex, property-id) pairs. Ordered — the first match wins
     /// for any given URL.
@@ -107,8 +108,9 @@ impl ReferenceFixer {
             .timeout(Duration::from_secs(60))
             .user_agent("Mix'n'match reference fixer (https://mix-n-match.toolforge.org)")
             .build()?;
+        let app: Arc<dyn AppContext> = Arc::new(app.clone());
         Ok(Self {
-            app: app.clone(),
+            app,
             http,
             url_patterns: Vec::new(),
             stated_in: HashMap::new(),
@@ -965,7 +967,7 @@ mod tests {
         // to exercise the offline logic. Avoid AppState construction by
         // going through a tiny hand-rolled one.
         ReferenceFixer {
-            app: crate::app_state::get_test_app(),
+            app: Arc::new(crate::app_state::get_test_app()),
             http: reqwest::Client::new(),
             url_patterns: vec![],
             stated_in: HashMap::new(),

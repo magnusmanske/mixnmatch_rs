@@ -1,6 +1,6 @@
 use crate::DbId;
-use crate::app_state::AppState;
-use crate::app_state::USER_LOCATION_MATCH;
+use crate::app_state::{AppContext, AppState, USER_LOCATION_MATCH};
+use std::sync::Arc;
 use crate::coordinates::LocationRow;
 use crate::entry::{Entry, EntryWriter};
 use crate::job::{Job, Jobbable};
@@ -27,7 +27,7 @@ lazy_static! {
 
 #[derive(Debug, Clone)]
 pub struct CoordinateMatcher {
-    app: AppState,
+    app: Arc<dyn AppContext>,
     mw_api: Api,
     job: Option<Job>,
     catalog_id: Option<DbId>,
@@ -52,8 +52,9 @@ impl Jobbable for CoordinateMatcher {
 impl CoordinateMatcher {
     pub async fn new(app: &AppState, catalog_id: Option<DbId>) -> Result<Self> {
         let mw_api = app.wikidata().get_mw_api().await?;
+        let app: Arc<dyn AppContext> = Arc::new(app.clone());
         let mut ret = Self {
-            app: app.clone(),
+            app,
             mw_api,
             job: None,
             catalog_id, // Specific catalog ID, or None for random catalogs
@@ -173,7 +174,7 @@ impl CoordinateMatcher {
         if items.is_empty() {
             return false;
         }
-        let mut entry = match Entry::from_id(row.entry_id, &self.app).await {
+        let mut entry = match Entry::from_id(row.entry_id, self.app.as_ref()).await {
             Ok(entry) => entry,
             Err(_) => return false,
         };
@@ -184,12 +185,12 @@ impl CoordinateMatcher {
                 return false;
             }
             // println!("Matching https://mix-n-match.toolforge.org/#/entry/{} to https://www.wikidata.org/wiki/{q}", row.entry_id);
-            let _ = EntryWriter::new(&self.app, &mut entry)
+            let _ = EntryWriter::new(self.app.as_ref(), &mut entry)
                 .set_match(q, USER_LOCATION_MATCH)
                 .await;
         } else if items.len() > 1 && entry.is_unmatched() {
             // Only set multimatch if entry is unmatched
-            let _ = EntryWriter::new(&self.app, &mut entry)
+            let _ = EntryWriter::new(self.app.as_ref(), &mut entry)
                 .set_auto_and_multi_match(&items)
                 .await;
         }
