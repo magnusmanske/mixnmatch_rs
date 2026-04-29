@@ -126,7 +126,6 @@ impl StorageMySQL {
             .await?;
         Ok(results)
     }
-
 }
 
 // STORAGE TRAIT IMPLEMENTATION
@@ -973,8 +972,7 @@ impl Storage for StorageMySQL {
             // Manually build the multi-VALUES list — exec_batch in
             // mysql_async fires N round-trips behind the scenes; one
             // INSERT with N tuples is materially faster.
-            let placeholders =
-                std::iter::repeat_n("(?,?,?,?)", chunk.len()).join(",");
+            let placeholders = std::iter::repeat_n("(?,?,?,?)", chunk.len()).join(",");
             let sql = format!(
                 "INSERT INTO `property_cache` \
                     (`prop_group`,`property`,`item`,`label`) \
@@ -1582,7 +1580,7 @@ impl Storage for StorageMySQL {
         offset: usize,
         batch_size: usize,
     ) -> Result<Vec<AutomatchSearchRow>> {
-        let sql = format!("SELECT `id`,`ext_name`,`type`,
+        let sql = format!("SELECT /* automatch_by_search_get_results */ `id`,`ext_name`,`type`,
 	            IFNULL((SELECT group_concat(DISTINCT `label` SEPARATOR '|') FROM aliases WHERE entry_id=entry.id),'') AS `aliases`
 	            FROM `entry` WHERE `catalog`=:catalog_id {}
 	            /* ORDER BY `id` */
@@ -1622,7 +1620,7 @@ impl Storage for StorageMySQL {
         offset: usize,
         batch_size: usize,
     ) -> Result<Vec<AutomatchSearchRow>> {
-        let sql = format!("SELECT `id`,`ext_name`,`type`,
+        let sql = format!("SELECT /* automatch_simple_get_results */ `id`,`ext_name`,`type`,
                 IFNULL((SELECT group_concat(DISTINCT `label` SEPARATOR '|') FROM aliases WHERE entry_id=entry.id),'') AS `aliases`
                 FROM `entry` WHERE `catalog`=:catalog_id {}
                 /* ORDER BY `id` */
@@ -1646,7 +1644,7 @@ impl Storage for StorageMySQL {
         batch_size: usize,
         offset: usize,
     ) -> Result<Vec<ResultInOriginalCatalog>> {
-        let sql = "SELECT `id`,`ext_name`,`type` FROM entry WHERE catalog=:catalog_id AND q IS NULL LIMIT :batch_size OFFSET :offset";
+        let sql = "SELECT /* automatch_from_other_catalogs_get_results */ `id`,`ext_name`,`type` FROM entry WHERE catalog=:catalog_id AND q IS NULL LIMIT :batch_size OFFSET :offset";
         let conn = self.get_conn_ro().await?;
         let results_in_original_catalog: Vec<ResultInOriginalCatalog> = sql
             .with(params! {catalog_id,batch_size,offset})
@@ -1672,7 +1670,7 @@ impl Storage for StorageMySQL {
             .collect();
         let params = Params::Positional(ext_names);
         let placeholders = Self::sql_placeholders(results_in_original_catalog.len());
-        let sql = "SELECT `id`,`ext_name`,`type`,q FROM entry
+        let sql = "SELECT /* automatch_from_other_catalogs_get_results2 */ `id`,`ext_name`,`type`,q FROM entry
             WHERE ext_name IN ("
             .to_string()
             + &placeholders
@@ -5160,11 +5158,7 @@ impl Storage for StorageMySQL {
         Ok(tiles)
     }
 
-    async fn wd_matches_get_batch(
-        &self,
-        status: &str,
-        limit: usize,
-    ) -> Result<Vec<WdMatchRow>> {
+    async fn wd_matches_get_batch(&self, status: &str, limit: usize) -> Result<Vec<WdMatchRow>> {
         // Filters mirror the PHP `getEntriesWithWdMatches` + active-catalog
         // gate: only fully-matched entries (`user>0 AND q>0`) on active
         // catalogs with a Wikidata property and no qualifier. Anything
@@ -5300,8 +5294,14 @@ impl Storage for StorageMySQL {
             .await?
             .map_and_drop(|row: Row| MergeableMatch {
                 target_entry_id: row.get("target_entry_id").unwrap_or(0),
-                source_q: row.get::<Option<isize>, _>("source_q").flatten().unwrap_or(0),
-                source_user: row.get::<Option<usize>, _>("source_user").flatten().unwrap_or(0),
+                source_q: row
+                    .get::<Option<isize>, _>("source_q")
+                    .flatten()
+                    .unwrap_or(0),
+                source_user: row
+                    .get::<Option<usize>, _>("source_user")
+                    .flatten()
+                    .unwrap_or(0),
                 source_timestamp: row
                     .get_opt::<Option<String>, _>("source_timestamp")
                     .and_then(Result::ok)
@@ -5360,7 +5360,10 @@ impl Storage for StorageMySQL {
                 ext_id: row.get::<String, _>("ext_id").unwrap_or_default(),
                 ext_name: row.get::<String, _>("ext_name").unwrap_or_default(),
                 ext_desc: row.get::<String, _>("ext_desc").unwrap_or_default(),
-                q: row.get_opt::<Option<isize>, _>("q").and_then(Result::ok).flatten(),
+                q: row
+                    .get_opt::<Option<isize>, _>("q")
+                    .and_then(Result::ok)
+                    .flatten(),
                 user: row
                     .get_opt::<Option<usize>, _>("user")
                     .and_then(Result::ok)
@@ -5420,7 +5423,10 @@ impl Storage for StorageMySQL {
                 (id, q)
             })
             .await?;
-        Ok(rows.into_iter().filter(|(id, q)| *id > 0 && *q > 0).collect())
+        Ok(rows
+            .into_iter()
+            .filter(|(id, q)| *id > 0 && *q > 0)
+            .collect())
     }
 
     async fn description_aux_get_all(&self) -> Result<Vec<DescriptionAuxRule>> {
@@ -5435,9 +5441,7 @@ impl Storage for StorageMySQL {
                 property: row.get("property").unwrap_or(0),
                 value: row.get::<String, _>("value").unwrap_or_default(),
                 rx: row.get::<String, _>("rx").unwrap_or_default(),
-                type_constraint: row
-                    .get::<String, _>("type_constraint")
-                    .unwrap_or_default(),
+                type_constraint: row.get::<String, _>("type_constraint").unwrap_or_default(),
             })
             .await?;
         Ok(rows
@@ -5486,11 +5490,8 @@ impl Storage for StorageMySQL {
                ){type_filter}"
         );
         let mut conn = self.get_conn().await?;
-        conn.exec_drop(
-            sql,
-            params! { catalog_id, property, value, rx },
-        )
-        .await?;
+        conn.exec_drop(sql, params! { catalog_id, property, value, rx })
+            .await?;
         Ok(conn.affected_rows() as usize)
     }
 
@@ -5525,9 +5526,7 @@ impl Storage for StorageMySQL {
             .map_and_drop(|row: Row| {
                 let prop: usize = row.get("aux_p").unwrap_or(0);
                 let name: String = row.get::<String, _>("aux_name").unwrap_or_default();
-                let entry_ids_csv: String = row
-                    .get::<String, _>("entry_ids")
-                    .unwrap_or_default();
+                let entry_ids_csv: String = row.get::<String, _>("entry_ids").unwrap_or_default();
                 let entry_ids: Vec<usize> = entry_ids_csv
                     .split(',')
                     .filter_map(|s| s.trim().parse().ok())
@@ -5541,10 +5540,7 @@ impl Storage for StorageMySQL {
             .collect())
     }
 
-    async fn auxiliary_select_for_prop(
-        &self,
-        prop: usize,
-    ) -> Result<Vec<(usize, String)>> {
+    async fn auxiliary_select_for_prop(&self, prop: usize) -> Result<Vec<(usize, String)>> {
         let sql = "SELECT `id`, `aux_name` FROM `auxiliary` WHERE `aux_p` = :prop";
         let rows = self
             .get_conn_ro()
@@ -5559,10 +5555,7 @@ impl Storage for StorageMySQL {
     async fn auxiliary_delete_row(&self, id: usize) -> Result<()> {
         self.get_conn()
             .await?
-            .exec_drop(
-                "DELETE FROM `auxiliary` WHERE `id` = :id",
-                params! { id },
-            )
+            .exec_drop("DELETE FROM `auxiliary` WHERE `id` = :id", params! { id })
             .await?;
         Ok(())
     }
@@ -6038,12 +6031,7 @@ impl crate::storage::MetaEntryQueries for StorageMySQL {
         Ok(())
     }
 
-    async fn meta_entry_set_kv_entry(
-        &self,
-        entry_id: usize,
-        key: &str,
-        value: &str,
-    ) -> Result<()> {
+    async fn meta_entry_set_kv_entry(&self, entry_id: usize, key: &str, value: &str) -> Result<()> {
         let sql = "REPLACE INTO `kv_entry` (`entry_id`, `kv_key`, `kv_value`) VALUES (:entry_id, :key, :value)";
         self.get_conn()
             .await?
@@ -6116,7 +6104,6 @@ impl StorageMySQL {
             .await?;
         Ok(rows)
     }
-
 }
 
 #[cfg(test)]
