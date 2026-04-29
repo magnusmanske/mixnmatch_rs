@@ -29,12 +29,15 @@ impl AuxiliaryRow {
 
     //TODO test
     pub fn from_row(row: &Row) -> Option<Self> {
+        // Decoded by column name so a SELECT reorder (or extra
+        // prepended columns) doesn't silently misalign the fields.
+        // SQL columns: `id`, `aux_p`, `aux_name`, `in_wikidata`, `entry_is_matched`.
         Some(Self {
-            row_id: row.get(0),
-            prop_numeric: row.get(1)?,
-            value: row.get(2)?,
-            in_wikidata: row.get(3)?,
-            entry_is_matched: row.get(4)?,
+            row_id: row.get("id"),
+            prop_numeric: row.get("aux_p")?,
+            value: row.get("aux_name")?,
+            in_wikidata: row.get("in_wikidata")?,
+            entry_is_matched: row.get("entry_is_matched")?,
         })
     }
 
