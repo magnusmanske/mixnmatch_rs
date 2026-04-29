@@ -1,5 +1,5 @@
 use crate::{
-    app_state::{AppState, USER_AUTO, USER_AUX_MATCH},
+    app_state::{AppContext, AppState, ExternalServicesContext, USER_AUTO, USER_AUX_MATCH, WikidataContext},
     catalog::Catalog,
     entry::{Entry, EntryWriter},
     mysql_misc::MySQLMisc,
@@ -72,7 +72,7 @@ impl WDRC {
         TimeStamp::datetime(&yesterday)
     }
 
-    async fn sync_redirects(&self, app: &AppState) -> Result<()> {
+    async fn sync_redirects(&self, app: &dyn ExternalServicesContext) -> Result<()> {
         let last_ts = app
             .storage()
             .get_kv_value("wdrc_sync_redirects")
@@ -97,7 +97,7 @@ impl WDRC {
         Ok(())
     }
 
-    async fn apply_deletions(&self, app: &AppState) -> Result<()> {
+    async fn apply_deletions(&self, app: &dyn AppContext) -> Result<()> {
         let (last_ts, mut new_ts) = self.get_deletion_timestamps(app).await?;
         let deletions = self.get_deletions(&last_ts, &mut new_ts).await?;
         if !deletions.is_empty() {
@@ -128,7 +128,7 @@ impl WDRC {
         Ok(())
     }
 
-    async fn get_deletion_timestamps(&self, app: &AppState) -> Result<(String, String)> {
+    async fn get_deletion_timestamps(&self, app: &dyn ExternalServicesContext) -> Result<(String, String)> {
         let last_ts = app
             .storage()
             .get_kv_value("wdrc_apply_deletions")
@@ -164,7 +164,7 @@ impl WDRC {
         Ok(deletions)
     }
 
-    async fn get_prop2catalog_ids(&self, app: &AppState) -> Result<HashMap<usize, Vec<usize>>> {
+    async fn get_prop2catalog_ids(&self, app: &dyn ExternalServicesContext) -> Result<HashMap<usize, Vec<usize>>> {
         let mut ret: HashMap<usize, Vec<usize>> = HashMap::new();
         let results = app.storage().maintenance_get_prop2catalog_ids().await?;
         for (catalog_id, property) in results {
@@ -177,7 +177,7 @@ impl WDRC {
         &self,
         property: usize,
         entity_ids: Vec<String>,
-        app_state: &AppState,
+        app_state: &dyn WikidataContext,
     ) -> Option<HashMap<String, isize>> {
         let api = app_state.wikidata().get_mw_api().await.ok()?;
         let entities = wikimisc::wikibase::entity_container::EntityContainer::new();
@@ -217,7 +217,7 @@ impl WDRC {
         property: usize,
         results: &[(usize, usize)],
         prop2catalog_ids: &HashMap<usize, Vec<usize>>,
-        app: &AppState,
+        app: &dyn AppContext,
     ) -> Result<()> {
         let entity_ids = results
             .iter()
@@ -257,7 +257,7 @@ impl WDRC {
         Ok(())
     }
 
-    pub async fn sync_properties(&self, app: &AppState) -> Result<()> {
+    pub async fn sync_properties(&self, app: &dyn AppContext) -> Result<()> {
         let last_ts = app
             .storage()
             .get_kv_value("wdrc_sync_properties")
@@ -294,7 +294,7 @@ impl WDRC {
         &self,
         results: &[(usize, usize)],
         prop2catalog_ids: &HashMap<usize, Vec<usize>>,
-        app: &AppState,
+        app: &dyn AppContext,
     ) -> Result<()> {
         let results = results.to_vec();
         let properties = results
@@ -315,7 +315,7 @@ impl WDRC {
         Ok(())
     }
 
-    pub async fn sync(&self, app: &AppState) -> Result<()> {
+    pub async fn sync(&self, app: &dyn AppContext) -> Result<()> {
         self.sync_redirects(app).await?;
         self.apply_deletions(app).await?;
         self.sync_properties(app).await?;
@@ -325,7 +325,7 @@ impl WDRC {
     async fn match_unmatched_entry(
         entry_id: usize,
         wd_item_q: isize,
-        app: &AppState,
+        app: &dyn AppContext,
     ) -> Result<()> {
         let mut entry = Entry::from_id(entry_id, app).await?;
         if !entry.is_fully_matched() {
