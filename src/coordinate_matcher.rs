@@ -2,7 +2,7 @@ use crate::DbId;
 use crate::app_state::AppState;
 use crate::app_state::USER_LOCATION_MATCH;
 use crate::coordinates::LocationRow;
-use crate::entry::Entry;
+use crate::entry::{Entry, EntryWriter};
 use crate::job::{Job, Jobbable};
 use anyhow::{Result, anyhow};
 use lazy_static::lazy_static;
@@ -184,11 +184,14 @@ impl CoordinateMatcher {
                 return false;
             }
             // println!("Matching https://mix-n-match.toolforge.org/#/entry/{} to https://www.wikidata.org/wiki/{q}", row.entry_id);
-            let _ = entry.set_match(q, USER_LOCATION_MATCH).await;
+            let _ = EntryWriter::new(&self.app, &mut entry)
+                .set_match(q, USER_LOCATION_MATCH)
+                .await;
         } else if items.len() > 1 && entry.is_unmatched() {
             // Only set multimatch if entry is unmatched
-            // println!("WARNING: https://mix-n-match.toolforge.org/#/entry/{} seems to match: {items:?}", row.entry_id);
-            let _ = entry.set_auto_and_multi_match(&items).await;
+            let _ = EntryWriter::new(&self.app, &mut entry)
+                .set_auto_and_multi_match(&items)
+                .await;
         }
         true // Entry is fully or partially matched
     }
@@ -318,13 +321,13 @@ mod tests {
     async fn test_match_by_coordinates() {
         let app = get_test_app();
         let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
-        entry.unmatch().await.unwrap();
+        EntryWriter::new(&app, &mut entry).unmatch().await.unwrap();
         let cm = CoordinateMatcher::new(&app, Some(TEST_CATALOG_ID))
             .await
             .unwrap();
         cm.run().await.unwrap();
         let mut entry2 = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
         assert_eq!(entry2.q, Some(12060465));
-        entry2.unmatch().await.unwrap();
+        EntryWriter::new(&app, &mut entry2).unmatch().await.unwrap();
     }
 }

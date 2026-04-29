@@ -1,4 +1,4 @@
-use crate::{app_state::AppState, entry::Entry, person_date::PersonDate};
+use crate::{app_state::AppState, entry::{Entry, EntryWriter}, person_date::PersonDate};
 use anyhow::Result;
 use async_trait::async_trait;
 use lazy_static::lazy_static;
@@ -70,15 +70,15 @@ impl BespokeScraper4098 {
     /// calling so the storage round-trip happens against the right
     /// connection pool.
     async fn apply_to_entry(&self, mut entry: Entry, parsed: ParsedProsopography) -> Result<()> {
-        entry.set_app(self.app());
+        let app = self.app();
         if !parsed.desc.is_empty() {
-            entry.set_ext_desc(&parsed.desc).await?;
+            EntryWriter::new(app, &mut entry).set_ext_desc(&parsed.desc).await?;
         }
         if parsed.born.is_some() || parsed.died.is_some() {
-            entry.set_person_dates(&parsed.born, &parsed.died).await?;
+            EntryWriter::new(app, &mut entry).set_person_dates(&parsed.born, &parsed.died).await?;
         }
         for (prop, value) in parsed.aux {
-            let _ = entry.set_auxiliary(prop, Some(value)).await;
+            let _ = EntryWriter::new(app, &mut entry).set_auxiliary(prop, Some(value)).await;
         }
         Ok(())
     }

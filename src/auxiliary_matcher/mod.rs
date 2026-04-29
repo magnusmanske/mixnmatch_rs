@@ -216,7 +216,7 @@ mod tests {
     use crate::wikidata_commands::WikidataCommandPropertyValue;
     use crate::{
         app_state::{TEST_MUTEX, get_test_app},
-        entry::Entry,
+        entry::{Entry, EntryWriter},
     };
 
     const TEST_CATALOG_ID: usize = 5526;
@@ -281,22 +281,23 @@ mod tests {
         let _test_lock = TEST_MUTEX.lock();
         let app = get_test_app();
         let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
-        entry
-            .set_auxiliary(214, Some("30701597".to_string()))
-            .await
-            .unwrap();
-        entry
-            .set_auxiliary(370, Some("foobar".to_string()))
-            .await
-            .unwrap(); // Sandbox string property
-        entry.set_match("Q13520818", 2).await.unwrap();
+        {
+            let mut ew = EntryWriter::new(&app, &mut entry);
+            ew.set_auxiliary(214, Some("30701597".to_string()))
+                .await
+                .unwrap();
+            ew.set_auxiliary(370, Some("foobar".to_string()))
+                .await
+                .unwrap(); // Sandbox string property
+            ew.set_match("Q13520818", 2).await.unwrap();
+        }
 
         // Run matcher
         let mut am = AuxiliaryMatcher::new(&app);
         am.add_auxiliary_to_wikidata(TEST_CATALOG_ID).await.unwrap();
 
         // Check
-        let aux = entry.get_aux().await.unwrap();
+        let aux = EntryWriter::new(&app, &mut entry).get_aux().await.unwrap();
         assert!(
             aux.iter()
                 .any(|x| x.prop_numeric() == 214 && x.in_wikidata())
@@ -307,9 +308,10 @@ mod tests {
         );
 
         // Cleanup
-        entry.set_auxiliary(214, None).await.unwrap();
-        entry.set_auxiliary(370, None).await.unwrap();
-        entry.unmatch().await.unwrap();
+        let mut ew = EntryWriter::new(&app, &mut entry);
+        ew.set_auxiliary(214, None).await.unwrap();
+        ew.set_auxiliary(370, None).await.unwrap();
+        ew.unmatch().await.unwrap();
     }
 
     #[tokio::test]

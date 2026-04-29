@@ -112,7 +112,7 @@ impl AutoMatch {
 mod tests {
     use super::*;
     use crate::app_state::{TEST_MUTEX, USER_AUTO, USER_DATE_MATCH, get_test_app};
-    use crate::entry::Entry;
+    use crate::entry::{Entry, EntryWriter};
 
     const TEST_CATALOG_ID: usize = 5526;
     const TEST_ENTRY_ID: usize = 143962196;
@@ -135,12 +135,8 @@ mod tests {
         let app = get_test_app();
 
         // Clear
-        Entry::from_id(TEST_ENTRY_ID2, &app)
-            .await
-            .unwrap()
-            .unmatch()
-            .await
-            .unwrap();
+        let mut entry = Entry::from_id(TEST_ENTRY_ID2, &app).await.unwrap();
+        EntryWriter::new(&app, &mut entry).unmatch().await.unwrap();
 
         // Match by date
         let mut am = AutoMatch::new(&app);
@@ -159,12 +155,8 @@ mod tests {
         let app = get_test_app();
 
         // Clear
-        Entry::from_id(TEST_ENTRY_ID, &app)
-            .await
-            .unwrap()
-            .unmatch()
-            .await
-            .unwrap();
+        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+        EntryWriter::new(&app, &mut entry).unmatch().await.unwrap();
 
         assert!(
             Entry::from_id(TEST_ENTRY_ID, &app)
@@ -183,7 +175,7 @@ mod tests {
         assert_eq!(entry.user, Some(USER_AUTO));
 
         // Clear
-        entry.unmatch().await.unwrap();
+        EntryWriter::new(&app, &mut entry).unmatch().await.unwrap();
     }
 
     #[tokio::test]
@@ -194,7 +186,7 @@ mod tests {
 
         // Clear
         let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
-        entry.unmatch().await.unwrap();
+        EntryWriter::new(&app, &mut entry).unmatch().await.unwrap();
 
         let mut am = AutoMatch::new(&app);
 
@@ -218,8 +210,9 @@ mod tests {
 
         // Set a full match
         let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
-        entry.unmatch().await.unwrap();
-        entry.set_match("Q1", 4).await.unwrap();
+        let mut ew = EntryWriter::new(&app, &mut entry);
+        ew.unmatch().await.unwrap();
+        ew.set_match("Q1", 4).await.unwrap();
         assert!(entry.is_fully_matched());
 
         // Purge catalog
@@ -232,8 +225,9 @@ mod tests {
 
         // Set an automatch
         let mut entry3 = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
-        entry3.unmatch().await.unwrap();
-        entry3.set_match("Q1", 0).await.unwrap();
+        let mut ew3 = EntryWriter::new(&app, &mut entry3);
+        ew3.unmatch().await.unwrap();
+        ew3.set_match("Q1", 0).await.unwrap();
         assert!(entry3.is_partially_matched());
 
         // Purge catalog
@@ -253,13 +247,16 @@ mod tests {
 
         // Clear
         let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
-        entry.unmatch().await.unwrap();
+        EntryWriter::new(&app, &mut entry).unmatch().await.unwrap();
 
         let mut am = AutoMatch::new(&app);
 
         // Set prelim match
         let mut entry2 = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
-        entry2.set_match("Q13520818", 0).await.unwrap();
+        EntryWriter::new(&app, &mut entry2)
+            .set_match("Q13520818", 0)
+            .await
+            .unwrap();
 
         // Run automatch
         am.match_person_by_single_date(
@@ -276,7 +273,7 @@ mod tests {
         assert_eq!(entry3.user, Some(USER_DATE_MATCH));
 
         // Cleanup
-        entry3.unmatch().await.unwrap();
+        EntryWriter::new(&app, &mut entry3).unmatch().await.unwrap();
         am.purge_automatches(TEST_CATALOG_ID).await.unwrap();
     }
 

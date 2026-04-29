@@ -11,7 +11,7 @@ use super::{
 };
 use crate::app_state::USER_AUTO;
 use crate::catalog::Catalog;
-use crate::entry::Entry;
+use crate::entry::{Entry, EntryWriter};
 use crate::entry_query::EntryQuery;
 use crate::job::Jobbable;
 use crate::match_state::MatchState;
@@ -160,8 +160,9 @@ impl AutoMatch {
             let mut entry_batch = self.app.storage().entry_query(&query).await?;
             for entry in &mut entry_batch {
                 if let Some(q) = label2q.get(&entry.ext_name.to_lowercase()) {
-                    entry.set_app(&self.app);
-                    let _ = entry.set_match(&format!("Q{q}"), USER_AUTO).await;
+                    let _ = EntryWriter::new(&self.app, entry)
+                        .set_match(&format!("Q{q}"), USER_AUTO)
+                        .await;
                 }
             }
             if entry_batch.len() < batch_size {
@@ -212,7 +213,9 @@ impl AutoMatch {
             if let Some(v) = name2entries.get(&title) {
                 for entry_id in v {
                     if let Ok(mut entry) = Entry::from_id(*entry_id, &self.app).await {
-                        let _ = entry.set_match(&format!("Q{q}"), USER_AUTO).await;
+                        let _ = EntryWriter::new(&self.app, &mut entry)
+                            .set_match(&format!("Q{q}"), USER_AUTO)
+                            .await;
                     }
                 }
             }
@@ -269,18 +272,16 @@ impl AutoMatch {
     ) -> Result<()> {
         let entry_ids: Vec<usize> = entry_id2items.keys().copied().collect();
         let mut entries = Entry::multiple_from_ids(&entry_ids, &self.app).await?;
-        let mut futures = vec![];
 
         for (entry_id, entry) in &mut entries {
             let items = match entry_id2items.get(entry_id) {
                 Some(items) => items,
                 None => continue,
             };
-            let future = entry.set_auto_and_multi_match(items);
-            futures.push(future);
+            let _ = EntryWriter::new(&self.app, entry)
+                .set_auto_and_multi_match(items)
+                .await;
         }
-
-        let _ = join_all(futures).await; // Ignore errors
         Ok(())
     }
 
@@ -415,7 +416,9 @@ impl AutoMatch {
                 continue;
             }
             if let Ok(mut entry) = Entry::from_id(object_entry_id, &self.app).await {
-                let _ = entry.set_auto_and_multi_match(&items).await;
+                let _ = EntryWriter::new(&self.app, &mut entry)
+                    .set_auto_and_multi_match(&items)
+                    .await;
             };
         }
         Ok(())
@@ -459,7 +462,9 @@ impl AutoMatch {
             Ok(entry) => entry,
             _ => return, // Ignore error
         };
-        let _ = entry.set_auto_and_multi_match(&items).await; // Ignore error
+        let _ = EntryWriter::new(&self.app, &mut entry)
+            .set_auto_and_multi_match(&items)
+            .await;
     }
 
     async fn automatch_simple_items_from_result(
@@ -548,7 +553,9 @@ impl AutoMatch {
         if let Some(v) = name_type2id.get(&key) {
             for entry_id in v {
                 if let Ok(mut entry) = Entry::from_id(*entry_id, &self.app).await {
-                    let _ = entry.set_match(&q, USER_AUTO).await;
+                    let _ = EntryWriter::new(&self.app, &mut entry)
+                        .set_match(&q, USER_AUTO)
+                        .await;
                 };
             }
         }
@@ -605,18 +612,22 @@ impl AutoMatch {
                 match items.len() {
                     0 => {
                         if !entry.is_unmatched() {
-                            let _ = entry.unmatch().await;
+                            let _ = EntryWriter::new(&self.app, entry).unmatch().await;
                         }
                     }
                     1 => {
-                        let _ = entry.set_match(&format!("{}", items[0]), USER_AUTO).await;
+                        let _ = EntryWriter::new(&self.app, entry)
+                            .set_match(&format!("{}", items[0]), USER_AUTO)
+                            .await;
                     }
                     _ => {
                         let items = items
                             .iter()
                             .map(|q| format!("Q{q}"))
                             .collect::<Vec<String>>();
-                        let _ = entry.set_multi_match(&items).await;
+                        let _ = EntryWriter::new(&self.app, entry)
+                            .set_multi_match(&items)
+                            .await;
                     }
                 }
             }

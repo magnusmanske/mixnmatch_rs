@@ -55,7 +55,6 @@ impl StorageMySQL {
                 .flatten()
                 .unwrap_or(0.0),
             type_name: Entry::value2opt_string(row.get("type")?).ok()?,
-            app: None,
         })
     }
 

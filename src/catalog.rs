@@ -1,4 +1,5 @@
 use crate::app_state::AppState;
+use crate::entry::EntryWriter;
 use crate::auxiliary_data::AuxiliaryRow;
 use crate::util::wikidata_props as wp;
 use anyhow::{Result, anyhow};
@@ -250,7 +251,7 @@ impl Catalog {
                 Err(_) => continue,
             };
             let q_str = format!("Q{q_num}");
-            if entry
+            if EntryWriter::new(&app, &mut entry)
                 .set_match(&q_str, crate::app_state::USER_DATE_MATCH)
                 .await
                 .is_ok()
@@ -261,7 +262,7 @@ impl Catalog {
         Ok(count)
     }
 
-    pub async fn references(&self, entry: &crate::entry::Entry) -> Vec<Reference> {
+    pub async fn references(&self, app: &AppState, entry: &crate::entry::Entry) -> Vec<Reference> {
         let mut snaks = vec![];
         if let Some(source_item) = self.source_item {
             let value = format!("Q{source_item}");
@@ -283,11 +284,13 @@ impl Catalog {
             }
         }
 
-        if let Some(ts) = entry.get_creation_time().await {
-            if let Some(date) = ts.split(' ').next() {
-                let time = format!("+{date}T00:00:00Z");
-                let snak = Snak::new_time(wp::P_RETRIEVED, &time, 11);
-                snaks.push(snak);
+        if let Some(entry_id) = entry.id {
+            if let Some(ts) = app.storage().entry_get_creation_time(entry_id).await {
+                if let Some(date) = ts.split(' ').next() {
+                    let time = format!("+{date}T00:00:00Z");
+                    let snak = Snak::new_time(wp::P_RETRIEVED, &time, 11);
+                    snaks.push(snak);
+                }
             }
         }
         if snaks.is_empty() {

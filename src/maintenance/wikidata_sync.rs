@@ -6,7 +6,7 @@
 //! Wikidata says (overwrite manual matches, rebuild aux candidates).
 
 use super::Maintenance;
-use crate::entry::Entry;
+use crate::entry::{Entry, EntryWriter};
 use crate::app_state::USER_AUX_MATCH;
 use crate::catalog::Catalog;
 use crate::prop_todo::PropTodo;
@@ -366,7 +366,10 @@ impl Maintenance {
                 }
             };
             let q_str = format!("Q{wd_q}");
-            if let Err(e) = entry.set_match(&q_str, USER_AUX_MATCH).await {
+            if let Err(e) = EntryWriter::new(&self.app, &mut entry)
+                .set_match(&q_str, USER_AUX_MATCH)
+                .await
+            {
                 log::warn!("overwrite_from_wikidata: rewrite failed for entry {entry_id}: {e}");
                 continue;
             }

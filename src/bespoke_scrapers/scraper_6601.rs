@@ -1,4 +1,4 @@
-use crate::{app_state::AppState, entry::Entry, extended_entry::ExtendedEntry};
+use crate::{app_state::AppState, entry::{Entry, EntryWriter}, extended_entry::ExtendedEntry};
 use anyhow::Result;
 use async_trait::async_trait;
 use lazy_static::lazy_static;
@@ -91,7 +91,7 @@ impl BespokeScraper for BespokeScraper6601 {
                     if let Some(artist_ext_id) = parsed.artist_ext_id {
                         if let Some(artist_entry_id) = artist2entry.get(&artist_ext_id) {
                             // P170 = creator
-                            let _ = ee.entry.add_mnm_relation(170, *artist_entry_id).await;
+                            let _ = EntryWriter::new(self.app(), &mut ee.entry).add_mnm_relation(170, *artist_entry_id).await;
                         }
                     }
                 }

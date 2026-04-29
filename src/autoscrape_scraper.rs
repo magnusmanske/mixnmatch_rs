@@ -209,7 +209,6 @@ impl AutoscrapeScraper {
                 ext_desc: self.resolve_desc.replace_vars(&map),
                 random: rand::rng().random(),
                 type_name,
-                app: Some(autoscrape.app().clone()),
                 ..Default::default()
             },
             aux: self

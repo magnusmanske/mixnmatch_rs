@@ -10,7 +10,7 @@ use super::{
     AuxiliaryMatcherError, AuxiliaryResults,
 };
 use crate::catalog::Catalog;
-use crate::entry::Entry;
+use crate::entry::{Entry, EntryWriter};
 use crate::issue::{Issue, IssueType};
 use crate::job::Jobbable;
 use crate::util::wikidata_props as wp;
@@ -126,8 +126,10 @@ impl AuxiliaryMatcher {
         }
         // Is that specific value in the entity?
         if Self::is_statement_in_entity(entity, &aux.prop(), &aux.value) {
-            if let Ok(entry) = Entry::from_id(aux.entry_id, &self.app).await {
-                let _ = entry.set_auxiliary_in_wikidata(aux.aux_id, true).await;
+            if let Ok(mut entry) = Entry::from_id(aux.entry_id, &self.app).await {
+                let _ = EntryWriter::new(&self.app, &mut entry)
+                    .set_auxiliary_in_wikidata(aux.aux_id, true)
+                    .await;
             };
         }
         true
@@ -252,8 +254,10 @@ impl AuxiliaryMatcher {
             std::cmp::Ordering::Less => {}
             std::cmp::Ordering::Equal => {
                 if search_results[0] == aux.q() {
-                    if let Ok(entry) = Entry::from_id(aux.entry_id, &self.app).await {
-                        let _ = entry.set_auxiliary_in_wikidata(aux.aux_id, true).await;
+                    if let Ok(mut entry) = Entry::from_id(aux.entry_id, &self.app).await {
+                        let _ = EntryWriter::new(&self.app, &mut entry)
+                            .set_auxiliary_in_wikidata(aux.aux_id, true)
+                            .await;
                     }
                 } else {
                     let issue = Issue::new(

@@ -1,7 +1,7 @@
 use crate::app_state::AppState;
 use crate::auxiliary_data::AuxiliaryRow;
 use crate::coordinates::CoordinateLocation;
-use crate::entry::Entry;
+use crate::entry::{Entry, EntryWriter};
 use crate::mnm_link::MnmLink;
 use crate::person_date::PersonDate;
 use crate::{DbId, ItemId, PropertyId};
@@ -205,7 +205,6 @@ impl MetaEntry {
     /// Returns the new entry ID.
     pub async fn create_in_storage(&self, app: &AppState) -> Result<DbId> {
         let mut entry = Entry::new_from_catalog_and_ext_id(self.entry.catalog, &self.entry.ext_id);
-        entry.set_app(app);
         // clone_from reuses the destination's existing String/Option<String>
         // allocation when the lengths line up — cheaper than a fresh clone
         // for the new-Entry hot path during catalog import.
@@ -215,7 +214,8 @@ impl MetaEntry {
         entry.type_name.clone_from(&self.entry.type_name);
         entry.random = self.entry.random;
 
-        let new_id = entry.insert_as_new().await?;
+        let mut ew = EntryWriter::new(app, &mut entry);
+        let new_id = ew.insert_as_new().await?;
         let entry_id = new_id.ok_or_else(|| anyhow!("Failed to insert new entry"))?;
 
         self.write_associated_data(entry_id, app).await?;
@@ -224,8 +224,8 @@ impl MetaEntry {
         if let Some(q) = self.entry.q {
             if q > 0 {
                 let user = self.entry.user.unwrap_or(0);
-                entry.id = Some(entry_id);
-                entry.set_match(&format!("Q{q}"), user).await?;
+                // insert_as_new already set ew.entry.id; set_match reads it.
+                ew.set_match(&format!("Q{q}"), user).await?;
             }
         }
 
@@ -281,7 +281,9 @@ impl MetaEntry {
             if q > 0 {
                 let user = self.entry.user.unwrap_or(0);
                 let mut entry = Entry::from_id(entry_id, app).await?;
-                entry.set_match(&format!("Q{q}"), user).await?;
+                EntryWriter::new(app, &mut entry)
+                    .set_match(&format!("Q{q}"), user)
+                    .await?;
             }
         }
 
@@ -406,7 +408,6 @@ mod tests {
                 timestamp: Some("20240101120000".to_string()),
                 random: 0.5,
                 type_name: Some("Q5".to_string()),
-                app: None,
             },
             auxiliary: vec![AuxiliaryRow::new(214, "12345".to_string())],
             coordinate: Some(CoordinateLocation::new_with_precision(51.5, -0.1, None)),
@@ -451,7 +452,6 @@ mod tests {
         let back = MetaEntry::from_json(&json).unwrap();
         assert_eq!(back.entry.id, Some(1));
         assert_eq!(back.entry.catalog, 100);
-        assert!(back.entry.app.is_none()); // app is skipped
         assert_eq!(back.auxiliary.len(), 1);
         assert_eq!(back.auxiliary[0].prop_numeric(), 214);
         let within_tolerance = (back.coordinate.unwrap().lat() - 51.5).abs() < 0.0001;
@@ -489,7 +489,6 @@ mod tests {
                 timestamp: None,
                 random: 0.0,
                 type_name: None,
-                app: None,
             },
             auxiliary: vec![],
             coordinate: None,

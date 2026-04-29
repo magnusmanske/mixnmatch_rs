@@ -1,6 +1,5 @@
-use crate::{app_state::AppState, entry::Entry};
+use crate::{app_state::AppState, entry::{Entry, EntryWriter}};
 use anyhow::{Result, anyhow};
-use futures::future::join_all;
 use std::collections::HashMap;
 use wikimisc::wikibase::ItemEntity;
 
@@ -63,7 +62,7 @@ impl ItemCreator {
             }
             entries_done.push(entry_id);
             self.add_entries_by_id(&[entry_id]).await?;
-            let entry = match self.entries.get(&entry_id) {
+            let entry = match self.entries.get_mut(&entry_id) {
                 Some(entry) => entry,
                 None => continue, // This should never happen, but...
             };
@@ -71,7 +70,7 @@ impl ItemCreator {
             // Check out this entries aux values,
             // and find other entries that have the same aux values,
             // for specific properties (eg VIAF, GND)
-            let mut aux_vec = entry.get_aux().await.unwrap_or_default();
+            let mut aux_vec = EntryWriter::new(&self.app, entry).get_aux().await.unwrap_or_default();
             aux_vec.retain(|a| EXT_PROPS.contains(&a.prop_numeric()));
             for aux in aux_vec {
                 if let Ok(mut other_entries) = self
@@ -97,8 +96,7 @@ impl ItemCreator {
         self.assert_at_least_one_entry()?;
         let mut item = ItemEntity::new_empty();
         for entry in self.entries.values_mut() {
-            entry.set_app(&self.app);
-            entry.add_to_item(&mut item).await?;
+            EntryWriter::new(&self.app, entry).add_to_item(&mut item).await?;
         }
         Ok(item)
     }
@@ -113,11 +111,9 @@ impl ItemCreator {
             .create_new_wikidata_item(&item, &comment)
             .await?;
         let _ = self.app.wikidata_mut().perform_ac2wd(&new_id).await; // Ignore error
-        let futures = self
-            .entries_mut()
-            .map(|e| e.set_match(&new_id, 4))
-            .collect::<Vec<_>>();
-        let _ = join_all(futures).await; // Ignore errors
+        for e in self.entries.values_mut() {
+            let _ = EntryWriter::new(&self.app, e).set_match(&new_id, 4).await;
+        }
         Ok(item)
     }
 

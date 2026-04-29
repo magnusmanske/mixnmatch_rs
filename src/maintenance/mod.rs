@@ -21,7 +21,7 @@ mod wikidata_sync;
 
 use crate::app_state::{AppState, USER_DATE_MATCH};
 use crate::catalog::Catalog;
-use crate::entry::Entry;
+use crate::entry::{Entry, EntryWriter};
 use crate::job::Job;
 use anyhow::Result;
 
@@ -92,8 +92,9 @@ impl Maintenance {
         results.dedup();
         for (entry_id, q) in results {
             if let Ok(mut entry) = Entry::from_id(entry_id, &self.app).await {
-                // Ignore error
-                let _ = entry.set_match(&format!("Q{q}"), USER_DATE_MATCH).await;
+                let _ = EntryWriter::new(&self.app, &mut entry)
+                    .set_match(&format!("Q{q}"), USER_DATE_MATCH)
+                    .await;
             };
         }
         Ok(())
@@ -162,7 +163,7 @@ mod tests {
     use crate::match_state::MatchState;
     use crate::{
         app_state::{TEST_MUTEX, get_test_app},
-        entry::Entry,
+        entry::{Entry, EntryWriter},
     };
 
     const TEST_CATALOG_ID: usize = 5526;
@@ -226,7 +227,10 @@ mod tests {
 
         // Set a match to a disambiguation item
         let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
-        entry.set_match("Q16456", 2).await.unwrap();
+        EntryWriter::new(&app, &mut entry)
+            .set_match("Q16456", 2)
+            .await
+            .unwrap();
 
         // Remove matches to disambiguation items
         let maintenance = Maintenance::new(&app);
@@ -244,9 +248,8 @@ mod tests {
     async fn test_fix_redirects() {
         let _test_lock = TEST_MUTEX.lock();
         let app = get_test_app();
-        Entry::from_id(TEST_ENTRY_ID, &app)
-            .await
-            .unwrap()
+        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+        EntryWriter::new(&app, &mut entry)
             .set_match("Q85756032", 2)
             .await
             .unwrap();
@@ -263,9 +266,8 @@ mod tests {
     async fn test_unlink_deleted_items() {
         let _test_lock = TEST_MUTEX.lock();
         let app = get_test_app();
-        Entry::from_id(TEST_ENTRY_ID, &app)
-            .await
-            .unwrap()
+        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+        EntryWriter::new(&app, &mut entry)
             .set_match("Q115205673", 2)
             .await
             .unwrap();

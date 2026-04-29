@@ -1,4 +1,4 @@
-use crate::{app_state::AppState, entry::Entry, extended_entry::ExtendedEntry};
+use crate::{app_state::AppState, entry::{Entry, EntryWriter}, extended_entry::ExtendedEntry};
 use anyhow::Result;
 use async_trait::async_trait;
 use lazy_static::lazy_static;
@@ -70,7 +70,7 @@ impl BespokeScraper for BespokeScraper3387 {
                 if let Some(author_entry_id) = author2entry.get(&author_ext_id) {
                     // P50 = author. Best-effort: a missing author entry just
                     // means the autor catalog wasn't (yet) imported; not an error.
-                    let _ = ee.entry.add_mnm_relation(50, *author_entry_id).await;
+                    let _ = EntryWriter::new(self.app(), &mut ee.entry).add_mnm_relation(50, *author_entry_id).await;
                 }
             }
         }

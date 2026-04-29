@@ -9,7 +9,8 @@
 use super::{AutoMatch, CandidateDates, PersonDateMatchRow, RE_YEAR};
 use crate::app_state::USER_DATE_MATCH;
 use crate::catalog::Catalog;
-use crate::entry::Entry;
+use crate::app_state::AppState;
+use crate::entry::{Entry, EntryWriter};
 use crate::issue::Issue;
 use crate::issue::IssueType;
 use crate::job::Jobbable;
@@ -72,10 +73,8 @@ impl AutoMatch {
         match candidates.len() {
             0 => Ok(()),
             1 => {
-                let _ = Entry::from_id(entry_id, &self.app)
-                    .await?
-                    .set_match(&candidates[0], user_id)
-                    .await?;
+                let mut entry = Entry::from_id(entry_id, &self.app).await?;
+                let _ = EntryWriter::new(&self.app, &mut entry).set_match(&candidates[0], user_id).await?;
                 Ok(())
             }
             _ => {
@@ -395,7 +394,14 @@ impl AutoMatch {
                 Err(_) => continue,
             };
             for row in reader.records().filter_map(|r| r.ok()) {
-                Self::automatch_complex_batch_process_row(&api, row, el_chunk, &mut entries).await;
+                Self::automatch_complex_batch_process_row(
+                    &api,
+                    row,
+                    el_chunk,
+                    &mut entries,
+                    &self.app,
+                )
+                .await;
             }
         }
         Ok(())
@@ -479,6 +485,7 @@ impl AutoMatch {
         row: csv::StringRecord,
         el_chunk: &[(usize, String)],
         entries: &mut std::collections::HashMap<usize, Entry>,
+        app: &AppState,
     ) {
         let q = match api.extract_entity_from_uri(&row[0]) {
             Ok(q) => q,
@@ -495,7 +502,9 @@ impl AutoMatch {
         }
 
         if let Some(entry) = entries.get_mut(&entry_candidates[0]) {
-            let _ = entry.set_auto_and_multi_match(&[q]).await;
+            let _ = EntryWriter::new(app, entry)
+                .set_auto_and_multi_match(&[q])
+                .await;
         }
     }
 }

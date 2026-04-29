@@ -2,6 +2,7 @@
 
 use crate::api::common::{self, ApiError, Params, json_resp};
 use crate::app_state::AppState;
+use crate::entry::EntryWriter;
 use axum::response::Response;
 
 pub async fn query_dg_desc(params: &Params) -> Result<Response, ApiError> {
@@ -48,17 +49,18 @@ pub async fn query_dg_log_action(app: &AppState, params: &Params) -> Result<Resp
     let uid = uid_res?;
     let mut entry = entry_res?;
 
+    let mut ew = EntryWriter::new(app, &mut entry);
     match decision.as_str() {
         "yes" => {
-            if let Some(q) = entry.q {
-                entry.set_match(&format!("Q{q}"), uid).await?;
+            if let Some(q) = ew.as_entry().q {
+                ew.set_match(&format!("Q{q}"), uid).await?;
             }
         }
         "no" => {
-            entry.unmatch().await?;
+            ew.unmatch().await?;
         }
         "n_a" => {
-            entry.set_match("Q-1", uid).await?;
+            ew.set_match("Q-1", uid).await?;
         }
         _ => {}
     }

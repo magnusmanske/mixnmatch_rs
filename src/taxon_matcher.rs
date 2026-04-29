@@ -1,7 +1,7 @@
 use crate::app_state::AppState;
 use crate::app_state::USER_AUX_MATCH;
 use crate::catalog::Catalog;
-use crate::entry::Entry;
+use crate::entry::{Entry, EntryWriter};
 use crate::job::Job;
 use crate::job::Jobbable;
 use anyhow::Result;
@@ -199,17 +199,13 @@ impl TaxonMatcher {
                     std::cmp::Ordering::Less => {}
                     std::cmp::Ordering::Equal => {
                         if let Some(q) = qs.first() {
-                            let _ = Entry::from_id(*entry_id, &self.app)
-                                .await?
-                                .set_match(q, USER_AUX_MATCH)
-                                .await;
+                            let mut entry = Entry::from_id(*entry_id, &self.app).await?;
+                            let _ = EntryWriter::new(&self.app, &mut entry).set_match(q, USER_AUX_MATCH).await;
                         }
                     }
                     std::cmp::Ordering::Greater => {
-                        let _ = Entry::from_id(*entry_id, &self.app)
-                            .await?
-                            .set_multi_match(&qs)
-                            .await;
+                        let mut entry = Entry::from_id(*entry_id, &self.app).await?;
+                        let _ = EntryWriter::new(&self.app, &mut entry).set_multi_match(&qs).await;
                     }
                 }
             }
@@ -222,6 +218,7 @@ impl TaxonMatcher {
 mod tests {
     use super::*;
     use crate::app_state::get_test_app;
+    use crate::entry::EntryWriter;
 
     const TEST_CATALOG_ID: usize = 5526;
     //const _TEST_ENTRY_ID1: usize = 144000951 ; // Britannica-style, akin to catalog 169
@@ -252,7 +249,7 @@ mod tests {
 
         // Clear entry
         let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
-        entry.unmatch().await.unwrap();
+        EntryWriter::new(&app, &mut entry).unmatch().await.unwrap();
 
         // Run matching
         tm.match_taxa(TEST_CATALOG_ID).await.unwrap();
@@ -261,6 +258,6 @@ mod tests {
         let mut entry2 = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
         assert_eq!(entry2.q, Some(2940133));
         assert_eq!(entry2.user, Some(4));
-        entry2.unmatch().await.unwrap();
+        EntryWriter::new(&app, &mut entry2).unmatch().await.unwrap();
     }
 }

@@ -502,7 +502,7 @@ impl ShellCommands {
                             entry: entry.to_owned(),
                             ..Default::default()
                         };
-                        ext_entry.load_extended_data().await?;
+                        ext_entry.load_extended_data(&app).await?;
                         let _item = match wb
                             .generate_entry_item(&app, &ext_entry, &catalog_item)
                             .await
