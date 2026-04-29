@@ -435,7 +435,7 @@ impl ReferenceFixer {
             if let Some(num) = si.strip_prefix('Q').and_then(|s| s.parse::<u64>().ok()) {
                 out.push(json!({
                     "snaktype": "value",
-                    "property": "P248",
+                    "property": wp::P_STATED_IN,
                     "datavalue": {
                         "value": {
                             "entity-type": "item",

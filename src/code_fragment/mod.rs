@@ -1,6 +1,8 @@
 mod jobs;
 
-pub use jobs::{run_aux_from_desc_job, run_desc_from_html_job, run_person_dates_job};
+pub use jobs::{
+    LuaJobOutcome, run_aux_from_desc_job, run_desc_from_html_job, run_person_dates_job,
+};
 
 use crate::entry::Entry;
 use crate::person_date::PersonDate;

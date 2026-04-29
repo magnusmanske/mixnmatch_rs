@@ -109,15 +109,9 @@ impl AuxiliaryMatcher {
                     }
                 }
                 std::cmp::Ordering::Greater => {
-                    Issue::new(
-                        aux.entry_id,
-                        IssueType::WdDuplicate,
-                        json!(search_results),
-                        &self.app,
-                    )
-                    .await?
-                    .insert()
-                    .await?;
+                    Issue::new(aux.entry_id, IssueType::WdDuplicate, json!(search_results))
+                        .insert(self.app.storage().as_ref().as_ref())
+                        .await?;
                 }
             }
         }
@@ -145,15 +139,9 @@ impl AuxiliaryMatcher {
                     std::cmp::Ordering::Less => {}
                     std::cmp::Ordering::Equal => items_to_check.push((items[0].to_owned(), aux)),
                     std::cmp::Ordering::Greater => {
-                        Issue::new(
-                            aux.entry_id,
-                            IssueType::WdDuplicate,
-                            json!(items),
-                            &self.app,
-                        )
-                        .await?
-                        .insert()
-                        .await?;
+                        Issue::new(aux.entry_id, IssueType::WdDuplicate, json!(items))
+                            .insert(self.app.storage().as_ref().as_ref())
+                            .await?;
                     }
                 }
             }

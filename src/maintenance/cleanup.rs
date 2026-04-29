@@ -12,6 +12,7 @@ use crate::catalog::Catalog;
 use crate::entry::Entry;
 use crate::job::Job;
 use crate::match_state::MatchState;
+use crate::util::wikidata_props as wp;
 use anyhow::{Result, anyhow};
 use futures::future::join_all;
 use std::collections::{HashMap, HashSet};
@@ -613,7 +614,7 @@ fn single_value<T>(set: &HashSet<T>) -> Option<&T> {
 /// algorithmic match shouldn't keep claiming it's a person.
 fn item_is_human(item: Option<&wikimisc::wikibase::Entity>) -> bool {
     let Some(item) = item else { return false };
-    item.claims_with_property("P31".to_string())
+    item.claims_with_property(wp::P_INSTANCE_OF.to_string())
         .iter()
         .filter_map(|s| s.main_snak().data_value().clone())
         .any(|dv| match dv.value() {

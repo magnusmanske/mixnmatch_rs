@@ -79,15 +79,9 @@ impl AutoMatch {
                 Ok(())
             }
             _ => {
-                Issue::new(
-                    entry_id,
-                    IssueType::WdDuplicate,
-                    json!(candidates),
-                    &self.app,
-                )
-                .await?
-                .insert()
-                .await?;
+                Issue::new(entry_id, IssueType::WdDuplicate, json!(candidates))
+                    .insert(self.app.storage().as_ref().as_ref())
+                    .await?;
                 Ok(())
             }
         }

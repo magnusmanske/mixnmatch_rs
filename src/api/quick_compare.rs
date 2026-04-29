@@ -4,6 +4,7 @@
 
 use crate::api::common::{ApiError, Params, ok};
 use crate::app_state::AppState;
+use crate::util::wikidata_props as wp;
 use axum::response::Response;
 use serde_json::{Value, json};
 use std::sync::OnceLock;
@@ -129,10 +130,14 @@ pub async fn run(app: &AppState, params: &Params) -> Result<Value, ApiError> {
             };
 
             // Wikidata-side gates.
-            if require_image && item.claims_with_property("P18".to_string()).is_empty() {
+            if require_image && item.claims_with_property(wp::P_IMAGE.to_string()).is_empty() {
                 continue;
             }
-            if require_coordinates && item.claims_with_property("P625".to_string()).is_empty() {
+            if require_coordinates
+                && item
+                    .claims_with_property(wp::P_COORDINATES.to_string())
+                    .is_empty()
+            {
                 continue;
             }
 
@@ -204,7 +209,7 @@ fn opt_usize(params: &Params, key: &str) -> Option<usize> {
 
 /// Extract (lat, lon) from a Wikidata item's first P625 claim, if present.
 fn extract_p625(item: &wikimisc::wikibase::Entity) -> Option<(f64, f64)> {
-    let claims = item.claims_with_property("P625".to_string());
+    let claims = item.claims_with_property(wp::P_COORDINATES.to_string());
     let claim = claims.first()?;
     let dv = claim.main_snak().data_value().as_ref()?;
     let val_json = serde_json::to_value(dv.value()).ok()?;
@@ -213,7 +218,7 @@ fn extract_p625(item: &wikimisc::wikibase::Entity) -> Option<(f64, f64)> {
 
 /// Extract the image filename (P18) string value, if any.
 fn extract_p18(item: &wikimisc::wikibase::Entity) -> Option<String> {
-    let claims = item.claims_with_property("P18".to_string());
+    let claims = item.claims_with_property(wp::P_IMAGE.to_string());
     let claim = claims.first()?;
     let dv = claim.main_snak().data_value().as_ref()?;
     if let wikimisc::wikibase::Value::StringValue(s) = dv.value() {
