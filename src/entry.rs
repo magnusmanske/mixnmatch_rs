@@ -1,4 +1,4 @@
-use crate::app_state::{AppState, USER_AUTO};
+use crate::app_state::{AppState, ExternalServicesContext, USER_AUTO};
 use crate::auxiliary_data::AuxiliaryRow;
 use crate::catalog::Catalog;
 use crate::coordinates::CoordinateLocation;
@@ -157,10 +157,10 @@ pub struct Entry {
 /// any cloning. Future work can swap the inner type for `&dyn
 /// AppContext` to break the AppState concrete dependency.
 #[derive(Debug)]
-pub struct EntryRepo<'a>(pub &'a AppState);
+pub struct EntryRepo<'a>(pub &'a dyn ExternalServicesContext);
 
 impl<'a> EntryRepo<'a> {
-    pub fn new(app: &'a AppState) -> Self {
+    pub fn new(app: &'a (impl ExternalServicesContext + 'a)) -> Self {
         Self(app)
     }
 
@@ -926,7 +926,7 @@ impl Entry {
     /// `maintenance/`, `auxiliary_matcher/`, etc. don't all need to
     /// change in lockstep with the repo extraction.
     //TODO test
-    pub async fn from_id(entry_id: DbId, app: &AppState) -> Result<Self> {
+    pub async fn from_id(entry_id: DbId, app: &impl ExternalServicesContext) -> Result<Self> {
         EntryRepo::new(app).find(entry_id).await
     }
 
@@ -943,14 +943,14 @@ impl Entry {
     ///
     /// **Prefer [`EntryRepo::find_by_ext_id`]** for new code.
     //TODO test
-    pub async fn from_ext_id(catalog_id: DbId, ext_id: &str, app: &AppState) -> Result<Entry> {
+    pub async fn from_ext_id(catalog_id: DbId, ext_id: &str, app: &impl ExternalServicesContext) -> Result<Entry> {
         EntryRepo::new(app).find_by_ext_id(catalog_id, ext_id).await
     }
 
     /// **Prefer [`EntryRepo::find_many`]** for new code.
     pub async fn multiple_from_ids(
         entry_ids: &[DbId],
-        app: &AppState,
+        app: &impl ExternalServicesContext,
     ) -> Result<HashMap<DbId, Self>> {
         EntryRepo::new(app).find_many(entry_ids).await
     }

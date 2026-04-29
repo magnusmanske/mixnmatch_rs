@@ -1,4 +1,4 @@
-use crate::app_state::AppState;
+use crate::app_state::{AppState, ExternalServicesContext};
 use crate::entry::EntryWriter;
 use crate::auxiliary_data::AuxiliaryRow;
 use crate::util::wikidata_props as wp;
@@ -29,12 +29,12 @@ pub struct Catalog {
 
 impl Catalog {
     /// Returns a Catalog object for a given ID.
-    pub async fn from_id(catalog_id: usize, app: &AppState) -> Result<Self> {
+    pub async fn from_id(catalog_id: usize, app: &impl ExternalServicesContext) -> Result<Self> {
         app.storage().get_catalog_from_id(catalog_id).await
     }
 
     /// Returns a Catalog object for a given name.
-    pub async fn from_name(name: &str, app: &AppState) -> Result<Self> {
+    pub async fn from_name(name: &str, app: &impl ExternalServicesContext) -> Result<Self> {
         app.storage().get_catalog_from_name(name).await
     }
 
