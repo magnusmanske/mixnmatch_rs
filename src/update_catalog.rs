@@ -314,6 +314,7 @@ mod tests {
     use crate::{
         app_state::{TEST_MUTEX, get_test_app},
         datasource::DataSourceLocation,
+        entry::EntryWriter,
         extended_entry::ExtendedEntry,
     };
 
@@ -427,7 +428,7 @@ mod tests {
 
         // Delete the entry if it exists
         if let Ok(mut entry) = Entry::from_ext_id(TEST_CATALOG_ID, "n2014191777", &app).await {
-            entry.delete().await.unwrap();
+            EntryWriter::new(&app, &mut entry).delete().await.unwrap();
         }
 
         // Import single entry
@@ -448,7 +449,7 @@ mod tests {
         assert_eq!(entry.type_name, Some("Q5".to_string()));
 
         // Check aux values
-        let aux = entry.get_aux().await.unwrap();
+        let aux = EntryWriter::new(&app, &mut entry).get_aux().await.unwrap();
         assert_eq!(aux.len(), 2);
         assert_eq!(
             aux.iter()
@@ -466,11 +467,11 @@ mod tests {
         );
 
         // Check person dates
-        let (born, died) = entry.get_person_dates().await.unwrap();
+        let (born, died) = EntryWriter::new(&app, &mut entry).get_person_dates().await.unwrap();
         assert_eq!(born.unwrap().to_db_string(), "1869");
         assert_eq!(died.unwrap().to_db_string(), "1961");
 
         // Cleanup
-        entry.delete().await.unwrap();
+        EntryWriter::new(&app, &mut entry).delete().await.unwrap();
     }
 }

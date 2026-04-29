@@ -8,7 +8,7 @@
 
 use super::{AUX_BLACKLISTED_PROPERTIES, AuxiliaryMatcher, AuxiliaryResults};
 use crate::app_state::USER_AUX_MATCH;
-use crate::entry::Entry;
+use crate::entry::{Entry, EntryWriter};
 use crate::issue::{Issue, IssueType};
 use crate::job::{Job, Jobbable};
 use anyhow::Result;
@@ -77,7 +77,9 @@ impl AuxiliaryMatcher {
             if let Some(entity) = &entities.get_entity(q.to_owned()) {
                 if aux.entity_has_statement(entity) {
                     if let Ok(mut entry) = Entry::from_id(aux.entry_id, &self.app).await {
-                        let _ = entry.set_match(q, USER_AUX_MATCH).await;
+                        let _ = EntryWriter::new(&self.app, &mut entry)
+                            .set_match(q, USER_AUX_MATCH)
+                            .await;
                     }
                 }
             }

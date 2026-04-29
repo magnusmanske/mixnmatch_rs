@@ -1,7 +1,7 @@
 use crate::{
     app_state::{AppState, USER_AUTO, USER_AUX_MATCH},
     catalog::Catalog,
-    entry::Entry,
+    entry::{Entry, EntryWriter},
     mysql_misc::MySQLMisc,
 };
 use anyhow::{Result, anyhow};
@@ -329,7 +329,7 @@ impl WDRC {
     ) -> Result<()> {
         let mut entry = Entry::from_id(entry_id, app).await?;
         if !entry.is_fully_matched() {
-            entry
+            EntryWriter::new(app, &mut entry)
                 .set_match(&format!("Q{wd_item_q}"), USER_AUX_MATCH)
                 .await?;
             // println!("P{property}: {} => {}",entry.get_entry_url().unwrap_or("".into()),entry.get_item_url().unwrap_or("".into()));

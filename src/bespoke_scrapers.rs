@@ -1,4 +1,4 @@
-use crate::{app_state::AppState, entry::Entry, extended_entry::ExtendedEntry};
+use crate::{app_state::AppState, entry::{Entry, EntryWriter}, extended_entry::ExtendedEntry};
 use anyhow::Result;
 use async_trait::async_trait;
 use futures::future::BoxFuture;
@@ -261,13 +261,14 @@ pub trait BespokeScraper {
         }
 
         if !new_aux.is_empty() {
-            let existing_aux = entry.get_aux().await?;
+            let mut entry = entry;
+            let existing_aux = EntryWriter::new(self.app(), &mut entry).get_aux().await?;
             for (aux_p, aux_name) in new_aux {
                 if !existing_aux
                     .iter()
                     .any(|a| a.prop_numeric() == aux_p && a.value() == aux_name)
                 {
-                    let _ = entry.set_auxiliary(aux_p, Some(aux_name)).await;
+                    let _ = EntryWriter::new(self.app(), &mut entry).set_auxiliary(aux_p, Some(aux_name)).await;
                 }
             }
         }

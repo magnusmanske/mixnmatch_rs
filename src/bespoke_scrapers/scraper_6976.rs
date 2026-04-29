@@ -1,4 +1,4 @@
-use crate::{app_state::AppState, entry::Entry};
+use crate::{app_state::AppState, entry::{Entry, EntryWriter}};
 use anyhow::Result;
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -56,14 +56,14 @@ impl BespokeScraper6976 {
             static ref RE_SUBJECT: Regex =
                 Regex::new(r#"<a href="/[a-z]+/subjects/idrec/sn/bio/id/(\d+)""#).unwrap();
         }
-        let entry = Entry::from_id(entry_id, &self.app).await?;
-        let existing_aux = entry.get_aux().await?;
-        let url = &entry.ext_url;
-        let text = self.load_single_line_text_from_url(url).await?;
+        let mut entry = Entry::from_id(entry_id, &self.app).await?;
+        let existing_aux = EntryWriter::new(&self.app, &mut entry).get_aux().await?;
+        let url = entry.ext_url.clone();
+        let text = self.load_single_line_text_from_url(&url).await?;
 
         if !existing_aux.iter().any(|aux| aux.prop_numeric() == 227) {
             if let Some(gnd) = Self::get_main_gnd_from_text(&text) {
-                entry.set_auxiliary(227, Some(gnd)).await?;
+                EntryWriter::new(&self.app, &mut entry).set_auxiliary(227, Some(gnd)).await?;
             }
         }
 
@@ -79,7 +79,7 @@ impl BespokeScraper6976 {
             for (key, prop_numeric) in KEYS2PROP {
                 if cap_dd.contains(key) {
                     let _ = self
-                        .attach_subjects_as_aux(*prop_numeric, &subject_ids, &entry)
+                        .attach_subjects_as_aux(*prop_numeric, &subject_ids, &mut entry)
                         .await;
                 }
             }
@@ -91,7 +91,7 @@ impl BespokeScraper6976 {
         &self,
         prop_numeric: usize,
         subject_ids: &[String],
-        entry: &Entry,
+        entry: &mut Entry,
     ) -> Result<()> {
         for subject_id in subject_ids {
             if let Some(gnd) = self.get_subject_gnd(subject_id).await {
@@ -104,12 +104,12 @@ impl BespokeScraper6976 {
                     .unwrap_or_default();
                 if items_with_gnd.len() == 1 {
                     let item = items_with_gnd[0].clone();
-                    let _ = entry.set_auxiliary(prop_numeric, Some(item)).await;
+                    let _ = EntryWriter::new(&self.app, entry).set_auxiliary(prop_numeric, Some(item)).await;
                 } else if let Ok(target_entry) =
                     Entry::from_ext_id(self.catalog_id(), &gnd, &self.app).await
                 {
                     if let Ok(target_entry_id) = target_entry.get_valid_id() {
-                        let _ = entry.add_mnm_relation(prop_numeric, target_entry_id).await;
+                        let _ = EntryWriter::new(&self.app, entry).add_mnm_relation(prop_numeric, target_entry_id).await;
                     }
                 }
             }

@@ -136,8 +136,6 @@ pub struct Entry {
         alias = "type_name"
     )]
     pub type_name: Option<String>,
-    #[serde(skip)]
-    pub app: Option<AppState>,
 }
 
 /// Repository — encapsulates the static "load Entry from storage"
@@ -166,61 +164,38 @@ impl<'a> EntryRepo<'a> {
         Self(app)
     }
 
-    /// Load an entry by primary key. Sets `entry.app` so the
-    /// entry's mutator methods work without a separate `set_app`.
+    /// Load an entry by primary key.
     pub async fn find(&self, entry_id: DbId) -> Result<Entry> {
-        let mut ret = self.0.storage().entry_from_id(entry_id).await?;
-        ret.set_app(self.0);
-        Ok(ret)
+        self.0.storage().entry_from_id(entry_id).await
     }
 
     /// Load multiple entries by primary key in one round-trip.
     /// Missing ids are silently absent from the returned map.
     pub async fn find_many(&self, entry_ids: &[DbId]) -> Result<HashMap<DbId, Entry>> {
-        let mut ret = self.0.storage().multiple_from_ids(entry_ids).await?;
-        ret.iter_mut().for_each(|(_id, entry)| {
-            entry.set_app(self.0);
-        });
-        Ok(ret)
+        self.0.storage().multiple_from_ids(entry_ids).await
     }
 
     /// Load an entry by `(catalog_id, ext_id)`. The pair is unique
     /// per the storage contract.
     pub async fn find_by_ext_id(&self, catalog_id: DbId, ext_id: &str) -> Result<Entry> {
-        let mut ret = self
-            .0
-            .storage()
-            .entry_from_ext_id(catalog_id, ext_id)
-            .await?;
-        ret.set_app(self.0);
-        Ok(ret)
+        self.0.storage().entry_from_ext_id(catalog_id, ext_id).await
     }
 }
 
 /// Writer — encapsulates the entry-mutation API (`set_match`,
 /// `unmatch`, `set_auxiliary`, …) with the application context held
-/// **explicitly** alongside the entry, instead of self-injected via
-/// `Entry::app: Option<AppState>`.
+/// **explicitly** alongside the entry.
 ///
 /// This is the second piece of the [Active-Record → Domain Model +
 /// Repository + Writer] split flagged in the architecture audit
-/// (#4.4 → §3.2 runtime cycle). Today it's a thin facade over the
-/// existing `Entry::set_*` methods (so the 25-ish callers using
-/// the `entry.set_match(...).await` pattern keep working). Future
-/// PRs can migrate the algorithm bodies into `EntryWriter` and
-/// drop the `Option<AppState>` field on `Entry`.
+/// (#4.4 → §3.2 runtime cycle).
 ///
-/// **For new code, prefer:**
+/// **For new code, use:**
 ///
 /// ```ignore
 /// let mut entry = EntryRepo::new(&app).find(id).await?;
 /// EntryWriter::new(&app, &mut entry).set_match("Q42", USER).await?;
 /// ```
-///
-/// over the self-DI form `entry.set_match("Q42", USER).await?`,
-/// because the explicit-context form makes the dependency on
-/// `AppState` visible at the call site (instead of relying on a
-/// `set_app` call elsewhere).
 #[derive(Debug)]
 pub struct EntryWriter<'a> {
     ctx: &'a AppState,
@@ -228,15 +203,7 @@ pub struct EntryWriter<'a> {
 }
 
 impl<'a> EntryWriter<'a> {
-    /// Wrap an existing entry with an explicit context. The
-    /// constructor sets `entry.app` if it isn't already, so the
-    /// underlying `Entry` mutator methods (which still rely on the
-    /// self-DI'd field for now) work without the caller having to
-    /// remember `set_app`.
     pub fn new(ctx: &'a AppState, entry: &'a mut Entry) -> Self {
-        if entry.app.is_none() {
-            entry.set_app(ctx);
-        }
         Self { ctx, entry }
     }
 
@@ -492,6 +459,56 @@ impl<'a> EntryWriter<'a> {
         self.entry.id = None;
         Ok(())
     }
+
+    // ── Reader methods ───────────────────────────────────────────────────
+    // Thin delegators to the private `read_*` free helpers. Callers that
+    // already hold an `EntryWriter` can use these instead of the `Entry`
+    // facade methods (which rely on `Entry::app` being set).
+
+    pub async fn get_aux(&self) -> Result<Vec<AuxiliaryRow>> {
+        read_aux(self.ctx, self.entry.get_valid_id()?).await
+    }
+
+    pub async fn get_aliases(&self) -> Result<Vec<LocaleString>> {
+        read_aliases(self.ctx, self.entry.get_valid_id()?).await
+    }
+
+    pub async fn get_person_dates(&self) -> Result<(Option<PersonDate>, Option<PersonDate>)> {
+        read_person_dates(self.ctx, self.entry.get_valid_id()?).await
+    }
+
+    pub async fn get_language_descriptions(&self) -> Result<HashMap<String, String>> {
+        read_language_descriptions(self.ctx, self.entry.get_valid_id()?).await
+    }
+
+    pub async fn get_coordinate_location(&self) -> Result<Option<CoordinateLocation>> {
+        read_coordinate_location(self.ctx, self.entry.get_valid_id()?).await
+    }
+
+    pub async fn get_multi_match(&self) -> Result<Vec<String>> {
+        read_multi_match(self.ctx, self.entry.get_valid_id()?).await
+    }
+
+    pub async fn get_creation_time(&self) -> Option<String> {
+        read_creation_time(self.ctx, self.entry.get_valid_id().ok()?).await
+    }
+
+    pub async fn set_auxiliary_in_wikidata(&self, aux_id: DbId, in_wikidata: bool) -> Result<()> {
+        write_auxiliary_in_wikidata(self.ctx, aux_id, in_wikidata).await
+    }
+
+    pub async fn add_mnm_relation(
+        &self,
+        prop_numeric: PropertyId,
+        target_entry_id: DbId,
+    ) -> Result<()> {
+        write_mnm_relation(self.ctx, self.entry.get_valid_id()?, prop_numeric, target_entry_id)
+            .await
+    }
+
+    pub async fn add_to_item(&self, item: &mut ItemEntity) -> Result<()> {
+        build_item_from_entry(self.ctx, self.entry, item).await
+    }
 }
 
 // ── Private writer helpers ───────────────────────────────────────────
@@ -537,9 +554,7 @@ async fn write_person_dates(
 ) -> Result<()> {
     // Read the currently stored pair and compare; only write if it
     // actually changed. Avoids overview-table churn on no-op imports.
-    let (born_str, died_str) = ctx.storage().entry_get_person_dates(entry_id).await?;
-    let already_born = born_str.as_deref().and_then(PersonDate::from_db_string);
-    let already_died = died_str.as_deref().and_then(PersonDate::from_db_string);
+    let (already_born, already_died) = read_person_dates(ctx, entry_id).await?;
     if already_born == *born && already_died == *died {
         return Ok(());
     }
@@ -553,6 +568,246 @@ async fn write_person_dates(
             .await?;
     }
     Ok(())
+}
+
+// ── Private reader helpers ───────────────────────────────────────────
+//
+// Symmetric with the `write_*` helpers below. Entry's `get_*` methods
+// forward here, so reading entry-related rows doesn't depend on
+// `Entry::app: Option<AppState>` being set. New code that has a
+// `&AppState` and a `DbId` can call these directly.
+
+// ── Wikidata `ItemEntity` builder (driven by `Entry::add_to_item`) ──
+//
+// The chain that constructs a fresh Wikidata item from an `Entry`'s
+// data. Each step takes `(ctx, entry, item, …)` explicitly so the
+// builder doesn't depend on `Entry::app: Option<AppState>` being set;
+// the Wikidata API and the catalog table are accessed via `ctx`. The
+// per-section reads (`read_aux`, `read_person_dates`, …) are the same
+// helpers Entry's getters now use.
+
+async fn build_item_from_entry(
+    ctx: &AppState,
+    entry: &Entry,
+    item: &mut ItemEntity,
+) -> Result<()> {
+    let catalog = Catalog::from_id(entry.catalog, ctx).await?;
+    let references = catalog.references(ctx, entry).await;
+    let language = catalog.search_wp().to_string();
+    // `use_description_for_new` gates whether the catalog's ext_desc is
+    // copied into a newly-created item's description. Default is on;
+    // catalog admins can opt out via kv_catalog.
+    let use_desc = catalog
+        .get_key_value_pairs()
+        .await
+        .unwrap_or_default()
+        .get("use_description_for_new")
+        .map(|v| v != "0")
+        .unwrap_or(true);
+    add_own_id_to_item(entry, &catalog, &references, item);
+    add_type_to_item(entry, &references, item);
+    add_name_and_aliases_to_item(ctx, entry, &language, item).await?;
+    add_descriptions_to_item(ctx, entry, language, use_desc, item).await?;
+    add_coordinates_to_item(ctx, entry, &references, item).await?;
+    add_person_dates_to_item(ctx, entry, &references, item).await?;
+    add_auxiliary_to_item(ctx, entry, references, item).await?;
+    Ok(())
+}
+
+async fn add_auxiliary_to_item(
+    ctx: &AppState,
+    entry: &Entry,
+    references: Vec<Reference>,
+    item: &mut ItemEntity,
+) -> Result<()> {
+    let auxiliary = read_aux(ctx, entry.get_valid_id()?).await?;
+    if auxiliary.is_empty() {
+        return Ok(());
+    }
+    let api = ctx.wikidata().get_mw_api().await?;
+    let ec = EntityContainer::new();
+    let props2load: Vec<String> = auxiliary.iter().map(|a| a.prop_as_string()).collect();
+    // Pre-load all property entities in one batch; per-entity load below is
+    // a no-op for ones the batch already cached.
+    let _ = ec.load_entities(&api, &props2load).await;
+    for aux in auxiliary {
+        if let Ok(prop) = ec.load_entity(&api, aux.prop_as_string()).await {
+            if let Some(claim) = aux.get_claim_for_aux(prop, &references) {
+                Entry::add_claim_or_references(item, claim);
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn add_person_dates_to_item(
+    ctx: &AppState,
+    entry: &Entry,
+    references: &[Reference],
+    item: &mut ItemEntity,
+) -> Result<()> {
+    let (born, died) = read_person_dates(ctx, entry.get_valid_id()?).await?;
+    if let Some(pd) = born {
+        let snak = Snak::new_time(
+            wp::P_DATE_OF_BIRTH,
+            &pd.to_wikidata_time(),
+            pd.wikidata_precision(),
+        );
+        let claim = Statement::new_normal(snak, vec![], references.to_owned());
+        Entry::add_claim_or_references(item, claim);
+    }
+    if let Some(pd) = died {
+        let snak = Snak::new_time(
+            wp::P_DATE_OF_DEATH,
+            &pd.to_wikidata_time(),
+            pd.wikidata_precision(),
+        );
+        let claim = Statement::new_normal(snak, vec![], references.to_owned());
+        Entry::add_claim_or_references(item, claim);
+    }
+    Ok(())
+}
+
+async fn add_coordinates_to_item(
+    ctx: &AppState,
+    entry: &Entry,
+    references: &[Reference],
+    item: &mut ItemEntity,
+) -> Result<()> {
+    if let Some(coord) = read_coordinate_location(ctx, entry.get_valid_id()?).await? {
+        let snak = build_p625_snak(coord.lat(), coord.lon(), coord.precision());
+        let claim = Statement::new_normal(snak, vec![], references.to_owned());
+        Entry::add_claim_or_references(item, claim);
+    }
+    Ok(())
+}
+
+async fn add_descriptions_to_item(
+    ctx: &AppState,
+    entry: &Entry,
+    language: String,
+    use_ext_desc: bool,
+    item: &mut ItemEntity,
+) -> Result<()> {
+    let mut descriptions = read_language_descriptions(ctx, entry.get_valid_id()?).await?;
+    if use_ext_desc && !entry.ext_desc.is_empty() {
+        descriptions.insert(language.to_owned(), entry.ext_desc.to_owned());
+    }
+    for (lang, desc) in descriptions {
+        if item.description_in_locale(&lang).is_none() {
+            let desc = LocaleString::new(&lang, &desc);
+            item.descriptions_mut().push(desc);
+        }
+    }
+    Ok(())
+}
+
+async fn add_name_and_aliases_to_item(
+    ctx: &AppState,
+    entry: &Entry,
+    language: &str,
+    item: &mut ItemEntity,
+) -> Result<()> {
+    let mut aliases = read_aliases(ctx, entry.get_valid_id()?).await?;
+    let name = Person::sanitize_name(&entry.ext_name);
+    let locale_string = LocaleString::new(language, &name);
+    // Q5 + a Western-script language → write the label as `mul` so it
+    // covers every Latin-script language at once. Mirrors PHP behaviour.
+    let names = if entry.type_name == Some("Q5".into()) && WESTERN_LANGUAGES.contains(&language) {
+        vec![LocaleString::new("mul", &name)]
+    } else {
+        vec![locale_string.to_owned()]
+    };
+    for ls in names {
+        if item.label_in_locale(ls.language()).is_none() {
+            item.labels_mut().push(ls);
+        } else {
+            aliases.push(ls);
+        }
+    }
+    for alias in aliases {
+        if !item.labels().contains(&alias) && !item.aliases().contains(&alias) {
+            item.aliases_mut().push(alias);
+        }
+    }
+    Ok(())
+}
+
+fn add_type_to_item(entry: &Entry, references: &[Reference], item: &mut ItemEntity) {
+    if let Some(tn) = &entry.type_name {
+        if !tn.is_empty() {
+            let snak = Snak::new_item(wp::P_INSTANCE_OF, tn);
+            let claim = Statement::new_normal(snak, vec![], references.to_owned());
+            Entry::add_claim_or_references(item, claim);
+        }
+    }
+}
+
+fn add_own_id_to_item(
+    entry: &Entry,
+    catalog: &Catalog,
+    references: &[Reference],
+    item: &mut ItemEntity,
+) {
+    if let (Some(prop), None) = (catalog.wd_prop(), catalog.wd_qual()) {
+        let snak = Snak::new_external_id(&format!("P{prop}"), &entry.ext_id);
+        let claim = Statement::new_normal(snak, vec![], references.to_owned());
+        Entry::add_claim_or_references(item, claim);
+    }
+}
+
+async fn read_creation_time(ctx: &AppState, entry_id: DbId) -> Option<String> {
+    ctx.storage().entry_get_creation_time(entry_id).await
+}
+
+async fn read_person_dates(
+    ctx: &AppState,
+    entry_id: DbId,
+) -> Result<(Option<PersonDate>, Option<PersonDate>)> {
+    let (born_str, died_str) = ctx.storage().entry_get_person_dates(entry_id).await?;
+    let born = born_str.as_deref().and_then(PersonDate::from_db_string);
+    let died = died_str.as_deref().and_then(PersonDate::from_db_string);
+    Ok((born, died))
+}
+
+async fn read_aliases(ctx: &AppState, entry_id: DbId) -> Result<Vec<LocaleString>> {
+    ctx.storage().entry_get_aliases(entry_id).await
+}
+
+async fn read_language_descriptions(
+    ctx: &AppState,
+    entry_id: DbId,
+) -> Result<HashMap<String, String>> {
+    ctx.storage().entry_get_language_descriptions(entry_id).await
+}
+
+async fn read_coordinate_location(
+    ctx: &AppState,
+    entry_id: DbId,
+) -> Result<Option<CoordinateLocation>> {
+    ctx.storage().entry_get_coordinate_location(entry_id).await
+}
+
+async fn read_aux(ctx: &AppState, entry_id: DbId) -> Result<Vec<AuxiliaryRow>> {
+    ctx.storage().entry_get_aux(entry_id).await
+}
+
+/// Returns the entry's multi-match list as `Q…` strings, or an empty
+/// vec if there's no row (or the row is malformed). Mirrors the PHP
+/// behaviour: `entry_get_multi_matches` returns 0 or 1 rows; any other
+/// shape is silently flattened to empty.
+async fn read_multi_match(ctx: &AppState, entry_id: DbId) -> Result<Vec<String>> {
+    let rows: Vec<String> = ctx.storage().entry_get_multi_matches(entry_id).await?;
+    if rows.len() != 1 {
+        return Ok(vec![]);
+    }
+    let ret = rows
+        .first()
+        .ok_or_else(|| anyhow!("get_multi_match err1"))?
+        .split(',')
+        .map(|q| format!("Q{q}"))
+        .collect();
+    Ok(ret)
 }
 
 async fn write_alias(ctx: &AppState, entry_id: DbId, s: &LocaleString) -> Result<()> {
@@ -644,7 +899,7 @@ async fn write_coordinate_location(
     entry_id: DbId,
     cl: &Option<CoordinateLocation>,
 ) -> Result<()> {
-    let existing_cl = ctx.storage().entry_get_coordinate_location(entry_id).await?;
+    let existing_cl = read_coordinate_location(ctx, entry_id).await?;
     if existing_cl == *cl {
         return Ok(());
     }
@@ -700,23 +955,6 @@ impl Entry {
         EntryRepo::new(app).find_many(entry_ids).await
     }
 
-    /// Inserts the current entry into the database. id must be None.
-    /// Facade — body lives in [`EntryWriter::insert_as_new`].
-    //TODO test
-    pub async fn insert_as_new(&mut self) -> Result<EntryId> {
-        let ctx = self.app()?.clone();
-        EntryWriter::new(&ctx, self).insert_as_new().await
-    }
-
-    /// Deletes the entry and all of its associated data in the
-    /// database. Resets the local ID to None. Facade — body lives in
-    /// [`EntryWriter::delete`].
-    //TODO test
-    pub async fn delete(&mut self) -> Result<()> {
-        let ctx = self.app()?.clone();
-        EntryWriter::new(&ctx, self).delete().await
-    }
-
     /// Helper function for `from_row()`.
     //TODO test
     pub fn value2opt_string(value: mysql_async::Value) -> Result<Option<String>> {
@@ -756,230 +994,8 @@ impl Entry {
             .map(|q| format!("https://www.wikidata.org/wiki/Q{q}"))
     }
 
-    /// Sets the `AppState` object. Automatically done when created via `from_id()`.
-    pub fn set_app(&mut self, app: &AppState) {
-        self.app = Some(app.clone());
-    }
-
-    /// Returns the `MixNMatch` object reference.
-    pub fn app(&self) -> Result<&AppState> {
-        let app = self.app.as_ref().ok_or(anyhow!("Entry: No app set"))?;
-        Ok(app)
-    }
-
-    pub async fn get_creation_time(&self) -> Option<String> {
-        let entry_id = self.get_valid_id().ok()?;
-        self.app()
-            .ok()?
-            .storage()
-            .entry_get_creation_time(entry_id)
-            .await
-    }
-
     pub fn description(&self) -> &str {
         &self.ext_desc
-    }
-
-    /// Updates `ext_name` locally and in the database. Facade — body
-    /// lives in [`EntryWriter::set_ext_name`].
-    //TODO test
-    pub async fn set_ext_name(&mut self, ext_name: &str) -> Result<()> {
-        let ctx = self.app()?.clone();
-        EntryWriter::new(&ctx, self).set_ext_name(ext_name).await
-    }
-
-    /// Mark an auxiliary row as already-in-Wikidata. Facade — body
-    /// lives in [`write_auxiliary_in_wikidata`].
-    //TODO test
-    pub async fn set_auxiliary_in_wikidata(&self, aux_id: DbId, in_wikidata: bool) -> Result<()> {
-        write_auxiliary_in_wikidata(self.app()?, aux_id, in_wikidata).await
-    }
-
-    /// Add an `mnm_relation` row linking this entry to another via a
-    /// property. Facade — body lives in [`write_mnm_relation`].
-    pub async fn add_mnm_relation(
-        &self,
-        prop_numeric: PropertyId,
-        target_entry_id: DbId,
-    ) -> Result<()> {
-        write_mnm_relation(
-            self.app()?,
-            self.get_valid_id()?,
-            prop_numeric,
-            target_entry_id,
-        )
-        .await
-    }
-
-    /// Updates `ext_desc` locally and in the database. Facade — body
-    /// lives in [`EntryWriter::set_ext_desc`].
-    //TODO test
-    pub async fn set_ext_desc(&mut self, ext_desc: &str) -> Result<()> {
-        let ctx = self.app()?.clone();
-        EntryWriter::new(&ctx, self).set_ext_desc(ext_desc).await
-    }
-
-    pub async fn add_to_item(&self, item: &mut ItemEntity) -> Result<()> {
-        let catalog = Catalog::from_id(self.catalog, self.app()?).await?;
-        let references = catalog.references(self).await;
-        let language = catalog.search_wp().to_string();
-        // `use_description_for_new` gates whether the catalog's ext_desc is
-        // copied into a newly-created item's description. Default is on;
-        // catalog admins can opt out via kv_catalog.
-        let use_desc = catalog
-            .get_key_value_pairs()
-            .await
-            .unwrap_or_default()
-            .get("use_description_for_new")
-            .map(|v| v != "0")
-            .unwrap_or(true);
-        self.add_to_item_own_id(&catalog, &references, item);
-        self.add_to_item_type(&references, item);
-        self.add_to_item_name_and_aliases(&language, item).await?;
-        self.add_to_item_descriptions(language, use_desc, item)
-            .await?;
-        self.add_to_item_coordinates(&references, item).await?;
-        self.add_to_item_person_dates(&references, item).await?;
-        self.add_to_item_auxiliary(references, item).await?;
-        Ok(())
-    }
-
-    async fn add_to_item_auxiliary(
-        &self,
-        references: Vec<Reference>,
-        item: &mut ItemEntity,
-    ) -> Result<()> {
-        let auxiliary = self.get_aux().await?;
-        if !auxiliary.is_empty() {
-            let api = self.app()?.wikidata().get_mw_api().await?;
-            let ec = EntityContainer::new();
-            let props2load: Vec<String> = auxiliary.iter().map(|a| a.prop_as_string()).collect();
-            let _ = ec.load_entities(&api, &props2load).await; // Try to pre-load all properties in one query
-            for aux in auxiliary {
-                if let Ok(prop) = ec.load_entity(&api, aux.prop_as_string()).await {
-                    if let Some(claim) = aux.get_claim_for_aux(prop, &references) {
-                        Self::add_claim_or_references(item, claim);
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
-    async fn add_to_item_person_dates(
-        &self,
-        references: &[Reference],
-        item: &mut ItemEntity,
-    ) -> Result<()> {
-        let (born, died) = self.get_person_dates().await?;
-        if let Some(pd) = born {
-            let snak = Snak::new_time(
-                wp::P_DATE_OF_BIRTH,
-                &pd.to_wikidata_time(),
-                pd.wikidata_precision(),
-            );
-            let claim = Statement::new_normal(snak, vec![], references.to_owned());
-            Self::add_claim_or_references(item, claim);
-        }
-        if let Some(pd) = died {
-            let snak = Snak::new_time(
-                wp::P_DATE_OF_DEATH,
-                &pd.to_wikidata_time(),
-                pd.wikidata_precision(),
-            );
-            let claim = Statement::new_normal(snak, vec![], references.to_owned());
-            Self::add_claim_or_references(item, claim);
-        }
-        Ok(())
-    }
-
-    async fn add_to_item_coordinates(
-        &self,
-        references: &[Reference],
-        item: &mut ItemEntity,
-    ) -> Result<()> {
-        if let Some(coord) = self.get_coordinate_location().await? {
-            let snak = build_p625_snak(coord.lat(), coord.lon(), coord.precision());
-            let claim = Statement::new_normal(snak, vec![], references.to_owned());
-            Self::add_claim_or_references(item, claim);
-        }
-        Ok(())
-    }
-
-    async fn add_to_item_descriptions(
-        &self,
-        language: String,
-        use_ext_desc: bool,
-        item: &mut ItemEntity,
-    ) -> Result<()> {
-        let mut descriptions = self.get_language_descriptions().await?;
-        if use_ext_desc && !self.ext_desc.is_empty() {
-            descriptions.insert(language.to_owned(), self.ext_desc.to_owned());
-        }
-        for (lang, desc) in descriptions {
-            if item.description_in_locale(&lang).is_none() {
-                let desc = LocaleString::new(&lang, &desc);
-                item.descriptions_mut().push(desc);
-            }
-        }
-        Ok(())
-    }
-
-    async fn add_to_item_name_and_aliases(
-        &self,
-        language: &str,
-        item: &mut ItemEntity,
-    ) -> Result<()> {
-        let mut aliases = self.get_aliases().await?;
-        let name = &self.ext_name;
-        let name = Person::sanitize_name(name);
-        let locale_string = LocaleString::new(language, &name);
-        let names = if self.type_name == Some("Q5".into()) && WESTERN_LANGUAGES.contains(&language)
-        {
-            vec![LocaleString::new("mul", &name)]
-        } else {
-            vec![locale_string.to_owned()]
-        };
-        for ls in names {
-            if item.label_in_locale(ls.language()).is_none() {
-                item.labels_mut().push(ls);
-            } else {
-                aliases.push(ls);
-            }
-        }
-
-        // Aliases
-        for alias in aliases {
-            if !item.labels().contains(&alias) && !item.aliases().contains(&alias) {
-                item.aliases_mut().push(alias);
-            }
-        }
-
-        Ok(())
-    }
-
-    fn add_to_item_type(&self, references: &[Reference], item: &mut ItemEntity) {
-        // Type
-        if let Some(tn) = &self.type_name {
-            if !tn.is_empty() {
-                let snak = Snak::new_item(wp::P_INSTANCE_OF, tn);
-                let claim = Statement::new_normal(snak, vec![], references.to_owned());
-                Self::add_claim_or_references(item, claim);
-            }
-        }
-    }
-
-    fn add_to_item_own_id(
-        &self,
-        catalog: &Catalog,
-        references: &[Reference],
-        item: &mut ItemEntity,
-    ) {
-        if let (Some(prop), None) = (catalog.wd_prop(), catalog.wd_qual()) {
-            let snak = Snak::new_external_id(&format!("P{prop}"), &self.ext_id);
-            let claim = Statement::new_normal(snak, vec![], references.to_owned());
-            Self::add_claim_or_references(item, claim);
-        }
     }
 
     fn add_claim_or_references(item: &mut ItemEntity, mut claim: Statement) {
@@ -1080,197 +1096,12 @@ impl Entry {
         aq.len() == bq.len() && aq.iter().all(|s| bq.contains(s))
     }
 
-    /// Updates `ext_id` locally and in the database. Facade — body
-    /// lives in [`EntryWriter::set_ext_id`].
-    //TODO test
-    pub async fn set_ext_id(&mut self, ext_id: &str) -> Result<()> {
-        let ctx = self.app()?.clone();
-        EntryWriter::new(&ctx, self).set_ext_id(ext_id).await
-    }
-
-    /// Updates `ext_url` locally and in the database. Facade — body
-    /// lives in [`EntryWriter::set_ext_url`].
-    //TODO test
-    pub async fn set_ext_url(&mut self, ext_url: &str) -> Result<()> {
-        let ctx = self.app()?.clone();
-        EntryWriter::new(&ctx, self).set_ext_url(ext_url).await
-    }
-
-    /// Updates `type_name` locally and in the database. Facade — body
-    /// lives in [`EntryWriter::set_type_name`].
-    //TODO test
-    pub async fn set_type_name(&mut self, type_name: Option<String>) -> Result<()> {
-        let ctx = self.app()?.clone();
-        EntryWriter::new(&ctx, self).set_type_name(type_name).await
-    }
-
-    /// Update person dates in the database, where necessary. Facade —
-    /// body lives in [`write_person_dates`].
-    pub async fn set_person_dates(
-        &self,
-        born: &Option<PersonDate>,
-        died: &Option<PersonDate>,
-    ) -> Result<()> {
-        write_person_dates(self.app()?, self.get_valid_id()?, born, died).await
-    }
-
-    /// Returns the birth and death date of a person as a tuple (born,died)
-    pub async fn get_person_dates(&self) -> Result<(Option<PersonDate>, Option<PersonDate>)> {
-        let entry_id = self.get_valid_id()?;
-        let (born_str, died_str) = self
-            .app()?
-            .storage()
-            .entry_get_person_dates(entry_id)
-            .await?;
-        let born = born_str.as_deref().and_then(PersonDate::from_db_string);
-        let died = died_str.as_deref().and_then(PersonDate::from_db_string);
-        Ok((born, died))
-    }
-
-    /// Set or clear a language description. Facade — body lives in
-    /// [`write_language_description`].
-    //TODO test
-    pub async fn set_language_description(
-        &self,
-        language: &str,
-        text: Option<String>,
-    ) -> Result<()> {
-        write_language_description(self.app()?, self.get_valid_id()?, language, text).await
-    }
-
-    /// Returns a `LocaleString` Vec of all aliases of the entry
-    //TODO test
-    pub async fn get_aliases(&self) -> Result<Vec<LocaleString>> {
-        self.app()?
-            .storage()
-            .entry_get_aliases(self.get_valid_id()?)
-            .await
-    }
-
-    /// Add a localised alias for the entry. Facade — body lives in
-    /// [`write_alias`].
-    pub async fn add_alias(&self, s: &LocaleString) -> Result<()> {
-        write_alias(self.app()?, self.get_valid_id()?, s).await
-    }
-
-    /// Returns a language:text `HashMap` of all language descriptions of the entry
-    //TODO test
-    pub async fn get_language_descriptions(&self) -> Result<HashMap<String, String>> {
-        self.app()?
-            .storage()
-            .entry_get_language_descriptions(self.get_valid_id()?)
-            .await
-    }
-
-    /// Set or clear the auxiliary value for `(entry, prop_numeric)`.
-    /// Facade — body lives in [`write_auxiliary`].
-    //TODO test
-    pub async fn set_auxiliary(
-        &self,
-        prop_numeric: PropertyId,
-        value: Option<String>,
-    ) -> Result<()> {
-        write_auxiliary(self.app()?, self.get_valid_id()?, prop_numeric, value).await
-    }
-
-    /// Update coordinate location in the database, where necessary.
-    /// Facade — body lives in [`write_coordinate_location`].
-    pub async fn set_coordinate_location(&self, cl: &Option<CoordinateLocation>) -> Result<()> {
-        write_coordinate_location(self.app()?, self.get_valid_id()?, cl).await
-    }
-
-    /// Returns the coordinate locationm or None
-    pub async fn get_coordinate_location(&self) -> Result<Option<CoordinateLocation>> {
-        self.app()?
-            .storage()
-            .entry_get_coordinate_location(self.get_valid_id()?)
-            .await
-    }
-
-    /// Returns auxiliary data for the entry
-    //TODO test
-    pub async fn get_aux(&self) -> Result<Vec<AuxiliaryRow>> {
-        self.app()?
-            .storage()
-            .entry_get_aux(self.get_valid_id()?)
-            .await
-    }
-
     /// Before q query or an update to the entry in the database, checks if this is a valid entry ID (eg not a new entry)
     pub fn get_valid_id(&self) -> Result<DbId> {
         match self.id {
             Some(id) => Ok(id),
             None => Err(anyhow!("No entry ID set")),
         }
-    }
-
-    /// Sets a match for the entry, and marks the entry as matched in
-    /// other tables. Facade — the body now lives in
-    /// [`EntryWriter::set_match`]. `clone()` on `AppState` is cheap
-    /// (Arc-internals); the local owns the context for the duration of
-    /// the writer call so we don't conflict with `&mut self`.
-    pub async fn set_match(&mut self, q: &str, user_id: DbId) -> Result<bool> {
-        let ctx = self.app()?.clone();
-        EntryWriter::new(&ctx, self).set_match(q, user_id).await
-    }
-
-    /// Removes the current match from the entry, and marks the entry as
-    /// unmatched in other tables. Facade — body lives in
-    /// [`EntryWriter::unmatch`].
-    pub async fn unmatch(&mut self) -> Result<()> {
-        let ctx = self.app()?.clone();
-        EntryWriter::new(&ctx, self).unmatch().await
-    }
-
-    /// Updates the entry matching status in multiple tables.
-    //TODO test
-    /// Update the entry's `is_matched` flag in `entry`/`person_dates`.
-    /// Facade — body lives in [`write_match_status`].
-    pub async fn set_match_status(&self, status: &str, is_matched: bool) -> Result<()> {
-        write_match_status(self.app()?, self.get_valid_id()?, status, is_matched).await
-    }
-
-    /// Retrieves the multi-matches for an entry
-    //TODO test
-    pub async fn get_multi_match(&self) -> Result<Vec<String>> {
-        let rows: Vec<String> = self
-            .app()?
-            .storage()
-            .entry_get_multi_matches(self.get_valid_id()?)
-            .await?;
-        if rows.len() != 1 {
-            Ok(vec![])
-        } else {
-            let ret = rows
-                .first()
-                .ok_or(anyhow!("get_multi_match err1"))?
-                .split(',')
-                .map(|q| format!("Q{q}"))
-                .collect();
-            Ok(ret)
-        }
-    }
-
-    /// Sets auto-match and multi-match for an entry. Facade — body
-    /// lives in [`EntryWriter::set_auto_and_multi_match`].
-    pub async fn set_auto_and_multi_match(&mut self, items: &[String]) -> Result<()> {
-        let ctx = self.app()?.clone();
-        EntryWriter::new(&ctx, self)
-            .set_auto_and_multi_match(items)
-            .await
-    }
-
-    /// Sets multi-matches for an entry. Facade — body lives in
-    /// [`write_multi_match`].
-    pub async fn set_multi_match(&self, items: &[String]) -> Result<()> {
-        write_multi_match(self.app()?, self.get_valid_id()?, items).await
-    }
-
-    /// Removes multi-matches for an entry, e.g. when the entry has been
-    /// fully matched. Facade — `write_multi_match` with an empty input
-    /// takes the remove branch.
-    pub async fn remove_multi_match(&self) -> Result<()> {
-        write_multi_match(self.app()?, self.get_valid_id()?, &[]).await
     }
 
     /// Checks if the entry is unmatched
@@ -1313,10 +1144,7 @@ mod tests {
         assert_eq!(via_repo.catalog, via_static.catalog);
         assert_eq!(via_repo.ext_id, via_static.ext_id);
         assert_eq!(via_repo.ext_name, via_static.ext_name);
-        assert!(
-            via_repo.app.is_some(),
-            "repo should set app on returned entry"
-        );
+        assert!(via_repo.id.is_some(), "repo should return a valid entry");
     }
 
     #[tokio::test]
@@ -1330,44 +1158,18 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert!(entries.contains_key(&TEST_ENTRY_ID));
         assert!(
-            entries.values().all(|e| e.app.is_some()),
-            "repo should set app on every returned entry"
+            entries.values().all(|e| e.id.is_some()),
+            "repo should return entries with valid ids"
         );
     }
 
     /// Pin the EntryWriter contract: the writer wraps an Entry +
-    /// AppState borrow, sets `entry.app` if missing, and routes
-    /// mutations through to the existing Entry methods. Once the
-    /// algorithm bodies move into EntryWriter directly, this test
-    /// will need to expand to cover them; for now the smoke test
-    /// covers wrap-and-delegate behaviour without actually writing
-    /// to the database.
-    #[test]
-    fn entry_writer_sets_app_when_missing() {
-        let entry = Entry {
-            id: Some(1),
-            catalog: 1,
-            ext_id: "x".into(),
-            ext_name: "Test".into(),
-            app: None,
-            ..Default::default()
-        };
-        assert!(entry.app.is_none());
-        // Build a dummy AppState only via get_test_app to avoid
-        // pulling config from this unit test — same pattern as the
-        // EntryRepo tests below. We need it `#[ignore]`-gated for
-        // the same reason.
-    }
-
     #[tokio::test]
     #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
-    async fn entry_writer_wraps_and_delegates() {
+    async fn entry_writer_ctx_accessor() {
         let app = get_test_app();
         let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
-        // Strip the self-DI'd app to prove the writer re-installs it.
-        entry.app = None;
         let writer = EntryWriter::new(&app, &mut entry);
-        assert!(writer.as_entry().app.is_some(), "writer must set app");
         // The writer's ctx accessor returns the borrowed context unchanged.
         let _: &AppState = writer.ctx();
     }
@@ -1377,26 +1179,26 @@ mod tests {
     async fn test_person_dates() {
         let _test_lock = TEST_MUTEX.lock();
         let app = get_test_app();
-        let entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
         let born = Some(PersonDate::year_month_day(1974, 5, 24));
         let died = Some(PersonDate::year_month_day(2000, 1, 1));
-        assert_eq!(entry.get_person_dates().await.unwrap(), (born, died));
+        assert_eq!(EntryWriter::new(&app, &mut entry).get_person_dates().await.unwrap(), (born, died));
 
         // Remove died
-        entry.set_person_dates(&born, &None).await.unwrap();
-        assert_eq!(entry.get_person_dates().await.unwrap(), (born, None));
+        EntryWriter::new(&app, &mut entry).set_person_dates(&born, &None).await.unwrap();
+        assert_eq!(EntryWriter::new(&app, &mut entry).get_person_dates().await.unwrap(), (born, None));
 
         // Remove born
-        entry.set_person_dates(&None, &died).await.unwrap();
-        assert_eq!(entry.get_person_dates().await.unwrap(), (None, died));
+        EntryWriter::new(&app, &mut entry).set_person_dates(&None, &died).await.unwrap();
+        assert_eq!(EntryWriter::new(&app, &mut entry).get_person_dates().await.unwrap(), (None, died));
 
         // Remove entire row
-        entry.set_person_dates(&None, &None).await.unwrap();
-        assert_eq!(entry.get_person_dates().await.unwrap(), (None, None));
+        EntryWriter::new(&app, &mut entry).set_person_dates(&None, &None).await.unwrap();
+        assert_eq!(EntryWriter::new(&app, &mut entry).get_person_dates().await.unwrap(), (None, None));
 
         // Set back to original and check
-        entry.set_person_dates(&born, &died).await.unwrap();
-        assert_eq!(entry.get_person_dates().await.unwrap(), (born, died));
+        EntryWriter::new(&app, &mut entry).set_person_dates(&born, &died).await.unwrap();
+        assert_eq!(EntryWriter::new(&app, &mut entry).get_person_dates().await.unwrap(), (born, died));
     }
 
     #[tokio::test]
@@ -1404,29 +1206,29 @@ mod tests {
     async fn test_coordinate_location() {
         let _test_lock = TEST_MUTEX.lock();
         let app = get_test_app();
-        let entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
 
         // Save whatever is currently in the DB so we can restore it at the end
-        let original = entry.get_coordinate_location().await.unwrap();
+        let original = EntryWriter::new(&app, &mut entry).get_coordinate_location().await.unwrap();
 
         let cl = CoordinateLocation::new(1.234, -5.678);
 
         // Set a known value
-        entry.set_coordinate_location(&Some(cl)).await.unwrap();
-        assert_eq!(entry.get_coordinate_location().await.unwrap(), Some(cl));
+        EntryWriter::new(&app, &mut entry).set_coordinate_location(&Some(cl)).await.unwrap();
+        assert_eq!(EntryWriter::new(&app, &mut entry).get_coordinate_location().await.unwrap(), Some(cl));
 
         // Switch lat/lon
         let cl2 = CoordinateLocation::new(cl.lon(), cl.lat());
-        entry.set_coordinate_location(&Some(cl2)).await.unwrap();
-        assert_eq!(entry.get_coordinate_location().await.unwrap(), Some(cl2));
+        EntryWriter::new(&app, &mut entry).set_coordinate_location(&Some(cl2)).await.unwrap();
+        assert_eq!(EntryWriter::new(&app, &mut entry).get_coordinate_location().await.unwrap(), Some(cl2));
 
         // Remove
-        entry.set_coordinate_location(&None).await.unwrap();
-        assert_eq!(entry.get_coordinate_location().await.unwrap(), None);
+        EntryWriter::new(&app, &mut entry).set_coordinate_location(&None).await.unwrap();
+        assert_eq!(EntryWriter::new(&app, &mut entry).get_coordinate_location().await.unwrap(), None);
 
         // Restore original value
-        entry.set_coordinate_location(&original).await.unwrap();
-        assert_eq!(entry.get_coordinate_location().await.unwrap(), original);
+        EntryWriter::new(&app, &mut entry).set_coordinate_location(&original).await.unwrap();
+        assert_eq!(EntryWriter::new(&app, &mut entry).get_coordinate_location().await.unwrap(), original);
     }
 
     #[tokio::test]
@@ -1436,12 +1238,10 @@ mod tests {
         let app = get_test_app();
 
         // Clear
-        Entry::from_id(TEST_ENTRY_ID, &app)
-            .await
-            .unwrap()
-            .unmatch()
-            .await
-            .unwrap();
+        {
+            let mut e = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+            EntryWriter::new(&app, &mut e).unmatch().await.unwrap();
+        }
 
         // Check if clear
         let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
@@ -1450,7 +1250,7 @@ mod tests {
         assert!(entry.timestamp.is_none());
 
         // Set and check in-memory changes
-        entry.set_match("Q1", 4).await.unwrap();
+        EntryWriter::new(&app, &mut entry).set_match("Q1", 4).await.unwrap();
         assert_eq!(entry.q, Some(1));
         assert_eq!(entry.user, Some(4));
         assert!(entry.timestamp.is_some());
@@ -1462,7 +1262,7 @@ mod tests {
         assert!(entry2.timestamp.is_some());
 
         // Clear and check in-memory changes
-        entry2.unmatch().await.unwrap();
+        EntryWriter::new(&app, &mut entry2).unmatch().await.unwrap();
         assert!(entry2.q.is_none());
         assert!(entry2.user.is_none());
         assert!(entry2.timestamp.is_none());
@@ -1488,16 +1288,16 @@ mod tests {
         let _test_lock = TEST_MUTEX.lock();
         let app = get_test_app();
         let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
-        entry.unmatch().await.unwrap();
+        EntryWriter::new(&app, &mut entry).unmatch().await.unwrap();
         let items: Vec<String> = ["Q1", "Q23456", "Q7"]
             .iter()
             .map(|s| s.to_string())
             .collect();
-        entry.set_multi_match(&items).await.unwrap();
-        let result1 = entry.get_multi_match().await.unwrap();
+        EntryWriter::new(&app, &mut entry).set_multi_match(&items).await.unwrap();
+        let result1 = EntryWriter::new(&app, &mut entry).get_multi_match().await.unwrap();
         assert_eq!(result1, items);
-        entry.remove_multi_match().await.unwrap();
-        let result2 = entry.get_multi_match().await.unwrap();
+        EntryWriter::new(&app, &mut entry).remove_multi_match().await.unwrap();
+        let result2 = EntryWriter::new(&app, &mut entry).get_multi_match().await.unwrap();
         let empty: Vec<String> = vec![];
         assert_eq!(result2, empty);
     }
@@ -1508,19 +1308,15 @@ mod tests {
         let _test_lock = TEST_MUTEX.lock();
         let app = get_test_app();
 
-        // !!
         let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
-
-        // !!!!!
-        entry.set_match("Q12345", 4).await.unwrap();
+        EntryWriter::new(&app, &mut entry).set_match("Q12345", 4).await.unwrap();
 
         assert_eq!(
             entry.get_item_url(),
             Some("https://www.wikidata.org/wiki/Q12345".to_string())
         );
 
-        // !!!!!
-        entry.unmatch().await.unwrap();
+        EntryWriter::new(&app, &mut entry).unmatch().await.unwrap();
 
         assert_eq!(entry.get_item_url(), None);
     }
@@ -1547,9 +1343,9 @@ mod tests {
         let _test_lock = TEST_MUTEX.lock();
         let app = get_test_app();
         let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
-        entry.set_match("Q12345", 4).await.unwrap();
+        EntryWriter::new(&app, &mut entry).set_match("Q12345", 4).await.unwrap();
         assert!(!entry.is_unmatched());
-        entry.unmatch().await.unwrap();
+        EntryWriter::new(&app, &mut entry).unmatch().await.unwrap();
         assert!(entry.is_unmatched());
     }
 
@@ -1559,9 +1355,9 @@ mod tests {
         let _test_lock = TEST_MUTEX.lock();
         let app = get_test_app();
         let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
-        entry.set_match("Q12345", 0).await.unwrap();
+        EntryWriter::new(&app, &mut entry).set_match("Q12345", 0).await.unwrap();
         assert!(entry.is_partially_matched());
-        entry.unmatch().await.unwrap();
+        EntryWriter::new(&app, &mut entry).unmatch().await.unwrap();
         assert!(!entry.is_partially_matched());
     }
 
@@ -1571,9 +1367,9 @@ mod tests {
         let _test_lock = TEST_MUTEX.lock();
         let app = get_test_app();
         let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
-        entry.set_match("Q12345", 4).await.unwrap();
+        EntryWriter::new(&app, &mut entry).set_match("Q12345", 4).await.unwrap();
         assert!(entry.is_fully_matched());
-        entry.unmatch().await.unwrap();
+        EntryWriter::new(&app, &mut entry).unmatch().await.unwrap();
         assert!(!entry.is_fully_matched());
     }
 
@@ -1780,10 +1576,10 @@ mod tests {
     async fn test_add_alias() {
         let _test_lock = TEST_MUTEX.lock();
         let app = get_test_app();
-        let entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
         let s = LocaleString::new("en", "test");
-        entry.add_alias(&s).await.unwrap();
-        assert!(entry.get_aliases().await.unwrap().contains(&s));
+        EntryWriter::new(&app, &mut entry).add_alias(&s).await.unwrap();
+        assert!(EntryWriter::new(&app, &mut entry).get_aliases().await.unwrap().contains(&s));
     }
 
     #[test]
@@ -1799,7 +1595,6 @@ mod tests {
         assert!(entry.user.is_none());
         assert!(entry.timestamp.is_none());
         assert!(entry.type_name.is_none());
-        assert!(entry.app.is_none());
         // random should be in [0, 1)
         assert!(entry.random >= 0.0 && entry.random < 1.0);
     }

@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use crate::app_state::AppState;
 use crate::catalog::Catalog;
-use crate::entry::Entry;
+use crate::entry::{Entry, EntryWriter};
 use crate::extended_entry::ExtendedEntry;
 use crate::person_date::PersonDate;
 
@@ -195,7 +195,7 @@ impl CerseiSync {
 
     /// Add a new entry to the database
     async fn add_new_entry(&self, entry: &mut Entry) -> Result<usize> {
-        entry.insert_as_new().await?;
+        EntryWriter::new(&self.app, entry).insert_as_new().await?;
         entry.get_valid_id()
     }
 
@@ -284,7 +284,6 @@ impl CerseiSync {
                     ext_desc: ce.description.clone().unwrap_or_default(),
                     ext_url: ce.url.clone().unwrap_or_default(),
                     q: ce.q.as_ref().and_then(|q| q.parse::<isize>().ok()),
-                    app: Some(self.app.clone()),
                     ..Default::default()
                 };
                 let mut ne = ExtendedEntry {
@@ -312,7 +311,7 @@ impl CerseiSync {
                         .await?;
 
                     if ne.born.is_some() || ne.died.is_some() {
-                        ne.entry.set_person_dates(&ne.born, &ne.died).await?;
+                        EntryWriter::new(&self.app, &mut ne.entry).set_person_dates(&ne.born, &ne.died).await?;
                     }
                 } else {
                     // Create new entry
@@ -324,7 +323,7 @@ impl CerseiSync {
 
                             // Set person dates if available
                             if ne.born.is_some() || ne.died.is_some() {
-                                ne.entry.set_person_dates(&ne.born, &ne.died).await?;
+                                EntryWriter::new(&self.app, &mut ne.entry).set_person_dates(&ne.born, &ne.died).await?;
                             }
                         }
                         Err(_e) => {

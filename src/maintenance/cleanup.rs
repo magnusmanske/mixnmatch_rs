@@ -9,7 +9,7 @@ use super::Maintenance;
 use crate::app_state::{AppState, USER_AUX_MATCH};
 use crate::auxiliary_matcher::AuxiliaryMatcher;
 use crate::catalog::Catalog;
-use crate::entry::Entry;
+use crate::entry::{Entry, EntryWriter};
 use crate::job::Job;
 use crate::match_state::MatchState;
 use crate::util::wikidata_props as wp;
@@ -252,7 +252,7 @@ impl Maintenance {
                 return false;
             }
         };
-        if let Err(e) = entry.unmatch().await {
+        if let Err(e) = EntryWriter::new(&self.app, &mut entry).unmatch().await {
             log::warn!(
                 "sanity_check_date_matches_are_human: unmatch failed for entry {entry_id}: {e}"
             );
@@ -405,7 +405,9 @@ impl Maintenance {
         if let Some(entry_id) = inventory_number2entry_id.get(&id) {
             if let Ok(mut entry) = Entry::from_id(*entry_id, &self.app).await {
                 if !entry.is_fully_matched() {
-                    let _ = entry.set_match(&q, USER_AUX_MATCH).await;
+                    let _ = EntryWriter::new(&self.app, &mut entry)
+                        .set_match(&q, USER_AUX_MATCH)
+                        .await;
                 }
             }
         }
@@ -509,7 +511,11 @@ impl Maintenance {
                     continue;
                 }
             };
-            if entry.set_match(&q_str, USER_AUX_MATCH).await.is_ok() {
+            if EntryWriter::new(&self.app, &mut entry)
+                .set_match(&q_str, USER_AUX_MATCH)
+                .await
+                .is_ok()
+            {
                 *total_matched += 1;
                 catalogs_to_microsync.insert(catalog_id);
             }

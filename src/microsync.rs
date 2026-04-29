@@ -1,7 +1,7 @@
 use crate::app_state::AppState;
 use crate::auxiliary_matcher::AUX_PROPERTIES_ALSO_USING_LOWERCASE;
 use crate::catalog::Catalog;
-use crate::entry::Entry;
+use crate::entry::{Entry, EntryWriter};
 use crate::job::{Job, Jobbable};
 use crate::maintenance::Maintenance;
 use crate::match_state::MatchState;
@@ -521,10 +521,8 @@ impl Microsync {
     ) -> Result<()> {
         if entry.user.is_none() || entry.user == Some(0) || entry.q.is_none() {
             // Found a match but not in app yet
-            Entry::from_id(entry.id, &self.app)
-                .await?
-                .set_match(&format!("Q{q}"), 4)
-                .await?;
+            let mut e = Entry::from_id(entry.id, &self.app).await?;
+            EntryWriter::new(&self.app, &mut e).set_match(&format!("Q{q}"), 4).await?;
         } else if Some(*q) != entry.q {
             // Fully matched but to different item
             if let Some(entry_q) = entry.q {
@@ -551,10 +549,8 @@ impl Microsync {
         match_differs: &mut Vec<MatchDiffers>,
     ) -> Result<()> {
         if entry_q <= 0 {
-            Entry::from_id(entry.id, &self.app)
-                .await?
-                .set_match(&format!("Q{q}"), 4)
-                .await?;
+            let mut e = Entry::from_id(entry.id, &self.app).await?;
+            EntryWriter::new(&self.app, &mut e).set_match(&format!("Q{q}"), 4).await?;
         } else {
             let md = MatchDiffers {
                 ext_id: ext_id.to_owned(),

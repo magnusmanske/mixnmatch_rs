@@ -1,5 +1,5 @@
 use crate::{
-    app_state::AppState, entry::Entry, entry_query::EntryQuery, item_creator::ItemCreator,
+    app_state::AppState, entry::{Entry, EntryWriter}, entry_query::EntryQuery, item_creator::ItemCreator,
     match_state::MatchState,
 };
 use anyhow::Result;
@@ -66,7 +66,7 @@ impl Process {
         Ok(())
     }
 
-    async fn generate_item_creator(&self, do_search: bool, entry: Entry) -> Option<ItemCreator> {
+    async fn generate_item_creator(&self, do_search: bool, mut entry: Entry) -> Option<ItemCreator> {
         if do_search {
             // Search (with type where applicable) and skip if there are results on Wikidata
             let type_name = entry.type_name.clone().unwrap_or_default();
@@ -84,7 +84,7 @@ impl Process {
             };
             if !results.is_empty() {
                 // These are supposed to be unmatched, use multimatch
-                let _ = entry.set_multi_match(&results).await;
+                let _ = EntryWriter::new(&self.app, &mut entry).set_multi_match(&results).await;
                 return None;
             }
         }

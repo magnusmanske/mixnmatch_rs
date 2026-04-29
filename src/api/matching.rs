@@ -3,6 +3,7 @@
 use crate::api::common::{self, ApiError, Params, json_resp, ok};
 use crate::app_state::AppState;
 use crate::auth;
+use crate::entry::EntryWriter;
 use axum::response::{IntoResponse, Response};
 use futures::stream::{self, StreamExt};
 use std::sync::Arc;
@@ -23,7 +24,9 @@ pub async fn query_match_q(
     let q = common::get_param_int(params, "q", -1);
     let uid = common::require_user_id(app, session, params).await?;
     let mut entry = crate::entry::Entry::from_id(eid, app).await?;
-    entry.set_match(&format!("Q{q}"), uid).await?;
+    EntryWriter::new(app, &mut entry)
+        .set_match(&format!("Q{q}"), uid)
+        .await?;
 
     // After set_match, `entry` already holds the post-update fields, so we
     // don't need a second `from_id` round-trip just to read them back. The
@@ -103,7 +106,7 @@ pub async fn query_remove_q(
     let eid = common::get_param_int(params, "entry", -1) as usize;
     auth::guard::require_user_from_params(app, session, params).await?;
     let mut entry = crate::entry::Entry::from_id(eid, app).await?;
-    entry.unmatch().await?;
+    EntryWriter::new(app, &mut entry).unmatch().await?;
     Ok(ok(serde_json::json!({})))
 }
 

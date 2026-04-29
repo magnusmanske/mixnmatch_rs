@@ -26,7 +26,7 @@
 
 use crate::app_state::{AppState, USER_AUTO};
 use crate::catalog::Catalog;
-use crate::entry::Entry;
+use crate::entry::{Entry, EntryWriter};
 use crate::storage::GroupedEntry;
 use anyhow::{Result, anyhow};
 use log::{info, warn};
@@ -155,7 +155,7 @@ impl CatalogMerger {
                 }
             };
             let q = format!("Q{}", cand.source_q);
-            if let Err(e) = target_entry.set_match(&q, cand.source_user).await {
+            if let Err(e) = EntryWriter::new(&self.app, &mut target_entry).set_match(&q, cand.source_user).await {
                 warn!(
                     "catalog_merger: set_match failed for entry {} -> {q}: {e}",
                     cand.target_entry_id
@@ -420,7 +420,7 @@ impl CatalogMerger {
             }
         };
         let q_str = format!("Q{}", decision.q);
-        if let Err(e) = entry.set_match(&q_str, decision.user).await {
+        if let Err(e) = EntryWriter::new(&self.app, &mut entry).set_match(&q_str, decision.user).await {
             warn!(
                 "migrate_property: set_match failed for entry {} -> {q_str}: {e}",
                 decision.target_entry_id

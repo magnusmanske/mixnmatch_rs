@@ -12,7 +12,7 @@ use super::{
 };
 use super::{LuaCommand, LuaEntry};
 use crate::app_state::AppState;
-use crate::entry::Entry;
+use crate::entry::{Entry, EntryWriter};
 use crate::person_date::PersonDate;
 use anyhow::{Result, anyhow};
 use log::warn;
@@ -147,9 +147,8 @@ pub async fn run_aux_from_desc_job(catalog_id: usize, app: &AppState) -> Result<
             };
 
             let mut entry_clone = entry.clone();
-            entry_clone.set_app(app);
             for cmd in &result.commands {
-                if let Err(e) = apply_command(cmd, &mut entry_clone).await {
+                if let Err(e) = apply_command(app, cmd, &mut entry_clone).await {
                     warn!("Error applying command for entry {}: {e}", lua_entry.id);
                 }
             }
@@ -229,70 +228,69 @@ async fn process_desc_from_html_entry(
     };
 
     let mut entry_clone = entry.clone();
-    entry_clone.set_app(app);
-    apply_desc_from_html_result(&mut entry_clone, &result).await;
+    apply_desc_from_html_result(app, &mut entry_clone, &result).await;
 }
 
-async fn apply_desc_from_html_result(entry: &mut Entry, result: &DescFromHtmlResult) {
-    apply_person_dates_from_result(entry, &result.born, &result.died).await;
-    apply_location_from_result(entry, result.location).await;
-    apply_aux_from_result(entry, &result.aux).await;
-    apply_change_name(entry, result.change_name.as_ref()).await;
-    apply_change_type(entry, result.change_type.as_ref()).await;
-    apply_descriptions_from_result(entry, &result.descriptions).await;
+async fn apply_desc_from_html_result(app: &AppState, entry: &mut Entry, result: &DescFromHtmlResult) {
+    apply_person_dates_from_result(app, entry, &result.born, &result.died).await;
+    apply_location_from_result(app, entry, result.location).await;
+    apply_aux_from_result(app, entry, &result.aux).await;
+    apply_change_name(app, entry, result.change_name.as_ref()).await;
+    apply_change_type(app, entry, result.change_type.as_ref()).await;
+    apply_descriptions_from_result(app, entry, &result.descriptions).await;
     for cmd in &result.commands {
-        let _ = apply_command(cmd, entry).await;
+        let _ = apply_command(app, cmd, entry).await;
     }
 }
 
-async fn apply_person_dates_from_result(entry: &mut Entry, born: &str, died: &str) {
+async fn apply_person_dates_from_result(app: &AppState, entry: &mut Entry, born: &str, died: &str) {
     if born.is_empty() && died.is_empty() {
         return;
     }
     if let Some((born, died)) = validate_born_died(born, died) {
         let born_pd = PersonDate::from_db_string(&born);
         let died_pd = PersonDate::from_db_string(&died);
-        let _ = entry.set_person_dates(&born_pd, &died_pd).await;
+        let _ = EntryWriter::new(app, entry).set_person_dates(&born_pd, &died_pd).await;
     }
 }
 
-async fn apply_location_from_result(entry: &mut Entry, location: Option<(f64, f64)>) {
+async fn apply_location_from_result(app: &AppState, entry: &mut Entry, location: Option<(f64, f64)>) {
     if let Some((lat, lon)) = location {
         let cl = crate::coordinates::CoordinateLocation::new(lat, lon);
-        let _ = entry.set_coordinate_location(&Some(cl)).await;
+        let _ = EntryWriter::new(app, entry).set_coordinate_location(&Some(cl)).await;
     }
 }
 
-async fn apply_aux_from_result(entry: &mut Entry, aux: &[(String, String)]) {
+async fn apply_aux_from_result(app: &AppState, entry: &mut Entry, aux: &[(String, String)]) {
     for (prop_str, value) in aux {
         let prop_str = prop_str.trim_start_matches('P');
         if let Ok(prop_numeric) = prop_str.parse::<usize>() {
-            let _ = entry.set_auxiliary(prop_numeric, Some(value.clone())).await;
+            let _ = EntryWriter::new(app, entry).set_auxiliary(prop_numeric, Some(value.clone())).await;
         }
     }
 }
 
-async fn apply_change_name(entry: &mut Entry, change: Option<&(String, String)>) {
+async fn apply_change_name(app: &AppState, entry: &mut Entry, change: Option<&(String, String)>) {
     if let Some((from, to)) = change {
         if from != to {
-            let _ = entry.set_ext_name(to).await;
+            let _ = EntryWriter::new(app, entry).set_ext_name(to).await;
         }
     }
 }
 
-async fn apply_change_type(entry: &mut Entry, change: Option<&(String, String)>) {
+async fn apply_change_type(app: &AppState, entry: &mut Entry, change: Option<&(String, String)>) {
     if let Some((_from, to)) = change {
-        let _ = entry.set_type_name(Some(to.clone())).await;
+        let _ = EntryWriter::new(app, entry).set_type_name(Some(to.clone())).await;
     }
 }
 
-async fn apply_descriptions_from_result(entry: &mut Entry, descriptions: &[String]) {
+async fn apply_descriptions_from_result(app: &AppState, entry: &mut Entry, descriptions: &[String]) {
     if descriptions.is_empty() {
         return;
     }
     let new_desc = get_new_description(&entry.ext_desc, descriptions);
     if new_desc != entry.ext_desc {
-        let _ = entry.set_ext_desc(&new_desc).await;
+        let _ = EntryWriter::new(app, entry).set_ext_desc(&new_desc).await;
     }
 }
 
@@ -312,7 +310,7 @@ async fn finalize_desc_from_html(app: &AppState, catalog_id: usize) -> Result<()
 }
 
 /// Apply a [`LuaCommand`] to an entry in the database.
-pub(super) async fn apply_command(cmd: &LuaCommand, entry: &mut Entry) -> Result<()> {
+pub(super) async fn apply_command(app: &AppState, cmd: &LuaCommand, entry: &mut Entry) -> Result<()> {
     match cmd {
         LuaCommand::SetAux {
             property, value, ..
@@ -321,29 +319,29 @@ pub(super) async fn apply_command(cmd: &LuaCommand, entry: &mut Entry) -> Result
             let prop_numeric: usize = prop_str
                 .parse()
                 .map_err(|_| anyhow!("Invalid property '{property}'"))?;
-            entry.set_auxiliary(prop_numeric, Some(value.clone())).await
+            EntryWriter::new(app, entry).set_auxiliary(prop_numeric, Some(value.clone())).await
         }
         LuaCommand::SetMatch { q, .. } => {
-            entry.set_match(q, 0).await?;
+            EntryWriter::new(app, entry).set_match(q, 0).await?;
             Ok(())
         }
         LuaCommand::SetLocation { lat, lon, .. } => {
             let cl = crate::coordinates::CoordinateLocation::new(*lat, *lon);
-            entry.set_coordinate_location(&Some(cl)).await
+            EntryWriter::new(app, entry).set_coordinate_location(&Some(cl)).await
         }
         LuaCommand::SetPersonDates { born, died, .. } => {
             let born_pd = PersonDate::from_db_string(born);
             let died_pd = PersonDate::from_db_string(died);
-            entry.set_person_dates(&born_pd, &died_pd).await
+            EntryWriter::new(app, entry).set_person_dates(&born_pd, &died_pd).await
         }
-        LuaCommand::SetDescription { value, .. } => entry.set_ext_desc(value).await,
-        LuaCommand::SetEntryName { value, .. } => entry.set_ext_name(value).await,
-        LuaCommand::SetEntryType { value, .. } => entry.set_type_name(Some(value.clone())).await,
+        LuaCommand::SetDescription { value, .. } => EntryWriter::new(app, entry).set_ext_desc(value).await,
+        LuaCommand::SetEntryName { value, .. } => EntryWriter::new(app, entry).set_ext_name(value).await,
+        LuaCommand::SetEntryType { value, .. } => EntryWriter::new(app, entry).set_type_name(Some(value.clone())).await,
         LuaCommand::AddAlias {
             label, language, ..
         } => {
             let ls = wikimisc::wikibase::locale_string::LocaleString::new(language, label);
-            entry.add_alias(&ls).await
+            EntryWriter::new(app, entry).add_alias(&ls).await
         }
         LuaCommand::AddLocationText { .. } => {
             // Location text is not yet implemented in the Rust storage layer

@@ -1488,7 +1488,6 @@ end
             timestamp: None,
             random: 0.5,
             type_name: Some("Q5".into()),
-            app: None,
         };
         let le = entry_to_lua_entry(&entry);
         assert_eq!(le.id, 42);

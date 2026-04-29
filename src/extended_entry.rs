@@ -2,7 +2,7 @@ use crate::app_state::AppState;
 use crate::auxiliary_data::AuxiliaryRow;
 use crate::coordinates::CoordinateLocation;
 use crate::datasource::DataSource;
-use crate::entry::Entry;
+use crate::entry::{Entry, EntryWriter};
 use crate::person_date::PersonDate;
 use crate::update_catalog::UpdateCatalogError;
 use anyhow::{Result, anyhow};
@@ -33,12 +33,13 @@ pub struct ExtendedEntry {
 }
 
 impl ExtendedEntry {
-    pub async fn load_extended_data(&mut self) -> Result<()> {
-        self.aux = self.entry.get_aux().await?.into_iter().collect();
-        self.location = self.entry.get_coordinate_location().await?;
-        (self.born, self.died) = self.entry.get_person_dates().await?;
-        self.aliases = self.entry.get_aliases().await?;
-        self.descriptions = self.entry.get_language_descriptions().await?;
+    pub async fn load_extended_data(&mut self, app: &AppState) -> Result<()> {
+        let ew = EntryWriter::new(app, &mut self.entry);
+        self.aux = ew.get_aux().await?.into_iter().collect();
+        self.location = ew.get_coordinate_location().await?;
+        (self.born, self.died) = ew.get_person_dates().await?;
+        self.aliases = ew.get_aliases().await?;
+        self.descriptions = ew.get_language_descriptions().await?;
         // TODO mnm
         // TODO kv_entry
         Ok(())
@@ -104,79 +105,87 @@ impl ExtendedEntry {
 
     //TODO test
     pub async fn update_existing(&mut self, entry: &mut Entry, app: &AppState) -> Result<()> {
-        entry.set_app(app);
-        self.update_existing_basic_values(entry).await?;
+        self.update_existing_basic_values(app, entry).await?;
         if self.born.is_some() || self.died.is_some() {
-            entry.set_person_dates(&self.born, &self.died).await?;
+            EntryWriter::new(app, entry)
+                .set_person_dates(&self.born, &self.died)
+                .await?;
         }
         if self.location.is_some() {
-            entry.set_coordinate_location(&self.location).await?;
+            EntryWriter::new(app, entry)
+                .set_coordinate_location(&self.location)
+                .await?;
         }
-        self.sync_aliases(entry).await?;
-        self.sync_descriptions(entry).await?;
-        self.sync_auxiliary(entry).await?;
+        self.sync_aliases(app, entry).await?;
+        self.sync_descriptions(app, entry).await?;
+        self.sync_auxiliary(app, entry).await?;
         Ok(())
     }
 
-    async fn update_existing_basic_values(&mut self, entry: &mut Entry) -> Result<()> {
+    async fn update_existing_basic_values(
+        &mut self,
+        app: &AppState,
+        entry: &mut Entry,
+    ) -> Result<()> {
+        let mut ew = EntryWriter::new(app, entry);
         if !self.entry.ext_name.is_empty() {
-            entry.set_ext_name(&self.entry.ext_name).await?;
+            ew.set_ext_name(&self.entry.ext_name).await?;
         }
         if !self.entry.ext_desc.is_empty() {
-            entry.set_ext_desc(&self.entry.ext_desc).await?;
+            ew.set_ext_desc(&self.entry.ext_desc).await?;
         }
         if self.entry.type_name.is_some() {
-            entry.set_type_name(self.entry.type_name.clone()).await?;
+            ew.set_type_name(self.entry.type_name.clone()).await?;
         }
         if !self.entry.ext_url.is_empty() {
-            entry.set_ext_url(&self.entry.ext_url).await?;
+            ew.set_ext_url(&self.entry.ext_url).await?;
         }
-        if entry.q.is_none() {
+        if ew.as_entry().q.is_none() {
             if let Some(q) = self.entry.q {
-                // println!("UPDATING Q{q} for {}", entry.id);
-                entry.set_match(&format!("Q{q}"), 4).await?;
+                ew.set_match(&format!("Q{q}"), 4).await?;
             }
         }
         Ok(())
     }
 
-    // Adds new aliases.
-    // Does NOT remove ones that don't exist anymore. Who knows how they got into the database.
+    // Adds new aliases to the existing DB entry.
+    // Does NOT remove ones that don't exist anymore.
     //TODO test
-    pub async fn sync_aliases(&self, entry: &Entry) -> Result<()> {
-        let existing = entry.get_aliases().await?;
+    pub async fn sync_aliases(&self, app: &AppState, entry: &mut Entry) -> Result<()> {
+        let ew = EntryWriter::new(app, entry);
+        let existing = ew.get_aliases().await?;
         for alias in &self.aliases {
             if !existing.contains(alias) {
-                self.entry.add_alias(alias).await?;
+                ew.add_alias(alias).await?;
             }
         }
         Ok(())
     }
 
-    // Adds/replaces new aux values.
-    // Does NOT remove ones that don't exist anymore. Who knows how they got into the database.
+    // Adds/replaces new aux values on the existing DB entry.
+    // Does NOT remove ones that don't exist anymore.
     //TODO test
-    pub async fn sync_auxiliary(&self, entry: &Entry) -> Result<()> {
-        let existing: HashSet<AuxiliaryRow> = entry.get_aux().await?.into_iter().collect();
+    pub async fn sync_auxiliary(&self, app: &AppState, entry: &mut Entry) -> Result<()> {
+        let mut ew = EntryWriter::new(app, entry);
+        let existing: HashSet<AuxiliaryRow> = ew.get_aux().await?.into_iter().collect();
         for aux in &self.aux {
             if !existing.contains(aux) {
-                entry
-                    .set_auxiliary(aux.prop_numeric(), Some(aux.value().to_owned()))
+                ew.set_auxiliary(aux.prop_numeric(), Some(aux.value().to_owned()))
                     .await?;
             }
         }
         Ok(())
     }
 
-    // Adds/replaces new language descriptions.
-    // Does NOT remove ones that don't exist anymore. Who knows how they got into the database.
+    // Adds/replaces new language descriptions on the existing DB entry.
+    // Does NOT remove ones that don't exist anymore.
     //TODO test
-    pub async fn sync_descriptions(&self, entry: &Entry) -> Result<()> {
-        let existing = entry.get_language_descriptions().await?;
+    pub async fn sync_descriptions(&self, app: &AppState, entry: &mut Entry) -> Result<()> {
+        let ew = EntryWriter::new(app, entry);
+        let existing = ew.get_language_descriptions().await?;
         for (language, value) in &self.descriptions {
             if existing.get(language) != Some(value) {
-                entry
-                    .set_language_description(language, Some(value.to_owned()))
+                ew.set_language_description(language, Some(value.to_owned()))
                     .await?;
             }
         }
@@ -184,36 +193,28 @@ impl ExtendedEntry {
     }
 
     /// Inserts a new entry and its associated data into the database
-    // #lizard forgives
     //TODO test
     pub async fn insert_new(&mut self, app: &AppState) -> Result<()> {
-        self.entry.set_app(app);
-        self.entry.insert_as_new().await?;
-
-        // TODO use update_existing_description
-        // TODO use update_all_descriptions
+        let mut ew = EntryWriter::new(app, &mut self.entry);
+        ew.insert_as_new().await?;
 
         if self.born.is_some() || self.died.is_some() {
-            self.entry.set_person_dates(&self.born, &self.died).await?;
+            ew.set_person_dates(&self.born, &self.died).await?;
         }
         if self.location.is_some() {
-            self.entry.set_coordinate_location(&self.location).await?;
+            ew.set_coordinate_location(&self.location).await?;
         }
-
         for alias in &self.aliases {
-            self.entry.add_alias(alias).await?;
+            ew.add_alias(alias).await?;
         }
         for aux in &self.aux {
-            self.entry
-                .set_auxiliary(aux.prop_numeric(), Some(aux.value().to_owned()))
+            ew.set_auxiliary(aux.prop_numeric(), Some(aux.value().to_owned()))
                 .await?;
         }
         for (language, text) in &self.descriptions {
-            self.entry
-                .set_language_description(language, Some(text.to_owned()))
+            ew.set_language_description(language, Some(text.to_owned()))
                 .await?;
         }
-
         Ok(())
     }
 
