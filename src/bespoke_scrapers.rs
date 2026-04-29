@@ -41,6 +41,7 @@ pub mod scraper_2849;
 pub mod scraper_2964;
 pub mod scraper_3386;
 pub mod scraper_3387;
+pub mod scraper_3862;
 pub mod scraper_4825;
 pub mod scraper_5100;
 pub mod scraper_5103;
@@ -72,6 +73,7 @@ pub use scraper_2849::BespokeScraper2849;
 pub use scraper_2964::BespokeScraper2964;
 pub use scraper_3386::BespokeScraper3386;
 pub use scraper_3387::BespokeScraper3387;
+pub use scraper_3862::BespokeScraper3862;
 pub use scraper_4825::BespokeScraper4825;
 pub use scraper_5100::BespokeScraper5100;
 pub use scraper_5103::BespokeScraper5103;
@@ -124,6 +126,7 @@ const SCRAPER_REGISTRY: &[(usize, ScraperRunFn)] = &[
     scraper_entry!(2964, BespokeScraper2964),
     scraper_entry!(3386, BespokeScraper3386),
     scraper_entry!(3387, BespokeScraper3387),
+    scraper_entry!(3862, BespokeScraper3862),
     scraper_entry!(4825, BespokeScraper4825),
     scraper_entry!(5100, BespokeScraper5100),
     scraper_entry!(5103, BespokeScraper5103),
@@ -296,7 +299,7 @@ mod tests {
         let ids: Vec<usize> = SCRAPER_REGISTRY.iter().map(|(id, _)| *id).collect();
         for expected in &[
             53_usize, 85, 121, 122, 722, 1178, 1223, 1379, 1619, 2670, 2849, 2964, 3386, 3387,
-            4825, 5100, 5103, 5311, 6479, 6794, 6975, 6976, 7043, 7433, 7696, 7697, 7700,
+            3862, 4825, 5100, 5103, 5311, 6479, 6794, 6975, 6976, 7043, 7433, 7696, 7697, 7700,
         ] {
             assert!(
                 ids.contains(expected),
