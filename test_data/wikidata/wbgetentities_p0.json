@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "no-such-entity",
+    "info": "Could not find an entity with the ID \"P0\".",
+    "id": "P0"
+  }
+}
