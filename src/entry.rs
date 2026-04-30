@@ -1125,20 +1125,22 @@ impl Entry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app_state::{TEST_MUTEX, get_test_app};
+    use crate::test_support;
 
-    const _TEST_CATALOG_ID: DbId = 5526;
+    #[allow(dead_code)]
+    const TEST_CATALOG_ID: DbId = 5526;
+    #[allow(dead_code)]
     const TEST_ENTRY_ID: DbId = 143962196;
 
     /// Verifies the new EntryRepo API loads the same row that
     /// `Entry::from_id` does — the static method should be a thin
     /// facade over the repo, so any divergence is a regression.
     #[tokio::test]
-    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn entry_repo_find_matches_legacy_static() {
-        let app = get_test_app();
-        let via_repo = EntryRepo::new(&app).find(TEST_ENTRY_ID).await.unwrap();
-        let via_static = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+        let app = test_support::test_app().await;
+        let (_, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
+        let via_repo = EntryRepo::new(&app).find(entry_id).await.unwrap();
+        let via_static = Entry::from_id(entry_id, &app).await.unwrap();
         assert_eq!(via_repo.id, via_static.id);
         assert_eq!(via_repo.catalog, via_static.catalog);
         assert_eq!(via_repo.ext_id, via_static.ext_id);
@@ -1147,15 +1149,12 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn entry_repo_find_many_returns_map_keyed_by_id() {
-        let app = get_test_app();
-        let entries = EntryRepo::new(&app)
-            .find_many(&[TEST_ENTRY_ID])
-            .await
-            .unwrap();
+        let app = test_support::test_app().await;
+        let (_, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
+        let entries = EntryRepo::new(&app).find_many(&[entry_id]).await.unwrap();
         assert_eq!(entries.len(), 1);
-        assert!(entries.contains_key(&TEST_ENTRY_ID));
+        assert!(entries.contains_key(&entry_id));
         assert!(
             entries.values().all(|e| e.id.is_some()),
             "repo should return entries with valid ids"
@@ -1164,23 +1163,25 @@ mod tests {
 
     /// Pin the EntryWriter contract: the writer wraps an Entry +
     #[tokio::test]
-    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn entry_writer_ctx_accessor() {
-        let app = get_test_app();
-        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+        let app = test_support::test_app().await;
+        let (_, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
+        let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
         let writer = EntryWriter::new(&app, &mut entry);
         // The writer's ctx accessor returns the borrowed context unchanged.
         let _: &dyn AppContext = writer.ctx();
     }
 
     #[tokio::test]
-    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_person_dates() {
-        let _test_lock = TEST_MUTEX.lock();
-        let app = get_test_app();
-        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+        let app = test_support::test_app().await;
+        let (_, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
+        let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
         let born = Some(PersonDate::year_month_day(1974, 5, 24));
         let died = Some(PersonDate::year_month_day(2000, 1, 1));
+
+        // Set both
+        EntryWriter::new(&app, &mut entry).set_person_dates(&born, &died).await.unwrap();
         assert_eq!(EntryWriter::new(&app, &mut entry).get_person_dates().await.unwrap(), (born, died));
 
         // Remove died
@@ -1194,21 +1195,13 @@ mod tests {
         // Remove entire row
         EntryWriter::new(&app, &mut entry).set_person_dates(&None, &None).await.unwrap();
         assert_eq!(EntryWriter::new(&app, &mut entry).get_person_dates().await.unwrap(), (None, None));
-
-        // Set back to original and check
-        EntryWriter::new(&app, &mut entry).set_person_dates(&born, &died).await.unwrap();
-        assert_eq!(EntryWriter::new(&app, &mut entry).get_person_dates().await.unwrap(), (born, died));
     }
 
     #[tokio::test]
-    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_coordinate_location() {
-        let _test_lock = TEST_MUTEX.lock();
-        let app = get_test_app();
-        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
-
-        // Save whatever is currently in the DB so we can restore it at the end
-        let original = EntryWriter::new(&app, &mut entry).get_coordinate_location().await.unwrap();
+        let app = test_support::test_app().await;
+        let (_, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
+        let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
 
         let cl = CoordinateLocation::new(1.234, -5.678);
 
@@ -1224,26 +1217,15 @@ mod tests {
         // Remove
         EntryWriter::new(&app, &mut entry).set_coordinate_location(&None).await.unwrap();
         assert_eq!(EntryWriter::new(&app, &mut entry).get_coordinate_location().await.unwrap(), None);
-
-        // Restore original value
-        EntryWriter::new(&app, &mut entry).set_coordinate_location(&original).await.unwrap();
-        assert_eq!(EntryWriter::new(&app, &mut entry).get_coordinate_location().await.unwrap(), original);
     }
 
     #[tokio::test]
-    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_match() {
-        let _test_lock = TEST_MUTEX.lock();
-        let app = get_test_app();
+        let app = test_support::test_app().await;
+        let (_, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
 
-        // Clear
-        {
-            let mut e = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
-            EntryWriter::new(&app, &mut e).unmatch().await.unwrap();
-        }
-
-        // Check if clear
-        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+        // Freshly seeded entry has no match
+        let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
         assert!(entry.q.is_none());
         assert!(entry.user.is_none());
         assert!(entry.timestamp.is_none());
@@ -1255,7 +1237,7 @@ mod tests {
         assert!(entry.timestamp.is_some());
 
         // Check in-database changes
-        let mut entry2 = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+        let mut entry2 = Entry::from_id(entry_id, &app).await.unwrap();
         assert_eq!(entry2.q, Some(1));
         assert_eq!(entry2.user, Some(4));
         assert!(entry2.timestamp.is_some());
@@ -1267,27 +1249,25 @@ mod tests {
         assert!(entry2.timestamp.is_none());
 
         // Check in-database changes
-        let entry3 = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+        let entry3 = Entry::from_id(entry_id, &app).await.unwrap();
         assert!(entry3.q.is_none());
         assert!(entry3.user.is_none());
         assert!(entry3.timestamp.is_none());
     }
 
     #[tokio::test]
-    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_utf8() {
-        let app = get_test_app();
-        let entry = Entry::from_id(102826400, &app).await.unwrap();
+        let app = test_support::test_app().await;
+        let (_, entry_id) = test_support::seed_entry_with_name("이희정").await.unwrap();
+        let entry = Entry::from_id(entry_id, &app).await.unwrap();
         assert_eq!("이희정", &entry.ext_name);
     }
 
     #[tokio::test]
-    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_multimatch() {
-        let _test_lock = TEST_MUTEX.lock();
-        let app = get_test_app();
-        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
-        EntryWriter::new(&app, &mut entry).unmatch().await.unwrap();
+        let app = test_support::test_app().await;
+        let (_, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
+        let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
         let items: Vec<String> = ["Q1", "Q23456", "Q7"]
             .iter()
             .map(|s| s.to_string())
@@ -1302,46 +1282,37 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_get_item_url() {
-        let _test_lock = TEST_MUTEX.lock();
-        let app = get_test_app();
-
-        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+        let app = test_support::test_app().await;
+        let (_, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
+        let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
         EntryWriter::new(&app, &mut entry).set_match("Q12345", 4).await.unwrap();
-
         assert_eq!(
             entry.get_item_url(),
             Some("https://www.wikidata.org/wiki/Q12345".to_string())
         );
-
         EntryWriter::new(&app, &mut entry).unmatch().await.unwrap();
-
         assert_eq!(entry.get_item_url(), None);
     }
 
     #[tokio::test]
-    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_get_entry_url() {
-        let _test_lock = TEST_MUTEX.lock();
-        let app = get_test_app();
-        let entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+        let app = test_support::test_app().await;
+        let (_, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
+        let entry = Entry::from_id(entry_id, &app).await.unwrap();
         assert_eq!(
             entry.get_entry_url(),
-            Some(format!(
-                "https://mix-n-match.toolforge.org/#/entry/{TEST_ENTRY_ID}"
-            ))
+            Some(format!("https://mix-n-match.toolforge.org/#/entry/{entry_id}"))
         );
         let entry2 = Entry::new_from_catalog_and_ext_id(1, "234");
         assert_eq!(entry2.get_entry_url(), None);
     }
 
     #[tokio::test]
-    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_is_unmatched() {
-        let _test_lock = TEST_MUTEX.lock();
-        let app = get_test_app();
-        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+        let app = test_support::test_app().await;
+        let (_, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
+        let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
         EntryWriter::new(&app, &mut entry).set_match("Q12345", 4).await.unwrap();
         assert!(!entry.is_unmatched());
         EntryWriter::new(&app, &mut entry).unmatch().await.unwrap();
@@ -1349,11 +1320,10 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_is_partially_matched() {
-        let _test_lock = TEST_MUTEX.lock();
-        let app = get_test_app();
-        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+        let app = test_support::test_app().await;
+        let (_, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
+        let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
         EntryWriter::new(&app, &mut entry).set_match("Q12345", 0).await.unwrap();
         assert!(entry.is_partially_matched());
         EntryWriter::new(&app, &mut entry).unmatch().await.unwrap();
@@ -1361,11 +1331,10 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn is_fully_matched() {
-        let _test_lock = TEST_MUTEX.lock();
-        let app = get_test_app();
-        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+        let app = test_support::test_app().await;
+        let (_, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
+        let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
         EntryWriter::new(&app, &mut entry).set_match("Q12345", 4).await.unwrap();
         assert!(entry.is_fully_matched());
         EntryWriter::new(&app, &mut entry).unmatch().await.unwrap();
@@ -1560,22 +1529,20 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_check_valid_id() {
-        let _test_lock = TEST_MUTEX.lock();
-        let app = get_test_app();
-        let entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+        let app = test_support::test_app().await;
+        let (_, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
+        let entry = Entry::from_id(entry_id, &app).await.unwrap();
         assert!(entry.get_valid_id().is_ok());
         let entry2 = Entry::new_from_catalog_and_ext_id(1, "234");
         assert!(entry2.get_valid_id().is_err());
     }
 
     #[tokio::test]
-    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_add_alias() {
-        let _test_lock = TEST_MUTEX.lock();
-        let app = get_test_app();
-        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+        let app = test_support::test_app().await;
+        let (_, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
+        let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
         let s = LocaleString::new("en", "test");
         EntryWriter::new(&app, &mut entry).add_alias(&s).await.unwrap();
         assert!(EntryWriter::new(&app, &mut entry).get_aliases().await.unwrap().contains(&s));

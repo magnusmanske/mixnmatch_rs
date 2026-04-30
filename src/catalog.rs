@@ -323,16 +323,13 @@ impl Catalog {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app_state::get_test_app;
-
-    const TEST_CATALOG_ID: usize = 5526;
-    const _TEST_ENTRY_ID: usize = 143962196;
+    use crate::test_support;
 
     #[tokio::test]
-    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_catalog_from_id() {
-        let app = get_test_app();
-        let catalog = Catalog::from_id(TEST_CATALOG_ID, &app).await.unwrap();
-        assert_eq!(catalog.name.unwrap(), "TEST CATALOG");
+        let app = test_support::test_app().await;
+        let (catalog_id, _) = test_support::seed_minimal_entry(&app).await.unwrap();
+        let catalog = Catalog::from_id(catalog_id, &app).await.unwrap();
+        assert_eq!(catalog.name.unwrap(), format!("test_catalog_{catalog_id}"));
     }
 }

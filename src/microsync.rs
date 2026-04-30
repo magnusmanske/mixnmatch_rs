@@ -637,8 +637,7 @@ fn wikitext_from_issues_get_header(catalog: &Catalog) -> String {
 mod tests {
     use super::*;
     use crate::app_state::get_test_app;
-
-    const TEST_ENTRY_ID: usize = 143962196;
+    use crate::test_support;
 
     #[tokio::test]
     #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
@@ -650,18 +649,14 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_get_multiple_q_in_mnm() {
-        // Smoke-test: the GROUP BY on a populated catalog (`TEST_CATALOG_ID`)
-        // scans every matched entry in that catalog and dominated the whole
-        // cargo-test wall time (often >20 s). The original test set up two
-        // entries matching the same Q and then ignored the result (`_results`),
-        // so it only ever checked that the query runs without error. Running
-        // against an unused catalog id exercises the same SQL/index path while
-        // returning in ~100 ms and lets us actually assert the shape.
-        let app = get_test_app();
+        // Smoke-test: query against an empty catalog (new unique id) so the
+        // GROUP BY returns quickly with an empty result — verifies the SQL
+        // runs without error and returns the right shape.
+        let app = test_support::test_app().await;
+        let catalog_id = test_support::unique_catalog_id();
         let ms = Microsync::new(&app);
-        let results = ms.get_multiple_q_in_mnm(0).await.unwrap();
+        let results = ms.get_multiple_q_in_mnm(catalog_id).await.unwrap();
         assert!(results.is_empty());
     }
 
@@ -739,16 +734,16 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_load_entry_names() {
-        let app = get_test_app();
+        let app = test_support::test_app().await;
+        let (_, entry_id) = test_support::seed_entry_with_name("Magnus Manske").await.unwrap();
         let result = app
             .storage()
-            .microsync_load_entry_names(&[TEST_ENTRY_ID])
+            .microsync_load_entry_names(&[entry_id])
             .await
             .unwrap();
         assert_eq!(
-            result.get(&TEST_ENTRY_ID),
+            result.get(&entry_id),
             Some(&"Magnus Manske".to_string())
         );
     }

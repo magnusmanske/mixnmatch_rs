@@ -314,22 +314,20 @@ mod tests {
 
     use super::*;
     use crate::{
-        app_state::{TEST_MUTEX, get_test_app},
         datasource::DataSourceLocation,
         entry::EntryWriter,
         extended_entry::ExtendedEntry,
+        test_support,
     };
 
-    const TEST_CATALOG_ID: usize = 5526; // was 4175
-
     #[tokio::test]
-    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_get_source_location() {
-        let app = get_test_app();
+        let app = test_support::test_app().await;
+        let catalog_id = test_support::unique_catalog_id();
 
         let url = "http://www.example.org".to_string();
         let datasource_1 = DataSource::new(
-            TEST_CATALOG_ID,
+            catalog_id,
             &json!({"source_url":&url,"columns":["id","name"]}),
         )
         .unwrap();
@@ -340,7 +338,7 @@ mod tests {
 
         let uuid = "4b115b29-2ad9-4f43-90ed-7023b51a6337";
         let datasource_2 = DataSource::new(
-            TEST_CATALOG_ID,
+            catalog_id,
             &json!({"file_uuid":&uuid,"columns":["id","name"]}),
         )
         .unwrap();
@@ -351,11 +349,14 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_get_update_info() {
-        let app = get_test_app();
+        let update_json = r#"{"default_type":"Q5","data_format":"tsv","columns":["id","name"]}"#;
+        let catalog_id = test_support::seed_catalog_with_update_info(2, update_json)
+            .await
+            .unwrap();
+        let app = test_support::test_app().await;
         let uc = UpdateCatalog::new(&app);
-        let info = uc.get_update_info(TEST_CATALOG_ID).await.unwrap();
+        let info = uc.get_update_info(catalog_id).await.unwrap();
         let json = info.json().unwrap();
         let type_name = json.get("default_type").unwrap().as_str().unwrap();
         assert_eq!(info.user_id, 2);
@@ -421,24 +422,33 @@ mod tests {
         );
     }
 
-    // #lizard forgives
     #[tokio::test]
-    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_update_from_tabbed_file() {
-        let _test_lock = TEST_MUTEX.lock();
-        let app = get_test_app();
-
-        // Delete the entry if it exists
-        if let Ok(mut entry) = Entry::from_ext_id(TEST_CATALOG_ID, "n2014191777", &app).await {
-            EntryWriter::new(&app, &mut entry).delete().await.unwrap();
-        }
+        let test_data_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/test_data");
+        let update_json = r#"{
+            "file_uuid": "5526_test",
+            "data_format": "tsv",
+            "url_pattern": "https://www.aspi.unimib.it/collections/entity/detail/$1/",
+            "default_type": "Q5",
+            "columns": ["id","name","desc"],
+            "patterns": {
+                "born":  {"col":2,"pattern":"|^\\s*(\\d{3,4})\\s*-|"},
+                "died":  {"col":2,"pattern":"|^[^;-]+-\\s*(\\d{3,4})|"},
+                "P214":  {"col":2,"pattern":"|viaf:\"(.+?)\"|"},
+                "P213":  {"col":2,"pattern":"|isni:\"(\\d{4} \\d{4} \\d{4} \\d{4})\"|"}
+            }
+        }"#;
+        let catalog_id = test_support::seed_catalog_with_update_info(2, update_json)
+            .await
+            .unwrap();
+        let app = test_support::test_app_with_import_path(test_data_dir).await;
 
         // Import single entry
         let mut uc = UpdateCatalog::new(&app);
-        uc.update_from_tabbed_file(TEST_CATALOG_ID).await.unwrap();
+        uc.update_from_tabbed_file(catalog_id).await.unwrap();
 
         // Get new entry
-        let mut entry = Entry::from_ext_id(TEST_CATALOG_ID, "n2014191777", &app)
+        let mut entry = Entry::from_ext_id(catalog_id, "n2014191777", &app)
             .await
             .unwrap();
 
@@ -454,17 +464,11 @@ mod tests {
         let aux = EntryWriter::new(&app, &mut entry).get_aux().await.unwrap();
         assert_eq!(aux.len(), 2);
         assert_eq!(
-            aux.iter()
-                .find(|row| row.prop_numeric() == 213)
-                .unwrap()
-                .value(),
+            aux.iter().find(|r| r.prop_numeric() == 213).unwrap().value(),
             "0000 0000 6555 4670"
         );
         assert_eq!(
-            aux.iter()
-                .find(|row| row.prop_numeric() == 214)
-                .unwrap()
-                .value(),
+            aux.iter().find(|r| r.prop_numeric() == 214).unwrap().value(),
             "91113950"
         );
 
@@ -472,8 +476,5 @@ mod tests {
         let (born, died) = EntryWriter::new(&app, &mut entry).get_person_dates().await.unwrap();
         assert_eq!(born.unwrap().to_db_string(), "1869");
         assert_eq!(died.unwrap().to_db_string(), "1961");
-
-        // Cleanup
-        EntryWriter::new(&app, &mut entry).delete().await.unwrap();
     }
 }

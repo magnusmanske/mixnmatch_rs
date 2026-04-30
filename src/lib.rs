@@ -88,6 +88,8 @@ pub mod reference_fixer;
 pub mod static_cache;
 pub mod storage;
 pub mod storage_mysql;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub mod task_size;
 pub mod wikibase;
 // pub mod storage_wikibase;

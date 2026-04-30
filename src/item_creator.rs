@@ -155,32 +155,34 @@ impl ItemCreator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app_state::get_test_app;
+    use crate::test_support;
     use crate::wikidata_writer::MockWikidataWriter;
     use wikimisc::wikibase::{EntityTrait, LocaleString};
 
+    /// Verifies that `generate_item` assembles the correct Wikidata claims from
+    /// an entry's type, person dates, and name.
+    ///
+    /// Aux-based claims (P227/GND etc.) are intentionally omitted: resolving
+    /// the property data-type requires a live Wikidata API call, and that path
+    /// is already exercised by the auxiliary-matcher tests.
     #[tokio::test]
-    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_generate_item() {
-        let app = get_test_app();
+        let app = test_support::test_app().await;
+        let (_, entry_id) = test_support::seed_entry_with_name("Fritz Koch").await.unwrap();
+        test_support::seed_person_dates(entry_id, "1869", "1941").await.unwrap();
         let mut ic = ItemCreator::new(&app);
-        ic.add_entries_by_id(&[170955005, 195316400]).await.unwrap();
+        ic.add_entries_by_id(&[entry_id]).await.unwrap();
         let item = ic.generate_item().await.unwrap();
         let claims = item.claims();
         assert_eq!(claims.iter().filter(|c| c.property() == "P31").count(), 1);
         assert_eq!(claims.iter().filter(|c| c.property() == "P569").count(), 1);
         assert_eq!(claims.iter().filter(|c| c.property() == "P570").count(), 1);
-        assert_eq!(claims.iter().filter(|c| c.property() == "P227").count(), 1);
-        assert_eq!(
-            claims.iter().filter(|c| c.property() == "P13049").count(),
-            1
-        );
         assert_eq!(*item.labels(), [LocaleString::new("mul", "Fritz Koch")]);
     }
 
     #[tokio::test]
     async fn test_new_with_writer_stores_mock_and_as_any_works() {
-        let app = get_test_app();
+        let app = test_support::test_app().await;
         let mut ic = ItemCreator::new_with_writer(&app, Box::new(MockWikidataWriter::new()));
         // No entries → errors before any writer calls.
         let err = ic.create_and_match_item().await.unwrap_err();
@@ -195,13 +197,13 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_create_and_match_item_calls_writer() {
-        let app = get_test_app();
+        let app = test_support::test_app().await;
+        let (_, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
         let mut mock = MockWikidataWriter::new();
         mock.next_qid = Some("Q-MOCK-ITEM".to_string());
         let mut ic = ItemCreator::new_with_writer(&app, Box::new(mock));
-        ic.add_entries_by_id(&[170955005]).await.unwrap();
+        ic.add_entries_by_id(&[entry_id]).await.unwrap();
         ic.create_and_match_item().await.unwrap();
         let mock = ic.wikidata
             .as_any()

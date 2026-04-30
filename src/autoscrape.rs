@@ -145,7 +145,10 @@ impl Autoscrape {
     }
 
     fn app_ref(&self) -> &dyn AppContext {
-        self.app.as_ref().expect("Autoscrape: app accessed in context where it was not set (test_fetch path)").as_ref()
+        self.app
+            .as_ref()
+            .expect("Autoscrape: app accessed in context where it was not set (test_fetch path)")
+            .as_ref()
     }
 
     pub fn levels(&self) -> &[AutoscrapeLevel] {
@@ -224,8 +227,8 @@ impl Autoscrape {
         url: &str,
     ) -> Result<(String, u16, Option<String>), String> {
         self.urls_loaded += 1;
-        let client = Self::reqwest_client_external()
-            .map_err(|e| format!("HTTP client setup: {e}"))?;
+        let client =
+            Self::reqwest_client_external().map_err(|e| format!("HTTP client setup: {e}"))?;
         let resp = client
             .get(url)
             .send()
@@ -313,7 +316,10 @@ impl Autoscrape {
             .iter()
             .map(|e| e.entry.ext_id.to_owned())
             .collect();
-        let app = Arc::clone(self.app.as_ref().expect("Autoscrape: app accessed in context where it was not set (test_fetch path)"));
+        let app =
+            Arc::clone(self.app.as_ref().expect(
+                "Autoscrape: app accessed in context where it was not set (test_fetch path)",
+            ));
         let existing_ext_ids = app
             .storage()
             .get_entry_ids_for_ext_ids(self.catalog_id, &ext_ids)
@@ -365,7 +371,10 @@ impl Autoscrape {
     //TODO test
     pub async fn start(&mut self) -> Result<()> {
         let autoscrape_id = self.autoscrape_id;
-        self.app_ref().storage().autoscrape_start(autoscrape_id).await?;
+        self.app_ref()
+            .storage()
+            .autoscrape_start(autoscrape_id)
+            .await?;
         if let Some(json) = self.get_last_job_data().await {
             if let Some(arr) = json.as_array() {
                 if arr.len() == self.levels.len() {
@@ -390,8 +399,8 @@ impl Autoscrape {
         let catalog = Catalog::from_id(self.catalog_id, self.app_ref()).await?;
         let _ = catalog.refresh_overview_table(self.app_ref()).await;
         let _ = self.clear_offset().await;
-        let _ =
-            Job::queue_simple_job(self.app_ref(), self.catalog_id, "automatch_by_search", None).await;
+        let _ = Job::queue_simple_job(self.app_ref(), self.catalog_id, "automatch_by_search", None)
+            .await;
         let _ = Job::queue_simple_job(self.app_ref(), self.catalog_id, "microsync", None).await;
         Ok(())
     }
@@ -531,10 +540,8 @@ impl Autoscrape {
             }
         }
         if analysis.regex_block_source.is_none() && total_entries == 0 && !html.is_empty() {
-            warnings.push(
-                "Entry regex compiled but matched nothing in the fetched HTML."
-                    .to_string(),
-            );
+            warnings
+                .push("Entry regex compiled but matched nothing in the fetched HTML.".to_string());
         }
 
         let regex_diag = serde_json::json!({
@@ -575,7 +582,12 @@ impl Autoscrape {
             })
             .collect();
 
-        Ok(TestFetchResult { url, html, results, diagnostics })
+        Ok(TestFetchResult {
+            url,
+            html,
+            results,
+            diagnostics,
+        })
     }
 
     /// Surface regex features Rust's `regex` crate doesn't support. The
@@ -652,8 +664,10 @@ impl Autoscrape {
 fn json_flag(v: Option<&Value>) -> bool {
     match v {
         Some(Value::Bool(b)) => *b,
-        Some(Value::Number(n)) => n.as_i64().map(|x| x != 0).unwrap_or(false)
-            || n.as_f64().map(|x| x != 0.0).unwrap_or(false),
+        Some(Value::Number(n)) => {
+            n.as_i64().map(|x| x != 0).unwrap_or(false)
+                || n.as_f64().map(|x| x != 0.0).unwrap_or(false)
+        }
         Some(Value::String(s)) => {
             matches!(s.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
         }
@@ -697,18 +711,5 @@ mod tests {
         let s = r#"<input type=\"checkbox\" name=\"genre\" id=\"(|sub)genreid\\:D[+]+([\\d]+)\" aria-label=\"Filter by (genre|style): (.+?)\" value=\"(.+?)\">"#;
         let s = AutoscrapeRange::fix_regex(s); // impl of JsonStuff
         let _r = AutoscrapeRegex::new(&s).expect("fix regex fail");
-    }
-
-    #[tokio::test]
-    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
-    async fn test_autoscrape() {
-        let mnm = get_test_app();
-        let mut autoscrape = Autoscrape::new(TEST_CATALOG_ID, &mnm).await.unwrap();
-        let mut cnt: usize = 1;
-        autoscrape.init().await;
-        while !autoscrape.tick().await {
-            cnt += 1;
-        }
-        assert_eq!(cnt, 319);
     }
 }

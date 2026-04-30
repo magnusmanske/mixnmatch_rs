@@ -717,10 +717,8 @@ const JOB_HANDLER_REGISTRY: &[(&str, JobHandlerFn)] = &[
 mod tests {
     use super::*;
     use crate::app_state::get_test_app;
+    use crate::test_support;
     use std::collections::HashSet;
-
-    const _TEST_CATALOG_ID: usize = 5526;
-    const _TEST_ENTRY_ID: usize = 143962196;
 
     /// Catches a copy-paste typo in the registry that would silently
     /// shadow an existing action with a second handler that's never
@@ -770,13 +768,16 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_set_from_id() {
-        let app = get_test_app();
+        let app = test_support::test_app().await;
+        let catalog_id = test_support::unique_catalog_id();
+        let job_id = test_support::seed_job("automatch_by_search", catalog_id)
+            .await
+            .unwrap();
         let mut job = Job::new(&app);
-        job.set_from_id(1).await.unwrap();
-        assert_eq!(job.get_id().await.unwrap(), 1);
-        assert_eq!(job.get_catalog().await.unwrap(), 2930);
+        job.set_from_id(job_id).await.unwrap();
+        assert_eq!(job.get_id().await.unwrap(), job_id);
+        assert_eq!(job.get_catalog().await.unwrap(), catalog_id);
         assert_eq!(job.get_action().await.unwrap(), "automatch_by_search");
     }
 

@@ -64,25 +64,32 @@ pub struct CerseiRelationsResponse {
     pub rows: Vec<CerseiRelationRow>,
 }
 
+const CERSEI_SCRAPERS_URL: &str = "https://cersei.toolforge.org/api/scrapers";
+
 #[derive(Debug)]
 pub struct CerseiSync {
     app: Arc<dyn AppContext>,
     http_client: reqwest::Client,
+    scrapers_url: String,
 }
 
 impl CerseiSync {
     pub fn new(app: &AppState) -> Result<Self> {
+        Self::new_with_scrapers_url(app, CERSEI_SCRAPERS_URL)
+    }
+
+    pub(crate) fn new_with_scrapers_url(app: &AppState, scrapers_url: &str) -> Result<Self> {
         let app: Arc<dyn AppContext> = Arc::new(app.clone());
         Ok(Self {
             app,
             http_client: crate::autoscrape::Autoscrape::reqwest_client_external()?,
+            scrapers_url: scrapers_url.to_string(),
         })
     }
 
     /// Fetch scrapers from CERSEI API
     async fn get_cersei_scrapers(&self) -> Result<Vec<CerseiScraper>> {
-        let url = "https://cersei.toolforge.org/api/scrapers";
-        let response = self.http_client.get(url).send().await?;
+        let response = self.http_client.get(&self.scrapers_url).send().await?;
         let scrapers_response: CerseiScrapersResponse = response.json().await?;
         Ok(scrapers_response.scrapers)
     }
@@ -543,15 +550,23 @@ impl CerseiSync {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app_state::get_test_app;
+    use crate::test_support;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    use wiremock::matchers::method;
+
+    const CERSEI_SCRAPERS_JSON: &str =
+        include_str!("../tests/fixtures/cersei_scrapers.json");
 
     #[tokio::test]
-    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_get_cersei_scrapers() {
-        let app = get_test_app();
-        let cs = CerseiSync::new(&app).unwrap();
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(CERSEI_SCRAPERS_JSON))
+            .mount(&server).await;
+        let app = test_support::test_app().await;
+        let cs = CerseiSync::new_with_scrapers_url(&app, &server.uri().to_string()).unwrap();
         let scrapers = cs.get_cersei_scrapers().await.unwrap();
-        assert!(scrapers.len() > 10);
+        assert_eq!(scrapers.len(), 19);
     }
 
     #[test]
