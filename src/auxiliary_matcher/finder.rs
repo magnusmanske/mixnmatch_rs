@@ -57,7 +57,7 @@ impl AuxiliaryMatcher {
             let _ = self.remember_offset(offset).await;
         }
         let _ = self.clear_offset().await;
-        let _ = Job::queue_simple_job(&self.app, catalog_id, "aux2wd", None).await;
+        let _ = Job::queue_simple_job(self.app.as_ref(), catalog_id, "aux2wd", None).await;
         Ok(())
     }
 
@@ -76,8 +76,8 @@ impl AuxiliaryMatcher {
         for (q, aux) in &items_to_check {
             if let Some(entity) = &entities.get_entity(q.to_owned()) {
                 if aux.entity_has_statement(entity) {
-                    if let Ok(mut entry) = Entry::from_id(aux.entry_id, &self.app).await {
-                        let _ = EntryWriter::new(&self.app, &mut entry)
+                    if let Ok(mut entry) = Entry::from_id(aux.entry_id, self.app.as_ref()).await {
+                        let _ = EntryWriter::new(self.app.as_ref(), &mut entry)
                             .set_match(q, USER_AUX_MATCH)
                             .await;
                     }
@@ -169,7 +169,7 @@ impl AuxiliaryMatcher {
 
     async fn get_extid_props(&mut self) -> Result<Vec<String>> {
         self.properties_that_have_external_ids =
-            Self::get_properties_that_have_external_ids(&self.app).await?;
+            Self::get_properties_that_have_external_ids(self.app.as_ref()).await?;
         let extid_props: Vec<String> = self
             .properties_that_have_external_ids
             .iter()

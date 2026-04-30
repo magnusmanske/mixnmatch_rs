@@ -1,4 +1,4 @@
-use crate::app_state::AppState;
+use crate::app_state::{AppContext, AppState};
 use crate::auxiliary_matcher::AUX_PROPERTIES_ALSO_USING_LOWERCASE;
 use crate::catalog::Catalog;
 use crate::entry::{Entry, EntryWriter};
@@ -6,6 +6,8 @@ use crate::job::{Job, Jobbable};
 use crate::maintenance::Maintenance;
 use crate::match_state::MatchState;
 use crate::util::wikidata_props as wp;
+use crate::wikidata::Wikidata;
+use std::sync::Arc;
 use anyhow::Result;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -57,7 +59,10 @@ struct ExtIdNoMnM {
 
 #[derive(Debug, Clone)]
 pub struct Microsync {
-    app: AppState,
+    app: Arc<dyn AppContext>,
+    /// Owned Wikidata writer session — see `ItemCreator::wikidata` for
+    /// the rationale.
+    wikidata: Wikidata,
     job: Option<Job>,
 }
 
@@ -78,8 +83,11 @@ impl Jobbable for Microsync {
 
 impl Microsync {
     pub fn new(app: &AppState) -> Self {
+        let wikidata = app.wikidata().clone();
+        let app: Arc<dyn AppContext> = Arc::new(app.clone());
         Self {
-            app: app.clone(),
+            app,
+            wikidata,
             job: None,
         }
     }
@@ -88,12 +96,12 @@ impl Microsync {
         if BLACKLISTED_CATALOGS.contains(&catalog_id) {
             return Ok(()); // TODO error?
         }
-        let catalog = Catalog::from_id(catalog_id, &self.app).await?;
+        let catalog = Catalog::from_id(catalog_id, self.app.as_ref()).await?;
         let property = match (catalog.wd_prop(), catalog.wd_qual()) {
             (Some(prop), None) => prop,
             _ => return Ok(()), // Don't fail this job, just silently close it
         };
-        let maintenance = Maintenance::new(&self.app);
+        let maintenance = Maintenance::from_arc(Arc::clone(&self.app));
         maintenance
             .fix_matched_items(catalog_id, &MatchState::fully_matched())
             .await?;
@@ -120,8 +128,7 @@ impl Microsync {
         let page_title = format!("User:Magnus Manske/Mix'n'match report/{catalog_id}");
         let day = &TimeStamp::now()[0..8];
         let comment = format!("Update {day}");
-        self.app
-            .wikidata_mut()
+        self.wikidata
             .set_wikipage_text(&page_title, wikitext, &comment)
             .await
     }
@@ -521,8 +528,8 @@ impl Microsync {
     ) -> Result<()> {
         if entry.user.is_none() || entry.user == Some(0) || entry.q.is_none() {
             // Found a match but not in app yet
-            let mut e = Entry::from_id(entry.id, &self.app).await?;
-            EntryWriter::new(&self.app, &mut e).set_match(&format!("Q{q}"), 4).await?;
+            let mut e = Entry::from_id(entry.id, self.app.as_ref()).await?;
+            EntryWriter::new(self.app.as_ref(), &mut e).set_match(&format!("Q{q}"), 4).await?;
         } else if Some(*q) != entry.q {
             // Fully matched but to different item
             if let Some(entry_q) = entry.q {
@@ -549,8 +556,8 @@ impl Microsync {
         match_differs: &mut Vec<MatchDiffers>,
     ) -> Result<()> {
         if entry_q <= 0 {
-            let mut e = Entry::from_id(entry.id, &self.app).await?;
-            EntryWriter::new(&self.app, &mut e).set_match(&format!("Q{q}"), 4).await?;
+            let mut e = Entry::from_id(entry.id, self.app.as_ref()).await?;
+            EntryWriter::new(self.app.as_ref(), &mut e).set_match(&format!("Q{q}"), 4).await?;
         } else {
             let md = MatchDiffers {
                 ext_id: ext_id.to_owned(),

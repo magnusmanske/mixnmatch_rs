@@ -1,18 +1,31 @@
-use crate::{app_state::AppState, entry::{Entry, EntryWriter}};
+use crate::{
+    app_state::{AppContext, AppState},
+    entry::{Entry, EntryWriter},
+    wikidata::Wikidata,
+};
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
+use std::sync::Arc;
 use wikimisc::wikibase::ItemEntity;
 
 #[derive(Debug)]
 pub struct ItemCreator {
-    app: AppState,
+    app: Arc<dyn AppContext>,
+    /// Owned Wikidata writer session — independent of `app.wikidata()`.
+    /// Per-struct ownership lets us issue mutating API calls without
+    /// needing `&mut` on the shared `AppContext`. See `audits/STATUS.md`
+    /// item #7 for the rationale.
+    wikidata: Wikidata,
     entries: HashMap<usize, Entry>,
 }
 
 impl ItemCreator {
     pub fn new(app: &AppState) -> Self {
+        let wikidata = app.wikidata().clone();
+        let app: Arc<dyn AppContext> = Arc::new(app.clone());
         Self {
-            app: app.clone(),
+            app,
+            wikidata,
             entries: HashMap::new(),
         }
     }
@@ -46,7 +59,7 @@ impl ItemCreator {
         if entry_ids.is_empty() {
             return Ok(());
         }
-        let entries = Entry::multiple_from_ids(&entry_ids, &self.app).await?;
+        let entries = Entry::multiple_from_ids(&entry_ids, self.app.as_ref()).await?;
         self.entries.extend(entries);
         Ok(())
     }
@@ -70,7 +83,7 @@ impl ItemCreator {
             // Check out this entries aux values,
             // and find other entries that have the same aux values,
             // for specific properties (eg VIAF, GND)
-            let mut aux_vec = EntryWriter::new(&self.app, entry).get_aux().await.unwrap_or_default();
+            let mut aux_vec = EntryWriter::new(self.app.as_ref(), entry).get_aux().await.unwrap_or_default();
             aux_vec.retain(|a| EXT_PROPS.contains(&a.prop_numeric()));
             for aux in aux_vec {
                 if let Ok(mut other_entries) = self
@@ -96,7 +109,7 @@ impl ItemCreator {
         self.assert_at_least_one_entry()?;
         let mut item = ItemEntity::new_empty();
         for entry in self.entries.values_mut() {
-            EntryWriter::new(&self.app, entry).add_to_item(&mut item).await?;
+            EntryWriter::new(self.app.as_ref(), entry).add_to_item(&mut item).await?;
         }
         Ok(item)
     }
@@ -106,13 +119,12 @@ impl ItemCreator {
         let comment = self.generate_item_creation_comment();
         let item = self.generate_item().await?;
         let new_id = self
-            .app
-            .wikidata_mut()
+            .wikidata
             .create_new_wikidata_item(&item, &comment)
             .await?;
-        let _ = self.app.wikidata_mut().perform_ac2wd(&new_id).await; // Ignore error
+        let _ = self.wikidata.perform_ac2wd(&new_id).await; // Ignore error
         for e in self.entries.values_mut() {
-            let _ = EntryWriter::new(&self.app, e).set_match(&new_id, 4).await;
+            let _ = EntryWriter::new(self.app.as_ref(), e).set_match(&new_id, 4).await;
         }
         Ok(item)
     }
