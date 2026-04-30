@@ -1,7 +1,7 @@
 use crate::{
     app_state::{AppContext, AppState},
     entry::{Entry, EntryWriter},
-    wikidata::Wikidata,
+    wikidata_writer::WikidataWriter,
 };
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
@@ -11,17 +11,18 @@ use wikimisc::wikibase::ItemEntity;
 #[derive(Debug)]
 pub struct ItemCreator {
     app: Arc<dyn AppContext>,
-    /// Owned Wikidata writer session — independent of `app.wikidata()`.
-    /// Per-struct ownership lets us issue mutating API calls without
-    /// needing `&mut` on the shared `AppContext`. See `audits/STATUS.md`
-    /// item #7 for the rationale.
-    wikidata: Wikidata,
+    /// Wikidata write session. Production code holds a real `Wikidata`
+    /// (boxed); tests substitute `MockWikidataWriter` via `new_with_writer`.
+    wikidata: Box<dyn WikidataWriter>,
     entries: HashMap<usize, Entry>,
 }
 
 impl ItemCreator {
     pub fn new(app: &AppState) -> Self {
-        let wikidata = app.wikidata().clone();
+        Self::new_with_writer(app, Box::new(app.wikidata().clone()))
+    }
+
+    pub(crate) fn new_with_writer(app: &AppState, wikidata: Box<dyn WikidataWriter>) -> Self {
         let app: Arc<dyn AppContext> = Arc::new(app.clone());
         Self {
             app,
@@ -155,6 +156,7 @@ impl ItemCreator {
 mod tests {
     use super::*;
     use crate::app_state::get_test_app;
+    use crate::wikidata_writer::MockWikidataWriter;
     use wikimisc::wikibase::{EntityTrait, LocaleString};
 
     #[tokio::test]
@@ -174,5 +176,38 @@ mod tests {
             1
         );
         assert_eq!(*item.labels(), [LocaleString::new("mul", "Fritz Koch")]);
+    }
+
+    #[tokio::test]
+    async fn test_new_with_writer_stores_mock_and_as_any_works() {
+        let app = get_test_app();
+        let mut ic = ItemCreator::new_with_writer(&app, Box::new(MockWikidataWriter::new()));
+        // No entries → errors before any writer calls.
+        let err = ic.create_and_match_item().await.unwrap_err();
+        assert!(err.to_string().contains("No entries"));
+        // Downcast must succeed and no calls should have been recorded.
+        let mock = ic.wikidata
+            .as_any()
+            .downcast_ref::<MockWikidataWriter>()
+            .expect("downcast to MockWikidataWriter should succeed");
+        assert_eq!(mock.create_calls.len(), 0);
+        assert_eq!(mock.ac2wd_calls.len(), 0);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
+    async fn test_create_and_match_item_calls_writer() {
+        let app = get_test_app();
+        let mut mock = MockWikidataWriter::new();
+        mock.next_qid = Some("Q-MOCK-ITEM".to_string());
+        let mut ic = ItemCreator::new_with_writer(&app, Box::new(mock));
+        ic.add_entries_by_id(&[170955005]).await.unwrap();
+        ic.create_and_match_item().await.unwrap();
+        let mock = ic.wikidata
+            .as_any()
+            .downcast_ref::<MockWikidataWriter>()
+            .expect("should be MockWikidataWriter");
+        assert_eq!(mock.create_calls.len(), 1, "create_new_wikidata_item called once");
+        assert_eq!(mock.ac2wd_calls, vec!["Q-MOCK-ITEM"], "perform_ac2wd called with the new QID");
     }
 }

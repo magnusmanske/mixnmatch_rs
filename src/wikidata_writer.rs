@@ -33,7 +33,7 @@ use wikimisc::wikibase::EntityTrait;
 /// Bot-write surface of Wikidata. Implemented by [`Wikidata`] for
 /// production and by `MockWikidataWriter` (test-only) for unit tests.
 #[async_trait]
-pub trait WikidataWriter: std::fmt::Debug + Send + Sync {
+pub trait WikidataWriter: std::fmt::Debug + Send + Sync + 'static {
     /// Send a batch of structured edits (claim adds, removes, etc.) to Wikidata.
     async fn execute_commands(&mut self, commands: Vec<WikidataCommand>) -> Result<()>;
 
@@ -58,6 +58,10 @@ pub trait WikidataWriter: std::fmt::Debug + Send + Sync {
     /// `https://ac2wd.toolforge.org/extend/{q}` and applies the returned
     /// patch to the existing item via `wbeditentity`.
     async fn perform_ac2wd(&mut self, q: &str) -> Result<String>;
+
+    /// Enables downcasting to the concrete type in test code.
+    /// Not intended for production use.
+    fn as_any(&self) -> &dyn std::any::Any;
 }
 
 #[async_trait]
@@ -88,6 +92,10 @@ impl WikidataWriter for Wikidata {
 
     async fn perform_ac2wd(&mut self, q: &str) -> Result<String> {
         Wikidata::perform_ac2wd(self, q).await
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 
@@ -179,6 +187,10 @@ impl WikidataWriter for MockWikidataWriter {
         }
         self.ac2wd_calls.push(q.to_string());
         Ok(self.take_qid())
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 

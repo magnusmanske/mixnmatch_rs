@@ -21,8 +21,8 @@ use crate::coordinates::CoordinateLocation;
 use crate::job::Job;
 use crate::job::Jobbable;
 use crate::util::wikidata_props as wp;
-use crate::wikidata::Wikidata;
 use crate::wikidata_commands::WikidataCommandValue;
+use crate::wikidata_writer::WikidataWriter;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::error::Error;
@@ -139,9 +139,9 @@ pub struct AuxiliaryMatcher {
     pub(super) properties_that_have_external_ids: Vec<String>,
     pub(super) properties_with_coordinates: Vec<String>,
     pub(super) app: Arc<dyn AppContext>,
-    /// Owned Wikidata writer session — see `ItemCreator::wikidata` for
-    /// the rationale.
-    pub(super) wikidata: Wikidata,
+    /// Wikidata write session. Production code holds a real `Wikidata`
+    /// (boxed); tests substitute `MockWikidataWriter` via `new_with_writer`.
+    pub(super) wikidata: Box<dyn WikidataWriter>,
     pub(super) catalogs: HashMap<usize, Option<Catalog>>,
     pub(super) properties: EntityContainer,
     pub(super) aux2wd_skip_existing_property: bool,
@@ -166,7 +166,10 @@ impl Jobbable for AuxiliaryMatcher {
 impl AuxiliaryMatcher {
     //TODO test
     pub fn new(app: &AppState) -> Self {
-        let wikidata = app.wikidata().clone();
+        Self::new_with_writer(app, Box::new(app.wikidata().clone()))
+    }
+
+    pub(crate) fn new_with_writer(app: &AppState, wikidata: Box<dyn WikidataWriter>) -> Self {
         let app: Arc<dyn AppContext> = Arc::new(app.clone());
         Self {
             properties_using_items: vec![],
@@ -320,6 +323,18 @@ mod tests {
         ew.set_auxiliary(214, None).await.unwrap();
         ew.set_auxiliary(370, None).await.unwrap();
         ew.unmatch().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_new_with_writer_and_as_any() {
+        use crate::wikidata_writer::MockWikidataWriter;
+        let app = get_test_app();
+        let am = AuxiliaryMatcher::new_with_writer(&app, Box::new(MockWikidataWriter::new()));
+        // Verify the mock is stored and accessible via as_any.
+        am.wikidata
+            .as_any()
+            .downcast_ref::<MockWikidataWriter>()
+            .expect("downcast to MockWikidataWriter should succeed");
     }
 
     #[tokio::test]
