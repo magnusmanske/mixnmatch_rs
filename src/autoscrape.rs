@@ -678,9 +678,8 @@ fn json_flag(v: Option<&Value>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{app_state::get_test_app, autoscrape_levels::AutoscrapeRange};
+    use crate::autoscrape_levels::AutoscrapeRange;
 
-    const TEST_CATALOG_ID: usize = 91; //5526 ;
     const _TEST_ENTRY_ID: usize = 143962196;
     const _TEST_ITEM_ID: usize = 13520818; // Q13520818
 

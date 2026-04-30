@@ -728,18 +728,18 @@ mod tests {
     #[test]
     fn string_url_snak_rejects_novalue_and_wrong_datatype() {
         // novalue snak — no URL to act on.
-        let snak = json!({"snaktype": "novalue", "property": "P854"});
-        assert!(StringUrlSnak::from_json(&snak).is_none());
+        let snak_novalue = json!({"snaktype": "novalue", "property": "P854"});
+        assert!(StringUrlSnak::from_json(&snak_novalue).is_none());
         // value snak with non-string datavalue — also unactionable.
-        let snak = json!({
+        let snak_entity_value = json!({
             "snaktype": "value",
             "property": "P854",
             "datavalue": {"type": "wikibase-entityid", "value": {"id": "Q1"}},
         });
-        assert!(StringUrlSnak::from_json(&snak).is_none());
+        assert!(StringUrlSnak::from_json(&snak_entity_value).is_none());
         // missing datavalue — malformed.
-        let snak = json!({"snaktype": "value", "property": "P854"});
-        assert!(StringUrlSnak::from_json(&snak).is_none());
+        let snak_missing_dv = json!({"snaktype": "value", "property": "P854"});
+        assert!(StringUrlSnak::from_json(&snak_missing_dv).is_none());
     }
 
     #[test]

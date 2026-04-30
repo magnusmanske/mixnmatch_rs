@@ -186,7 +186,9 @@ impl AuxiliaryMatcher {
     }
 
     //TODO test
-    pub(super) async fn get_properties_using_items(app: &dyn WikidataContext) -> Result<Vec<String>> {
+    pub(super) async fn get_properties_using_items(
+        app: &dyn WikidataContext,
+    ) -> Result<Vec<String>> {
         let mw_api = app.wikidata().get_mw_api().await?;
         let sparql = "SELECT ?p WHERE { ?p rdf:type wikibase:Property; wikibase:propertyType wikibase:WikibaseItem }";
         let sparql_results = mw_api.sparql_query(sparql).await?;
@@ -231,8 +233,8 @@ mod tests {
         entry::{Entry, EntryWriter},
         test_support,
     };
-    use wiremock::{Mock, MockServer, ResponseTemplate};
     use wiremock::matchers::{method, path, query_param_contains};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     const TEST_ITEM_ID: usize = 13520818; // Q13520818
 
@@ -242,31 +244,45 @@ mod tests {
     #[tokio::test]
     async fn test_is_statement_in_entity() {
         let server = MockServer::start().await;
-        Mock::given(method("GET")).and(query_param_contains("action", "query"))
+        Mock::given(method("GET"))
+            .and(query_param_contains("action", "query"))
             .respond_with(ResponseTemplate::new(200).set_body_string(SITEINFO_JSON))
-            .mount(&server).await;
-        Mock::given(method("GET")).and(query_param_contains("action", "wbgetentities"))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(query_param_contains("action", "wbgetentities"))
             .respond_with(ResponseTemplate::new(200).set_body_string(Q13520818_JSON))
-            .mount(&server).await;
+            .mount(&server)
+            .await;
         let api_url = format!("{}/w/api.php", server.uri());
         let app = test_support::test_app_with_wikidata_api_url(&api_url).await;
         let mw_api = app.wikidata().get_mw_api().await.unwrap();
         let entities = EntityContainer::new();
         let entity = entities.load_entity(&mw_api, "Q13520818").await.unwrap();
-        assert!(AuxiliaryMatcher::is_statement_in_entity(&entity, "P31", "Q5"));
-        assert!(AuxiliaryMatcher::is_statement_in_entity(&entity, "P214", "30701597"));
-        assert!(!AuxiliaryMatcher::is_statement_in_entity(&entity, "P214", "30701596"));
+        assert!(AuxiliaryMatcher::is_statement_in_entity(
+            &entity, "P31", "Q5"
+        ));
+        assert!(AuxiliaryMatcher::is_statement_in_entity(
+            &entity, "P214", "30701597"
+        ));
+        assert!(!AuxiliaryMatcher::is_statement_in_entity(
+            &entity, "P214", "30701596"
+        ));
     }
 
     #[tokio::test]
     async fn test_entity_already_has_property() {
         let server = MockServer::start().await;
-        Mock::given(method("GET")).and(query_param_contains("action", "query"))
+        Mock::given(method("GET"))
+            .and(query_param_contains("action", "query"))
             .respond_with(ResponseTemplate::new(200).set_body_string(SITEINFO_JSON))
-            .mount(&server).await;
-        Mock::given(method("GET")).and(query_param_contains("action", "wbgetentities"))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(query_param_contains("action", "wbgetentities"))
             .respond_with(ResponseTemplate::new(200).set_body_string(Q13520818_JSON))
-            .mount(&server).await;
+            .mount(&server)
+            .await;
         let api_url = format!("{}/w/api.php", server.uri());
         let app = test_support::test_app_with_wikidata_api_url(&api_url).await;
         let mw_api = app.wikidata().get_mw_api().await.unwrap();
@@ -317,11 +333,13 @@ mod tests {
         Mock::given(method("GET"))
             .and(query_param_contains("action", "query"))
             .respond_with(ResponseTemplate::new(200).set_body_string(&siteinfo))
-            .mount(&server).await;
+            .mount(&server)
+            .await;
         Mock::given(method("GET"))
             .and(query_param_contains("action", "wbgetentities"))
             .respond_with(ResponseTemplate::new(200).set_body_string(Q13520818_JSON))
-            .mount(&server).await;
+            .mount(&server)
+            .await;
         // Both get_properties_using_items and get_properties_that_have_external_ids
         // POST here. Empty bindings → both lists stay empty, which is fine: the
         // P214 in_wikidata path depends on entity_already_has_property, not SPARQL.
@@ -329,7 +347,8 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/sparql"))
             .respond_with(ResponseTemplate::new(200).set_body_string(empty_sparql))
-            .mount(&server).await;
+            .mount(&server)
+            .await;
 
         let api_url = format!("{}/w/api.php", server.uri());
         let app = test_support::test_app_with_wikidata_api_url(&api_url).await;
@@ -339,8 +358,12 @@ mod tests {
         {
             let mut ew = EntryWriter::new(&app, &mut entry);
             ew.set_match("Q13520818", 2).await.unwrap();
-            ew.set_auxiliary(214, Some("30701597".to_string())).await.unwrap();
-            ew.set_auxiliary(370, Some("foobar".to_string())).await.unwrap();
+            ew.set_auxiliary(214, Some("30701597".to_string()))
+                .await
+                .unwrap();
+            ew.set_auxiliary(370, Some("foobar".to_string()))
+                .await
+                .unwrap();
         }
 
         let mut am = AuxiliaryMatcher::new_with_writer(&app, Box::new(MockWikidataWriter::new()));
@@ -348,12 +371,18 @@ mod tests {
 
         // P214=30701597 is already in Q13520818 → entity_already_has_property marks it
         // P370=foobar is absent from the entity → in_wikidata stays false
-        let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
-        let aux = EntryWriter::new(&app, &mut entry).get_aux().await.unwrap();
-        assert!(aux.iter().any(|x| x.prop_numeric() == 214 && x.in_wikidata()),
-            "P214 should be marked in_wikidata after entity check");
-        assert!(aux.iter().any(|x| x.prop_numeric() == 370 && !x.in_wikidata()),
-            "P370 should not be marked in_wikidata (absent from entity)");
+        let mut entry_after = Entry::from_id(entry_id, &app).await.unwrap();
+        let aux = EntryWriter::new(&app, &mut entry_after).get_aux().await.unwrap();
+        assert!(
+            aux.iter()
+                .any(|x| x.prop_numeric() == 214 && x.in_wikidata()),
+            "P214 should be marked in_wikidata after entity check"
+        );
+        assert!(
+            aux.iter()
+                .any(|x| x.prop_numeric() == 370 && !x.in_wikidata()),
+            "P370 should not be marked in_wikidata (absent from entity)"
+        );
     }
 
     #[tokio::test]

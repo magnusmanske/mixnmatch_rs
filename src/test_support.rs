@@ -318,19 +318,19 @@ pub async fn seed_wbt_label(item_id: u64, name: &str) -> Result<()> {
         .with(params! { "id" => wbx_id })
         .ignore(&mut conn)
         .await?;
-    let wbxl_id: u64 =
+    let text_in_lang_id: u64 =
         "SELECT wbxl_id FROM wbt_text_in_lang WHERE wbxl_text_id=:id AND wbxl_language='en'"
             .with(params! { "id" => wbx_id })
             .first(&mut conn)
             .await?
             .expect("wbxl_id must exist");
     "INSERT IGNORE INTO wbt_term_in_lang (wbtl_text_in_lang_id) VALUES (:id)"
-        .with(params! { "id" => wbxl_id })
+        .with(params! { "id" => text_in_lang_id })
         .ignore(&mut conn)
         .await?;
     let wbtl_id: u64 =
         "SELECT wbtl_id FROM wbt_term_in_lang WHERE wbtl_text_in_lang_id=:id"
-            .with(params! { "id" => wbxl_id })
+            .with(params! { "id" => text_in_lang_id })
             .first(&mut conn)
             .await?
             .expect("wbtl_id must exist");

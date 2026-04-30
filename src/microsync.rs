@@ -783,12 +783,12 @@ mod tests {
         let mock = Box::new(MockWikidataWriter::new());
         let mut ms = Microsync::new_with_writer(&app, mock);
         ms.update_wiki_page(42, "hello world").await.unwrap();
-        let mock = ms.wikidata
+        let mock_ref = ms.wikidata
             .as_any()
             .downcast_ref::<MockWikidataWriter>()
             .expect("should be MockWikidataWriter");
-        assert_eq!(mock.set_wikipage_calls.len(), 1);
-        let (title, wikitext, _comment) = &mock.set_wikipage_calls[0];
+        assert_eq!(mock_ref.set_wikipage_calls.len(), 1);
+        let (title, wikitext, _comment) = &mock_ref.set_wikipage_calls[0];
         assert!(title.contains("42"), "title should contain catalog id");
         assert_eq!(wikitext, "hello world");
     }

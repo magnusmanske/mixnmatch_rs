@@ -242,8 +242,8 @@ mod tests {
         test_support::seed_wdt_redirect("Q85756032", "Q3819700").await.unwrap();
         let ms = Maintenance::new(&app);
         ms.fix_redirects(catalog_id, &MatchState::fully_matched()).await.unwrap();
-        let entry = Entry::from_id(entry_id, &app).await.unwrap();
-        assert_eq!(entry.q, Some(3819700));
+        let entry_after = Entry::from_id(entry_id, &app).await.unwrap();
+        assert_eq!(entry_after.q, Some(3819700));
     }
 
     #[tokio::test]
@@ -255,8 +255,8 @@ mod tests {
         // Q115205673 intentionally not seeded in `page` → treated as deleted
         let ms = Maintenance::new(&app);
         ms.unlink_deleted_items(catalog_id, &MatchState::fully_matched()).await.unwrap();
-        let entry = Entry::from_id(entry_id, &app).await.unwrap();
-        assert_eq!(entry.q, None);
+        let entry_after = Entry::from_id(entry_id, &app).await.unwrap();
+        assert_eq!(entry_after.q, None);
     }
 
     #[tokio::test]
