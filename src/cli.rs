@@ -567,7 +567,7 @@ impl ShellCommands {
                 no_blank_entries,
             }) => {
                 let app = Self::path2app(config)?;
-                let merger = crate::catalog_merger::CatalogMerger::new(app);
+                let merger = crate::catalog_merger::CatalogMerger::new(&app);
                 let stats = merger.merge(*source, *target, !*no_blank_entries).await?;
                 println!("merge {source} -> {target}: {stats}");
             }
@@ -591,7 +591,7 @@ impl ShellCommands {
             }
             Some(Commands::MigrateCatalogProperty { config, old, new }) => {
                 let app = Self::path2app(config)?;
-                let merger = crate::catalog_merger::CatalogMerger::new(app);
+                let merger = crate::catalog_merger::CatalogMerger::new(&app);
                 let stats = merger.migrate_property(*old, *new).await?;
                 println!("migrate-catalog-property {old} -> {new}: {stats}");
             }

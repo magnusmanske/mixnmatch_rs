@@ -24,14 +24,14 @@
 //! two share the storage layer but have separate pipelines because
 //! they answer different questions.
 
-use crate::app_state::{AppState, USER_AUTO};
+use crate::app_state::{AppContext, AppState, USER_AUTO};
 use crate::catalog::Catalog;
 use crate::entry::{Entry, EntryWriter};
 use crate::storage::GroupedEntry;
 use anyhow::{Result, anyhow};
 use log::{info, warn};
 use std::collections::{HashMap, HashSet};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 /// What the merge pipeline did, suitable for one-line CLI / log output.
 #[derive(Debug, Default, Clone, Copy)]
@@ -59,11 +59,12 @@ impl std::fmt::Display for MergeStats {
 
 #[derive(Debug)]
 pub struct CatalogMerger {
-    app: AppState,
+    app: Arc<dyn AppContext>,
 }
 
 impl CatalogMerger {
-    pub fn new(app: AppState) -> Self {
+    pub fn new(app: &AppState) -> Self {
+        let app: Arc<dyn AppContext> = Arc::new(app.clone());
         Self { app }
     }
 
@@ -99,7 +100,7 @@ impl CatalogMerger {
         // contract is "after this, only the target receives new work";
         // leaving the source active would invite new entries that the
         // target wouldn't see.
-        self.app.storage().catalog_set_active(source, false).await?;
+        self.app.as_ref().storage().catalog_set_active(source, false).await?;
         info!(
             "catalog_merger: merged {source} into {target} ({stats}); source deactivated"
         );
@@ -110,6 +111,7 @@ impl CatalogMerger {
     async fn copy_missing_entries(&self, source: usize, target: usize) -> Result<usize> {
         let added = self
             .app
+            .as_ref()
             .storage()
             .entry_copy_missing_to_catalog(source, target)
             .await?;
@@ -119,6 +121,7 @@ impl CatalogMerger {
         // merger is run interactively and operators expect the page to
         // be correct on the next refresh.
         self.app
+            .as_ref()
             .storage()
             .overview_increment_noq(target, added)
             .await?;
@@ -128,6 +131,7 @@ impl CatalogMerger {
     async fn port_matches(&self, source: usize, target: usize) -> Result<(usize, usize)> {
         let candidates = self
             .app
+            .as_ref()
             .storage()
             .entry_get_mergeable_matches(source, target)
             .await?;
@@ -143,7 +147,7 @@ impl CatalogMerger {
             // get touched correctly — bypassing them here would
             // re-introduce the same drift that wd_match_sync was
             // designed to clean up.
-            let mut target_entry = match Entry::from_id(cand.target_entry_id, &self.app).await {
+            let mut target_entry = match Entry::from_id(cand.target_entry_id, self.app.as_ref()).await {
                 Ok(e) => e,
                 Err(e) => {
                     warn!(
@@ -155,7 +159,7 @@ impl CatalogMerger {
                 }
             };
             let q = format!("Q{}", cand.source_q);
-            if let Err(e) = EntryWriter::new(&self.app, &mut target_entry).set_match(&q, cand.source_user).await {
+            if let Err(e) = EntryWriter::new(self.app.as_ref(), &mut target_entry).set_match(&q, cand.source_user).await {
                 warn!(
                     "catalog_merger: set_match failed for entry {} -> {q}: {e}",
                     cand.target_entry_id
@@ -170,6 +174,7 @@ impl CatalogMerger {
             if let Some(ts) = cand.source_timestamp.as_deref() {
                 if let Err(e) = self
                     .app
+                    .as_ref()
                     .storage()
                     .entry_force_timestamp(cand.target_entry_id, ts)
                     .await
@@ -263,8 +268,8 @@ impl CatalogMerger {
         // at `old.wd_prop` first, then fell back to `new.wd_prop`; we
         // keep that order — if the migration happened mid-rebadge the
         // new catalog might not have the property set yet.
-        let old_cat = Catalog::from_id(old, &self.app).await?;
-        let new_cat = Catalog::from_id(new, &self.app).await?;
+        let old_cat = Catalog::from_id(old, self.app.as_ref()).await?;
+        let new_cat = Catalog::from_id(new, self.app.as_ref()).await?;
         let property = old_cat
             .wd_prop()
             .or_else(|| new_cat.wd_prop())
@@ -274,7 +279,7 @@ impl CatalogMerger {
         info!("migrate_property: anchoring on P{property}");
 
         let synced = old_cat
-            .sync_from_sparql(&self.app, property)
+            .sync_from_sparql(self.app.as_ref(), property)
             .await
             .unwrap_or_else(|e| {
                 // Failure here is recoverable: we just skip the
@@ -288,10 +293,10 @@ impl CatalogMerger {
         }
 
         let old_groups = group_by_ext_name(
-            self.app.storage().entry_load_for_migration(old).await?,
+            self.app.as_ref().storage().entry_load_for_migration(old).await?,
         );
         let new_groups = group_by_ext_name(
-            self.app.storage().entry_load_for_migration(new).await?,
+            self.app.as_ref().storage().entry_load_for_migration(new).await?,
         );
 
         let mut used_qs: HashSet<isize> = new_groups
@@ -319,7 +324,7 @@ impl CatalogMerger {
         // matches in `new` after the migration. Not an error — the
         // duplicates may be entirely legitimate — but the operator
         // wants to see them.
-        match self.app.storage().entry_get_duplicate_qs_in_catalog(new).await {
+        match self.app.as_ref().storage().entry_get_duplicate_qs_in_catalog(new).await {
             Ok(dupes) if !dupes.is_empty() => {
                 warn!(
                     "migrate_property: {} Q value(s) used twice in manual matches on \
@@ -408,7 +413,7 @@ impl CatalogMerger {
         decision: MigrationDecision,
         stats: &mut MigrationStats,
     ) {
-        let mut entry = match Entry::from_id(decision.target_entry_id, &self.app).await {
+        let mut entry = match Entry::from_id(decision.target_entry_id, self.app.as_ref()).await {
             Ok(e) => e,
             Err(e) => {
                 warn!(
@@ -420,7 +425,7 @@ impl CatalogMerger {
             }
         };
         let q_str = format!("Q{}", decision.q);
-        if let Err(e) = EntryWriter::new(&self.app, &mut entry).set_match(&q_str, decision.user).await {
+        if let Err(e) = EntryWriter::new(self.app.as_ref(), &mut entry).set_match(&q_str, decision.user).await {
             warn!(
                 "migrate_property: set_match failed for entry {} -> {q_str}: {e}",
                 decision.target_entry_id
@@ -484,7 +489,7 @@ mod tests {
     #[tokio::test]
     async fn merge_rejects_self_merge() {
         let app = get_test_app();
-        let m = CatalogMerger::new(app);
+        let m = CatalogMerger::new(&app);
         let err = m.merge(42, 42, true).await.unwrap_err().to_string();
         assert!(err.contains("must differ"), "err was: {err}");
     }
@@ -492,7 +497,7 @@ mod tests {
     #[tokio::test]
     async fn merge_rejects_zero_source() {
         let app = get_test_app();
-        let m = CatalogMerger::new(app);
+        let m = CatalogMerger::new(&app);
         let err = m.merge(0, 5, true).await.unwrap_err().to_string();
         assert!(err.contains("must be positive"), "err was: {err}");
     }
@@ -500,7 +505,7 @@ mod tests {
     #[tokio::test]
     async fn merge_rejects_zero_target() {
         let app = get_test_app();
-        let m = CatalogMerger::new(app);
+        let m = CatalogMerger::new(&app);
         let err = m.merge(5, 0, true).await.unwrap_err().to_string();
         assert!(err.contains("must be positive"), "err was: {err}");
     }
@@ -508,7 +513,7 @@ mod tests {
     #[tokio::test]
     async fn migrate_property_rejects_self_migration() {
         let app = get_test_app();
-        let m = CatalogMerger::new(app);
+        let m = CatalogMerger::new(&app);
         let err = m.migrate_property(7, 7).await.unwrap_err().to_string();
         assert!(err.contains("must differ"), "err was: {err}");
     }
@@ -516,7 +521,7 @@ mod tests {
     #[tokio::test]
     async fn migrate_property_rejects_zero_ids() {
         let app = get_test_app();
-        let m = CatalogMerger::new(app);
+        let m = CatalogMerger::new(&app);
         assert!(m.migrate_property(0, 5).await.is_err());
         assert!(m.migrate_property(5, 0).await.is_err());
     }

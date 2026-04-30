@@ -35,11 +35,12 @@ pub use crate::storage::{
     ResultInOtherCatalog,
 };
 
-use crate::app_state::AppState;
+use crate::app_state::{AppContext, AppState};
 use crate::job::Job;
 use crate::job::Jobbable;
 use lazy_static::lazy_static;
 use regex::Regex;
+use std::sync::Arc;
 
 lazy_static! {
     pub(super) static ref RE_YEAR: Regex = Regex::new(r"(\d{3,4})").expect("Regexp error");
@@ -81,7 +82,7 @@ impl CandidateDates {
 
 #[derive(Debug, Clone)]
 pub struct AutoMatch {
-    pub(super) app: AppState,
+    pub(super) app: Arc<dyn AppContext>,
     pub(super) job: Option<Job>,
 }
 
@@ -101,8 +102,9 @@ impl Jobbable for AutoMatch {
 
 impl AutoMatch {
     pub fn new(app: &AppState) -> Self {
+        let app: Arc<dyn AppContext> = Arc::new(app.clone());
         Self {
-            app: app.clone(),
+            app,
             job: None,
         }
     }

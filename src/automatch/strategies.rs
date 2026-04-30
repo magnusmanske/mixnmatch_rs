@@ -30,8 +30,8 @@ impl AutoMatch {
     }
 
     pub async fn automatch_with_sparql(&mut self, catalog_id: usize) -> Result<()> {
-        let catalog = Catalog::from_id(catalog_id, &self.app).await?;
-        let sparql = Self::read_automatch_sparql(&catalog, &self.app).await?;
+        let catalog = Catalog::from_id(catalog_id, self.app.as_ref()).await?;
+        let sparql = Self::read_automatch_sparql(&catalog, self.app.as_ref()).await?;
 
         // Try the unbatched query first — fast path when WDQS is healthy
         // and the result is small enough to stream. If the streaming query
@@ -52,7 +52,7 @@ impl AutoMatch {
     /// Pull the user-supplied SPARQL fragment out of the catalog's kv_pairs
     /// and shape it into a complete `SELECT ?q ?qLabel WHERE { ... }` query
     /// when the user only supplied the WHERE body.
-    async fn read_automatch_sparql(catalog: &Catalog, app: &crate::app_state::AppState) -> Result<String> {
+    async fn read_automatch_sparql(catalog: &Catalog, app: &dyn crate::app_state::AppContext) -> Result<String> {
         let kv_pairs = catalog.get_key_value_pairs(app).await?;
         let sparql_part = kv_pairs
             .get("automatch_sparql")
@@ -160,7 +160,7 @@ impl AutoMatch {
             let mut entry_batch = self.app.storage().entry_query(&query).await?;
             for entry in &mut entry_batch {
                 if let Some(q) = label2q.get(&entry.ext_name.to_lowercase()) {
-                    let _ = EntryWriter::new(&self.app, entry)
+                    let _ = EntryWriter::new(self.app.as_ref(), entry)
                         .set_match(&format!("Q{q}"), USER_AUTO)
                         .await;
                 }
@@ -174,7 +174,7 @@ impl AutoMatch {
     }
 
     pub async fn automatch_by_sitelink(&mut self, catalog_id: usize) -> Result<()> {
-        let catalog = Catalog::from_id(catalog_id, &self.app).await?;
+        let catalog = Catalog::from_id(catalog_id, self.app.as_ref()).await?;
         let language = catalog.search_wp();
         let site = format!("{}wiki", &language);
         let mut offset = self.get_last_job_offset().await;
@@ -212,8 +212,8 @@ impl AutoMatch {
         for (q, title) in wd_matches {
             if let Some(v) = name2entries.get(&title) {
                 for entry_id in v {
-                    if let Ok(mut entry) = Entry::from_id(*entry_id, &self.app).await {
-                        let _ = EntryWriter::new(&self.app, &mut entry)
+                    if let Ok(mut entry) = Entry::from_id(*entry_id, self.app.as_ref()).await {
+                        let _ = EntryWriter::new(self.app.as_ref(), &mut entry)
                             .set_match(&format!("Q{q}"), USER_AUTO)
                             .await;
                     }
@@ -271,14 +271,14 @@ impl AutoMatch {
         entry_id2items: &HashMap<usize, Vec<String>>,
     ) -> Result<()> {
         let entry_ids: Vec<usize> = entry_id2items.keys().copied().collect();
-        let mut entries = Entry::multiple_from_ids(&entry_ids, &self.app).await?;
+        let mut entries = Entry::multiple_from_ids(&entry_ids, self.app.as_ref()).await?;
 
         for (entry_id, entry) in &mut entries {
             let items = match entry_id2items.get(entry_id) {
                 Some(items) => items,
                 None => continue,
             };
-            let _ = EntryWriter::new(&self.app, entry)
+            let _ = EntryWriter::new(self.app.as_ref(), entry)
                 .set_auto_and_multi_match(items)
                 .await;
         }
@@ -415,8 +415,8 @@ impl AutoMatch {
             if items.is_empty() {
                 continue;
             }
-            if let Ok(mut entry) = Entry::from_id(object_entry_id, &self.app).await {
-                let _ = EntryWriter::new(&self.app, &mut entry)
+            if let Ok(mut entry) = Entry::from_id(object_entry_id, self.app.as_ref()).await {
+                let _ = EntryWriter::new(self.app.as_ref(), &mut entry)
                     .set_auto_and_multi_match(&items)
                     .await;
             };
@@ -458,11 +458,11 @@ impl AutoMatch {
         if items.is_empty() {
             return;
         }
-        let mut entry = match Entry::from_id(entry_id, &self.app).await {
+        let mut entry = match Entry::from_id(entry_id, self.app.as_ref()).await {
             Ok(entry) => entry,
             _ => return, // Ignore error
         };
-        let _ = EntryWriter::new(&self.app, &mut entry)
+        let _ = EntryWriter::new(self.app.as_ref(), &mut entry)
             .set_auto_and_multi_match(&items)
             .await;
     }
@@ -552,8 +552,8 @@ impl AutoMatch {
         let key = (r.ext_name.to_owned(), r.type_name.to_owned());
         if let Some(v) = name_type2id.get(&key) {
             for entry_id in v {
-                if let Ok(mut entry) = Entry::from_id(*entry_id, &self.app).await {
-                    let _ = EntryWriter::new(&self.app, &mut entry)
+                if let Ok(mut entry) = Entry::from_id(*entry_id, self.app.as_ref()).await {
+                    let _ = EntryWriter::new(self.app.as_ref(), &mut entry)
                         .set_match(&q, USER_AUTO)
                         .await;
                 };
@@ -612,11 +612,11 @@ impl AutoMatch {
                 match items.len() {
                     0 => {
                         if !entry.is_unmatched() {
-                            let _ = EntryWriter::new(&self.app, entry).unmatch().await;
+                            let _ = EntryWriter::new(self.app.as_ref(), entry).unmatch().await;
                         }
                     }
                     1 => {
-                        let _ = EntryWriter::new(&self.app, entry)
+                        let _ = EntryWriter::new(self.app.as_ref(), entry)
                             .set_match(&format!("{}", items[0]), USER_AUTO)
                             .await;
                     }
@@ -625,7 +625,7 @@ impl AutoMatch {
                             .iter()
                             .map(|q| format!("Q{q}"))
                             .collect::<Vec<String>>();
-                        let _ = EntryWriter::new(&self.app, entry)
+                        let _ = EntryWriter::new(self.app.as_ref(), entry)
                             .set_multi_match(&items)
                             .await;
                     }

@@ -7,9 +7,8 @@
 //! chains, location chains, free properties).
 
 use super::{AutoMatch, CandidateDates, PersonDateMatchRow, RE_YEAR};
-use crate::app_state::USER_DATE_MATCH;
+use crate::app_state::{AppContext, USER_DATE_MATCH};
 use crate::catalog::Catalog;
-use crate::app_state::AppState;
 use crate::entry::{Entry, EntryWriter};
 use crate::issue::Issue;
 use crate::issue::IssueType;
@@ -73,8 +72,8 @@ impl AutoMatch {
         match candidates.len() {
             0 => Ok(()),
             1 => {
-                let mut entry = Entry::from_id(entry_id, &self.app).await?;
-                let _ = EntryWriter::new(&self.app, &mut entry).set_match(&candidates[0], user_id).await?;
+                let mut entry = Entry::from_id(entry_id, self.app.as_ref()).await?;
+                let _ = EntryWriter::new(self.app.as_ref(), &mut entry).set_match(&candidates[0], user_id).await?;
                 Ok(())
             }
             _ => {
@@ -380,7 +379,7 @@ impl AutoMatch {
         let search_results = self.automatch_complex_batch_search(el_chunk).await?;
         let api = self.app.wikidata().get_mw_api().await?;
         let entry_ids = el_chunk.iter().map(|(entry_id, _)| *entry_id).collect_vec();
-        let mut entries = Entry::multiple_from_ids(&entry_ids, &self.app).await?;
+        let mut entries = Entry::multiple_from_ids(&entry_ids, self.app.as_ref()).await?;
 
         for sr in search_results.chunks(50) {
             let sr = sr.join(" wd:");
@@ -399,7 +398,7 @@ impl AutoMatch {
                     row,
                     el_chunk,
                     &mut entries,
-                    &self.app,
+                    self.app.as_ref(),
                 )
                 .await;
             }
@@ -429,7 +428,7 @@ impl AutoMatch {
     }
 
     async fn automatch_complex_get_sparql_parts(&self, catalog: &Catalog) -> Result<String> {
-        let key_value_pairs = catalog.get_key_value_pairs(&self.app).await?;
+        let key_value_pairs = catalog.get_key_value_pairs(self.app.as_ref()).await?;
         let property_roots = key_value_pairs
             .get("automatch_complex")
             .ok_or_else(|| anyhow!("No automatch_complex key in catalog"))?;
@@ -447,7 +446,7 @@ impl AutoMatch {
     }
 
     pub async fn automatch_complex(&mut self, catalog_id: usize) -> Result<()> {
-        let catalog = Catalog::from_id(catalog_id, &self.app).await?;
+        let catalog = Catalog::from_id(catalog_id, self.app.as_ref()).await?;
         let sparql_parts = self.automatch_complex_get_sparql_parts(&catalog).await?;
         let mut language = catalog.search_wp().to_string();
         if language.is_empty() {
@@ -485,7 +484,7 @@ impl AutoMatch {
         row: csv::StringRecord,
         el_chunk: &[(usize, String)],
         entries: &mut std::collections::HashMap<usize, Entry>,
-        app: &AppState,
+        app: &dyn AppContext,
     ) {
         let q = match api.extract_entity_from_uri(&row[0]) {
             Ok(q) => q,
