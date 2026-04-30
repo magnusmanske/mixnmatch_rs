@@ -57,6 +57,7 @@ pub mod scraper_5100;
 pub mod scraper_5103;
 pub mod scraper_53;
 pub mod scraper_5311;
+pub mod scraper_5335;
 pub mod scraper_5347;
 pub mod scraper_5522;
 pub mod scraper_6545;
@@ -104,6 +105,7 @@ pub use scraper_4966::BespokeScraper4966;
 pub use scraper_5100::BespokeScraper5100;
 pub use scraper_5103::BespokeScraper5103;
 pub use scraper_5311::BespokeScraper5311;
+pub use scraper_5335::BespokeScraper5335;
 pub use scraper_5347::BespokeScraper5347;
 pub use scraper_5522::BespokeScraper5522;
 pub use scraper_6545::BespokeScraper6545;
@@ -173,6 +175,7 @@ const SCRAPER_REGISTRY: &[(usize, ScraperRunFn)] = &[
     scraper_entry!(5100, BespokeScraper5100),
     scraper_entry!(5103, BespokeScraper5103),
     scraper_entry!(5311, BespokeScraper5311),
+    scraper_entry!(5335, BespokeScraper5335),
     scraper_entry!(5347, BespokeScraper5347),
     scraper_entry!(5522, BespokeScraper5522),
     scraper_entry!(6479, BespokeScraper6479),
