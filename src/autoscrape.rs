@@ -1,4 +1,4 @@
-use crate::app_state::AppState;
+use crate::app_state::{AppContext, AppState};
 use crate::autoscrape_levels::AutoscrapeLevel;
 use crate::autoscrape_resolve::RE_SIMPLE_SPACE;
 use crate::autoscrape_scraper::AutoscrapeScraper;
@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
+use std::sync::Arc;
 
 //pub type AutoscrapeRegex = fancy_regex::Regex;
 //pub type AutoscrapeRegexBuilder = fancy_regex::RegexBuilder;
@@ -105,7 +106,7 @@ pub struct Autoscrape {
     levels: Vec<AutoscrapeLevel>,
     scraper: AutoscrapeScraper,
     // None only for the test_fetch path, which never calls methods that need app.
-    app: Option<AppState>,
+    app: Option<Arc<dyn AppContext>>,
     job: Option<Job>,
     urls_loaded: usize,
     entry_batch: Vec<ExtendedEntry>,
@@ -143,8 +144,8 @@ impl Autoscrape {
         self.catalog_id
     }
 
-    fn app_ref(&self) -> &AppState {
-        self.app.as_ref().expect("Autoscrape: app accessed in context where it was not set (test_fetch path)")
+    fn app_ref(&self) -> &dyn AppContext {
+        self.app.as_ref().expect("Autoscrape: app accessed in context where it was not set (test_fetch path)").as_ref()
     }
 
     pub fn levels(&self) -> &[AutoscrapeLevel] {
@@ -312,7 +313,7 @@ impl Autoscrape {
             .iter()
             .map(|e| e.entry.ext_id.to_owned())
             .collect();
-        let app = self.app_ref().clone();
+        let app = Arc::clone(self.app.as_ref().expect("Autoscrape: app accessed in context where it was not set (test_fetch path)"));
         let existing_ext_ids = app
             .storage()
             .get_entry_ids_for_ext_ids(self.catalog_id, &ext_ids)
@@ -326,7 +327,7 @@ impl Autoscrape {
                     // TODO update?
                 }
                 None => {
-                    let _ = ex.insert_new(&app).await;
+                    let _ = ex.insert_new(app.as_ref()).await;
                 }
             }
         }
@@ -417,7 +418,7 @@ impl Autoscrape {
         let ret = Self {
             autoscrape_id: *id,
             catalog_id,
-            app: app.cloned(),
+            app: app.map(|a| Arc::new(a.clone()) as Arc<dyn AppContext>),
             simple_space: false,
             skip_failed: false,
             utf8_encode: false,
