@@ -15,17 +15,19 @@
 mod finder;
 mod sync;
 
-use crate::app_state::{AppState, WikidataContext};
+use crate::app_state::{AppContext, AppState, WikidataContext};
 use crate::catalog::Catalog;
 use crate::coordinates::CoordinateLocation;
 use crate::job::Job;
 use crate::job::Jobbable;
 use crate::util::wikidata_props as wp;
+use crate::wikidata::Wikidata;
 use crate::wikidata_commands::WikidataCommandValue;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
+use std::sync::Arc;
 use wikimisc::wikibase::Entity;
 use wikimisc::wikibase::Value;
 use wikimisc::wikibase::entity_container::EntityContainer;
@@ -136,7 +138,10 @@ pub struct AuxiliaryMatcher {
     pub(super) properties_using_items: Vec<String>,
     pub(super) properties_that_have_external_ids: Vec<String>,
     pub(super) properties_with_coordinates: Vec<String>,
-    pub(super) app: AppState,
+    pub(super) app: Arc<dyn AppContext>,
+    /// Owned Wikidata writer session — see `ItemCreator::wikidata` for
+    /// the rationale.
+    pub(super) wikidata: Wikidata,
     pub(super) catalogs: HashMap<usize, Option<Catalog>>,
     pub(super) properties: EntityContainer,
     pub(super) aux2wd_skip_existing_property: bool,
@@ -161,12 +166,15 @@ impl Jobbable for AuxiliaryMatcher {
 impl AuxiliaryMatcher {
     //TODO test
     pub fn new(app: &AppState) -> Self {
+        let wikidata = app.wikidata().clone();
+        let app: Arc<dyn AppContext> = Arc::new(app.clone());
         Self {
             properties_using_items: vec![],
             properties_that_have_external_ids: vec![],
             // TODO load dynamically like the ones above
             properties_with_coordinates: vec![wp::P_COORDINATES.to_string()],
-            app: app.clone(),
+            app,
+            wikidata,
             catalogs: HashMap::new(),
             properties: EntityContainer::new(),
             aux2wd_skip_existing_property: true,

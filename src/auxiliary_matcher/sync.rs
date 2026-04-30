@@ -33,9 +33,9 @@ impl AuxiliaryMatcher {
         if AUX_DO_NOT_SYNC_CATALOG_TO_WIKIDATA.contains(&catalog_id) {
             return Err(AuxiliaryMatcherError::BlacklistedCatalog.into());
         }
-        self.properties_using_items = Self::get_properties_using_items(&self.app).await?;
+        self.properties_using_items = Self::get_properties_using_items(self.app.as_ref()).await?;
         self.properties_that_have_external_ids =
-            Self::get_properties_that_have_external_ids(&self.app).await?;
+            Self::get_properties_that_have_external_ids(self.app.as_ref()).await?;
         let blacklisted_properties: Vec<String> = AUX_BLACKLISTED_PROPERTIES
             .iter()
             .map(|u| u.to_string())
@@ -89,7 +89,7 @@ impl AuxiliaryMatcher {
         for data in aux.values() {
             commands.append(&mut self.aux2wd_process_item(data, &sources, &entities).await);
         }
-        self.app.wikidata_mut().execute_commands(commands).await?;
+        self.wikidata.execute_commands(commands).await?;
         Ok(())
     }
 
@@ -126,8 +126,8 @@ impl AuxiliaryMatcher {
         }
         // Is that specific value in the entity?
         if Self::is_statement_in_entity(entity, &aux.prop(), &aux.value) {
-            if let Ok(mut entry) = Entry::from_id(aux.entry_id, &self.app).await {
-                let _ = EntryWriter::new(&self.app, &mut entry)
+            if let Ok(mut entry) = Entry::from_id(aux.entry_id, self.app.as_ref()).await {
+                let _ = EntryWriter::new(self.app.as_ref(), &mut entry)
                     .set_auxiliary_in_wikidata(aux.aux_id, true)
                     .await;
             };
@@ -254,8 +254,8 @@ impl AuxiliaryMatcher {
             std::cmp::Ordering::Less => {}
             std::cmp::Ordering::Equal => {
                 if search_results[0] == aux.q() {
-                    if let Ok(mut entry) = Entry::from_id(aux.entry_id, &self.app).await {
-                        let _ = EntryWriter::new(&self.app, &mut entry)
+                    if let Ok(mut entry) = Entry::from_id(aux.entry_id, self.app.as_ref()).await {
+                        let _ = EntryWriter::new(self.app.as_ref(), &mut entry)
                             .set_auxiliary_in_wikidata(aux.aux_id, true)
                             .await;
                     }
@@ -293,7 +293,7 @@ impl AuxiliaryMatcher {
         let mut sources: HashMap<String, WikidataCommandPropertyValueGroup> = HashMap::new();
 
         let entry_ids: Vec<usize> = results.iter().map(|r| r.entry_id).collect();
-        let entries = Entry::multiple_from_ids(&entry_ids, &self.app)
+        let entries = Entry::multiple_from_ids(&entry_ids, self.app.as_ref())
             .await
             .unwrap_or_default();
 
@@ -360,7 +360,7 @@ impl AuxiliaryMatcher {
     > {
         self.catalogs
             .entry(entry.catalog)
-            .or_insert(Catalog::from_id(entry.catalog, &self.app).await.ok());
+            .or_insert(Catalog::from_id(entry.catalog, self.app.as_ref()).await.ok());
         let catalog = match self.catalogs.get(&entry.catalog) {
             Some(catalog) => catalog,
             None => return Err(None), // No catalog, no source
