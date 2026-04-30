@@ -115,6 +115,7 @@ mod tests {
     use super::*;
     use crate::app_state::{TEST_MUTEX, USER_AUTO, USER_DATE_MATCH, get_test_app};
     use crate::entry::{Entry, EntryWriter};
+    use crate::test_support;
 
     const TEST_CATALOG_ID: usize = 5526;
     const TEST_ENTRY_ID: usize = 143962196;
@@ -205,39 +206,30 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore] // Requires database, must run single-threaded
     async fn test_purge_automatches() {
-        let _test_lock = TEST_MUTEX.lock();
-        let app = get_test_app();
+        let app = test_support::test_app().await;
+        let (catalog_id, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
 
-        // Set a full match
-        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+        // Set a full (manual) match
+        let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
         let mut ew = EntryWriter::new(&app, &mut entry);
-        ew.unmatch().await.unwrap();
         ew.set_match("Q1", 4).await.unwrap();
         assert!(entry.is_fully_matched());
 
-        // Purge catalog
-        let am2 = AutoMatch::new(&app);
-        am2.purge_automatches(TEST_CATALOG_ID).await.unwrap();
-
-        // Check that the entry is still fully matched
-        let entry2 = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+        // Purge catalog — full matches must survive
+        AutoMatch::new(&app).purge_automatches(catalog_id).await.unwrap();
+        let entry2 = Entry::from_id(entry_id, &app).await.unwrap();
         assert!(entry2.is_fully_matched());
 
-        // Set an automatch
-        let mut entry3 = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
-        let mut ew3 = EntryWriter::new(&app, &mut entry3);
-        ew3.unmatch().await.unwrap();
-        ew3.set_match("Q1", 0).await.unwrap();
+        // Switch to an automatch (user==0)
+        let mut entry3 = Entry::from_id(entry_id, &app).await.unwrap();
+        EntryWriter::new(&app, &mut entry3).unmatch().await.unwrap();
+        EntryWriter::new(&app, &mut entry3).set_match("Q1", 0).await.unwrap();
         assert!(entry3.is_partially_matched());
 
-        // Purge catalog
-        let am4 = AutoMatch::new(&app);
-        am4.purge_automatches(TEST_CATALOG_ID).await.unwrap();
-
-        // Check that the entry is now unmatched
-        let entry4 = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+        // Purge catalog — automatch must be removed
+        AutoMatch::new(&app).purge_automatches(catalog_id).await.unwrap();
+        let entry4 = Entry::from_id(entry_id, &app).await.unwrap();
         assert!(entry4.is_unmatched());
     }
 

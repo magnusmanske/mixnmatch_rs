@@ -166,12 +166,10 @@ mod tests {
     use super::*;
     use crate::match_state::MatchState;
     use crate::{
-        app_state::{TEST_MUTEX, get_test_app},
+        app_state::get_test_app,
+        test_support,
         entry::{Entry, EntryWriter},
     };
-
-    const TEST_CATALOG_ID: usize = 5526;
-    const TEST_ENTRY_ID: usize = 143962196;
 
     #[test]
     fn property_cache_row_parses_canonical_uris() {
@@ -224,62 +222,40 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_unlink_meta_items() {
-        let _test_lock = TEST_MUTEX.lock();
-        let app = get_test_app();
-
-        // Set a match to a disambiguation item
-        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
-        EntryWriter::new(&app, &mut entry)
-            .set_match("Q16456", 2)
-            .await
-            .unwrap();
-
-        // Remove matches to disambiguation items
+        let app = test_support::test_app().await;
+        let (catalog_id, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
+        let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
+        EntryWriter::new(&app, &mut entry).set_match("Q16456", 2).await.unwrap();
+        test_support::seed_wdt_meta_item_page("Q16456").await.unwrap();
         let maintenance = Maintenance::new(&app);
-        maintenance
-            .unlink_meta_items(TEST_CATALOG_ID, &MatchState::any_matched())
-            .await
-            .unwrap();
-
-        // Check that removal was successful
-        assert_eq!(Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap().q, None);
+        maintenance.unlink_meta_items(catalog_id, &MatchState::any_matched()).await.unwrap();
+        assert_eq!(Entry::from_id(entry_id, &app).await.unwrap().q, None);
     }
 
     #[tokio::test]
-    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_fix_redirects() {
-        let _test_lock = TEST_MUTEX.lock();
-        let app = get_test_app();
-        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
-        EntryWriter::new(&app, &mut entry)
-            .set_match("Q85756032", 2)
-            .await
-            .unwrap();
+        let app = test_support::test_app().await;
+        let (catalog_id, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
+        let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
+        EntryWriter::new(&app, &mut entry).set_match("Q85756032", 2).await.unwrap();
+        test_support::seed_wdt_redirect("Q85756032", "Q3819700").await.unwrap();
         let ms = Maintenance::new(&app);
-        ms.fix_redirects(TEST_CATALOG_ID, &MatchState::fully_matched())
-            .await
-            .unwrap();
-        let entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+        ms.fix_redirects(catalog_id, &MatchState::fully_matched()).await.unwrap();
+        let entry = Entry::from_id(entry_id, &app).await.unwrap();
         assert_eq!(entry.q, Some(3819700));
     }
 
     #[tokio::test]
-    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_unlink_deleted_items() {
-        let _test_lock = TEST_MUTEX.lock();
-        let app = get_test_app();
-        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
-        EntryWriter::new(&app, &mut entry)
-            .set_match("Q115205673", 2)
-            .await
-            .unwrap();
+        let app = test_support::test_app().await;
+        let (catalog_id, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
+        let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
+        EntryWriter::new(&app, &mut entry).set_match("Q115205673", 2).await.unwrap();
+        // Q115205673 intentionally not seeded in `page` → treated as deleted
         let ms = Maintenance::new(&app);
-        ms.unlink_deleted_items(TEST_CATALOG_ID, &MatchState::fully_matched())
-            .await
-            .unwrap();
-        let entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+        ms.unlink_deleted_items(catalog_id, &MatchState::fully_matched()).await.unwrap();
+        let entry = Entry::from_id(entry_id, &app).await.unwrap();
         assert_eq!(entry.q, None);
     }
 

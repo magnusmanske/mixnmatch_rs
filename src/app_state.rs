@@ -605,27 +605,23 @@ mod tests {
     /// satisfies all three sub-traits and the composed `AppContext`.
     /// Also verifies that `dyn SubTrait` vtables are usable at
     /// heap-erased (dynamic dispatch) boundaries.
-    #[test]
-    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
-    fn app_state_satisfies_app_context() {
+    #[tokio::test]
+    async fn app_state_satisfies_app_context() {
         fn takes_context<C: AppContext>(c: &C) -> usize {
-            // Trivial sanity: storage is reachable through the full trait.
             Arc::strong_count(c.storage())
         }
-        let app = get_test_app();
+        let app = crate::test_support::test_app().await;
         let _ = takes_context(&app);
 
-        // Each sub-trait vtable works independently.
-        let app2 = get_test_app();
+        let app2 = crate::test_support::test_app().await;
         let dyn_ext: &dyn ExternalServicesContext = &app2;
         let _ = Arc::strong_count(dyn_ext.storage());
 
-        let app3 = get_test_app();
+        let app3 = crate::test_support::test_app().await;
         let dyn_cfg: &dyn RuntimeConfig = &app3;
-        assert!(dyn_cfg.toolforge_php_command().starts_with("php"));
+        assert_eq!(dyn_cfg.toolforge_php_command(), "php8.3");
 
-        // AppContext (marker) coercion still compiles.
-        let app4 = get_test_app();
+        let app4 = crate::test_support::test_app().await;
         let _dyn_ctx: &dyn AppContext = &app4;
     }
 

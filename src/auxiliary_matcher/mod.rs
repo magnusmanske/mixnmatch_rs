@@ -225,110 +225,141 @@ impl AuxiliaryMatcher {
 mod tests {
     use super::*;
     use crate::wikidata_commands::WikidataCommandPropertyValue;
+    use crate::wikidata_writer::MockWikidataWriter;
     use crate::{
-        app_state::{TEST_MUTEX, get_test_app},
+        app_state::get_test_app,
         entry::{Entry, EntryWriter},
+        test_support,
     };
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    use wiremock::matchers::{method, path, query_param_contains};
 
-    const TEST_CATALOG_ID: usize = 5526;
-    const TEST_ENTRY_ID: usize = 143962196;
     const TEST_ITEM_ID: usize = 13520818; // Q13520818
 
+    const SITEINFO_JSON: &str = include_str!("../../tests/fixtures/wikidata/siteinfo.json");
+    const Q13520818_JSON: &str = include_str!("../../tests/fixtures/wikidata/Q13520818.json");
+
     #[tokio::test]
-    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_is_statement_in_entity() {
-        let app = get_test_app();
+        let server = MockServer::start().await;
+        Mock::given(method("GET")).and(query_param_contains("action", "query"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(SITEINFO_JSON))
+            .mount(&server).await;
+        Mock::given(method("GET")).and(query_param_contains("action", "wbgetentities"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(Q13520818_JSON))
+            .mount(&server).await;
+        let api_url = format!("{}/w/api.php", server.uri());
+        let app = test_support::test_app_with_wikidata_api_url(&api_url).await;
         let mw_api = app.wikidata().get_mw_api().await.unwrap();
         let entities = EntityContainer::new();
         let entity = entities.load_entity(&mw_api, "Q13520818").await.unwrap();
-        assert!(AuxiliaryMatcher::is_statement_in_entity(
-            &entity, "P31", "Q5"
-        ));
-        assert!(AuxiliaryMatcher::is_statement_in_entity(
-            &entity, "P214", "30701597"
-        ));
-        assert!(!AuxiliaryMatcher::is_statement_in_entity(
-            &entity, "P214", "30701596"
-        ));
+        assert!(AuxiliaryMatcher::is_statement_in_entity(&entity, "P31", "Q5"));
+        assert!(AuxiliaryMatcher::is_statement_in_entity(&entity, "P214", "30701597"));
+        assert!(!AuxiliaryMatcher::is_statement_in_entity(&entity, "P214", "30701596"));
     }
 
     #[tokio::test]
-    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_entity_already_has_property() {
-        let app = get_test_app();
+        let server = MockServer::start().await;
+        Mock::given(method("GET")).and(query_param_contains("action", "query"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(SITEINFO_JSON))
+            .mount(&server).await;
+        Mock::given(method("GET")).and(query_param_contains("action", "wbgetentities"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(Q13520818_JSON))
+            .mount(&server).await;
+        let api_url = format!("{}/w/api.php", server.uri());
+        let app = test_support::test_app_with_wikidata_api_url(&api_url).await;
         let mw_api = app.wikidata().get_mw_api().await.unwrap();
         let entities = EntityContainer::new();
         let entity = entities.load_entity(&mw_api, "Q13520818").await.unwrap();
-        let aux = AuxiliaryResults {
+        let am = AuxiliaryMatcher::new(&app);
+        // P214 is present in entity → returns true regardless of value
+        let aux_present = AuxiliaryResults {
             aux_id: 0,
             entry_id: 0,
             q_numeric: TEST_ITEM_ID,
             property: 214,
             value: "30701597".to_string(),
         };
-        let am = AuxiliaryMatcher::new(&app);
-        assert!(am.entity_already_has_property(&aux, &entity).await);
-        let aux2 = AuxiliaryResults {
+        assert!(am.entity_already_has_property(&aux_present, &entity).await);
+        let aux_any_val = AuxiliaryResults {
             aux_id: 0,
             entry_id: 0,
             q_numeric: TEST_ITEM_ID,
             property: 214,
             value: "foobar".to_string(),
         };
-        assert!(am.entity_already_has_property(&aux2, &entity).await);
-        let aux3 = AuxiliaryResults {
+        assert!(am.entity_already_has_property(&aux_any_val, &entity).await);
+        // P212 is absent → returns false
+        let aux_absent = AuxiliaryResults {
             aux_id: 0,
             entry_id: 0,
             q_numeric: TEST_ITEM_ID,
             property: 212,
             value: "foobar".to_string(),
         };
-        assert!(!am.entity_already_has_property(&aux3, &entity).await);
+        assert!(!am.entity_already_has_property(&aux_absent, &entity).await);
     }
 
     #[tokio::test]
-    #[ignore] // Requires database, must run single-threaded
     async fn test_add_auxiliary_to_wikidata() {
-        let _test_lock = TEST_MUTEX.lock();
-        let app = get_test_app();
-        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+        // Mock server provides siteinfo (with SPARQL URL), wbgetentities, and SPARQL.
+        // MockWikidataWriter records execute_commands calls without touching Wikidata.
+        let server = MockServer::start().await;
+
+        // Siteinfo must point wikibase-sparql at the mock server so sparql_query()
+        // hits our mock instead of query.wikidata.org.
+        let sparql_url = format!("{}/sparql", server.uri());
+        let siteinfo = format!(
+            r#"{{"batchcomplete":"","query":{{"general":{{"sitename":"Wikidata","dbname":"wikidatawiki","wikibase-conceptbaseuri":"http://www.wikidata.org/entity/","wikibase-sparql":"{sparql_url}","mainpage":"Wikidata","base":"https://www.wikidata.org/wiki/Wikidata:Main_Page","generator":"MediaWiki 1.38.0","phpversion":"8.1.0","phpsapi":"cli","dbtype":"mysql","dbversion":"10.6","lang":"en","fallback":[],"fallback8bitEncoding":"windows-1252","writeapi":"","maxarticlesize":2097152,"timezone":"UTC","timeoffset":0,"articlepath":"/wiki/$1","scriptpath":"/w","script":"/w/index.php","variantarticlepath":false,"server":"https://www.wikidata.org","servername":"www.wikidata.org","wikiid":"wikidatawiki","time":"2024-01-01T00:00:00Z","case":"first-letter"}},"namespaces":{{"0":{{"id":0,"case":"first-letter","content":"","*":""}},"1":{{"id":1,"case":"first-letter","*":"Talk"}}}},"namespacealiases":[],"interwikimap":[]}}}}"#
+        );
+
+        Mock::given(method("GET"))
+            .and(query_param_contains("action", "query"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(&siteinfo))
+            .mount(&server).await;
+        Mock::given(method("GET"))
+            .and(query_param_contains("action", "wbgetentities"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(Q13520818_JSON))
+            .mount(&server).await;
+        // Both get_properties_using_items and get_properties_that_have_external_ids
+        // POST here. Empty bindings → both lists stay empty, which is fine: the
+        // P214 in_wikidata path depends on entity_already_has_property, not SPARQL.
+        let empty_sparql = r#"{"results":{"bindings":[]},"head":{"vars":["p"]}}"#;
+        Mock::given(method("POST"))
+            .and(path("/sparql"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(empty_sparql))
+            .mount(&server).await;
+
+        let api_url = format!("{}/w/api.php", server.uri());
+        let app = test_support::test_app_with_wikidata_api_url(&api_url).await;
+
+        let (catalog_id, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
+        let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
         {
             let mut ew = EntryWriter::new(&app, &mut entry);
-            ew.set_auxiliary(214, Some("30701597".to_string()))
-                .await
-                .unwrap();
-            ew.set_auxiliary(370, Some("foobar".to_string()))
-                .await
-                .unwrap(); // Sandbox string property
             ew.set_match("Q13520818", 2).await.unwrap();
+            ew.set_auxiliary(214, Some("30701597".to_string())).await.unwrap();
+            ew.set_auxiliary(370, Some("foobar".to_string())).await.unwrap();
         }
 
-        // Run matcher
-        let mut am = AuxiliaryMatcher::new(&app);
-        am.add_auxiliary_to_wikidata(TEST_CATALOG_ID).await.unwrap();
+        let mut am = AuxiliaryMatcher::new_with_writer(&app, Box::new(MockWikidataWriter::new()));
+        am.add_auxiliary_to_wikidata(catalog_id).await.unwrap();
 
-        // Check
+        // P214=30701597 is already in Q13520818 → entity_already_has_property marks it
+        // P370=foobar is absent from the entity → in_wikidata stays false
+        let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
         let aux = EntryWriter::new(&app, &mut entry).get_aux().await.unwrap();
-        assert!(
-            aux.iter()
-                .any(|x| x.prop_numeric() == 214 && x.in_wikidata())
-        );
-        assert!(
-            aux.iter()
-                .any(|x| x.prop_numeric() == 370 && !x.in_wikidata())
-        );
-
-        // Cleanup
-        let mut ew = EntryWriter::new(&app, &mut entry);
-        ew.set_auxiliary(214, None).await.unwrap();
-        ew.set_auxiliary(370, None).await.unwrap();
-        ew.unmatch().await.unwrap();
+        assert!(aux.iter().any(|x| x.prop_numeric() == 214 && x.in_wikidata()),
+            "P214 should be marked in_wikidata after entity check");
+        assert!(aux.iter().any(|x| x.prop_numeric() == 370 && !x.in_wikidata()),
+            "P370 should not be marked in_wikidata (absent from entity)");
     }
 
     #[tokio::test]
     async fn test_new_with_writer_and_as_any() {
         use crate::wikidata_writer::MockWikidataWriter;
-        let app = get_test_app();
+        let app = test_support::test_app().await;
         let am = AuxiliaryMatcher::new_with_writer(&app, Box::new(MockWikidataWriter::new()));
         // Verify the mock is stored and accessible via as_any.
         am.wikidata

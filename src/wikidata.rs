@@ -28,6 +28,7 @@ pub struct Wikidata {
     mw_api: Option<mediawiki::api::Api>,
     bot_name: String,
     bot_password: String,
+    api_url: String,
 }
 
 impl MySQLMisc for Wikidata {
@@ -38,11 +39,16 @@ impl MySQLMisc for Wikidata {
 
 impl Wikidata {
     pub fn new(config: &Value, bot_name: String, bot_password: String) -> Self {
+        let api_url = config["api_url"]
+            .as_str()
+            .unwrap_or(WIKIDATA_API_URL)
+            .to_string();
         Self {
             pool: Self::create_pool(config),
             mw_api: None,
             bot_name,
             bot_password,
+            api_url,
         }
     }
 
@@ -242,7 +248,7 @@ impl Wikidata {
         }
         panic!("No MediaWiki API created")*/
         let builder = reqwest::Client::builder().timeout(Duration::from_secs(60));
-        mediawiki::api::Api::new_from_builder(WIKIDATA_API_URL, builder).await
+        mediawiki::api::Api::new_from_builder(&self.api_url, builder).await
     }
 
     pub async fn api_log_in(&mut self) -> Result<()> {
@@ -510,12 +516,7 @@ impl Wikidata {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn get_test_wd() -> Wikidata {
-        let app = crate::app_state::get_test_app();
-        let wd = app.wikidata();
-        wd.to_owned()
-    }
+    use crate::test_support;
 
     #[test]
     fn test_sql_placeholders() {
@@ -533,7 +534,8 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_api_log_in() {
-        let mut wd = get_test_wd();
+        let app = crate::app_state::get_test_app();
+        let mut wd = app.wikidata().to_owned();
         wd.api_log_in().await.unwrap();
         let api = wd.mw_api.as_ref().unwrap();
         assert!(api.user().logged_in());
@@ -642,27 +644,22 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_remove_meta_items() {
-        let wd = get_test_wd();
+        test_support::seed_wdt_meta_item_page("Q3522").await.unwrap();
+        let app = test_support::test_app().await;
         let mut items: Vec<String> = ["Q1", "Q3522", "Q2"]
             .iter()
             .map(|s| s.to_string())
             .collect();
-        wd.remove_meta_items(&mut items).await.unwrap();
+        app.wikidata().remove_meta_items(&mut items).await.unwrap();
         assert_eq!(items, ["Q1", "Q2"]);
     }
 
     #[tokio::test]
-    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_search_db_with_type() {
-        let app = crate::app_state::get_test_app();
-        let wdt = app.wdt();
-        assert_eq!(
-            wdt.search_db_with_type("Magnus Manske", "Q5")
-                .await
-                .unwrap(),
-            vec!["Q13520818".to_string()]
-        );
+        test_support::seed_wbt_label(13520818, "Magnus Manske").await.unwrap();
+        let app = test_support::test_app().await;
+        let result = app.wdt().search_db_with_type("Magnus Manske", "Q5").await.unwrap();
+        assert!(result.contains(&"Q13520818".to_string()), "expected Q13520818 in {:?}", result);
     }
 }
