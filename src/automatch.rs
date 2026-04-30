@@ -146,9 +146,9 @@ mod tests {
         am.match_person_by_dates(TEST_CATALOG_ID).await.unwrap();
 
         // Check if set
-        let entry = Entry::from_id(TEST_ENTRY_ID2, &app).await.unwrap();
-        assert!(entry.is_fully_matched());
-        assert_eq!(1035, entry.q.unwrap());
+        let entry_after = Entry::from_id(TEST_ENTRY_ID2, &app).await.unwrap();
+        assert!(entry_after.is_fully_matched());
+        assert_eq!(1035, entry_after.q.unwrap());
     }
 
     #[tokio::test]
@@ -173,12 +173,12 @@ mod tests {
         am.automatch_by_search(TEST_CATALOG_ID).await.unwrap();
 
         // Check in-database changes
-        let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
-        assert_eq!(entry.q, Some(467402));
-        assert_eq!(entry.user, Some(USER_AUTO));
+        let mut entry_after = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
+        assert_eq!(entry_after.q, Some(467402));
+        assert_eq!(entry_after.user, Some(USER_AUTO));
 
         // Clear
-        EntryWriter::new(&app, &mut entry).unmatch().await.unwrap();
+        EntryWriter::new(&app, &mut entry_after).unmatch().await.unwrap();
     }
 
     #[tokio::test]

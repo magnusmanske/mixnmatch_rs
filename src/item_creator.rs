@@ -188,12 +188,12 @@ mod tests {
         let err = ic.create_and_match_item().await.unwrap_err();
         assert!(err.to_string().contains("No entries"));
         // Downcast must succeed and no calls should have been recorded.
-        let mock = ic.wikidata
+        let mock_ref = ic.wikidata
             .as_any()
             .downcast_ref::<MockWikidataWriter>()
             .expect("downcast to MockWikidataWriter should succeed");
-        assert_eq!(mock.create_calls.len(), 0);
-        assert_eq!(mock.ac2wd_calls.len(), 0);
+        assert_eq!(mock_ref.create_calls.len(), 0);
+        assert_eq!(mock_ref.ac2wd_calls.len(), 0);
     }
 
     #[tokio::test]
@@ -205,11 +205,11 @@ mod tests {
         let mut ic = ItemCreator::new_with_writer(&app, Box::new(mock));
         ic.add_entries_by_id(&[entry_id]).await.unwrap();
         ic.create_and_match_item().await.unwrap();
-        let mock = ic.wikidata
+        let mock_ref = ic.wikidata
             .as_any()
             .downcast_ref::<MockWikidataWriter>()
             .expect("should be MockWikidataWriter");
-        assert_eq!(mock.create_calls.len(), 1, "create_new_wikidata_item called once");
-        assert_eq!(mock.ac2wd_calls, vec!["Q-MOCK-ITEM"], "perform_ac2wd called with the new QID");
+        assert_eq!(mock_ref.create_calls.len(), 1, "create_new_wikidata_item called once");
+        assert_eq!(mock_ref.ac2wd_calls, vec!["Q-MOCK-ITEM"], "perform_ac2wd called with the new QID");
     }
 }
