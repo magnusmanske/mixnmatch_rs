@@ -6,7 +6,7 @@ use crate::job::{Job, Jobbable};
 use crate::maintenance::Maintenance;
 use crate::match_state::MatchState;
 use crate::util::wikidata_props as wp;
-use crate::wikidata::Wikidata;
+use crate::wikidata_writer::WikidataWriter;
 use std::sync::Arc;
 use anyhow::Result;
 use serde_json::Value;
@@ -57,12 +57,12 @@ struct ExtIdNoMnM {
     ext_id: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Microsync {
     app: Arc<dyn AppContext>,
-    /// Owned Wikidata writer session — see `ItemCreator::wikidata` for
-    /// the rationale.
-    wikidata: Wikidata,
+    /// Wikidata write session. Production code holds a real `Wikidata`
+    /// (boxed); tests substitute `MockWikidataWriter` via `new_with_writer`.
+    wikidata: Box<dyn WikidataWriter>,
     job: Option<Job>,
 }
 
@@ -83,7 +83,10 @@ impl Jobbable for Microsync {
 
 impl Microsync {
     pub fn new(app: &AppState) -> Self {
-        let wikidata = app.wikidata().clone();
+        Self::new_with_writer(app, Box::new(app.wikidata().clone()))
+    }
+
+    pub(crate) fn new_with_writer(app: &AppState, wikidata: Box<dyn WikidataWriter>) -> Self {
         let app: Arc<dyn AppContext> = Arc::new(app.clone());
         Self {
             app,
@@ -776,5 +779,22 @@ mod tests {
         let app = get_test_app();
         let mut ms = Microsync::new(&app);
         ms.check_catalog(22).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_update_wiki_page_uses_writer() {
+        use crate::wikidata_writer::MockWikidataWriter;
+        let app = get_test_app();
+        let mock = Box::new(MockWikidataWriter::new());
+        let mut ms = Microsync::new_with_writer(&app, mock);
+        ms.update_wiki_page(42, "hello world").await.unwrap();
+        let mock = ms.wikidata
+            .as_any()
+            .downcast_ref::<MockWikidataWriter>()
+            .expect("should be MockWikidataWriter");
+        assert_eq!(mock.set_wikipage_calls.len(), 1);
+        let (title, wikitext, _comment) = &mock.set_wikipage_calls[0];
+        assert!(title.contains("42"), "title should contain catalog id");
+        assert_eq!(wikitext, "hello world");
     }
 }
