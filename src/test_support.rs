@@ -30,7 +30,7 @@ use testcontainers::{ContainerAsync, core::IntoContainerPort, runners::AsyncRunn
 use testcontainers_modules::mariadb::Mariadb;
 use tokio::sync::OnceCell;
 
-const SCHEMA_SQL: &str = include_str!("../tests/fixtures/schema.sql");
+const SCHEMA_SQL: &str = include_str!("../test_data/schema.sql");
 
 struct TestDb {
     url: String,

@@ -555,7 +555,7 @@ mod tests {
     use wiremock::matchers::method;
 
     const CERSEI_SCRAPERS_JSON: &str =
-        include_str!("../tests/fixtures/cersei_scrapers.json");
+        include_str!("../test_data/cersei_scrapers.json");
 
     #[tokio::test]
     async fn test_get_cersei_scrapers() {
