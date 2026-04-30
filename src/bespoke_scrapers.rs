@@ -47,6 +47,7 @@ pub mod scraper_4097;
 pub mod scraper_4098;
 pub mod scraper_4361;
 pub mod scraper_4589;
+pub mod scraper_4837;
 pub mod scraper_4600;
 pub mod scraper_4679;
 pub mod scraper_4681;
@@ -95,6 +96,7 @@ pub use scraper_4098::BespokeScraper4098;
 pub use scraper_4361::BespokeScraper4361;
 pub use scraper_4589::BespokeScraper4589;
 pub use scraper_4600::BespokeScraper4600;
+pub use scraper_4837::BespokeScraper4837;
 pub use scraper_4679::BespokeScraper4679;
 pub use scraper_4681::BespokeScraper4681;
 pub use scraper_4825::BespokeScraper4825;
@@ -166,6 +168,7 @@ const SCRAPER_REGISTRY: &[(usize, ScraperRunFn)] = &[
     scraper_entry!(4679, BespokeScraper4679),
     scraper_entry!(4681, BespokeScraper4681),
     scraper_entry!(4825, BespokeScraper4825),
+    scraper_entry!(4837, BespokeScraper4837),
     scraper_entry!(4966, BespokeScraper4966),
     scraper_entry!(5100, BespokeScraper5100),
     scraper_entry!(5103, BespokeScraper5103),
