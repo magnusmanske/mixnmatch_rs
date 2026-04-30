@@ -236,8 +236,8 @@ mod tests {
 
     const TEST_ITEM_ID: usize = 13520818; // Q13520818
 
-    const SITEINFO_JSON: &str = include_str!("../../test_data/wikidata/siteinfo.json");
-    const Q13520818_JSON: &str = include_str!("../../test_data/wikidata/Q13520818.json");
+    const SITEINFO_JSON: &str = include_str!("../test_data/wikidata/siteinfo.json");
+    const Q13520818_JSON: &str = include_str!("../test_data/wikidata/Q13520818.json");
 
     #[tokio::test]
     async fn test_is_statement_in_entity() {

@@ -398,8 +398,8 @@ impl ReferenceFixer {
         let (property, value) = unique_property_match(parsed.url, &self.url_patterns)?;
         let mut out = Vec::new();
         if let Some(qid) = self.stated_in.get(&property) {
-            if let Some(snak) = build_stated_in_snak(qid) {
-                out.push(snak);
+            if let Some(stated_in) = build_stated_in_snak(qid) {
+                out.push(stated_in);
             }
         }
         out.push(build_external_id_snak(&property, &value));
