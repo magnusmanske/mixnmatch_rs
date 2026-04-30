@@ -788,7 +788,7 @@ pub trait Storage:
         &self,
         catalog_id: usize,
         batch_size: usize,
-        offset: usize,
+        min_entry_id: usize,
     ) -> Result<Vec<PersonDateMatchRow>>;
     async fn match_person_by_single_date_get_results(
         &self,

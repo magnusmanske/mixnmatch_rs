@@ -1708,16 +1708,18 @@ impl Storage for StorageMySQL {
         &self,
         catalog_id: usize,
         batch_size: usize,
-        offset: usize,
+        min_entry_id: usize,
     ) -> Result<Vec<PersonDateMatchRow>> {
-        let sql = "SELECT entry_id,ext_name,born,died
+        let sql = "SELECT `entry`.`id` AS entry_id,ext_name,born,died
             FROM (`entry` join `person_dates`)
             WHERE `person_dates`.`entry_id` = `entry`.`id`
             AND `catalog`=:catalog_id AND (q IS NULL or user=0) AND born!='' AND died!=''
-            LIMIT :batch_size OFFSET :offset";
+            AND `entry`.`id` > :min_entry_id
+            ORDER BY `entry`.`id`
+            LIMIT :batch_size";
         let mut conn = self.get_conn_ro().await?;
         let results = conn
-            .exec_iter(sql, params! {catalog_id,batch_size,offset})
+            .exec_iter(sql, params! {catalog_id, batch_size, min_entry_id})
             .await?
             .map_and_drop(|row| {
                 let (entry_id, ext_name, born, died) =

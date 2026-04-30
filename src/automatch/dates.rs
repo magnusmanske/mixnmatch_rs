@@ -141,13 +141,13 @@ impl AutoMatch {
 
     pub async fn match_person_by_dates(&mut self, catalog_id: usize) -> Result<()> {
         let mw_api = self.app.wikidata().get_mw_api().await?;
-        let mut offset = self.get_last_job_offset().await;
+        let mut min_entry_id = self.get_last_job_offset().await;
         let batch_size = 5000;
         loop {
             let results = self
                 .app
                 .storage()
-                .match_person_by_dates_get_results(catalog_id, batch_size, offset)
+                .match_person_by_dates_get_results(catalog_id, batch_size, min_entry_id)
                 .await?;
             for result in &results {
                 let _ = self
@@ -157,8 +157,10 @@ impl AutoMatch {
             if results.len() < batch_size {
                 break;
             }
-            let _ = self.remember_offset(offset).await;
-            offset += results.len();
+            if let Some(last) = results.last() {
+                min_entry_id = last.entry_id;
+            }
+            let _ = self.remember_offset(min_entry_id).await;
         }
         let _ = self.clear_offset().await;
         Ok(())
