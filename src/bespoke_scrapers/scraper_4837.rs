@@ -44,12 +44,10 @@ impl BespokeScraper for BespokeScraper4837 {
                 _ => break,
             };
 
-            let mut cache = vec![];
-            for hit in hits {
-                if let Some(ee) = Self::parse_hit(self.catalog_id(), hit) {
-                    cache.push(ee);
-                }
-            }
+            let mut cache: Vec<_> = hits
+                .iter()
+                .filter_map(|hit| Self::parse_hit(self.catalog_id(), hit))
+                .collect();
             self.process_cache(&mut cache).await?;
             from += BATCH_SIZE;
         }

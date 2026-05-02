@@ -4,6 +4,7 @@ use crate::{
     entry::Entry,
     extended_entry::ExtendedEntry,
 };
+use std::collections::HashSet;
 use anyhow::Result;
 use async_trait::async_trait;
 use rand::RngExt;
@@ -83,7 +84,7 @@ impl BespokeScraper3296 {
             .as_str()
             .and_then(|rank| Self::rank_to_q(rank));
 
-        let mut aux = std::collections::HashSet::new();
+        let mut aux = HashSet::new();
         aux.insert(AuxiliaryRow::new(225, scientific_name.to_string()));
         if let Some(q) = rank_q {
             aux.insert(AuxiliaryRow::new(105, q.to_string()));
