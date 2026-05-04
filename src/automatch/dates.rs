@@ -58,6 +58,13 @@ impl DateStringLength {
     }
 }
 
+/// Returns `true` if `name` contains at least one name initial: an uppercase
+/// ASCII letter immediately followed by a period (e.g. "M. Manske", "A. B. Smith").
+fn name_has_initials(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    bytes.windows(2).any(|w| w[0].is_ascii_uppercase() && w[1] == b'.')
+}
+
 impl AutoMatch {
     /// Helper method to handle match candidates based on their count:
     /// - 0 candidates: do nothing
@@ -89,10 +96,11 @@ impl AutoMatch {
         &self,
         result: &PersonDateMatchRow,
         mw_api: &Api,
+        http_client: &reqwest::Client,
     ) -> Result<()> {
         let entry_id = result.entry_id;
         let candidate_items = match self
-            .match_person_by_dates_process_result_get_candidate_items(result, mw_api)
+            .match_person_by_dates_process_result_get_candidate_items(result, mw_api, http_client)
             .await
         {
             Ok(value) => value,
@@ -106,6 +114,7 @@ impl AutoMatch {
         &self,
         result: &PersonDateMatchRow,
         mw_api: &Api,
+        http_client: &reqwest::Client,
     ) -> Result<Vec<String>, ()> {
         let ext_name = &result.ext_name;
         let birth_year = match Self::extract_sane_year_from_date(&result.born) {
@@ -116,10 +125,19 @@ impl AutoMatch {
             Some(year) => year,
             None => return Err(()),
         };
-        let candidate_items = match self.search_person(ext_name).await {
+        let mut candidate_items = match self.search_person(ext_name).await {
             Ok(c) => c,
             _ => return Err(()),
         };
+        // Fallback for names with initials (e.g. "M. Manske"): standard Wikidata search
+        // often misses these, so try wd-infernal which indexes by initial. Only called
+        // when the primary search returns nothing, to respect infernal's resource limits.
+        if candidate_items.is_empty() && name_has_initials(ext_name) {
+            candidate_items = self
+                .search_person_via_infernal(ext_name, http_client)
+                .await
+                .unwrap_or_default();
+        }
         if candidate_items.is_empty() {
             return Err(());
         }
@@ -141,6 +159,10 @@ impl AutoMatch {
 
     pub async fn match_person_by_dates(&mut self, catalog_id: usize) -> Result<()> {
         let mw_api = self.app.wikidata().get_mw_api().await?;
+        let http_client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .unwrap_or_default();
         let mut min_entry_id = self.get_last_job_offset().await;
         let batch_size = 5000;
         loop {
@@ -151,7 +173,7 @@ impl AutoMatch {
                 .await?;
             for result in &results {
                 let _ = self
-                    .match_person_by_dates_process_result(result, &mw_api)
+                    .match_person_by_dates_process_result(result, &mw_api, &http_client)
                     .await;
             }
             if results.len() < batch_size {
@@ -302,6 +324,34 @@ impl AutoMatch {
     async fn search_person(&self, name: &str) -> Result<Vec<String>> {
         let name = Person::sanitize_simplify_name(name);
         self.app.wikidata().search_with_type_api(&name, "Q5").await
+    }
+
+    async fn search_person_via_infernal(
+        &self,
+        name: &str,
+        http_client: &reqwest::Client,
+    ) -> Result<Vec<String>> {
+        let url = format!(
+            "https://wd-infernal.toolforge.org/initial_search/{}",
+            urlencoding::encode(name)
+        );
+        let json = http_client
+            .get(&url)
+            .send()
+            .await?
+            .json::<serde_json::Value>()
+            .await?;
+        let items = json
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str())
+                    .filter(|s| s.starts_with('Q'))
+                    .map(|s| s.to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(items)
     }
 
     //TODO test
@@ -506,5 +556,40 @@ impl AutoMatch {
                 .set_auto_and_multi_match(&[q])
                 .await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_name_has_initials_single() {
+        assert!(name_has_initials("M. Manske"));
+    }
+
+    #[test]
+    fn test_name_has_initials_multiple() {
+        assert!(name_has_initials("A. B. Smith"));
+    }
+
+    #[test]
+    fn test_name_has_initials_hyphenated() {
+        assert!(name_has_initials("J.-C. Dupont"));
+    }
+
+    #[test]
+    fn test_name_has_initials_full_name() {
+        assert!(!name_has_initials("Magnus Manske"));
+    }
+
+    #[test]
+    fn test_name_has_initials_empty() {
+        assert!(!name_has_initials(""));
+    }
+
+    #[test]
+    fn test_name_has_initials_no_dot_after_upper() {
+        assert!(!name_has_initials("MacDonald"));
     }
 }
