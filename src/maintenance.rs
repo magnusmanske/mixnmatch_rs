@@ -19,7 +19,7 @@
 mod cleanup;
 mod wikidata_sync;
 
-use crate::app_state::{AppContext, AppState, USER_DATE_MATCH};
+use crate::app_state::{AppContext, USER_DATE_MATCH};
 use std::sync::Arc;
 use crate::catalog::Catalog;
 use crate::entry::{Entry, EntryWriter};
@@ -32,12 +32,7 @@ pub struct Maintenance {
 }
 
 impl Maintenance {
-    pub fn new(app: &AppState) -> Self {
-        let app: Arc<dyn AppContext> = Arc::new(app.clone());
-        Self { app }
-    }
-
-    pub fn from_arc(app: Arc<dyn AppContext>) -> Self {
+    pub fn new(app: Arc<dyn AppContext>) -> Self {
         Self { app }
     }
 
@@ -228,7 +223,7 @@ mod tests {
         let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
         EntryWriter::new(&app, &mut entry).set_match("Q16456", 2).await.unwrap();
         test_support::seed_wdt_meta_item_page("Q16456").await.unwrap();
-        let maintenance = Maintenance::new(&app);
+        let maintenance = Maintenance::new(Arc::new(app.clone()));
         maintenance.unlink_meta_items(catalog_id, &MatchState::any_matched()).await.unwrap();
         assert_eq!(Entry::from_id(entry_id, &app).await.unwrap().q, None);
     }
@@ -240,7 +235,7 @@ mod tests {
         let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
         EntryWriter::new(&app, &mut entry).set_match("Q85756032", 2).await.unwrap();
         test_support::seed_wdt_redirect("Q85756032", "Q3819700").await.unwrap();
-        let ms = Maintenance::new(&app);
+        let ms = Maintenance::new(Arc::new(app.clone()));
         ms.fix_redirects(catalog_id, &MatchState::fully_matched()).await.unwrap();
         let entry_after = Entry::from_id(entry_id, &app).await.unwrap();
         assert_eq!(entry_after.q, Some(3819700));
@@ -253,7 +248,7 @@ mod tests {
         let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
         EntryWriter::new(&app, &mut entry).set_match("Q115205673", 2).await.unwrap();
         // Q115205673 intentionally not seeded in `page` → treated as deleted
-        let ms = Maintenance::new(&app);
+        let ms = Maintenance::new(Arc::new(app.clone()));
         ms.unlink_deleted_items(catalog_id, &MatchState::fully_matched()).await.unwrap();
         let entry_after = Entry::from_id(entry_id, &app).await.unwrap();
         assert_eq!(entry_after.q, None);
@@ -263,7 +258,7 @@ mod tests {
     #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_update_auxiliary_fix_table() {
         let app = get_test_app();
-        let ms = Maintenance::new(&app);
+        let ms = Maintenance::new(Arc::new(app.clone()));
         let prop2type = ms.get_sparql_prop2type().await.unwrap();
         assert!(prop2type.len() > 12000);
         assert!(prop2type.iter().any(|(prop, _)| prop == "P31"));

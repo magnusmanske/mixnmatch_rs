@@ -1,4 +1,5 @@
-use crate::{app_state::AppState, entry::Entry, extended_entry::ExtendedEntry};
+use std::sync::Arc;
+use crate::{app_state::AppContext, entry::Entry, extended_entry::ExtendedEntry};
 use anyhow::Result;
 use async_trait::async_trait;
 use lazy_static::lazy_static;
@@ -15,7 +16,7 @@ const START_URL: &str =
 
 #[derive(Debug)]
 pub struct BespokeScraper5311 {
-    pub(super) app: AppState,
+    pub(super) app: Arc<dyn AppContext>,
 }
 
 #[async_trait]
@@ -325,7 +326,7 @@ mod tests {
     fn test_5311_catalog_id() {
         assert_eq!(
             BespokeScraper5311 {
-                app: crate::app_state::get_test_app()
+                app: std::sync::Arc::new(crate::app_state::get_test_app())
             }
             .catalog_id(),
             5311

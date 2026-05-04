@@ -1,4 +1,4 @@
-use crate::app_state::{AppContext, AppState};
+use crate::app_state::AppContext;
 use std::sync::Arc;
 use crate::catalog::Catalog;
 use crate::datasource::DataSource;
@@ -87,8 +87,7 @@ pub struct UpdateCatalog {
 }
 
 impl UpdateCatalog {
-    pub fn new(app: &AppState) -> Self {
-        let app: Arc<dyn AppContext> = Arc::new(app.clone());
+    pub fn new(app: Arc<dyn AppContext>) -> Self {
         Self {
             app,
             job: None,
@@ -355,7 +354,7 @@ mod tests {
             .await
             .unwrap();
         let app = test_support::test_app().await;
-        let uc = UpdateCatalog::new(&app);
+        let uc = UpdateCatalog::new(Arc::new(app.clone()));
         let info = uc.get_update_info(catalog_id).await.unwrap();
         let json = info.json().unwrap();
         let type_name = json.get("default_type").unwrap().as_str().unwrap();
@@ -444,7 +443,7 @@ mod tests {
         let app = test_support::test_app_with_import_path(test_data_dir).await;
 
         // Import single entry
-        let mut uc = UpdateCatalog::new(&app);
+        let mut uc = UpdateCatalog::new(Arc::new(app.clone()));
         uc.update_from_tabbed_file(catalog_id).await.unwrap();
 
         // Get new entry

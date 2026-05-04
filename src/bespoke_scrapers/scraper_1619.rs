@@ -1,5 +1,6 @@
+use std::sync::Arc;
 use crate::{
-    app_state::AppState, auxiliary_data::AuxiliaryRow, entry::Entry,
+    app_state::AppContext, auxiliary_data::AuxiliaryRow, entry::Entry,
     extended_entry::ExtendedEntry,
 };
 use anyhow::Result;
@@ -21,7 +22,7 @@ const BEACON_URLS: &[&str] = &[
 
 #[derive(Debug)]
 pub struct BespokeScraper1619 {
-    pub(super) app: AppState,
+    pub(super) app: Arc<dyn AppContext>,
 }
 
 #[async_trait]

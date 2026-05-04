@@ -1,4 +1,5 @@
-use crate::{app_state::AppState, entry::{Entry, EntryWriter}, person_date::PersonDate};
+use std::sync::Arc;
+use crate::{app_state::AppContext, entry::{Entry, EntryWriter}, person_date::PersonDate};
 use anyhow::Result;
 use async_trait::async_trait;
 use lazy_static::lazy_static;
@@ -20,7 +21,7 @@ const ENTRY_BATCH_SIZE: usize = 5000;
 
 #[derive(Debug)]
 pub struct BespokeScraper4098 {
-    pub(super) app: AppState,
+    pub(super) app: Arc<dyn AppContext>,
 }
 
 #[async_trait]

@@ -1,5 +1,6 @@
+use std::sync::Arc;
 use crate::{
-    app_state::{AppState, USER_AUX_MATCH},
+    app_state::{AppContext, USER_AUX_MATCH},
     auxiliary_data::AuxiliaryRow,
     coordinates::CoordinateLocation,
     entry::Entry,
@@ -37,7 +38,7 @@ lazy_static! {
 
 #[derive(Debug)]
 pub struct BespokeScraper6479 {
-    pub(super) app: AppState,
+    pub(super) app: Arc<dyn AppContext>,
 }
 
 #[async_trait]
@@ -199,7 +200,7 @@ mod tests {
 
     fn make_scraper() -> BespokeScraper6479 {
         BespokeScraper6479 {
-            app: get_test_app(),
+            app: std::sync::Arc::new(get_test_app()),
         }
     }
 

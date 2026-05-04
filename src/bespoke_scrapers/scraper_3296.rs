@@ -1,5 +1,6 @@
+use std::sync::Arc;
 use crate::{
-    app_state::AppState, auxiliary_data::AuxiliaryRow, entry::Entry, extended_entry::ExtendedEntry,
+    app_state::AppContext, auxiliary_data::AuxiliaryRow, entry::Entry, extended_entry::ExtendedEntry,
 };
 use anyhow::Result;
 use async_trait::async_trait;
@@ -16,7 +17,7 @@ const BATCH_SIZE: u64 = 1000;
 
 #[derive(Debug)]
 pub struct BespokeScraper3296 {
-    pub(super) app: AppState,
+    pub(super) app: Arc<dyn AppContext>,
 }
 
 #[async_trait]
@@ -123,7 +124,7 @@ mod tests {
 
     fn make_scraper() -> BespokeScraper3296 {
         BespokeScraper3296 {
-            app: get_test_app(),
+            app: std::sync::Arc::new(get_test_app()),
         }
     }
 

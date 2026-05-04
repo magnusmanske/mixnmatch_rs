@@ -1,4 +1,4 @@
-use crate::app_state::{AppContext, AppState, USER_AUX_MATCH};
+use crate::app_state::{AppContext, USER_AUX_MATCH};
 use std::sync::Arc;
 use crate::catalog::Catalog;
 use crate::entry::{Entry, EntryWriter};
@@ -70,8 +70,7 @@ pub struct TaxonMatcher {
 }
 
 impl TaxonMatcher {
-    pub fn new(app: &AppState) -> Self {
-        let app: Arc<dyn AppContext> = Arc::new(app.clone());
+    pub fn new(app: Arc<dyn AppContext>) -> Self {
         Self {
             app,
             job: None,
@@ -246,7 +245,7 @@ mod tests {
     #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_match_taxa() {
         let app = get_test_app();
-        let mut tm = TaxonMatcher::new(&app);
+        let mut tm = TaxonMatcher::new(Arc::new(app.clone()));
 
         // Clear entry
         let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();

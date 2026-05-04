@@ -1,10 +1,11 @@
-use crate::{app_state::AppState, entry::{Entry, EntryWriter}, extended_entry::ExtendedEntry};
+use crate::{app_state::AppContext, entry::{Entry, EntryWriter}, extended_entry::ExtendedEntry};
 use anyhow::Result;
 use async_trait::async_trait;
 use futures::future::BoxFuture;
 use log::info;
 use regex::Regex;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Generates the three identical boilerplate methods required by every `BespokeScraper` impl:
 /// `new`, `catalog_id`, and `app`. Place this inside the `impl BespokeScraper for …` block,
@@ -18,14 +19,14 @@ use std::collections::HashMap;
 /// ```
 macro_rules! scraper_boilerplate {
     ($catalog_id:expr) => {
-        fn new(app: &$crate::app_state::AppState) -> Self {
-            Self { app: app.clone() }
+        fn new(app: ::std::sync::Arc<dyn $crate::app_state::AppContext>) -> Self {
+            Self { app }
         }
         fn catalog_id(&self) -> usize {
             $catalog_id
         }
-        fn app(&self) -> &$crate::app_state::AppState {
-            &self.app
+        fn app(&self) -> &dyn $crate::app_state::AppContext {
+            &*self.app
         }
     };
 }
@@ -131,7 +132,7 @@ pub use scraper_7700::BespokeScraper7700;
 /// the same fn-pointer type. The trait can't be made object-safe
 /// directly because of `fn new(app: &AppState) -> Self` (returns
 /// `Self`).
-type ScraperRunFn = for<'a> fn(&'a AppState) -> BoxFuture<'a, Result<()>>;
+type ScraperRunFn = fn(Arc<dyn AppContext>) -> BoxFuture<'static, Result<()>>;
 
 /// Build a `(catalog_id, ScraperRunFn)` entry for the registry.
 /// Factor of three less per-scraper boilerplate vs the old match arm.
@@ -196,7 +197,7 @@ const SCRAPER_REGISTRY: &[(usize, ScraperRunFn)] = &[
     scraper_entry!(7700, BespokeScraper7700),
 ];
 
-pub async fn run_bespoke_scraper(catalog_id: usize, app: &AppState) -> Result<()> {
+pub async fn run_bespoke_scraper(catalog_id: usize, app: Arc<dyn AppContext>) -> Result<()> {
     SCRAPER_REGISTRY
         .iter()
         .find(|(id, _)| *id == catalog_id)
@@ -210,9 +211,9 @@ const CACHE_FLUSH_THRESHOLD: usize = 100;
 
 #[async_trait]
 pub trait BespokeScraper {
-    fn new(app: &AppState) -> Self;
+    fn new(app: Arc<dyn AppContext>) -> Self;
     fn catalog_id(&self) -> usize;
-    fn app(&self) -> &AppState;
+    fn app(&self) -> &dyn AppContext;
     async fn run(&self) -> Result<()>;
 
     fn testing(&self) -> bool {

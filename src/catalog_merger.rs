@@ -24,7 +24,7 @@
 //! two share the storage layer but have separate pipelines because
 //! they answer different questions.
 
-use crate::app_state::{AppContext, AppState, USER_AUTO};
+use crate::app_state::{AppContext, USER_AUTO};
 use crate::catalog::Catalog;
 use crate::entry::{Entry, EntryWriter};
 use crate::storage::GroupedEntry;
@@ -63,8 +63,7 @@ pub struct CatalogMerger {
 }
 
 impl CatalogMerger {
-    pub fn new(app: &AppState) -> Self {
-        let app: Arc<dyn AppContext> = Arc::new(app.clone());
+    pub fn new(app: Arc<dyn AppContext>) -> Self {
         Self { app }
     }
 
@@ -489,7 +488,7 @@ mod tests {
     #[tokio::test]
     async fn merge_rejects_self_merge() {
         let app = get_test_app();
-        let m = CatalogMerger::new(&app);
+        let m = CatalogMerger::new(Arc::new(app.clone()));
         let err = m.merge(42, 42, true).await.unwrap_err().to_string();
         assert!(err.contains("must differ"), "err was: {err}");
     }
@@ -497,7 +496,7 @@ mod tests {
     #[tokio::test]
     async fn merge_rejects_zero_source() {
         let app = get_test_app();
-        let m = CatalogMerger::new(&app);
+        let m = CatalogMerger::new(Arc::new(app.clone()));
         let err = m.merge(0, 5, true).await.unwrap_err().to_string();
         assert!(err.contains("must be positive"), "err was: {err}");
     }
@@ -505,7 +504,7 @@ mod tests {
     #[tokio::test]
     async fn merge_rejects_zero_target() {
         let app = get_test_app();
-        let m = CatalogMerger::new(&app);
+        let m = CatalogMerger::new(Arc::new(app.clone()));
         let err = m.merge(5, 0, true).await.unwrap_err().to_string();
         assert!(err.contains("must be positive"), "err was: {err}");
     }
@@ -513,7 +512,7 @@ mod tests {
     #[tokio::test]
     async fn migrate_property_rejects_self_migration() {
         let app = get_test_app();
-        let m = CatalogMerger::new(&app);
+        let m = CatalogMerger::new(Arc::new(app.clone()));
         let err = m.migrate_property(7, 7).await.unwrap_err().to_string();
         assert!(err.contains("must differ"), "err was: {err}");
     }
@@ -521,7 +520,7 @@ mod tests {
     #[tokio::test]
     async fn migrate_property_rejects_zero_ids() {
         let app = get_test_app();
-        let m = CatalogMerger::new(&app);
+        let m = CatalogMerger::new(Arc::new(app.clone()));
         assert!(m.migrate_property(0, 5).await.is_err());
         assert!(m.migrate_property(5, 0).await.is_err());
     }

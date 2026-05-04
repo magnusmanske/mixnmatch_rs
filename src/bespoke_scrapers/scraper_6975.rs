@@ -1,4 +1,5 @@
-use crate::{app_state::AppState, entry::Entry, extended_entry::ExtendedEntry, person_date::PersonDate};
+use std::sync::Arc;
+use crate::{app_state::AppContext, entry::Entry, extended_entry::ExtendedEntry, person_date::PersonDate};
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use lazy_static::lazy_static;
@@ -12,7 +13,7 @@ use super::BespokeScraper;
 
 #[derive(Debug)]
 pub struct BespokeScraper6975 {
-    pub(super) app: AppState,
+    pub(super) app: Arc<dyn AppContext>,
 }
 
 #[async_trait]
@@ -161,7 +162,7 @@ mod tests {
     #[test]
     fn test_6975_record2ext_entry_valid() {
         let scraper = BespokeScraper6975 {
-            app: crate::app_state::get_test_app(),
+            app: std::sync::Arc::new(crate::app_state::get_test_app()),
         };
         let record = serde_json::json!([
             "Müller",
@@ -185,7 +186,7 @@ mod tests {
     #[test]
     fn test_6975_record2ext_entry_no_id_field() {
         let scraper = BespokeScraper6975 {
-            app: crate::app_state::get_test_app(),
+            app: std::sync::Arc::new(crate::app_state::get_test_app()),
         };
         // record[4] does not contain the open_person pattern
         let record = serde_json::json!(["Müller", "Hans", "Zürich", "16.06.1970", "no-id-here"]);
@@ -195,7 +196,7 @@ mod tests {
     #[test]
     fn test_6975_record2ext_entry_empty_record() {
         let scraper = BespokeScraper6975 {
-            app: crate::app_state::get_test_app(),
+            app: std::sync::Arc::new(crate::app_state::get_test_app()),
         };
         let record = serde_json::json!([]);
         assert!(scraper.record2ext_entry(&record).is_none());
@@ -204,7 +205,7 @@ mod tests {
     #[test]
     fn test_6975_record2ext_entry_invalid_date_still_creates_entry() {
         let scraper = BespokeScraper6975 {
-            app: crate::app_state::get_test_app(),
+            app: std::sync::Arc::new(crate::app_state::get_test_app()),
         };
         let record = serde_json::json!([
             "Schmidt",
@@ -222,7 +223,7 @@ mod tests {
     #[test]
     fn test_6975_record2ext_entry_name_formatting() {
         let scraper = BespokeScraper6975 {
-            app: crate::app_state::get_test_app(),
+            app: std::sync::Arc::new(crate::app_state::get_test_app()),
         };
         let record = serde_json::json!([
             "von Arx",

@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::thread;
 use std::time::Duration;
 
-use crate::app_state::{AppContext, AppState};
+use crate::app_state::AppContext;
 use crate::catalog::Catalog;
 use crate::entry::{Entry, EntryWriter};
 use crate::extended_entry::ExtendedEntry;
@@ -74,12 +74,11 @@ pub struct CerseiSync {
 }
 
 impl CerseiSync {
-    pub fn new(app: &AppState) -> Result<Self> {
+    pub fn new(app: Arc<dyn AppContext>) -> Result<Self> {
         Self::new_with_scrapers_url(app, CERSEI_SCRAPERS_URL)
     }
 
-    pub(crate) fn new_with_scrapers_url(app: &AppState, scrapers_url: &str) -> Result<Self> {
-        let app: Arc<dyn AppContext> = Arc::new(app.clone());
+    pub(crate) fn new_with_scrapers_url(app: Arc<dyn AppContext>, scrapers_url: &str) -> Result<Self> {
         Ok(Self {
             app,
             http_client: crate::autoscrape::Autoscrape::reqwest_client_external()?,
@@ -549,7 +548,7 @@ mod tests {
             .mount(&server)
             .await;
         let app = test_support::test_app().await;
-        let cs = CerseiSync::new_with_scrapers_url(&app, &server.uri().to_string()).unwrap();
+        let cs = CerseiSync::new_with_scrapers_url(Arc::new(app), &server.uri().to_string()).unwrap();
         let scrapers = cs.get_cersei_scrapers().await.unwrap();
         assert_eq!(scrapers.len(), 19);
     }

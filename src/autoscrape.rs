@@ -1,4 +1,4 @@
-use crate::app_state::{AppContext, AppState};
+use crate::app_state::AppContext;
 use crate::autoscrape_levels::AutoscrapeLevel;
 use crate::autoscrape_resolve::RE_SIMPLE_SPACE;
 use crate::autoscrape_scraper::AutoscrapeScraper;
@@ -129,7 +129,7 @@ impl Jobbable for Autoscrape {
 
 impl Autoscrape {
     //TODO test
-    pub async fn new(catalog_id: usize, app: &AppState) -> Result<Self> {
+    pub async fn new(catalog_id: usize, app: Arc<dyn AppContext>) -> Result<Self> {
         let results = app.storage().autoscrape_get_for_catalog(catalog_id).await?;
         let (id, json) = results
             .first()
@@ -421,13 +421,13 @@ impl Autoscrape {
     fn new_basic(
         id: &usize,
         catalog_id: usize,
-        app: Option<&AppState>,
+        app: Option<Arc<dyn AppContext>>,
         json: &Value,
     ) -> Result<Autoscrape> {
         let ret = Self {
             autoscrape_id: *id,
             catalog_id,
-            app: app.map(|a| Arc::new(a.clone()) as Arc<dyn AppContext>),
+            app,
             simple_space: false,
             skip_failed: false,
             utf8_encode: false,

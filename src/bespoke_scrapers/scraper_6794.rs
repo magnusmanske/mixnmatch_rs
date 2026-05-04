@@ -1,4 +1,5 @@
-use crate::app_state::AppState;
+use std::sync::Arc;
+use crate::app_state::AppContext;
 use anyhow::Result;
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -12,7 +13,7 @@ use super::BespokeScraper;
 
 #[derive(Debug)]
 pub struct BespokeScraper6794 {
-    pub(super) app: AppState,
+    pub(super) app: Arc<dyn AppContext>,
 }
 
 #[async_trait]
@@ -55,7 +56,7 @@ mod tests {
 
     fn make_scraper() -> BespokeScraper6794 {
         BespokeScraper6794 {
-            app: get_test_app(),
+            app: std::sync::Arc::new(get_test_app()),
         }
     }
 

@@ -1,4 +1,5 @@
-use crate::{app_state::AppState, entry::{Entry, EntryWriter}};
+use std::sync::Arc;
+use crate::{app_state::AppContext, entry::{Entry, EntryWriter}};
 use anyhow::Result;
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -12,7 +13,7 @@ use super::BespokeScraper;
 
 #[derive(Debug)]
 pub struct BespokeScraper6976 {
-    pub(super) app: AppState,
+    pub(super) app: Arc<dyn AppContext>,
 }
 
 #[async_trait]
@@ -56,14 +57,14 @@ impl BespokeScraper6976 {
             static ref RE_SUBJECT: Regex =
                 Regex::new(r#"<a href="/[a-z]+/subjects/idrec/sn/bio/id/(\d+)""#).unwrap();
         }
-        let mut entry = Entry::from_id(entry_id, &self.app).await?;
-        let existing_aux = EntryWriter::new(&self.app, &mut entry).get_aux().await?;
+        let mut entry = Entry::from_id(entry_id, self.app()).await?;
+        let existing_aux = EntryWriter::new(self.app(), &mut entry).get_aux().await?;
         let url = entry.ext_url.clone();
         let text = self.load_single_line_text_from_url(&url).await?;
 
         if !existing_aux.iter().any(|aux| aux.prop_numeric() == 227) {
             if let Some(gnd) = Self::get_main_gnd_from_text(&text) {
-                EntryWriter::new(&self.app, &mut entry).set_auxiliary(227, Some(gnd)).await?;
+                EntryWriter::new(self.app(), &mut entry).set_auxiliary(227, Some(gnd)).await?;
             }
         }
 
@@ -97,19 +98,19 @@ impl BespokeScraper6976 {
             if let Some(gnd) = self.get_subject_gnd(subject_id).await {
                 let query = format!("haswbstatement:P227={gnd}");
                 let items_with_gnd = self
-                    .app
+                    .app()
                     .wikidata()
                     .search_api(&query)
                     .await
                     .unwrap_or_default();
                 if items_with_gnd.len() == 1 {
                     let item = items_with_gnd[0].clone();
-                    let _ = EntryWriter::new(&self.app, entry).set_auxiliary(prop_numeric, Some(item)).await;
+                    let _ = EntryWriter::new(self.app(), entry).set_auxiliary(prop_numeric, Some(item)).await;
                 } else if let Ok(target_entry) =
-                    Entry::from_ext_id(self.catalog_id(), &gnd, &self.app).await
+                    Entry::from_ext_id(self.catalog_id(), &gnd, self.app()).await
                 {
                     if let Ok(target_entry_id) = target_entry.get_valid_id() {
-                        let _ = EntryWriter::new(&self.app, entry).add_mnm_relation(prop_numeric, target_entry_id).await;
+                        let _ = EntryWriter::new(self.app(), entry).add_mnm_relation(prop_numeric, target_entry_id).await;
                     }
                 }
             }
@@ -138,7 +139,7 @@ mod tests {
 
     fn make_scraper() -> BespokeScraper6976 {
         BespokeScraper6976 {
-            app: crate::app_state::get_test_app(),
+            app: std::sync::Arc::new(crate::app_state::get_test_app()),
         }
     }
 

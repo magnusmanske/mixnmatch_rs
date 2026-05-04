@@ -567,13 +567,13 @@ impl ShellCommands {
                 no_blank_entries,
             }) => {
                 let app = Self::path2app(config)?;
-                let merger = crate::catalog_merger::CatalogMerger::new(&app);
+                let merger = crate::catalog_merger::CatalogMerger::new(std::sync::Arc::new(app));
                 let stats = merger.merge(*source, *target, !*no_blank_entries).await?;
                 println!("merge {source} -> {target}: {stats}");
             }
             Some(Commands::OverwriteFromWikidata { config, catalog_id }) => {
                 let app = Self::path2app(config)?;
-                let n = crate::maintenance::Maintenance::new(&app)
+                let n = crate::maintenance::Maintenance::new(std::sync::Arc::new(app))
                     .overwrite_from_wikidata(*catalog_id)
                     .await?;
                 println!("overwrite-from-wikidata: catalog {catalog_id} rewrote {n} match(es)");
@@ -584,14 +584,14 @@ impl ShellCommands {
                 url_pattern,
             }) => {
                 let app = Self::path2app(config)?;
-                crate::maintenance::Maintenance::new(&app)
+                crate::maintenance::Maintenance::new(std::sync::Arc::new(app))
                     .update_ext_urls_from_pattern(*catalog_id, url_pattern)
                     .await?;
                 println!("update-catalog-ext-urls: catalog {catalog_id} rewritten");
             }
             Some(Commands::MigrateCatalogProperty { config, old, new }) => {
                 let app = Self::path2app(config)?;
-                let merger = crate::catalog_merger::CatalogMerger::new(&app);
+                let merger = crate::catalog_merger::CatalogMerger::new(std::sync::Arc::new(app));
                 let stats = merger.migrate_property(*old, *new).await?;
                 println!("migrate-catalog-property {old} -> {new}: {stats}");
             }

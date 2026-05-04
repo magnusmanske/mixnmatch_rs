@@ -1,5 +1,6 @@
+use std::sync::Arc;
 use crate::{
-    app_state::{AppState, USER_AUX_MATCH, item2numeric},
+    app_state::{AppContext, USER_AUX_MATCH, item2numeric},
     entry::Entry,
     extended_entry::ExtendedEntry,
     person_date::PersonDate,
@@ -19,7 +20,7 @@ use super::BespokeScraper;
 
 #[derive(Debug)]
 pub struct BespokeScraper121 {
-    pub(super) app: AppState,
+    pub(super) app: Arc<dyn AppContext>,
 }
 
 #[async_trait]

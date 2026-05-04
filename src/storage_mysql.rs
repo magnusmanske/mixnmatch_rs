@@ -6769,7 +6769,7 @@ async fn test_match_via_auxiliary() {
     entry.unmatch().await.unwrap();
 
     // Run matcher
-    let mut am = AuxiliaryMatcher::new(&mnm);
+    let mut am = AuxiliaryMatcher::new(Arc::new(mnm.clone()));
     am.match_via_auxiliary(TEST_CATALOG_ID).await.unwrap();
 
     // Check

@@ -1,5 +1,6 @@
+use std::sync::Arc;
 use crate::{
-    app_state::AppState, auxiliary_data::AuxiliaryRow, entry::Entry, extended_entry::ExtendedEntry,
+    app_state::AppContext, auxiliary_data::AuxiliaryRow, entry::Entry, extended_entry::ExtendedEntry,
 };
 use anyhow::Result;
 use async_trait::async_trait;
@@ -24,7 +25,7 @@ const PAGE_COUNT: u32 = 12;
 
 #[derive(Debug)]
 pub struct BespokeScraper4679 {
-    pub(super) app: AppState,
+    pub(super) app: Arc<dyn AppContext>,
 }
 
 #[async_trait]

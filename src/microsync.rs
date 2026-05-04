@@ -1,4 +1,4 @@
-use crate::app_state::{AppContext, AppState, item2numeric};
+use crate::app_state::{AppContext, item2numeric};
 use crate::auxiliary_matcher::AUX_PROPERTIES_ALSO_USING_LOWERCASE;
 use crate::catalog::Catalog;
 use crate::entry::{Entry, EntryWriter};
@@ -82,12 +82,12 @@ impl Jobbable for Microsync {
 }
 
 impl Microsync {
-    pub fn new(app: &AppState) -> Self {
-        Self::new_with_writer(app, Box::new(app.wikidata().clone()))
+    pub fn new(app: Arc<dyn AppContext>) -> Self {
+        let wikidata = Box::new(app.wikidata().clone());
+        Self::new_with_writer(app, wikidata)
     }
 
-    pub(crate) fn new_with_writer(app: &AppState, wikidata: Box<dyn WikidataWriter>) -> Self {
-        let app: Arc<dyn AppContext> = Arc::new(app.clone());
+    pub(crate) fn new_with_writer(app: Arc<dyn AppContext>, wikidata: Box<dyn WikidataWriter>) -> Self {
         Self {
             app,
             wikidata,
@@ -104,7 +104,7 @@ impl Microsync {
             (Some(prop), None) => prop,
             _ => return Ok(()), // Don't fail this job, just silently close it
         };
-        let maintenance = Maintenance::from_arc(Arc::clone(&self.app));
+        let maintenance = Maintenance::new(Arc::clone(&self.app));
         maintenance
             .fix_matched_items(catalog_id, &MatchState::fully_matched())
             .await?;
@@ -643,7 +643,7 @@ mod tests {
     #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_get_multiple_extid_in_wikidata() {
         let app = get_test_app();
-        let ms = Microsync::new(&app);
+        let ms = Microsync::new(Arc::new(app.clone()));
         let result = ms.get_multiple_extid_in_wikidata(7889).await.unwrap();
         assert!(!result.is_empty());
     }
@@ -655,7 +655,7 @@ mod tests {
         // runs without error and returns the right shape.
         let app = test_support::test_app().await;
         let catalog_id = test_support::unique_catalog_id();
-        let ms = Microsync::new(&app);
+        let ms = Microsync::new(Arc::new(app.clone()));
         let results = ms.get_multiple_q_in_mnm(catalog_id).await.unwrap();
         assert!(results.is_empty());
     }
@@ -772,7 +772,7 @@ mod tests {
     #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_check_catalog() {
         let app = get_test_app();
-        let mut ms = Microsync::new(&app);
+        let mut ms = Microsync::new(Arc::new(app.clone()));
         ms.check_catalog(22).await.unwrap();
     }
 
@@ -781,7 +781,7 @@ mod tests {
         use crate::wikidata_writer::MockWikidataWriter;
         let app = get_test_app();
         let mock = Box::new(MockWikidataWriter::new());
-        let mut ms = Microsync::new_with_writer(&app, mock);
+        let mut ms = Microsync::new_with_writer(Arc::new(app.clone()), mock);
         ms.update_wiki_page(42, "hello world").await.unwrap();
         let mock_ref = ms.wikidata
             .as_any()

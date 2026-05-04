@@ -1,4 +1,5 @@
-use crate::app_state::{AppState, ExternalServicesContext};
+use crate::app_state::{AppContext, AppState, ExternalServicesContext};
+use std::sync::Arc;
 use crate::automatch::AutoMatch;
 use crate::autoscrape::Autoscrape;
 use crate::auxiliary_matcher::AuxiliaryMatcher;
@@ -104,7 +105,7 @@ impl fmt::Display for JobError {
 #[derive(Debug, Clone)]
 pub struct Job {
     pub data: JobRow,
-    pub app: AppState,
+    pub app: Arc<dyn AppContext>,
     pub skip_actions: Vec<String>,
 }
 
@@ -112,7 +113,7 @@ impl Job {
     pub fn new(app: &AppState) -> Self {
         Self {
             data: JobRow::default(),
-            app: app.clone(),
+            app: Arc::new(app.clone()),
             skip_actions: vec![],
         }
     }
@@ -487,7 +488,7 @@ type JobHandlerFn =
 macro_rules! matcher_action {
     ($action:literal) => {
         ($action, ((|job, catalog_id| Box::pin(async move {
-            let mut am = AutoMatch::new(&job.app);
+            let mut am = AutoMatch::new(Arc::clone(&job.app));
             am.set_current_job(job);
             crate::automatch::run_matcher_for_action($action, &mut am, catalog_id)
                 .await
@@ -501,7 +502,7 @@ macro_rules! matcher_action {
 macro_rules! maintenance_no_arg {
     ($action:literal, $method:ident) => {
         ($action, ((|job, _catalog_id| Box::pin(async move {
-            Maintenance::new(&job.app).$method().await
+            Maintenance::new(Arc::clone(&job.app)).$method().await
         })) as JobHandlerFn))
     };
 }
@@ -511,7 +512,7 @@ macro_rules! maintenance_no_arg {
 macro_rules! maintenance_with_cat {
     ($action:literal, $method:ident) => {
         ($action, ((|job, catalog_id| Box::pin(async move {
-            Maintenance::new(&job.app).$method(catalog_id).await
+            Maintenance::new(Arc::clone(&job.app)).$method(catalog_id).await
         })) as JobHandlerFn))
     };
 }
@@ -565,19 +566,19 @@ const JOB_HANDLER_REGISTRY: &[(&str, JobHandlerFn)] = &[
 
     // --- Maintenance: bespoke (logging on success or special handling) ---
     ("maintenance_crossmatch_via_aux", (|job, _cat| Box::pin(async move {
-        Maintenance::new(&job.app)
+        Maintenance::new(Arc::clone(&job.app))
             .crossmatch_via_aux()
             .await
             .map(|n| log::info!("crossmatch_via_aux: {n} new match(es)"))
     })) as JobHandlerFn),
     ("maintenance_sanity_check_date_matches_are_human", (|job, _cat| Box::pin(async move {
-        Maintenance::new(&job.app)
+        Maintenance::new(Arc::clone(&job.app))
             .sanity_check_date_matches_are_human()
             .await
             .map(|n| log::info!("sanity_check_date_matches_are_human: removed {n}"))
     })) as JobHandlerFn),
     ("fix_disambig", (|job, catalog_id| Box::pin(async move {
-        Maintenance::new(&job.app)
+        Maintenance::new(Arc::clone(&job.app))
             .unlink_meta_items(catalog_id, &MatchState::any_matched())
             .await
     })) as JobHandlerFn),
@@ -592,39 +593,39 @@ const JOB_HANDLER_REGISTRY: &[(&str, JobHandlerFn)] = &[
             },
             other => other,
         };
-        Maintenance::new(&job.app)
+        Maintenance::new(Arc::clone(&job.app))
             .fix_redirects(catalog_id, &MatchState::any_matched())
             .await
     })) as JobHandlerFn),
 
     // --- Subsystems with set_current_job + special construction ---
     ("autoscrape", (|job, catalog_id| Box::pin(async move {
-        let mut autoscrape = Autoscrape::new(catalog_id, &job.app).await?;
+        let mut autoscrape = Autoscrape::new(catalog_id, Arc::clone(&job.app)).await?;
         autoscrape.set_current_job(job);
         autoscrape.run().await
     })) as JobHandlerFn),
     ("aux2wd", (|job, catalog_id| Box::pin(async move {
-        let mut am = AuxiliaryMatcher::new(&job.app);
+        let mut am = AuxiliaryMatcher::new(Arc::clone(&job.app));
         am.set_current_job(job);
         am.add_auxiliary_to_wikidata(catalog_id).await
     })) as JobHandlerFn),
     ("auxiliary_matcher", (|job, catalog_id| Box::pin(async move {
-        let mut am = AuxiliaryMatcher::new(&job.app);
+        let mut am = AuxiliaryMatcher::new(Arc::clone(&job.app));
         am.set_current_job(job);
         am.match_via_auxiliary(catalog_id).await
     })) as JobHandlerFn),
     ("taxon_matcher", (|job, catalog_id| Box::pin(async move {
-        let mut tm = TaxonMatcher::new(&job.app);
+        let mut tm = TaxonMatcher::new(Arc::clone(&job.app));
         tm.set_current_job(job);
         tm.match_taxa(catalog_id).await
     })) as JobHandlerFn),
     ("update_from_tabbed_file", (|job, catalog_id| Box::pin(async move {
-        let mut uc = UpdateCatalog::new(&job.app);
+        let mut uc = UpdateCatalog::new(Arc::clone(&job.app));
         uc.set_current_job(job);
         uc.update_from_tabbed_file(catalog_id).await
     })) as JobHandlerFn),
     ("microsync", (|job, catalog_id| Box::pin(async move {
-        let mut ms = Microsync::new(&job.app);
+        let mut ms = Microsync::new(Arc::clone(&job.app));
         ms.set_current_job(job);
         let catalog_id = match catalog_id {
             0 => match job.app.storage().get_random_active_catalog_id_with_property().await {
@@ -638,29 +639,29 @@ const JOB_HANDLER_REGISTRY: &[(&str, JobHandlerFn)] = &[
 
     // --- Free-function dispatch ---
     ("fix_duplicate_issues", (|job, _cat| Box::pin(async move {
-        crate::issue::Issue::fix_wd_duplicates(&job.app).await
+        crate::issue::Issue::fix_wd_duplicates(&*job.app).await
     })) as JobHandlerFn),
     ("update_issues", (|job, _cat| Box::pin(async move {
-        crate::issue::Issue::sweep_open(&job.app).await
+        crate::issue::Issue::sweep_open(&*job.app).await
     })) as JobHandlerFn),
     ("wdrc_sync", (|job, _cat| Box::pin(async move {
-        job.app.wdrc().sync(&job.app).await
+        job.app.wdrc().sync(&*job.app).await
     })) as JobHandlerFn),
     ("sync_wd_matches", (|job, _cat| Box::pin(async move {
-        crate::wd_match_sync::classify_pending(&job.app, crate::wd_match_sync::DEFAULT_BATCH_SIZE)
+        crate::wd_match_sync::classify_pending(&*job.app, crate::wd_match_sync::DEFAULT_BATCH_SIZE)
             .await
             .map(|stats| log::info!("sync_wd_matches: {stats}"))
     })) as JobHandlerFn),
     ("push_wd_matches_to_wikidata", (|job, _cat| Box::pin(async move {
-        crate::wd_match_sync::push_wd_missing(&job.app, crate::wd_match_sync::DEFAULT_BATCH_SIZE)
+        crate::wd_match_sync::push_wd_missing(&*job.app, crate::wd_match_sync::DEFAULT_BATCH_SIZE)
             .await
             .map(|stats| log::info!("push_wd_matches_to_wikidata: {stats}"))
     })) as JobHandlerFn),
     ("bespoke_scraper", (|job, catalog_id| Box::pin(async move {
-        crate::bespoke_scrapers::run_bespoke_scraper(catalog_id, &job.app).await
+        crate::bespoke_scrapers::run_bespoke_scraper(catalog_id, Arc::clone(&job.app)).await
     })) as JobHandlerFn),
     ("import_aux_from_url", (|job, catalog_id| Box::pin(async move {
-        PhpWrapper::import_aux_from_url(catalog_id, &job.app)
+        PhpWrapper::import_aux_from_url(catalog_id, &*job.app)
     })) as JobHandlerFn),
 
     // --- Lua-with-PHP-fallback handlers ---
@@ -670,37 +671,37 @@ const JOB_HANDLER_REGISTRY: &[(&str, JobHandlerFn)] = &[
     // but fails at runtime, the error is returned — falling back to PHP
     // there would mask the bug.
     ("update_person_dates", (|job, catalog_id| Box::pin(async move {
-        match code_fragment::run_person_dates_job(catalog_id, &job.app).await? {
+        match code_fragment::run_person_dates_job(catalog_id, &*job.app).await? {
             code_fragment::LuaJobOutcome::Done => Ok(()),
             code_fragment::LuaJobOutcome::NoLuaCode => {
-                PhpWrapper::update_person_dates(catalog_id, &job.app)
+                PhpWrapper::update_person_dates(catalog_id, &*job.app)
             }
         }
     })) as JobHandlerFn),
     ("generate_aux_from_description", (|job, catalog_id| Box::pin(async move {
-        match code_fragment::run_aux_from_desc_job(catalog_id, &job.app).await? {
+        match code_fragment::run_aux_from_desc_job(catalog_id, &*job.app).await? {
             code_fragment::LuaJobOutcome::Done => Ok(()),
             code_fragment::LuaJobOutcome::NoLuaCode => {
-                PhpWrapper::generate_aux_from_description(catalog_id, &job.app)
+                PhpWrapper::generate_aux_from_description(catalog_id, &*job.app)
             }
         }
     })) as JobHandlerFn),
     ("update_descriptions_from_url", (|job, catalog_id| Box::pin(async move {
-        match code_fragment::run_desc_from_html_job(catalog_id, &job.app).await? {
+        match code_fragment::run_desc_from_html_job(catalog_id, &*job.app).await? {
             code_fragment::LuaJobOutcome::Done => Ok(()),
             code_fragment::LuaJobOutcome::NoLuaCode => {
-                PhpWrapper::update_descriptions_from_url(catalog_id, &job.app)
+                PhpWrapper::update_descriptions_from_url(catalog_id, &*job.app)
             }
         }
     })) as JobHandlerFn),
 
     // --- Misc ---
     ("match_by_coordinates", (|job, catalog_id| Box::pin(async move {
-        let cm = CoordinateMatcher::new(&job.app, Some(catalog_id)).await?;
+        let cm = CoordinateMatcher::new(Arc::clone(&job.app), Some(catalog_id)).await?;
         cm.run().await
     })) as JobHandlerFn),
     ("sync_from_cersei", (|job, _cat| Box::pin(async move {
-        let cs = crate::cersei::CerseiSync::new(&job.app)?;
+        let cs = crate::cersei::CerseiSync::new(Arc::clone(&job.app))?;
         cs.sync().await
     })) as JobHandlerFn),
     ("reference_fixer", (|job, _cat| Box::pin(async move {
@@ -708,7 +709,7 @@ const JOB_HANDLER_REGISTRY: &[(&str, JobHandlerFn)] = &[
         // external-id references on Wikidata. Drains the
         // `reference_fixer` queue populated by every successful
         // `entry.set_match`. Catalog id is 0 (not catalog-scoped).
-        let mut rf = crate::reference_fixer::ReferenceFixer::new(&job.app)?;
+        let mut rf = crate::reference_fixer::ReferenceFixer::new(Arc::clone(&job.app))?;
         rf.run().await.map(|_| ())
     })) as JobHandlerFn),
 ];

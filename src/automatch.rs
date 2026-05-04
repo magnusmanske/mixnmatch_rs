@@ -35,7 +35,7 @@ pub use crate::storage::{
     ResultInOtherCatalog,
 };
 
-use crate::app_state::{AppContext, AppState};
+use crate::app_state::AppContext;
 use crate::job::Job;
 use crate::job::Jobbable;
 use lazy_static::lazy_static;
@@ -101,8 +101,7 @@ impl Jobbable for AutoMatch {
 }
 
 impl AutoMatch {
-    pub fn new(app: &AppState) -> Self {
-        let app: Arc<dyn AppContext> = Arc::new(app.clone());
+    pub fn new(app: Arc<dyn AppContext>) -> Self {
         Self {
             app,
             job: None,
@@ -126,7 +125,7 @@ mod tests {
     // async fn test_automatch_complex() {
     //     let _test_lock = TEST_MUTEX.lock();
     //     let app = get_test_app();
-    //     let mut am = AutoMatch::new(&app);
+    //     let mut am = AutoMatch::new(Arc::new(app.clone()));
     //     let result = am.automatch_complex(3663).await.unwrap();
     //     println!("{result:?}");
     // }
@@ -142,7 +141,7 @@ mod tests {
         EntryWriter::new(&app, &mut entry).unmatch().await.unwrap();
 
         // Match by date
-        let mut am = AutoMatch::new(&app);
+        let mut am = AutoMatch::new(Arc::new(app.clone()));
         am.match_person_by_dates(TEST_CATALOG_ID).await.unwrap();
 
         // Check if set
@@ -169,7 +168,7 @@ mod tests {
         );
 
         // Run automatch
-        let mut am = AutoMatch::new(&app);
+        let mut am = AutoMatch::new(Arc::new(app.clone()));
         am.automatch_by_search(TEST_CATALOG_ID).await.unwrap();
 
         // Check in-database changes
@@ -191,7 +190,7 @@ mod tests {
         let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
         EntryWriter::new(&app, &mut entry).unmatch().await.unwrap();
 
-        let mut am = AutoMatch::new(&app);
+        let mut am = AutoMatch::new(Arc::new(app.clone()));
 
         // Run automatch
         am.automatch_by_sitelink(TEST_CATALOG_ID).await.unwrap();
@@ -217,7 +216,7 @@ mod tests {
         assert!(entry.is_fully_matched());
 
         // Purge catalog — full matches must survive
-        AutoMatch::new(&app).purge_automatches(catalog_id).await.unwrap();
+        AutoMatch::new(Arc::new(app.clone())).purge_automatches(catalog_id).await.unwrap();
         let entry2 = Entry::from_id(entry_id, &app).await.unwrap();
         assert!(entry2.is_fully_matched());
 
@@ -228,7 +227,7 @@ mod tests {
         assert!(entry3.is_partially_matched());
 
         // Purge catalog — automatch must be removed
-        AutoMatch::new(&app).purge_automatches(catalog_id).await.unwrap();
+        AutoMatch::new(Arc::new(app.clone())).purge_automatches(catalog_id).await.unwrap();
         let entry4 = Entry::from_id(entry_id, &app).await.unwrap();
         assert!(entry4.is_unmatched());
     }
@@ -243,7 +242,7 @@ mod tests {
         let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
         EntryWriter::new(&app, &mut entry).unmatch().await.unwrap();
 
-        let mut am = AutoMatch::new(&app);
+        let mut am = AutoMatch::new(Arc::new(app.clone()));
 
         // Set prelim match
         let mut entry2 = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();

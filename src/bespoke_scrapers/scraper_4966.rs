@@ -1,4 +1,5 @@
-use crate::{app_state::AppState, entry::Entry, extended_entry::ExtendedEntry};
+use std::sync::Arc;
+use crate::{app_state::AppContext, entry::Entry, extended_entry::ExtendedEntry};
 use anyhow::Result;
 use async_trait::async_trait;
 use rand::RngExt;
@@ -18,7 +19,7 @@ use super::BespokeScraper;
 
 #[derive(Debug)]
 pub struct BespokeScraper4966 {
-    pub(super) app: AppState,
+    pub(super) app: Arc<dyn AppContext>,
 }
 
 #[async_trait]

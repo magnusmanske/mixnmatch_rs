@@ -1,4 +1,5 @@
-use crate::{app_state::AppState, entry::{Entry, EntryWriter}, extended_entry::ExtendedEntry};
+use std::sync::Arc;
+use crate::{app_state::AppContext, entry::{Entry, EntryWriter}, extended_entry::ExtendedEntry};
 use anyhow::Result;
 use async_trait::async_trait;
 use lazy_static::lazy_static;
@@ -32,7 +33,7 @@ const PAGE_SIZE: usize = 1000;
 
 #[derive(Debug)]
 pub struct BespokeScraper6601 {
-    pub(super) app: AppState,
+    pub(super) app: Arc<dyn AppContext>,
 }
 
 #[async_trait]

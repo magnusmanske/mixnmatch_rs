@@ -14,7 +14,7 @@
 //! but run the job in a way that's easy to disable (remove the
 //! "reference_fixer" job row).
 
-use crate::app_state::{AppContext, AppState};
+use crate::app_state::AppContext;
 use std::sync::Arc;
 use crate::util::wikidata_props as wp;
 use crate::wdqs::WDQS_URL;
@@ -103,12 +103,11 @@ pub struct ReferenceFixer {
 }
 
 impl ReferenceFixer {
-    pub fn new(app: &AppState) -> Result<Self> {
+    pub fn new(app: Arc<dyn AppContext>) -> Result<Self> {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(60))
             .user_agent("Mix'n'match reference fixer (https://mix-n-match.toolforge.org)")
             .build()?;
-        let app: Arc<dyn AppContext> = Arc::new(app.clone());
         Ok(Self {
             app,
             http,

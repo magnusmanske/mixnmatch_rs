@@ -1,5 +1,6 @@
+use std::sync::Arc;
 use crate::{
-    app_state::{AppState, USER_AUX_MATCH, item2numeric},
+    app_state::{AppContext, USER_AUX_MATCH, item2numeric},
     auxiliary_data::AuxiliaryRow,
     entry::Entry,
     extended_entry::ExtendedEntry,
@@ -18,7 +19,7 @@ use super::BespokeScraper;
 
 #[derive(Debug)]
 pub struct BespokeScraper7697 {
-    pub(super) app: AppState,
+    pub(super) app: Arc<dyn AppContext>,
 }
 
 #[async_trait]
@@ -440,7 +441,7 @@ mod tests {
     #[test]
     fn test_7697_catalog_id() {
         let s = BespokeScraper7697 {
-            app: crate::app_state::get_test_app(),
+            app: std::sync::Arc::new(crate::app_state::get_test_app()),
         };
         assert_eq!(s.catalog_id(), 7697);
     }
@@ -448,7 +449,7 @@ mod tests {
     #[test]
     fn test_7697_keep_existing_names_default_false() {
         let s = BespokeScraper7697 {
-            app: crate::app_state::get_test_app(),
+            app: std::sync::Arc::new(crate::app_state::get_test_app()),
         };
         assert!(!s.keep_existing_names());
     }

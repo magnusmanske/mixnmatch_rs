@@ -1,5 +1,5 @@
 use crate::DbId;
-use crate::app_state::{AppContext, AppState, USER_LOCATION_MATCH, item2numeric};
+use crate::app_state::{AppContext, USER_LOCATION_MATCH, item2numeric};
 use std::sync::Arc;
 use crate::coordinates::LocationRow;
 use crate::entry::{Entry, EntryWriter};
@@ -50,14 +50,13 @@ impl Jobbable for CoordinateMatcher {
 }
 
 impl CoordinateMatcher {
-    pub async fn new(app: &AppState, catalog_id: Option<DbId>) -> Result<Self> {
+    pub async fn new(app: Arc<dyn AppContext>, catalog_id: Option<DbId>) -> Result<Self> {
         let mw_api = app.wikidata().get_mw_api().await?;
-        let app: Arc<dyn AppContext> = Arc::new(app.clone());
         let mut ret = Self {
             app,
             mw_api,
             job: None,
-            catalog_id, // Specific catalog ID, or None for random catalogs
+            catalog_id,
             permissions: HashMap::new(),
             bad_catalogs: vec![],
         };
@@ -323,7 +322,7 @@ mod tests {
         let app = get_test_app();
         let mut entry = Entry::from_id(TEST_ENTRY_ID, &app).await.unwrap();
         EntryWriter::new(&app, &mut entry).unmatch().await.unwrap();
-        let cm = CoordinateMatcher::new(&app, Some(TEST_CATALOG_ID))
+        let cm = CoordinateMatcher::new(Arc::new(app.clone()), Some(TEST_CATALOG_ID))
             .await
             .unwrap();
         cm.run().await.unwrap();

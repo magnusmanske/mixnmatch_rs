@@ -1,5 +1,6 @@
+use std::sync::Arc;
 use crate::{
-    app_state::{AppState, USER_AUX_MATCH},
+    app_state::{AppContext, USER_AUX_MATCH},
     coordinates::CoordinateLocation,
     entry::Entry,
     extended_entry::ExtendedEntry,
@@ -25,7 +26,7 @@ use super::BespokeScraper;
 
 #[derive(Debug)]
 pub struct BespokeScraper2964 {
-    pub(super) app: AppState,
+    pub(super) app: Arc<dyn AppContext>,
 }
 
 /// `(api_key, default_type)` pairs; the same shape used by the PHP

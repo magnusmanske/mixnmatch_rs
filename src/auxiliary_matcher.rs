@@ -15,7 +15,7 @@
 mod finder;
 mod sync;
 
-use crate::app_state::{AppContext, AppState, WikidataContext};
+use crate::app_state::{AppContext, WikidataContext};
 use crate::catalog::Catalog;
 use crate::coordinates::CoordinateLocation;
 use crate::job::Job;
@@ -165,12 +165,12 @@ impl Jobbable for AuxiliaryMatcher {
 
 impl AuxiliaryMatcher {
     //TODO test
-    pub fn new(app: &AppState) -> Self {
-        Self::new_with_writer(app, Box::new(app.wikidata().clone()))
+    pub fn new(app: Arc<dyn AppContext>) -> Self {
+        let wikidata = Box::new(app.wikidata().clone());
+        Self::new_with_writer(app, wikidata)
     }
 
-    pub(crate) fn new_with_writer(app: &AppState, wikidata: Box<dyn WikidataWriter>) -> Self {
-        let app: Arc<dyn AppContext> = Arc::new(app.clone());
+    pub(crate) fn new_with_writer(app: Arc<dyn AppContext>, wikidata: Box<dyn WikidataWriter>) -> Self {
         Self {
             properties_using_items: vec![],
             properties_that_have_external_ids: vec![],
@@ -288,7 +288,7 @@ mod tests {
         let mw_api = app.wikidata().get_mw_api().await.unwrap();
         let entities = EntityContainer::new();
         let entity = entities.load_entity(&mw_api, "Q13520818").await.unwrap();
-        let am = AuxiliaryMatcher::new(&app);
+        let am = AuxiliaryMatcher::new(Arc::new(app.clone()));
         // P214 is present in entity → returns true regardless of value
         let aux_present = AuxiliaryResults {
             aux_id: 0,
@@ -366,7 +366,7 @@ mod tests {
                 .unwrap();
         }
 
-        let mut am = AuxiliaryMatcher::new_with_writer(&app, Box::new(MockWikidataWriter::new()));
+        let mut am = AuxiliaryMatcher::new_with_writer(Arc::new(app.clone()), Box::new(MockWikidataWriter::new()));
         am.add_auxiliary_to_wikidata(catalog_id).await.unwrap();
 
         // P214=30701597 is already in Q13520818 → entity_already_has_property marks it
@@ -389,7 +389,7 @@ mod tests {
     async fn test_new_with_writer_and_as_any() {
         use crate::wikidata_writer::MockWikidataWriter;
         let app = test_support::test_app().await;
-        let am = AuxiliaryMatcher::new_with_writer(&app, Box::new(MockWikidataWriter::new()));
+        let am = AuxiliaryMatcher::new_with_writer(Arc::new(app.clone()), Box::new(MockWikidataWriter::new()));
         // Verify the mock is stored and accessible via as_any.
         am.wikidata
             .as_any()
@@ -401,7 +401,7 @@ mod tests {
     #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_get_source_for_entry() {
         let app = get_test_app();
-        let mut am = AuxiliaryMatcher::new(&app);
+        let mut am = AuxiliaryMatcher::new(Arc::new(app.clone()));
         let entry = Entry::from_id(144507016, &app).await.unwrap();
         let res = am.get_source_for_entry(&entry).await;
         let x1 = WikidataCommandPropertyValue {
