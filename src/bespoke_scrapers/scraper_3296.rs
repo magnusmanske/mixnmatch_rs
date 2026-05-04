@@ -1,13 +1,10 @@
 use crate::{
-    app_state::AppState,
-    auxiliary_data::AuxiliaryRow,
-    entry::Entry,
-    extended_entry::ExtendedEntry,
+    app_state::AppState, auxiliary_data::AuxiliaryRow, entry::Entry, extended_entry::ExtendedEntry,
 };
-use std::collections::HashSet;
 use anyhow::Result;
 use async_trait::async_trait;
 use rand::RngExt;
+use std::collections::HashSet;
 
 use super::BespokeScraper;
 
@@ -32,9 +29,7 @@ impl BespokeScraper for BespokeScraper3296 {
         let mut end_of_records = false;
 
         while !end_of_records {
-            let url = format!(
-                "https://api.gbif.org/v1/species?limit={BATCH_SIZE}&offset={offset}"
-            );
+            let url = format!("https://api.gbif.org/v1/species?limit={BATCH_SIZE}&offset={offset}");
             let json: serde_json::Value = client.get(&url).send().await?.json().await?;
             end_of_records = json["endOfRecords"].as_bool().unwrap_or(true);
 
@@ -80,9 +75,7 @@ impl BespokeScraper3296 {
         }
         let ext_desc = desc_parts.join(" | ");
 
-        let rank_q = r["rank"]
-            .as_str()
-            .and_then(|rank| Self::rank_to_q(rank));
+        let rank_q = r["rank"].as_str().and_then(Self::rank_to_q);
 
         let mut aux = HashSet::new();
         aux.insert(AuxiliaryRow::new(225, scientific_name.to_string()));
@@ -94,10 +87,7 @@ impl BespokeScraper3296 {
             entry: Entry {
                 catalog: catalog_id,
                 ext_id: key.to_string(),
-                ext_url: format!(
-                    "https://www.gbif.org/species/{}",
-                    key
-                ),
+                ext_url: format!("https://www.gbif.org/species/{}", key),
                 ext_name: scientific_name.to_string(),
                 ext_desc,
                 type_name: Some("Q16521".to_string()),
@@ -156,8 +146,14 @@ mod tests {
         assert_eq!(ee.entry.ext_id, "1");
         assert_eq!(ee.entry.ext_name, "Animalia");
         assert_eq!(ee.entry.type_name, Some("Q16521".to_string()));
-        assert!(ee.aux.contains(&AuxiliaryRow::new(225, "Animalia".to_string())));
-        assert!(ee.aux.contains(&AuxiliaryRow::new(105, "Q36732".to_string())));
+        assert!(
+            ee.aux
+                .contains(&AuxiliaryRow::new(225, "Animalia".to_string()))
+        );
+        assert!(
+            ee.aux
+                .contains(&AuxiliaryRow::new(105, "Q36732".to_string()))
+        );
         // vernacular differs from scientific, so it's in desc
         assert!(ee.entry.ext_desc.contains("animals"));
     }
@@ -208,7 +204,10 @@ mod tests {
         });
         let ee = BespokeScraper3296::parse_result(3296, &r).unwrap();
         // P225 present, P105 absent (unknown rank)
-        assert!(ee.aux.contains(&AuxiliaryRow::new(225, "Weirdus taxon".to_string())));
+        assert!(
+            ee.aux
+                .contains(&AuxiliaryRow::new(225, "Weirdus taxon".to_string()))
+        );
         assert!(!ee.aux.iter().any(|a| a.prop_numeric() == 105));
     }
 

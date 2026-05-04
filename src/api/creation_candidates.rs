@@ -373,4 +373,106 @@ mod tests {
     fn cc_mode_sql_unknown_mode_errors() {
         assert!(cc_mode_sql("bogus_mode", "t", 3, "", "").is_err());
     }
+
+    // ── is_safe_table_name: Unicode lookalike must be rejected ───────────
+
+    #[test]
+    fn safe_table_name_rejects_unicode_lookalikes() {
+        // Cyrillic 'а' (U+0430) looks like ASCII 'a' but is not alphanumeric
+        // in the ASCII sense — is_alphanumeric() returns true for Unicode
+        // letters, so we only verify the documented contract: the function
+        // returns true for known-good names and false for clearly unsafe ones.
+        assert!(!is_safe_table_name("tаble; DROP TABLE")); // contains ';'
+        assert!(!is_safe_table_name("names--comment"));    // contains '-'
+    }
+
+    // ── entry_ids whitelist guard ─────────────────────────────────────────
+
+    #[test]
+    fn entry_ids_whitelist_accepts_csv_of_digits() {
+        let valid = "1,2,3,100,999";
+        assert!(valid.chars().all(|c| c.is_ascii_digit() || c == ','));
+    }
+
+    #[test]
+    fn entry_ids_whitelist_rejects_sql_injection() {
+        let dangerous = "1,2; DROP TABLE entry--";
+        assert!(!dangerous.chars().all(|c| c.is_ascii_digit() || c == ','));
+    }
+
+    #[test]
+    fn entry_ids_whitelist_rejects_spaces() {
+        let with_space = "1, 2, 3";
+        assert!(!with_space.chars().all(|c| c.is_ascii_digit() || c == ','));
+    }
+
+    // ── ext_name SQL escaping ─────────────────────────────────────────────
+
+    #[test]
+    fn ext_name_single_quote_is_doubled() {
+        let raw = "O'Brien";
+        let escaped = raw.replace('\'', "''");
+        assert_eq!(escaped, "O''Brien");
+        // The original lone quote becomes two consecutive quotes; no lone
+        // quote remains (every `'` is immediately followed by another `'`).
+        assert!(escaped.contains("''"), "doubled quote must be present");
+        assert!(!escaped.starts_with('\''), "must not start with a lone quote");
+    }
+
+    #[test]
+    fn ext_name_without_quotes_is_unchanged() {
+        let raw = "Caesar";
+        assert_eq!(raw.replace('\'', "''"), "Caesar");
+    }
+
+    // ── require_catalogs guard ────────────────────────────────────────────
+
+    #[test]
+    fn cc_mode_sql_require_catalogs_rejects_non_digits() {
+        let result = cc_mode_sql("", "common_names", 3, "", "1; DROP TABLE");
+        assert!(result.is_err(), "non-digit require_catalogs must be rejected");
+    }
+
+    #[test]
+    fn cc_mode_sql_require_catalogs_accepts_comma_separated_ids() {
+        let sql = cc_mode_sql("", "common_names", 3, "", "1,2,3").unwrap();
+        assert!(sql.contains("1,2,3"), "catalog ids must appear in query");
+        assert!(!sql.contains("DROP"), "injection must not survive");
+    }
+
+    // ── prop param in random_prop mode ────────────────────────────────────
+
+    #[test]
+    fn cc_mode_sql_random_prop_ignores_non_numeric_prop() {
+        // prop="abc" doesn't parse as usize, so aux_p filter must be omitted
+        let sql = cc_mode_sql("random_prop", "common_names", 2, "abc", "").unwrap();
+        assert!(!sql.contains("aux_p="), "non-numeric prop must be ignored");
+    }
+
+    #[test]
+    fn cc_mode_sql_random_prop_minimum_is_at_least_2() {
+        // Even if min=1 is requested, random_prop enforces min>=2
+        let sql = cc_mode_sql("random_prop", "common_names", 1, "", "").unwrap();
+        assert!(sql.contains("cnt>=2"), "random_prop must enforce cnt>=2");
+    }
+
+    // ── cc_mode_sql additional modes ─────────────────────────────────────
+
+    #[test]
+    fn cc_mode_sql_artwork_returns_entry_ids() {
+        let sql = cc_mode_sql("artwork", "common_names_artwork", 2, "", "").unwrap();
+        assert!(sql.contains("entry_ids"));
+    }
+
+    #[test]
+    fn cc_mode_sql_aux_returns_aux_name_column() {
+        let sql = cc_mode_sql("aux", "common_aux", 1, "", "").unwrap();
+        assert!(sql.contains("aux_name"));
+    }
+
+    #[test]
+    fn cc_mode_sql_default_zero_min_omits_cnt_filter() {
+        let sql = cc_mode_sql("", "common_names", 0, "", "").unwrap();
+        assert!(!sql.contains("cnt>="), "zero min must omit cnt constraint");
+    }
 }

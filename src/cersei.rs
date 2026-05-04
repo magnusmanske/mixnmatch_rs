@@ -6,11 +6,11 @@ use std::thread;
 use std::time::Duration;
 
 use crate::app_state::{AppContext, AppState};
-use std::sync::Arc;
 use crate::catalog::Catalog;
 use crate::entry::{Entry, EntryWriter};
 use crate::extended_entry::ExtendedEntry;
 use crate::person_date::PersonDate;
+use std::sync::Arc;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CerseiScraper {
@@ -133,7 +133,8 @@ impl CerseiSync {
 
             // Check if catalog with that name exists
             loop {
-                let catalog_with_name_exists = Catalog::from_name(&name, self.app.as_ref()).await.is_ok();
+                let catalog_with_name_exists =
+                    Catalog::from_name(&name, self.app.as_ref()).await.is_ok();
                 if catalog_with_name_exists {
                     name = format!("{name} [CERSEI]");
                 } else {
@@ -204,7 +205,9 @@ impl CerseiSync {
 
     /// Add a new entry to the database
     async fn add_new_entry(&self, entry: &mut Entry) -> Result<usize> {
-        EntryWriter::new(self.app.as_ref(), entry).insert_as_new().await?;
+        EntryWriter::new(self.app.as_ref(), entry)
+            .insert_as_new()
+            .await?;
         entry.get_valid_id()
     }
 
@@ -212,13 +215,18 @@ impl CerseiSync {
     /// exponential back-off and cache-busting query params on JSON parse failures.
     async fn fetch_cersei_page(&self, url: &str) -> Result<CerseiEntriesResponse> {
         let mut url = url.to_string();
-        for attempt in 0u64..=5 {
+        for attempt in 0_u64..=5 {
             match self.http_client.get(&url).send().await {
                 Ok(response) => match response.json::<CerseiEntriesResponse>().await {
                     Ok(data) => return Ok(data),
                     Err(_) if attempt < 5 => {
                         thread::sleep(Duration::from_secs((attempt + 1) * 5));
-                        url = format!("{}&blah{}={}", url, rand::random::<u32>(), rand::random::<u32>());
+                        url = format!(
+                            "{}&blah{}={}",
+                            url,
+                            rand::random::<u32>(),
+                            rand::random::<u32>()
+                        );
                     }
                     Err(_) => {}
                 },
@@ -237,7 +245,12 @@ impl CerseiSync {
         catalog_id: usize,
         existing_ext_ids: &mut HashMap<String, usize>,
     ) -> Result<bool> {
-        let name = ce.label.as_ref().or(ce.original_label.as_ref()).map(String::as_str).unwrap_or("");
+        let name = ce
+            .label
+            .as_ref()
+            .or(ce.original_label.as_ref())
+            .map(String::as_str)
+            .unwrap_or("");
         if name.is_empty() || ce.source_id.is_empty() {
             return Ok(false);
         }
@@ -263,9 +276,20 @@ impl CerseiSync {
 
         if let Some(&entry_id) = existing_ext_ids.get(&ne.entry.ext_id) {
             let type_str = ne.entry.type_name.as_deref().unwrap_or("");
-            self.app.storage().entry_update_cersei(entry_id, &ne.entry.ext_name, &ne.entry.ext_desc, type_str, &ne.entry.ext_url).await?;
+            self.app
+                .storage()
+                .entry_update_cersei(
+                    entry_id,
+                    &ne.entry.ext_name,
+                    &ne.entry.ext_desc,
+                    type_str,
+                    &ne.entry.ext_url,
+                )
+                .await?;
             if ne.born.is_some() || ne.died.is_some() {
-                EntryWriter::new(self.app.as_ref(), &mut ne.entry).set_person_dates(&ne.born, &ne.died).await?;
+                EntryWriter::new(self.app.as_ref(), &mut ne.entry)
+                    .set_person_dates(&ne.born, &ne.died)
+                    .await?;
             }
             Ok(false)
         } else {
@@ -273,7 +297,9 @@ impl CerseiSync {
                 Ok(entry_id) => {
                     existing_ext_ids.insert(ne.entry.id.unwrap_or(0).to_string(), entry_id);
                     if ne.born.is_some() || ne.died.is_some() {
-                        EntryWriter::new(self.app.as_ref(), &mut ne.entry).set_person_dates(&ne.born, &ne.died).await?;
+                        EntryWriter::new(self.app.as_ref(), &mut ne.entry)
+                            .set_person_dates(&ne.born, &ne.died)
+                            .await?;
                     }
                     Ok(true)
                 }
@@ -307,7 +333,10 @@ impl CerseiSync {
 
             let response_data = self.fetch_cersei_page(&url).await?;
             for ce in &response_data.entries {
-                if self.apply_cersei_entry(ce, catalog_id, &mut existing_ext_ids).await? {
+                if self
+                    .apply_cersei_entry(ce, catalog_id, &mut existing_ext_ids)
+                    .await?
+                {
                     added_new_entries = true;
                 }
             }
@@ -318,8 +347,14 @@ impl CerseiSync {
         }
 
         self.sync_internal_relations(scraper_id, last_sync).await?;
-        self.app.storage().update_cersei_last_update(scraper_id, &start_time).await?;
-        self.app.storage().catalog_refresh_overview_table(catalog_id).await?;
+        self.app
+            .storage()
+            .update_cersei_last_update(scraper_id, &start_time)
+            .await?;
+        self.app
+            .storage()
+            .catalog_refresh_overview_table(catalog_id)
+            .await?;
 
         if self.set_human_dates_flag(catalog_id).await? {
             self.queue_job(catalog_id, "match_person_dates").await?;
@@ -327,7 +362,8 @@ impl CerseiSync {
         }
         if added_new_entries {
             self.queue_job(catalog_id, "automatch_by_sitelink").await?;
-            self.queue_job(catalog_id, "automatch_from_other_catalogs").await?;
+            self.queue_job(catalog_id, "automatch_from_other_catalogs")
+                .await?;
             self.queue_job(catalog_id, "automatch_by_search").await?;
         }
         Ok(())
@@ -500,18 +536,18 @@ impl CerseiSync {
 mod tests {
     use super::*;
     use crate::test_support;
-    use wiremock::{Mock, MockServer, ResponseTemplate};
     use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    const CERSEI_SCRAPERS_JSON: &str =
-        include_str!("../test_data/cersei_scrapers.json");
+    const CERSEI_SCRAPERS_JSON: &str = include_str!("../test_data/cersei_scrapers.json");
 
     #[tokio::test]
     async fn test_get_cersei_scrapers() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .respond_with(ResponseTemplate::new(200).set_body_string(CERSEI_SCRAPERS_JSON))
-            .mount(&server).await;
+            .mount(&server)
+            .await;
         let app = test_support::test_app().await;
         let cs = CerseiSync::new_with_scrapers_url(&app, &server.uri().to_string()).unwrap();
         let scrapers = cs.get_cersei_scrapers().await.unwrap();

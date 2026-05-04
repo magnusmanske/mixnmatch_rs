@@ -358,7 +358,6 @@ impl AutoMatch {
         Ok(ret)
     }
 
-    //TODO test
     pub(super) fn extract_sane_year_from_date(date: &str) -> Option<i32> {
         let captures = RE_YEAR.captures(date)?;
         if captures.len() != 2 {

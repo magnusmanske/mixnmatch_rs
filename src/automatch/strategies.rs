@@ -499,7 +499,6 @@ impl AutoMatch {
         Some((entry_id, items))
     }
 
-    //TODO test
     pub async fn automatch_from_other_catalogs(&mut self, catalog_id: usize) -> Result<()> {
         let mut offset = self.get_last_job_offset().await;
         let batch_size = 500;
@@ -657,5 +656,110 @@ fn json_array_of_strings_to_vec_item_ids(json: &serde_json::Value) -> Vec<usize>
             .filter_map(|item| item.as_str()?.get(1..)?.parse().ok())
             .collect(),
         None => Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::ResultInOriginalCatalog;
+    use serde_json::json;
+
+    // ── automatch_by_sitelink_name2entries ────────────────────────────────
+
+    #[test]
+    fn name2entries_groups_by_name() {
+        let entries = vec![
+            (1_usize, "Caesar".to_string()),
+            (2_usize, "Caesar".to_string()),
+            (3_usize, "Brutus".to_string()),
+        ];
+        let map = AutoMatch::automatch_by_sitelink_name2entries(&entries);
+        assert_eq!(map["Caesar"], vec![1, 2]);
+        assert_eq!(map["Brutus"], vec![3]);
+    }
+
+    #[test]
+    fn name2entries_empty_input_gives_empty_map() {
+        let map = AutoMatch::automatch_by_sitelink_name2entries(&[]);
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn name2entries_preserves_case() {
+        let entries = vec![
+            (1, "caesar".to_string()),
+            (2, "Caesar".to_string()),
+        ];
+        let map = AutoMatch::automatch_by_sitelink_name2entries(&entries);
+        assert_eq!(map.len(), 2, "different cases must be separate keys");
+    }
+
+    // ── automatch_from_other_catalogs_name_type2id ────────────────────────
+
+    fn make_original(entry_id: usize, name: &str, type_name: &str) -> ResultInOriginalCatalog {
+        ResultInOriginalCatalog {
+            entry_id,
+            ext_name: name.to_string(),
+            type_name: type_name.to_string(),
+        }
+    }
+
+    #[test]
+    fn name_type2id_groups_by_name_and_type() {
+        let rows = vec![
+            make_original(1, "Caesar", "Q5"),
+            make_original(2, "Caesar", "Q5"),
+            make_original(3, "Caesar", "Q167037"),
+        ];
+        let map = AutoMatch::automatch_from_other_catalogs_name_type2id(&rows);
+        assert_eq!(map[&("Caesar".to_string(), "Q5".to_string())], vec![1, 2]);
+        assert_eq!(map[&("Caesar".to_string(), "Q167037".to_string())], vec![3]);
+    }
+
+    #[test]
+    fn name_type2id_empty_input_gives_empty_map() {
+        let map = AutoMatch::automatch_from_other_catalogs_name_type2id(&[]);
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn name_type2id_different_names_are_separate_keys() {
+        let rows = vec![
+            make_original(10, "Alpha", "Q5"),
+            make_original(20, "Beta", "Q5"),
+        ];
+        let map = AutoMatch::automatch_from_other_catalogs_name_type2id(&rows);
+        assert_eq!(map.len(), 2);
+    }
+
+    // ── json_array_of_strings_to_vec_item_ids ─────────────────────────────
+
+    #[test]
+    fn json_item_ids_parses_q_strings() {
+        let json = json!(["Q1", "Q42", "Q999"]);
+        let ids = json_array_of_strings_to_vec_item_ids(&json);
+        assert_eq!(ids, vec![1, 42, 999]);
+    }
+
+    #[test]
+    fn json_item_ids_skips_malformed_entries() {
+        let json = json!(["Q1", "NotAnId", "Q", "Q999", 42]);
+        let ids = json_array_of_strings_to_vec_item_ids(&json);
+        // Only Q1 and Q999 parse correctly; "NotAnId" starts with 'N',
+        // "Q" has empty tail, and 42 is not a string.
+        assert_eq!(ids, vec![1, 999]);
+    }
+
+    #[test]
+    fn json_item_ids_empty_array_gives_empty_vec() {
+        let json = json!([]);
+        assert!(json_array_of_strings_to_vec_item_ids(&json).is_empty());
+    }
+
+    #[test]
+    fn json_item_ids_non_array_gives_empty_vec() {
+        assert!(json_array_of_strings_to_vec_item_ids(&json!(null)).is_empty());
+        assert!(json_array_of_strings_to_vec_item_ids(&json!({"q": "Q1"})).is_empty());
     }
 }

@@ -5936,8 +5936,7 @@ impl crate::storage::MetaEntryQueries for StorageMySQL {
                     .flatten()
                     .unwrap_or_default();
                 let user: Option<usize> = row.get::<Option<usize>, _>("user").flatten();
-                let timestamp: Option<String> =
-                    row.get::<Option<String>, _>("timestamp").flatten();
+                let timestamp: Option<String> = row.get::<Option<String>, _>("timestamp").flatten();
                 let q: Option<isize> = row.get::<Option<isize>, _>("q").flatten();
                 MetaLogEntry {
                     id,
@@ -6126,8 +6125,8 @@ impl StorageMySQL {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app_state::get_test_app;
     use crate::job_status::JobStatus;
+    use crate::test_support;
 
     #[test]
     fn normalize_wd_prop_zero_and_none_become_none() {
@@ -6246,20 +6245,32 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_get_all_external_ids() {
-        let app = get_test_app();
-        let results = app.storage().get_all_external_ids(1).await.unwrap();
-        assert_eq!(results.len(), 67233);
-        assert!(results.contains_key("100006"));
+        let app = test_support::test_app().await;
+        let (catalog_id, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
+        let results = app
+            .storage()
+            .get_all_external_ids(catalog_id)
+            .await
+            .unwrap();
+        // The seeded entry must appear exactly once.
+        assert_eq!(results.len(), 1, "expected exactly one seeded entry");
+        // The map value is the entry id.
+        assert!(
+            results.values().any(|&id| id == entry_id),
+            "seeded entry_id {entry_id} not found in result"
+        );
     }
 
     #[tokio::test]
-    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_get_overview_table() {
-        let app = get_test_app();
+        let app = test_support::test_app().await;
+        // Overview table starts empty in a fresh container — just verify
+        // the query succeeds without panicking.
         let results = app.storage().get_overview_table().await.unwrap();
-        assert!(results.len() > 5000);
+        // Not asserting a count here: the table is populated by a separate
+        // maintenance job that doesn't run in the test container.
+        let _ = results;
     }
 
     #[test]
@@ -6477,6 +6488,230 @@ mod tests {
         assert_eq!(lone_quotes, 2, "unescaped quote in: {sql}");
         assert!(sql.contains("+ev''il"));
         assert!(sql.contains(r"+b\\d"));
+    }
+
+    // ── coordinate_matcher SQL builders ──────────────────────────────────
+
+    #[test]
+    fn coordinate_matcher_without_catalog_uses_random_subquery() {
+        let sql = StorageMySQL::coordinate_matcher_main_query_sql(&None, &[], 50);
+        assert!(sql.contains("vw_location"), "must query vw_location");
+        assert!(
+            sql.contains("random"),
+            "must use random column for sampling"
+        );
+        assert!(!sql.contains("`catalog`="), "must not pin a catalog");
+    }
+
+    #[test]
+    fn coordinate_matcher_with_catalog_pins_catalog() {
+        let sql = StorageMySQL::coordinate_matcher_main_query_sql(&Some(42), &[], 50);
+        assert!(sql.contains("`catalog`=42"), "must filter by catalog 42");
+    }
+
+    #[test]
+    fn coordinate_matcher_subquery_includes_limit() {
+        let sql = StorageMySQL::coordinate_matcher_main_query_sql_subquery(&[], 75);
+        assert!(sql.contains("75"), "limit must appear in subquery");
+    }
+
+    #[test]
+    fn coordinate_matcher_subquery_excludes_bad_catalogs() {
+        let sql = StorageMySQL::coordinate_matcher_main_query_sql_subquery(&[7, 8, 9], 10);
+        assert!(
+            sql.contains("NOT IN (7,8,9)"),
+            "bad catalogs must be excluded"
+        );
+    }
+
+    #[test]
+    fn coordinate_matcher_subquery_no_exclusion_when_bad_list_empty() {
+        let sql = StorageMySQL::coordinate_matcher_main_query_sql_subquery(&[], 10);
+        assert!(!sql.contains("NOT IN"), "must not emit empty NOT IN clause");
+    }
+
+    // ── build_api_search_entries_sql ─────────────────────────────────────
+
+    #[test]
+    fn search_entries_sql_none_for_empty_words() {
+        assert!(
+            StorageMySQL::build_api_search_entries_sql(&[], false, false, &[], &[], 10).is_none()
+        );
+    }
+
+    #[test]
+    fn search_entries_sql_none_when_all_targets_disabled() {
+        // no_label_search=true, description_search=false → nothing to MATCH against
+        assert!(
+            StorageMySQL::build_api_search_entries_sql(
+                &["test".to_string()],
+                false,
+                true,
+                &[],
+                &[],
+                10
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn search_entries_sql_label_search_by_default() {
+        let sql = StorageMySQL::build_api_search_entries_sql(
+            &["caesar".to_string(), "rome".to_string()],
+            false,
+            false,
+            &[],
+            &[],
+            20,
+        )
+        .unwrap();
+        assert!(
+            sql.contains("caesar") && sql.contains("rome"),
+            "words must appear in query"
+        );
+        assert!(sql.contains("ext_name"), "must search label column");
+        assert!(sql.contains("LIMIT 20"), "limit must be applied");
+    }
+
+    #[test]
+    fn search_entries_sql_description_search_adds_ext_desc() {
+        let sql = StorageMySQL::build_api_search_entries_sql(
+            &["roman".to_string()],
+            true,
+            false,
+            &[],
+            &[],
+            10,
+        )
+        .unwrap();
+        assert!(sql.contains("ext_desc"), "must include ext_desc in MATCH");
+    }
+
+    #[test]
+    fn search_entries_sql_no_label_search_omits_ext_name_match() {
+        let sql = StorageMySQL::build_api_search_entries_sql(
+            &["roman".to_string()],
+            true,
+            true,
+            &[],
+            &[],
+            10,
+        )
+        .unwrap();
+        // ext_name still appears in the SELECT list, but the MATCH() clause
+        // must not reference it when no_label_search=true.
+        assert!(
+            !sql.contains("MATCH(`ext_name`)"),
+            "MATCH(ext_name) must be absent when no_label_search=true"
+        );
+        assert!(
+            sql.contains("ext_desc"),
+            "ext_desc must be present in MATCH clause"
+        );
+    }
+
+    #[test]
+    fn search_entries_sql_exclude_list() {
+        let sql = StorageMySQL::build_api_search_entries_sql(
+            &["test".to_string()],
+            false,
+            false,
+            &[5, 6],
+            &[],
+            10,
+        )
+        .unwrap();
+        assert!(
+            sql.contains("NOT IN (5,6)"),
+            "excluded catalogs must appear"
+        );
+    }
+
+    #[test]
+    fn search_entries_sql_include_list() {
+        let sql = StorageMySQL::build_api_search_entries_sql(
+            &["test".to_string()],
+            false,
+            false,
+            &[],
+            &[3, 4],
+            10,
+        )
+        .unwrap();
+        // The include list restricts to specific catalogs
+        assert!(
+            sql.contains("3") && sql.contains("4"),
+            "included catalog ids must appear"
+        );
+        assert!(!sql.contains("NOT IN"), "must not produce exclusion clause");
+    }
+
+    // ── build_download2_sql / download2_columns ──────────────────────────
+
+    #[test]
+    fn download2_sql_strips_non_digit_catalog_chars() {
+        let filter = Download2Filter {
+            catalogs: "1,2;DROP TABLE entry--".to_string(),
+            ..Default::default()
+        };
+        let sql = StorageMySQL::build_download2_sql(&filter);
+        assert!(!sql.contains("DROP"), "SQL injection must be stripped");
+        assert!(sql.contains("1,2"), "valid catalog ids must be preserved");
+    }
+
+    #[test]
+    fn download2_sql_includes_limit_and_offset() {
+        let filter = Download2Filter {
+            catalogs: "1".to_string(),
+            limit: 50,
+            offset: 100,
+            ..Default::default()
+        };
+        let sql = StorageMySQL::build_download2_sql(&filter);
+        assert!(sql.contains("LIMIT 50"), "limit must appear");
+        assert!(sql.contains("OFFSET 100"), "offset must appear");
+    }
+
+    #[test]
+    fn download2_sql_hide_any_matched_adds_null_check() {
+        let filter = Download2Filter {
+            catalogs: "1".to_string(),
+            hide_any_matched: true,
+            ..Default::default()
+        };
+        let sql = StorageMySQL::build_download2_sql(&filter);
+        assert!(
+            sql.contains("q IS NULL"),
+            "hide_any_matched must add q IS NULL"
+        );
+    }
+
+    #[test]
+    fn download2_columns_basic_always_includes_entry_id_and_q() {
+        let filter = Download2Filter::default();
+        let cols = StorageMySQL::download2_columns(&filter);
+        assert!(cols.contains(&"entry_id".to_string()));
+        assert!(cols.contains(&"q".to_string()));
+        assert!(!cols.contains(&"matched_by_username".to_string()));
+    }
+
+    #[test]
+    fn download2_columns_with_optional_groups() {
+        let filter = Download2Filter {
+            include_username: true,
+            include_dates: true,
+            include_location: true,
+            include_ext_url: true,
+            ..Default::default()
+        };
+        let cols = StorageMySQL::download2_columns(&filter);
+        assert!(cols.contains(&"matched_by_username".to_string()));
+        assert!(cols.contains(&"born".to_string()));
+        assert!(cols.contains(&"died".to_string()));
+        assert!(cols.contains(&"lat".to_string()));
+        assert!(cols.contains(&"lon".to_string()));
+        assert!(cols.contains(&"name".to_string()));
     }
 }
 

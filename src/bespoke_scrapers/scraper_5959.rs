@@ -21,13 +21,7 @@ impl BespokeScraper for BespokeScraper5959 {
 
     async fn run(&self) -> Result<()> {
         let url = "https://www.eionet.europa.eu/gemet/exports/latest/en/gemet-definitions.rdf";
-        let text = self
-            .http_client()
-            .get(url)
-            .send()
-            .await?
-            .text()
-            .await?;
+        let text = self.http_client().get(url).send().await?.text().await?;
 
         let existing = self
             .app()
@@ -62,8 +56,7 @@ impl BespokeScraper5959 {
         existing: &std::collections::HashMap<String, usize>,
     ) -> Vec<ExtendedEntry> {
         lazy_static! {
-            static ref RE_ABOUT: Regex =
-                Regex::new(r#"rdf:about="concept/(\d+)""#).unwrap();
+            static ref RE_ABOUT: Regex = Regex::new(r#"rdf:about="concept/(\d+)""#).unwrap();
             static ref RE_LABEL: Regex =
                 Regex::new(r#"<skos:prefLabel>(.+?)</skos:prefLabel>"#).unwrap();
             static ref RE_DEF: Regex =
@@ -169,7 +162,7 @@ mod tests {
     </rdf:Description>
 "#;
         let mut existing = HashMap::new();
-        existing.insert("100".to_string(), 42usize);
+        existing.insert("100".to_string(), 42_usize);
         let entries = BespokeScraper5959::parse_rdf(5959, rdf, &existing);
         assert!(entries.is_empty());
     }
