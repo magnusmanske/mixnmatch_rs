@@ -1,5 +1,5 @@
 use crate::{
-    app_state::{AppState, USER_AUX_MATCH},
+    app_state::{AppState, USER_AUX_MATCH, item2numeric},
     entry::Entry,
     extended_entry::ExtendedEntry,
     person_date::PersonDate,
@@ -64,7 +64,7 @@ impl BespokeScraper121 {
         record: HashMap<String, String>,
     ) -> Option<ExtendedEntry> {
         let q = match record.get("WIKIDATA_ID") {
-            Some(q) => AppState::item2numeric(q),
+            Some(q) => item2numeric(q),
             None => return None,
         };
         let ext_entry = ExtendedEntry {

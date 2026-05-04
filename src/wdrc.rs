@@ -1,5 +1,5 @@
 use crate::{
-    app_state::{AppContext, AppState, ExternalServicesContext, USER_AUTO, USER_AUX_MATCH, WikidataContext},
+    app_state::{AppContext, ExternalServicesContext, USER_AUTO, USER_AUX_MATCH, WikidataContext, item2numeric},
     catalog::Catalog,
     entry::{Entry, EntryWriter},
     mysql_misc::MySQLMisc,
@@ -109,7 +109,7 @@ impl WDRC {
             let confirmed_deleted = app.wikidata().get_deleted_items(&qs).await?;
             let confirmed_numeric: Vec<isize> = confirmed_deleted
                 .iter()
-                .filter_map(|q| AppState::item2numeric(q))
+                .filter_map(|q| item2numeric(q))
                 .collect();
             if !confirmed_numeric.is_empty() {
                 let catalog_ids = app
@@ -146,7 +146,7 @@ impl WDRC {
         {
             let item = j["item"]
                 .as_str()
-                .map(AppState::item2numeric)
+                .map(item2numeric)
                 .and_then(|i| i)
                 .unwrap_or(0);
             let ts = j["timestamp"]
@@ -184,7 +184,7 @@ impl WDRC {
         entities.load_entities(&api, &entity_ids).await.ok()?;
         let mut propval2item: HashMap<String, Vec<isize>> = HashMap::new();
         for q in entity_ids {
-            let q_num = match AppState::item2numeric(&q) {
+            let q_num = match item2numeric(&q) {
                 Some(q_num) => q_num,
                 None => continue,
             };
@@ -344,12 +344,12 @@ impl WDRC {
     ) -> String {
         let from = j["item"]
             .as_str()
-            .map(AppState::item2numeric)
+            .map(item2numeric)
             .and_then(|i| i)
             .unwrap_or(0);
         let to = j["target"]
             .as_str()
-            .map(AppState::item2numeric)
+            .map(item2numeric)
             .and_then(|i| i)
             .unwrap_or(0);
         let ts = j["timestamp"].as_str().unwrap_or(new_ts).to_string();

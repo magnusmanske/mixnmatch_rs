@@ -322,28 +322,28 @@ pub trait AppContext:
 
 impl AppContext for AppState {}
 
+/// Converts a string like "Q12345" to the numeric 12345.
+pub fn item2numeric(q: &str) -> Option<isize> {
+    RE_ITEM2NUMERIC
+        .captures_iter(q)
+        .next()
+        .and_then(|cap| cap[1].parse::<isize>().ok())
+}
+
+pub fn tool_root_dir() -> String {
+    std::env::var("TOOL_DATA_DIR").unwrap_or("/data/project/mix-n-match".to_string())
+}
+
+pub fn is_on_toolforge() -> bool {
+    std::path::Path::new("/etc/wmcs-project").exists()
+}
+
 impl AppState {
 
     pub async fn disconnect(&self) -> Result<()> {
         self.wikidata.disconnect_db().await?;
         self.storage.disconnect().await?;
         Ok(())
-    }
-
-    /// Converts a string like "Q12345" to the numeric 12334
-    pub fn item2numeric(q: &str) -> Option<isize> {
-        RE_ITEM2NUMERIC
-            .captures_iter(q)
-            .next()
-            .and_then(|cap| cap[1].parse::<isize>().ok())
-    }
-
-    pub fn tool_root_dir() -> String {
-        std::env::var("TOOL_DATA_DIR").unwrap_or("/data/project/mix-n-match".to_string())
-    }
-
-    pub fn is_on_toolforge() -> bool {
-        std::path::Path::new("/etc/wmcs-project").exists()
     }
 
     pub async fn run_single_hp_job(&self) -> Result<()> {
@@ -627,45 +627,33 @@ mod tests {
 
     #[test]
     fn test_item2numeric() {
-        assert_eq!(AppState::item2numeric("foobar"), None);
-        assert_eq!(AppState::item2numeric("12345"), Some(12345));
-        assert_eq!(AppState::item2numeric("Q12345"), Some(12345));
-        assert_eq!(AppState::item2numeric("Q12345X"), Some(12345));
-        assert_eq!(AppState::item2numeric("Q12345X6"), Some(12345));
+        assert_eq!(item2numeric("foobar"), None);
+        assert_eq!(item2numeric("12345"), Some(12345));
+        assert_eq!(item2numeric("Q12345"), Some(12345));
+        assert_eq!(item2numeric("Q12345X"), Some(12345));
+        assert_eq!(item2numeric("Q12345X6"), Some(12345));
     }
 
     #[test]
     fn test_item2numeric_edge_cases() {
-        // Empty string
-        assert_eq!(AppState::item2numeric(""), None);
-        // Just "Q" with no digits
-        assert_eq!(AppState::item2numeric("Q"), None);
-        // Negative-looking input — regex allows optional minus sign
-        assert_eq!(AppState::item2numeric("Q-5"), Some(-5));
-        // Zero
-        assert_eq!(AppState::item2numeric("Q0"), Some(0));
-        // Large number
-        assert_eq!(AppState::item2numeric("Q999999999"), Some(999999999));
-        // Whitespace around
-        assert_eq!(AppState::item2numeric(" Q42 "), Some(42));
-        // Multiple Q patterns — only first match
-        assert_eq!(AppState::item2numeric("Q1 Q2"), Some(1));
-        // Lowercase q — regex matches digits regardless of prefix
-        assert_eq!(AppState::item2numeric("q123"), Some(123));
+        assert_eq!(item2numeric(""), None);
+        assert_eq!(item2numeric("Q"), None);
+        assert_eq!(item2numeric("Q-5"), Some(-5));
+        assert_eq!(item2numeric("Q0"), Some(0));
+        assert_eq!(item2numeric("Q999999999"), Some(999999999));
+        assert_eq!(item2numeric(" Q42 "), Some(42));
+        assert_eq!(item2numeric("Q1 Q2"), Some(1));
+        assert_eq!(item2numeric("q123"), Some(123));
     }
 
     #[test]
     fn test_tool_root_dir_default() {
-        // When TOOL_DATA_DIR is not set, should return the default path
-        // We can't guarantee the env var state, but we can verify it returns a non-empty string
-        let dir = AppState::tool_root_dir();
+        let dir = tool_root_dir();
         assert!(!dir.is_empty());
     }
 
     #[test]
     fn test_is_on_toolforge() {
-        // On a dev machine, /etc/wmcs-project should not exist
-        // This test just verifies the function doesn't panic
-        let _result = AppState::is_on_toolforge();
+        let _result = is_on_toolforge();
     }
 }

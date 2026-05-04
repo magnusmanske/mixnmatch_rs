@@ -1,4 +1,4 @@
-use crate::app_state::{AppContext, AppState};
+use crate::app_state::{AppContext, AppState, item2numeric};
 use crate::auxiliary_matcher::AUX_PROPERTIES_ALSO_USING_LOWERCASE;
 use crate::catalog::Catalog;
 use crate::entry::{Entry, EntryWriter};
@@ -439,7 +439,7 @@ impl Microsync {
             .filter_map(|r| r.ok())
             .filter_map(|r| {
                 let q = mw_api.extract_entity_from_uri(r.get(0)?).ok()?;
-                let q_numeric = AppState::item2numeric(&q)?;
+                let q_numeric = item2numeric(&q)?;
                 let value = r.get(1)?;
                 let value = if case_insensitive {
                     value.to_lowercase().to_string()

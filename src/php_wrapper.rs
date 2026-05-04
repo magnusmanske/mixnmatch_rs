@@ -1,4 +1,4 @@
-use crate::app_state::{AppState, RuntimeConfig};
+use crate::app_state::{RuntimeConfig, is_on_toolforge, tool_root_dir};
 use anyhow::Result;
 use chrono::Utc;
 use log::info;
@@ -9,8 +9,8 @@ pub struct PhpWrapper;
 
 impl PhpWrapper {
     fn new_command(script: &str, app: &dyn RuntimeConfig) -> Command {
-        let root_dir = AppState::tool_root_dir();
-        let mut ret = if AppState::is_on_toolforge() {
+        let root_dir = tool_root_dir();
+        let mut ret = if is_on_toolforge() {
             let mut ret = Command::new(app.toolforge_php_command());
             let _ = ret.arg("-c");
             let _ = ret.arg(format!("{root_dir}/mixnmatch_rs/php.ini"));

@@ -1,5 +1,5 @@
 use crate::DbId;
-use crate::app_state::{AppContext, AppState, USER_LOCATION_MATCH};
+use crate::app_state::{AppContext, AppState, USER_LOCATION_MATCH, item2numeric};
 use std::sync::Arc;
 use crate::coordinates::LocationRow;
 use crate::entry::{Entry, EntryWriter};
@@ -180,7 +180,7 @@ impl CoordinateMatcher {
         };
         if items.len() == 1 {
             let q = items.first().unwrap();
-            if entry.q == AppState::item2numeric(q) && entry.is_fully_matched() {
+            if entry.q == item2numeric(q) && entry.is_fully_matched() {
                 // Already the same match
                 return false;
             }

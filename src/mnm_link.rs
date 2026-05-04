@@ -1,4 +1,4 @@
-use crate::{DbId, ItemId, app_state::{AppState, ExternalServicesContext}};
+use crate::{DbId, ItemId, app_state::{ExternalServicesContext, item2numeric}};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
@@ -20,7 +20,7 @@ pub enum MnmLink {
 impl MnmLink {
     /// Build from a Q-number string like "Q42".
     pub fn from_q(q: &str) -> Option<Self> {
-        AppState::item2numeric(q).map(Self::WikidataQid)
+        item2numeric(q).map(Self::WikidataQid)
     }
 
     /// Return the "Q…" string for a WikidataQid variant.

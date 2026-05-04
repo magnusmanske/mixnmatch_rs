@@ -6,7 +6,7 @@
 //! orphans, ext_url drift) and rewrite or remove the offending rows.
 
 use super::Maintenance;
-use crate::app_state::{AppState, USER_AUX_MATCH}; // AppState kept for item2numeric static calls
+use crate::app_state::{USER_AUX_MATCH, item2numeric};
 use crate::auxiliary_matcher::AuxiliaryMatcher;
 use crate::catalog::Catalog;
 use crate::entry::{Entry, EntryWriter};
@@ -94,7 +94,7 @@ impl Maintenance {
         let page2rd = self.app.wikidata().get_redirected_items(unique_qs).await?;
         for (from, to) in &page2rd {
             if let (Some(from), Some(to)) =
-                (AppState::item2numeric(from), AppState::item2numeric(to))
+                (item2numeric(from), item2numeric(to))
             {
                 if from > 0 && to > 0 {
                     self.app
@@ -125,7 +125,7 @@ impl Maintenance {
     pub async fn unlink_item_matches(&self, items: &[String]) -> Result<()> {
         let items: Vec<isize> = items
             .iter()
-            .filter_map(|q| AppState::item2numeric(q))
+            .filter_map(|q| item2numeric(q))
             .collect();
 
         if !items.is_empty() {

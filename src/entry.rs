@@ -1,4 +1,4 @@
-use crate::app_state::{AppContext, AppState, ExternalServicesContext, USER_AUTO};
+use crate::app_state::{AppContext, ExternalServicesContext, USER_AUTO, item2numeric};
 use crate::auxiliary_data::AuxiliaryRow;
 use crate::catalog::Catalog;
 use crate::coordinates::CoordinateLocation;
@@ -225,7 +225,7 @@ impl<'a> EntryWriter<'a> {
     /// the `Entry::app: Option<AppState>` field can be dropped.
     pub async fn set_match(&mut self, q: &str, user_id: DbId) -> Result<bool> {
         self.entry.get_valid_id()?;
-        let q_numeric = AppState::item2numeric(q)
+        let q_numeric = item2numeric(q)
             .ok_or_else(|| anyhow!("'{}' is not a valid item", &q))?;
         let timestamp = TimeStamp::now();
         if self
@@ -403,7 +403,7 @@ impl<'a> EntryWriter<'a> {
     pub async fn set_auto_and_multi_match(&mut self, items: &[String]) -> Result<()> {
         let mut qs_numeric: Vec<ItemId> = items
             .iter()
-            .filter_map(|q| AppState::item2numeric(q))
+            .filter_map(|q| item2numeric(q))
             .collect();
         if qs_numeric.is_empty() {
             return Ok(());
@@ -878,7 +878,7 @@ async fn write_language_description(
 async fn write_multi_match(ctx: &dyn AppContext, entry_id: DbId, items: &[String]) -> Result<()> {
     let qs_numeric: Vec<String> = items
         .iter()
-        .filter_map(|q| AppState::item2numeric(q))
+        .filter_map(|q| item2numeric(q))
         .map(|q| q.to_string())
         .collect();
     if qs_numeric.is_empty() || qs_numeric.len() > 10 {

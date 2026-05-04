@@ -1,5 +1,5 @@
 use crate::api::common::{ApiError, Params};
-use crate::app_state::{AppState, ExternalServicesContext};
+use crate::app_state::{ExternalServicesContext, is_on_toolforge};
 use crate::auth::session::{SessionData, SessionState, load, normalize_username};
 use tower_sessions::Session;
 
@@ -8,7 +8,7 @@ use tower_sessions::Session;
 /// Keeps the rest of the server honest — on toolforge this returns `None`
 /// and the real OAuth check runs.
 pub fn dev_bypass_user() -> Option<AuthedUser> {
-    if AppState::is_on_toolforge() {
+    if is_on_toolforge() {
         None
     } else {
         Some(AuthedUser {

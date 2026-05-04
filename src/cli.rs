@@ -1,5 +1,5 @@
 use crate::import_catalog::ImportMode;
-use crate::{app_state::AppState, extended_entry::ExtendedEntry, process::Process};
+use crate::{app_state::{AppState, is_on_toolforge}, extended_entry::ExtendedEntry, process::Process};
 use anyhow::{Result, anyhow};
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
@@ -394,7 +394,7 @@ impl ShellCommands {
         let url = format!("{scheme}://127.0.0.1:{port}");
         println!("webserver: listening on {url}");
         log::info!("webserver: listening on {url}");
-        if !AppState::is_on_toolforge() {
+        if !is_on_toolforge() {
             let warning = "webserver: OAuth is BYPASSED (not running on toolforge) — all requests are attributed to Magnus Manske / uid 2";
             println!("{warning}");
             log::warn!("{warning}");

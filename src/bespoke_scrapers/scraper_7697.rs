@@ -1,5 +1,5 @@
 use crate::{
-    app_state::{AppState, USER_AUX_MATCH},
+    app_state::{AppState, USER_AUX_MATCH, item2numeric},
     auxiliary_data::AuxiliaryRow,
     entry::Entry,
     extended_entry::ExtendedEntry,
@@ -68,7 +68,7 @@ impl BespokeScraper7697 {
         let ext_desc = Self::featherbase_id_to_description(fb_id).to_string();
         let ext_url = format!("https://www.featherbase.info/en/{}", fb_id);
         let item_uri = binding["item"]["value"].as_str().unwrap_or_default();
-        let q = AppState::item2numeric(item_uri);
+        let q = item2numeric(item_uri);
         let entry = Entry {
             catalog: catalog_id,
             ext_id: fb_id.to_string(),
