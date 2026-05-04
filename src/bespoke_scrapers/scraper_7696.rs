@@ -147,7 +147,6 @@ impl BespokeScraper7696 {
 mod tests {
     use super::*;
 
-    // #lizard forgives the complexity
     #[test]
     fn test_7696_slug_to_scientific_name() {
         assert_eq!(

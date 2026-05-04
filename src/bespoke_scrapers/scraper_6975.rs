@@ -104,7 +104,6 @@ impl BespokeScraper6975 {
 mod tests {
     use super::*;
 
-    // #lizard forgives the complexity
     #[test]
     fn test_6975_fix_date() {
         assert_eq!(

@@ -29,7 +29,63 @@ pub fn is_safe_table_name(name: &str) -> bool {
     !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_')
 }
 
-#[allow(clippy::cognitive_complexity)]
+/// Execute one random-pick attempt.
+/// Returns `Ok(Some((entries_json, name)))` on success, `Ok(None)` to retry,
+/// or `Err` on a hard failure (DB error, invalid params).
+async fn try_attempt(
+    app: &AppState,
+    opts: &ParsedParams,
+    table: &str,
+    user_ids: &mut Vec<usize>,
+) -> Result<Option<(Vec<Value>, Option<String>)>, ApiError> {
+    let pick_sql = if !opts.ext_name_required.is_empty() {
+        // Test/diagnostic shortcut: skip the random-pick scan and pin the
+        // candidate name directly. Validates the rest of the pipeline
+        // against an indexed `ext_name` lookup.
+        let safe = opts.ext_name_required.replace('\'', "''");
+        format!("SELECT '{safe}' AS ext_name, 20 AS cnt")
+    } else {
+        cc_mode_sql(&opts.mode, table, opts.min, &opts.prop, &opts.require_catalogs)?
+    };
+
+    let picks = app.storage().cc_random_pick(&pick_sql).await.map_err(|e| ApiError(format!("pick query failed: {e}")))?;
+    if picks.is_empty() {
+        return Ok(None);
+    }
+
+    let pick = &picks[0];
+    // The pick column is `ext_name` for most modes, `aux_name` for `random_prop`.
+    let ext_name = pick["ext_name"].as_str().or_else(|| pick["aux_name"].as_str()).unwrap_or("").to_string();
+    let result_name = (!ext_name.is_empty()).then(|| ext_name.clone());
+
+    let entries = match load_entries_for_pick(app, opts, pick, &ext_name).await? {
+        Some(e) => e,
+        None => return Ok(None),
+    };
+
+    // Required-counts gating (skip when the caller pinned an `ext_name`).
+    if opts.ext_name_required.is_empty() {
+        let (found_unset, required_found) = tally_constraints(&entries, &opts.require_catalogs, user_ids);
+        if found_unset < opts.require_unset || required_found.len() < opts.catalogs_required {
+            return Ok(None);
+        }
+    } else {
+        // Even when we skip the gate, accumulate user_ids for the trailing lookup.
+        for e in &entries {
+            if let Some(uid) = e.user {
+                user_ids.push(uid);
+            }
+        }
+    }
+
+    if opts.min > 0 && entries.len() < opts.min && opts.ext_name_required.is_empty() {
+        return Ok(None);
+    }
+
+    let entries_json: Vec<Value> = entries.iter().map(|e| serde_json::to_value(e).unwrap_or(json!(null))).collect();
+    Ok(Some((entries_json, result_name)))
+}
+
 pub async fn run(app: &AppState, params: &Params) -> Result<Value, ApiError> {
     let opts = ParsedParams::from(params);
 
@@ -48,82 +104,20 @@ pub async fn run(app: &AppState, params: &Params) -> Result<Value, ApiError> {
     let mut result_data = json!({"entries": []});
     let mut result_name: Option<String> = None;
     let mut user_ids: Vec<usize> = vec![];
-    let mut completed = false;
 
-    for _attempt in 0..MAX_TRIES {
-        let pick_sql = if !opts.ext_name_required.is_empty() {
-            // Test/diagnostic shortcut: skip the random-pick scan and pin the
-            // candidate name directly. Validates the rest of the pipeline
-            // against an indexed `ext_name` lookup.
-            let safe = opts.ext_name_required.replace('\'', "''");
-            format!("SELECT '{safe}' AS ext_name, 20 AS cnt")
-        } else {
-            cc_mode_sql(&opts.mode, &table, opts.min, &opts.prop, &opts.require_catalogs)?
-        };
-
-        let picks = app
-            .storage()
-            .cc_random_pick(&pick_sql)
-            .await
-            .map_err(|e| ApiError(format!("pick query failed: {e}")))?;
-
-        if picks.is_empty() {
-            continue;
-        }
-
-        let pick = &picks[0];
-        // The pick column is `ext_name` for most modes, `aux_name` for `random_prop`.
-        let ext_name = pick["ext_name"]
-            .as_str()
-            .or_else(|| pick["aux_name"].as_str())
-            .unwrap_or("")
-            .to_string();
-        if !ext_name.is_empty() {
-            result_name = Some(ext_name.clone());
-        }
-
-        let entries = match load_entries_for_pick(app, &opts, pick, &ext_name).await? {
-            Some(e) => e,
-            None => continue,
-        };
-
-        // Required-counts gating (skip when the caller pinned an `ext_name`).
-        if opts.ext_name_required.is_empty() {
-            let (found_unset, required_found) =
-                tally_constraints(&entries, &opts.require_catalogs, &mut user_ids);
-            if found_unset < opts.require_unset {
-                continue;
-            }
-            if required_found.len() < opts.catalogs_required {
-                continue;
-            }
-        } else {
-            // Even when we skip the gate, we still want user_ids accumulated
-            // for the trailing user-resolution lookup.
-            for e in &entries {
-                if let Some(uid) = e.user {
-                    user_ids.push(uid);
-                }
+    let completed = 'outer: {
+        for _attempt in 0..MAX_TRIES {
+            if let Some((entries_json, name)) = try_attempt(app, &opts, &table, &mut user_ids).await? {
+                result_data = json!({"entries": entries_json});
+                result_name = name;
+                break 'outer true;
             }
         }
-
-        if opts.min > 0 && entries.len() < opts.min && opts.ext_name_required.is_empty() {
-            continue;
-        }
-
-        let entries_json: Vec<Value> = entries
-            .iter()
-            .map(|e| serde_json::to_value(e).unwrap_or(json!(null)))
-            .collect();
-        result_data = json!({"entries": entries_json});
-        completed = true;
-        break;
-    }
+        false
+    };
 
     if !completed {
-        return Err(ApiError(format!(
-            "No results after {MAX_TRIES} attempts, giving up"
-        )));
+        return Err(ApiError(format!("No results after {MAX_TRIES} attempts, giving up")));
     }
 
     if let Some(name) = &result_name {
@@ -135,11 +129,7 @@ pub async fn run(app: &AppState, params: &Params) -> Result<Value, ApiError> {
     let users_map = if unique_ids.is_empty() {
         json!({})
     } else {
-        let rows = app
-            .storage()
-            .get_users_by_ids(&unique_ids)
-            .await
-            .unwrap_or_default();
+        let rows = app.storage().get_users_by_ids(&unique_ids).await.unwrap_or_default();
         let mut obj = serde_json::Map::new();
         for (id, val) in rows {
             obj.insert(id.to_string(), val);

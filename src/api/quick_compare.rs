@@ -53,8 +53,62 @@ pub fn parse_location_distance(s: &str) -> Option<f64> {
     None
 }
 
+/// Build the JSON object for a single row, applying all gates.
+/// Returns `None` if the row should be skipped.
+fn build_entry_json(
+    row: &Value,
+    ec: &wikimisc::wikibase::entity_container::EntityContainer,
+    require_image: bool,
+    require_coordinates: bool,
+    max_distance_m: Option<f64>,
+) -> Option<Value> {
+    let q_num = row["q"].as_i64().filter(|&q| q > 0)?;
+    let q_str = format!("Q{q_num}");
+    let item = ec.get_entity(q_str.clone())?;
+
+    if require_image && item.claims_with_property(wp::P_IMAGE.to_string()).is_empty() {
+        return None;
+    }
+    if require_coordinates && item.claims_with_property(wp::P_COORDINATES.to_string()).is_empty() {
+        return None;
+    }
+
+    let lang = row["language"].as_str().unwrap_or("en");
+    let mut entry_json = row.clone();
+    let mut item_json = json!({
+        "q": q_str,
+        "label": item.label_in_locale(lang).unwrap_or(&q_str),
+        "description": item.description_in_locale(lang).unwrap_or(""),
+    });
+
+    if let Some((lat_item, lon_item)) = extract_p625(&item) {
+        item_json["coordinates"] = json!({"lat": lat_item, "lon": lon_item});
+        if let (Some(lat_e), Some(lon_e)) = (row["lat"].as_f64(), row["lon"].as_f64()) {
+            let dist = haversine_distance_m(lat_item, lon_item, lat_e, lon_e);
+            if max_distance_m.is_some_and(|max| dist > max) {
+                return None;
+            }
+            entry_json["distance_m"] = json!(dist);
+        }
+    }
+
+    if let Some(img) = extract_p18(&item) {
+        item_json["image"] = json!(img);
+    }
+
+    if let Some(img) = row.get("image_url").and_then(|v| v.as_str()) {
+        if !img.is_empty() {
+            entry_json["ext_img"] = json!(img);
+        } else if require_image {
+            return None;
+        }
+    }
+
+    entry_json["item"] = item_json;
+    Some(entry_json)
+}
+
 /// Parse all `quick_compare` params and run the comparison.
-#[allow(clippy::cognitive_complexity)]
 pub async fn run(app: &AppState, params: &Params) -> Result<Value, ApiError> {
     let catalog_id = parse_catalog(params)?;
     let entry_id = opt_usize(params, "entry_id");
@@ -64,11 +118,7 @@ pub async fn run(app: &AppState, params: &Params) -> Result<Value, ApiError> {
     // Resolve max-distance: catalog default (kv pair) overridden by request
     // param if provided.
     let mut max_distance_m: Option<f64> = None;
-    let catalog_kvs = app
-        .storage()
-        .get_catalog_key_value_pairs(catalog_id)
-        .await
-        .unwrap_or_default();
+    let catalog_kvs = app.storage().get_catalog_key_value_pairs(catalog_id).await.unwrap_or_default();
     if let Some(ld) = catalog_kvs.get("location_distance") {
         max_distance_m = parse_location_distance(ld);
     }
@@ -81,22 +131,11 @@ pub async fn run(app: &AppState, params: &Params) -> Result<Value, ApiError> {
     for retry in 0..RETRY_COUNT {
         // Last retry uses a deterministic 0.0 threshold so we can pick up the
         // earliest matching rows even if random chunks all came up empty.
-        let random_threshold = if retry < RETRY_COUNT - 1 {
-            rand::random::<f64>()
-        } else {
-            0.0
-        };
+        let random_threshold = if retry < RETRY_COUNT - 1 { rand::random::<f64>() } else { 0.0 };
 
         let rows = app
             .storage()
-            .qc_get_entries(
-                catalog_id,
-                entry_id,
-                require_image,
-                require_coordinates,
-                random_threshold,
-                MAX_RESULTS,
-            )
+            .qc_get_entries(catalog_id, entry_id, require_image, require_coordinates, random_threshold, MAX_RESULTS)
             .await
             .map_err(|e| ApiError(format!("query failed: {e}")))?;
 
@@ -104,79 +143,18 @@ pub async fn run(app: &AppState, params: &Params) -> Result<Value, ApiError> {
             continue;
         }
 
-        // Pull all candidate Q items in a single Wikidata batch.
         let q_values: Vec<String> = rows
             .iter()
             .filter_map(|r| r["q"].as_i64().filter(|&q| q > 0).map(|q| format!("Q{q}")))
             .collect();
-
-        let mw_api = app
-            .wikidata()
-            .get_mw_api()
-            .await
-            .map_err(|e| ApiError(format!("Wikidata API error: {e}")))?;
+        let mw_api = app.wikidata().get_mw_api().await.map_err(|e| ApiError(format!("Wikidata API error: {e}")))?;
         let ec = wikimisc::wikibase::entity_container::EntityContainer::new();
         let _ = ec.load_entities(&mw_api, &q_values).await;
 
         for row in &rows {
-            let q_num = match row["q"].as_i64() {
-                Some(q) if q > 0 => q,
-                _ => continue,
-            };
-            let q_str = format!("Q{q_num}");
-            let item = match ec.get_entity(q_str.clone()) {
-                Some(i) => i,
-                None => continue,
-            };
-
-            // Wikidata-side gates.
-            if require_image && item.claims_with_property(wp::P_IMAGE.to_string()).is_empty() {
-                continue;
+            if let Some(entry) = build_entry_json(row, &ec, require_image, require_coordinates, max_distance_m) {
+                result_entries.push(entry);
             }
-            if require_coordinates
-                && item
-                    .claims_with_property(wp::P_COORDINATES.to_string())
-                    .is_empty()
-            {
-                continue;
-            }
-
-            let lang = row["language"].as_str().unwrap_or("en");
-            let mut entry_json = row.clone();
-            let mut item_json = json!({
-                "q": q_str,
-                "label": item.label_in_locale(lang).unwrap_or(&q_str),
-                "description": item.description_in_locale(lang).unwrap_or(""),
-            });
-
-            // Coordinates + distance gate.
-            if let Some((lat_item, lon_item)) = extract_p625(&item) {
-                item_json["coordinates"] = json!({"lat": lat_item, "lon": lon_item});
-                if let (Some(lat_e), Some(lon_e)) = (row["lat"].as_f64(), row["lon"].as_f64()) {
-                    let dist = haversine_distance_m(lat_item, lon_item, lat_e, lon_e);
-                    if max_distance_m.is_some_and(|max| dist > max) {
-                        continue;
-                    }
-                    entry_json["distance_m"] = json!(dist);
-                }
-            }
-
-            // Image from Wikidata (P18).
-            if let Some(img) = extract_p18(&item) {
-                item_json["image"] = json!(img);
-            }
-
-            // Entry image (require gate).
-            if let Some(img) = row.get("image_url").and_then(|v| v.as_str()) {
-                if !img.is_empty() {
-                    entry_json["ext_img"] = json!(img);
-                } else if require_image {
-                    continue;
-                }
-            }
-
-            entry_json["item"] = item_json;
-            result_entries.push(entry_json);
         }
 
         if !result_entries.is_empty() {

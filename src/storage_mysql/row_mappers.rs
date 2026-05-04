@@ -23,12 +23,10 @@ impl StorageMySQL {
         })
     }
 
-    // #lizard forgives
     pub(super) fn catalog_from_row(row: &Row) -> Option<Catalog> {
         Catalog::from_mysql_row(row)
     }
 
-    // #lizard forgives
     pub(super) fn entry_from_row(row: &Row) -> Option<Entry> {
         // Read by column name — positional reads break whenever a SELECT
         // prepends extra columns (e.g. `cnt`, `property`, `source_entry_id`)

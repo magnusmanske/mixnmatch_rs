@@ -62,7 +62,6 @@ impl Person {
 mod tests {
     use super::*;
 
-    // #lizard forgives the complexity
     #[test]
     fn test_sanitize_name() {
         assert_eq!(
@@ -127,7 +126,6 @@ mod tests {
         );
     }
 
-    // #lizard forgives the complexity
     #[test]
     fn test_simplify_name() {
         assert_eq!(

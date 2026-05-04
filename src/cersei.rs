@@ -208,19 +208,89 @@ impl CerseiSync {
         entry.get_valid_id()
     }
 
+    /// Fetch one page from the CERSEI API, retrying up to 5 times with
+    /// exponential back-off and cache-busting query params on JSON parse failures.
+    async fn fetch_cersei_page(&self, url: &str) -> Result<CerseiEntriesResponse> {
+        let mut url = url.to_string();
+        for attempt in 0u64..=5 {
+            match self.http_client.get(&url).send().await {
+                Ok(response) => match response.json::<CerseiEntriesResponse>().await {
+                    Ok(data) => return Ok(data),
+                    Err(_) if attempt < 5 => {
+                        thread::sleep(Duration::from_secs((attempt + 1) * 5));
+                        url = format!("{}&blah{}={}", url, rand::random::<u32>(), rand::random::<u32>());
+                    }
+                    Err(_) => {}
+                },
+                Err(_) if attempt < 5 => thread::sleep(Duration::from_secs((attempt + 1) * 5)),
+                Err(_) => {}
+            }
+        }
+        Err(anyhow!("CERSEI API failed after retries"))
+    }
+
+    /// Upsert a single CERSEI entry into the catalog.
+    /// Returns `true` when a new entry was created (so the caller can queue automatch jobs).
+    async fn apply_cersei_entry(
+        &self,
+        ce: &CerseiEntry,
+        catalog_id: usize,
+        existing_ext_ids: &mut HashMap<String, usize>,
+    ) -> Result<bool> {
+        let name = ce.label.as_ref().or(ce.original_label.as_ref()).map(String::as_str).unwrap_or("");
+        if name.is_empty() || ce.source_id.is_empty() {
+            return Ok(false);
+        }
+
+        let ne_entry = Entry {
+            catalog: catalog_id,
+            ext_id: ce.source_id.clone(),
+            ext_name: name.chars().take(127).collect(),
+            ext_desc: ce.description.clone().unwrap_or_default(),
+            ext_url: ce.url.clone().unwrap_or_default(),
+            q: ce.q.as_ref().and_then(|q| q.parse::<isize>().ok()),
+            ..Default::default()
+        };
+        let mut ne = ExtendedEntry {
+            entry: ne_entry,
+            born: Self::parse_time(ce.p569.as_ref()),
+            died: Self::parse_time(ce.p570.as_ref()),
+            ..Default::default()
+        };
+        if let Some(p31) = ce.p31 {
+            ne.entry.type_name = Some(format!("Q{p31}"));
+        }
+
+        if let Some(&entry_id) = existing_ext_ids.get(&ne.entry.ext_id) {
+            let type_str = ne.entry.type_name.as_deref().unwrap_or("");
+            self.app.storage().entry_update_cersei(entry_id, &ne.entry.ext_name, &ne.entry.ext_desc, type_str, &ne.entry.ext_url).await?;
+            if ne.born.is_some() || ne.died.is_some() {
+                EntryWriter::new(self.app.as_ref(), &mut ne.entry).set_person_dates(&ne.born, &ne.died).await?;
+            }
+            Ok(false)
+        } else {
+            match self.add_new_entry(&mut ne.entry).await {
+                Ok(entry_id) => {
+                    existing_ext_ids.insert(ne.entry.id.unwrap_or(0).to_string(), entry_id);
+                    if ne.born.is_some() || ne.died.is_some() {
+                        EntryWriter::new(self.app.as_ref(), &mut ne.entry).set_person_dates(&ne.born, &ne.died).await?;
+                    }
+                    Ok(true)
+                }
+                Err(_) => Ok(false),
+            }
+        }
+    }
+
     /// Sync a single scraper
-    #[allow(clippy::cognitive_complexity)]
     pub async fn sync_scraper(
         &self,
         scraper_id: usize,
         catalog_id: usize,
         last_sync: Option<&str>,
     ) -> Result<()> {
-        // println!("Syncing scraper {} for catalog {}", scraper_id, catalog_id);
-
         let mut existing_ext_ids = self.app.storage().get_all_external_ids(catalog_id).await?;
         let start_time = Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
-
         let mut offset = 0;
         let limit = 500;
         let mut added_new_entries = false;
@@ -229,158 +299,37 @@ impl CerseiSync {
             let mut url = format!(
                 "https://cersei.toolforge.org/api/get_entries/{scraper_id}?offset={offset}&limit={limit}&no_json=1&wide=1"
             );
-
             if let Some(sync_time) = last_sync {
                 if !sync_time.is_empty() {
                     url = format!("{url}&revision_since={sync_time}");
                 }
             }
 
-            // Retry logic for API calls
-            let mut response_data = None;
-            for attempt in 0..=5 {
-                match self.http_client.get(&url).send().await {
-                    Ok(response) => {
-                        match response.json::<CerseiEntriesResponse>().await {
-                            Ok(data) => {
-                                response_data = Some(data);
-                                break;
-                            }
-                            Err(_e) => {
-                                // eprintln!("Failed to parse JSON on attempt {}: {}", attempt + 1, e);
-                                if attempt < 5 {
-                                    thread::sleep(Duration::from_secs((attempt + 1) * 5));
-                                    // Add cache-busting parameter
-                                    url = format!(
-                                        "{}&blah{}={}",
-                                        url,
-                                        rand::random::<u32>(),
-                                        rand::random::<u32>()
-                                    );
-                                }
-                            }
-                        }
-                    }
-                    Err(_e) => {
-                        // eprintln!("HTTP request failed on attempt {}: {}", attempt + 1, e);
-                        if attempt < 5 {
-                            thread::sleep(Duration::from_secs((attempt + 1) * 5));
-                        }
-                    }
-                }
-            }
-
-            let response_data =
-                response_data.ok_or_else(|| anyhow!("CERSEI API failed after retries"))?;
-
-            // Process entries
+            let response_data = self.fetch_cersei_page(&url).await?;
             for ce in &response_data.entries {
-                let name = ce
-                    .label
-                    .as_ref()
-                    .or(ce.original_label.as_ref())
-                    .unwrap_or(&"".to_string())
-                    .clone();
-
-                if name.is_empty() || ce.source_id.is_empty() {
-                    continue;
-                }
-
-                let ne_entry = Entry {
-                    catalog: catalog_id,
-                    ext_id: ce.source_id.clone(),
-                    ext_name: name.chars().take(127).collect(),
-                    ext_desc: ce.description.clone().unwrap_or_default(),
-                    ext_url: ce.url.clone().unwrap_or_default(),
-                    q: ce.q.as_ref().and_then(|q| q.parse::<isize>().ok()),
-                    ..Default::default()
-                };
-                let mut ne = ExtendedEntry {
-                    entry: ne_entry,
-                    born: Self::parse_time(ce.p569.as_ref()),
-                    died: Self::parse_time(ce.p570.as_ref()),
-                    ..Default::default()
-                };
-
-                if let Some(p31) = ce.p31 {
-                    ne.entry.type_name = Some(format!("Q{p31}"));
-                }
-
-                if let Some(&entry_id) = existing_ext_ids.get(&ne.entry.ext_id) {
-                    let type_str = ne.entry.type_name.as_deref().unwrap_or("");
-                    self.app
-                        .storage()
-                        .entry_update_cersei(
-                            entry_id,
-                            &ne.entry.ext_name,
-                            &ne.entry.ext_desc,
-                            type_str,
-                            &ne.entry.ext_url,
-                        )
-                        .await?;
-
-                    if ne.born.is_some() || ne.died.is_some() {
-                        EntryWriter::new(self.app.as_ref(), &mut ne.entry).set_person_dates(&ne.born, &ne.died).await?;
-                    }
-                } else {
-                    // Create new entry
-                    match self.add_new_entry(&mut ne.entry).await {
-                        Ok(entry_id) => {
-                            // Update our local cache
-                            existing_ext_ids.insert(ne.entry.id.unwrap_or(0).to_string(), entry_id);
-                            added_new_entries = true;
-
-                            // Set person dates if available
-                            if ne.born.is_some() || ne.died.is_some() {
-                                EntryWriter::new(self.app.as_ref(), &mut ne.entry).set_person_dates(&ne.born, &ne.died).await?;
-                            }
-                        }
-                        Err(_e) => {
-                            // eprintln!("Error creating entry: {}", e);
-                            continue;
-                        }
-                    }
+                if self.apply_cersei_entry(ce, catalog_id, &mut existing_ext_ids).await? {
+                    added_new_entries = true;
                 }
             }
-
             if response_data.entries.len() < limit {
-                break; // No more data
+                break;
             }
             offset += limit;
         }
 
-        // Sync internal relations
         self.sync_internal_relations(scraper_id, last_sync).await?;
+        self.app.storage().update_cersei_last_update(scraper_id, &start_time).await?;
+        self.app.storage().catalog_refresh_overview_table(catalog_id).await?;
 
-        // Update last sync time
-        self.app
-            .storage()
-            .update_cersei_last_update(scraper_id, &start_time)
-            .await?;
-
-        self.app
-            .storage()
-            .catalog_refresh_overview_table(catalog_id)
-            .await?;
-
-        // Check for human dates and queue appropriate jobs
         if self.set_human_dates_flag(catalog_id).await? {
             self.queue_job(catalog_id, "match_person_dates").await?;
             self.queue_job(catalog_id, "match_on_birthdate").await?;
         }
-
         if added_new_entries {
-            // Queue automatch jobs
             self.queue_job(catalog_id, "automatch_by_sitelink").await?;
-            self.queue_job(catalog_id, "automatch_from_other_catalogs")
-                .await?;
+            self.queue_job(catalog_id, "automatch_from_other_catalogs").await?;
             self.queue_job(catalog_id, "automatch_by_search").await?;
         }
-
-        // println!(
-        //     "Completed syncing scraper {} for catalog {}",
-        //     scraper_id, catalog_id
-        // );
         Ok(())
     }
 

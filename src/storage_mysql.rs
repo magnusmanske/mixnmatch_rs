@@ -6262,7 +6262,6 @@ mod tests {
         assert!(results.len() > 5000);
     }
 
-    // #lizard forgives
     #[test]
     fn test_jobs_get_next_job_construct_sql() {
         let catalog_filter =

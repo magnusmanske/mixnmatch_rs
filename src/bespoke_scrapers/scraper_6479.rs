@@ -15,6 +15,23 @@ use wikimisc::timestamp::TimeStamp;
 
 use super::BespokeScraper;
 
+lazy_static! {
+    static ref RE_URI: Regex = Regex::new(r"^https://ikmk.smb.museum/ndp/(.+?)$").unwrap();
+    static ref RE_LOC_NAME: Regex = Regex::new(r"^(.+?) * \| *(.+)$").unwrap();
+    static ref RE_WD: Regex = Regex::new(r"^https?://www.wikidata.org/(wiki|entity)/Q(\d+)").unwrap();
+    static ref RE_WP: Regex = Regex::new(r"^https?://([a-z]+).wikipedia.org/wiki/(.+)$").unwrap();
+    static ref RE_GND: Regex = Regex::new(r"^https?://d-nb.info/gnd/([^#]+)").unwrap();
+    static ref RE_VIAF: Regex = Regex::new(r"^https?://viaf.org/viaf/(.+)$").unwrap();
+    static ref RE_NOMISMA: Regex = Regex::new(r"^https?://nomisma.org/id/(.+)$").unwrap();
+    static ref RE_BM: Regex = Regex::new(r"^https?://www.britishmuseum.org/collection/term/BIOG(.+)$").unwrap();
+    static ref RE_ZDB: Regex = Regex::new(r"^https?://ld.zdb-services.de/resource/(.+)$").unwrap();
+    static ref RE_MD: Regex = Regex::new(r"^https?://term.museum-digital.de/md-de/persinst/(\d+)$").unwrap();
+    static ref RE_GEONAMES: Regex = Regex::new(r"^https?://www.geonames.org/(\d+)$").unwrap();
+    static ref RE_MMLO: Regex = Regex::new(r"^https?://(www.)?mmlo.de/(\d+)$").unwrap();
+    static ref RE_RPC: Regex = Regex::new(r"^https?://rpc.ashmus.ox.ac.uk/(.+)$").unwrap();
+    static ref RE_LGPN: Regex = Regex::new(r"^https?://www.lgpn.ox.ac.uk/id/(.+?)$").unwrap();
+}
+
 // ______________________________________________________
 // Münzkabinett
 
@@ -64,36 +81,12 @@ impl BespokeScraper for BespokeScraper6479 {
 }
 
 impl BespokeScraper6479 {
-    #[allow(clippy::cognitive_complexity)]
     pub(crate) fn record2ext_entry(
         &self,
         record: HashMap<String, String>,
     ) -> Option<ExtendedEntry> {
-        lazy_static! {
-            static ref re_uri: Regex = Regex::new(r"^https://ikmk.smb.museum/ndp/(.+?)$").unwrap();
-            static ref re_loc_name: Regex = Regex::new(r"^(.+?) * \| *(.+)$").unwrap();
-            static ref re_wd: Regex =
-                Regex::new(r"^https?://www.wikidata.org/(wiki|entity)/Q(\d+)").unwrap();
-            static ref re_wp: Regex =
-                Regex::new(r"^https?://([a-z]+).wikipedia.org/wiki/(.+)$").unwrap();
-            static ref re_gnd: Regex = Regex::new(r"^https?://d-nb.info/gnd/([^#]+)").unwrap();
-            static ref re_viaf: Regex = Regex::new(r"^https?://viaf.org/viaf/(.+)$").unwrap();
-            static ref re_nomisma: Regex = Regex::new(r"^https?://nomisma.org/id/(.+)$").unwrap();
-            static ref re_bm: Regex =
-                Regex::new(r"^https?://www.britishmuseum.org/collection/term/BIOG(.+)$").unwrap();
-            static ref re_zdb: Regex =
-                Regex::new(r"^https?://ld.zdb-services.de/resource/(.+)$").unwrap();
-            static ref re_md: Regex =
-                Regex::new(r"^https?://term.museum-digital.de/md-de/persinst/(\d+)$").unwrap();
-            static ref re_geonames: Regex =
-                Regex::new(r"^https?://www.geonames.org/(\d+)$").unwrap();
-            static ref re_mmlo: Regex = Regex::new(r"^https?://(www.)?mmlo.de/(\d+)$").unwrap();
-            static ref re_rpc: Regex = Regex::new(r"^https?://rpc.ashmus.ox.ac.uk/(.+)$").unwrap();
-            static ref re_lgpn: Regex =
-                Regex::new(r"^https?://www.lgpn.ox.ac.uk/id/(.+?)$").unwrap();
-        }
         let uri = record.get("uri")?.to_string();
-        let ext_id = re_uri.captures(&uri)?[1].to_string();
+        let ext_id = RE_URI.captures(&uri)?[1].to_string();
         let mut ext_entry = ExtendedEntry {
             entry: Entry {
                 catalog: self.catalog_id(),
@@ -114,33 +107,38 @@ impl BespokeScraper6479 {
             Some("female") => {
                 ext_entry.aux.insert(AuxiliaryRow::new(21, "Q6581072".to_string()));
             }
-            Some("") => {}
-            Some(other) => {
-                self.log(format!("Unknown gender {other}"));
-            }
-            None => {}
+            Some("") | None => {}
+            Some(other) => self.log(format!("Unknown gender {other}")),
         }
-        ext_entry.entry.type_name = match record.get("type").map(|s| s.as_str()) {
+        self.apply_type_url(record.get("type").map(|s| s.as_str()), &mut ext_entry);
+        let lods: Vec<&str> = record
+            .get("LOD")
+            .map(|s| s.as_str())
+            .unwrap_or("")
+            .split('|')
+            .collect();
+        for lod in lods {
+            self.apply_lod_item(lod, &mut ext_entry);
+        }
+        Some(ext_entry)
+    }
+
+    fn apply_type_url(&self, type_url: Option<&str>, ext_entry: &mut ExtendedEntry) {
+        ext_entry.entry.type_name = match type_url {
             Some("https://ikmk.smb.museum/ndp/category/mk_person") => Some("Q5".to_string()),
-            Some("https://ikmk.smb.museum/ndp/category/mk_corporation") => {
-                Some("Q167037".to_string())
-            }
-            Some("https://ikmk.smb.museum/ndp/category/mk_owner") => None, // ??
-            Some("https://ikmk.smb.museum/ndp/category/mk_mstand") => None, // ??
-            Some("https://ikmk.smb.museum/ndp/category/mk_herstellungtype") => None, // ??
+            Some("https://ikmk.smb.museum/ndp/category/mk_corporation") => Some("Q167037".to_string()),
+            Some("https://ikmk.smb.museum/ndp/category/mk_owner")
+            | Some("https://ikmk.smb.museum/ndp/category/mk_mstand")
+            | Some("https://ikmk.smb.museum/ndp/category/mk_herstellungtype") => None,
             Some("https://ikmk.smb.museum/ndp/category/mk_land") => Some("Q6256".to_string()),
             Some("https://ikmk.smb.museum/ndp/category/mk_material") => Some("Q214609".to_string()),
-            Some("https://ikmk.smb.museum/ndp/category/mk_periode") => {
-                Some("Q11514315".to_string())
-            }
+            Some("https://ikmk.smb.museum/ndp/category/mk_periode") => Some("Q11514315".to_string()),
             Some("https://ikmk.smb.museum/ndp/category/mk_staette") => {
-                if let Some(name) = re_loc_name.captures(&ext_entry.entry.ext_name) {
+                if let Some(name) = RE_LOC_NAME.captures(&ext_entry.entry.ext_name) {
                     ext_entry.entry.ext_name = name[1].to_string();
-                };
-                if let Some(desc) = re_loc_name.captures(&ext_entry.entry.ext_desc) {
-                    let lat = desc[1].parse::<f64>();
-                    let lon = desc[2].parse::<f64>();
-                    if let (Ok(lat), Ok(lon)) = (lat, lon) {
+                }
+                if let Some(desc) = RE_LOC_NAME.captures(&ext_entry.entry.ext_desc) {
+                    if let (Ok(lat), Ok(lon)) = (desc[1].parse::<f64>(), desc[2].parse::<f64>()) {
                         ext_entry.location = Some(CoordinateLocation::new(lat, lon));
                     }
                 }
@@ -152,50 +150,38 @@ impl BespokeScraper6479 {
             }
             None => None,
         };
+    }
 
-        // Other external IDs
-        let lods: Vec<&str> = record
-            .get("LOD")
-            .map(|s| s.as_str())
-            .unwrap_or("")
-            .split('|')
-            .collect();
-        for lod in lods {
-            if lod.is_empty() || lod.ends_with('/') {
-                // Ignore
-            } else if let Some(id) = re_wd.captures(lod) {
-                if let Ok(q) = id[2].parse::<isize>() {
-                    ext_entry.entry.q = Some(q);
-                    ext_entry.entry.user = Some(USER_AUX_MATCH);
-                    ext_entry.entry.timestamp = Some(TimeStamp::now());
-                }
-            } else if let Some(_lang_title) = re_wp.captures(lod) {
-                // Wikipedia article, ignore, wikidata should cover it
-            } else if let Some(id) = re_gnd.captures(lod) {
-                ext_entry.aux.insert(AuxiliaryRow::new(227, id[1].to_string()));
-            } else if let Some(id) = re_viaf.captures(lod) {
-                ext_entry.aux.insert(AuxiliaryRow::new(214, id[1].to_string()));
-            } else if let Some(id) = re_nomisma.captures(lod) {
-                ext_entry.aux.insert(AuxiliaryRow::new(2950, id[1].to_string()));
-            } else if let Some(id) = re_bm.captures(lod) {
-                ext_entry.aux.insert(AuxiliaryRow::new(1711, id[1].to_string()));
-            } else if let Some(_id) = re_zdb.captures(lod) {
-                // Ignore, no property
-            } else if let Some(_id) = re_rpc.captures(lod) {
-                // Ignore, no property
-            } else if let Some(_id) = re_lgpn.captures(lod) {
-                // Ignore, no property
-            } else if let Some(id) = re_md.captures(lod) {
-                ext_entry.aux.insert(AuxiliaryRow::new(12597, id[1].to_string()));
-            } else if let Some(id) = re_geonames.captures(lod) {
-                ext_entry.aux.insert(AuxiliaryRow::new(1566, id[1].to_string()));
-            } else if let Some(id) = re_mmlo.captures(lod) {
-                ext_entry.aux.insert(AuxiliaryRow::new(6240, id[2].to_string()));
-            } else {
-                self.log(format!("Unknown URL pattern {lod}"));
+    fn apply_lod_item(&self, lod: &str, ext_entry: &mut ExtendedEntry) {
+        if lod.is_empty() || lod.ends_with('/') {
+            // Ignore
+        } else if let Some(id) = RE_WD.captures(lod) {
+            if let Ok(q) = id[2].parse::<isize>() {
+                ext_entry.entry.q = Some(q);
+                ext_entry.entry.user = Some(USER_AUX_MATCH);
+                ext_entry.entry.timestamp = Some(TimeStamp::now());
             }
+        } else if RE_WP.is_match(lod) {
+            // Wikipedia article, ignore, wikidata should cover it
+        } else if let Some(id) = RE_GND.captures(lod) {
+            ext_entry.aux.insert(AuxiliaryRow::new(227, id[1].to_string()));
+        } else if let Some(id) = RE_VIAF.captures(lod) {
+            ext_entry.aux.insert(AuxiliaryRow::new(214, id[1].to_string()));
+        } else if let Some(id) = RE_NOMISMA.captures(lod) {
+            ext_entry.aux.insert(AuxiliaryRow::new(2950, id[1].to_string()));
+        } else if let Some(id) = RE_BM.captures(lod) {
+            ext_entry.aux.insert(AuxiliaryRow::new(1711, id[1].to_string()));
+        } else if RE_ZDB.is_match(lod) || RE_RPC.is_match(lod) || RE_LGPN.is_match(lod) {
+            // Ignore, no property
+        } else if let Some(id) = RE_MD.captures(lod) {
+            ext_entry.aux.insert(AuxiliaryRow::new(12597, id[1].to_string()));
+        } else if let Some(id) = RE_GEONAMES.captures(lod) {
+            ext_entry.aux.insert(AuxiliaryRow::new(1566, id[1].to_string()));
+        } else if let Some(id) = RE_MMLO.captures(lod) {
+            ext_entry.aux.insert(AuxiliaryRow::new(6240, id[2].to_string()));
+        } else {
+            self.log(format!("Unknown URL pattern {lod}"));
         }
-        Some(ext_entry)
     }
 }
 

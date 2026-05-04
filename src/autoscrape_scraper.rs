@@ -26,7 +26,6 @@ pub struct AutoscrapeScraper {
 impl JsonStuff for AutoscrapeScraper {}
 
 impl AutoscrapeScraper {
-    // #lizard forgives
     pub fn from_json(json: &Value) -> Result<Self> {
         let resolve = json
             .get("resolve")

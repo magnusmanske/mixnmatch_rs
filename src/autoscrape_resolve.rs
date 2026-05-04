@@ -67,7 +67,6 @@ impl AutoscrapeResolve {
         RE_SIMPLE_SPACE.replace_all(&ret, " ").trim().into()
     }
 
-    // #lizard forgives
     fn from_json_regex(
         regex: Value,
         json: &Value,
