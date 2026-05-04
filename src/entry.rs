@@ -90,7 +90,6 @@ pub enum EntryError {
 impl Error for EntryError {}
 
 impl fmt::Display for EntryError {
-    //TODO test
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             EntryError::TryingToUpdateNewEntry => write!(f, "EntryError::TryingToUpdateNewEntry"),
@@ -225,8 +224,7 @@ impl<'a> EntryWriter<'a> {
     /// the `Entry::app: Option<AppState>` field can be dropped.
     pub async fn set_match(&mut self, q: &str, user_id: DbId) -> Result<bool> {
         self.entry.get_valid_id()?;
-        let q_numeric = item2numeric(q)
-            .ok_or_else(|| anyhow!("'{}' is not a valid item", &q))?;
+        let q_numeric = item2numeric(q).ok_or_else(|| anyhow!("'{}' is not a valid item", &q))?;
         let timestamp = TimeStamp::now();
         if self
             .ctx
@@ -329,10 +327,7 @@ impl<'a> EntryWriter<'a> {
         }
         let entry_id = self.entry.get_valid_id()?;
         self.entry.ext_id = ext_id.to_string();
-        self.ctx
-            .storage()
-            .entry_set_ext_id(ext_id, entry_id)
-            .await
+        self.ctx.storage().entry_set_ext_id(ext_id, entry_id).await
     }
 
     /// Update `ext_url` locally and in the database. **Canonical
@@ -404,10 +399,7 @@ impl<'a> EntryWriter<'a> {
     /// also write the multi-match list. **Canonical implementation.**
     /// `Entry::set_auto_and_multi_match` forwards here.
     pub async fn set_auto_and_multi_match(&mut self, items: &[String]) -> Result<()> {
-        let mut qs_numeric: Vec<ItemId> = items
-            .iter()
-            .filter_map(|q| item2numeric(q))
-            .collect();
+        let mut qs_numeric: Vec<ItemId> = items.iter().filter_map(|q| item2numeric(q)).collect();
         if qs_numeric.is_empty() {
             return Ok(());
         }
@@ -416,7 +408,8 @@ impl<'a> EntryWriter<'a> {
         if self.entry.q == Some(qs_numeric[0]) {
             return Ok(()); // Automatch already there; skip multimatch.
         }
-        self.set_match(&format!("Q{}", qs_numeric[0]), USER_AUTO).await?;
+        self.set_match(&format!("Q{}", qs_numeric[0]), USER_AUTO)
+            .await?;
         if qs_numeric.len() > 1 {
             self.set_multi_match(items).await?;
         }
@@ -785,7 +778,9 @@ async fn read_language_descriptions(
     ctx: &dyn AppContext,
     entry_id: DbId,
 ) -> Result<HashMap<String, String>> {
-    ctx.storage().entry_get_language_descriptions(entry_id).await
+    ctx.storage()
+        .entry_get_language_descriptions(entry_id)
+        .await
 }
 
 async fn read_coordinate_location(
@@ -892,7 +887,6 @@ impl Entry {
     /// facade exists so the existing call sites in `automatch/`,
     /// `maintenance/`, `auxiliary_matcher/`, etc. don't all need to
     /// change in lockstep with the repo extraction.
-    //TODO test
     pub async fn from_id(entry_id: DbId, app: &dyn ExternalServicesContext) -> Result<Self> {
         EntryRepo::new(app).find(entry_id).await
     }
@@ -909,8 +903,11 @@ impl Entry {
     /// Returns an Entry object for a given external ID in a catalog.
     ///
     /// **Prefer [`EntryRepo::find_by_ext_id`]** for new code.
-    //TODO test
-    pub async fn from_ext_id(catalog_id: DbId, ext_id: &str, app: &dyn ExternalServicesContext) -> Result<Entry> {
+    pub async fn from_ext_id(
+        catalog_id: DbId,
+        ext_id: &str,
+        app: &dyn ExternalServicesContext,
+    ) -> Result<Entry> {
         EntryRepo::new(app).find_by_ext_id(catalog_id, ext_id).await
     }
 
@@ -923,7 +920,6 @@ impl Entry {
     }
 
     /// Helper function for `from_row()`.
-    //TODO test
     pub fn value2opt_string(value: mysql_async::Value) -> Result<Option<String>> {
         match value {
             Value::Bytes(s) => Ok(Some(std::str::from_utf8(&s)?.to_owned())),
@@ -932,7 +928,6 @@ impl Entry {
     }
 
     /// Helper function for `from_row()`.
-    //TODO test
     pub fn value2opt_isize(value: mysql_async::Value) -> Result<Option<isize>> {
         match value {
             Value::Int(i) => Ok(Some(i.try_into()?)),
@@ -941,7 +936,6 @@ impl Entry {
     }
 
     /// Helper function for `from_row()`.
-    //TODO test
     pub fn value2opt_usize(value: mysql_async::Value) -> Result<Option<usize>> {
         match value {
             Value::Int(i) => Ok(Some(i.try_into()?)),
@@ -1149,20 +1143,56 @@ mod tests {
         let died = Some(PersonDate::year_month_day(2000, 1, 1));
 
         // Set both
-        EntryWriter::new(&app, &mut entry).set_person_dates(&born, &died).await.unwrap();
-        assert_eq!(EntryWriter::new(&app, &mut entry).get_person_dates().await.unwrap(), (born, died));
+        EntryWriter::new(&app, &mut entry)
+            .set_person_dates(&born, &died)
+            .await
+            .unwrap();
+        assert_eq!(
+            EntryWriter::new(&app, &mut entry)
+                .get_person_dates()
+                .await
+                .unwrap(),
+            (born, died)
+        );
 
         // Remove died
-        EntryWriter::new(&app, &mut entry).set_person_dates(&born, &None).await.unwrap();
-        assert_eq!(EntryWriter::new(&app, &mut entry).get_person_dates().await.unwrap(), (born, None));
+        EntryWriter::new(&app, &mut entry)
+            .set_person_dates(&born, &None)
+            .await
+            .unwrap();
+        assert_eq!(
+            EntryWriter::new(&app, &mut entry)
+                .get_person_dates()
+                .await
+                .unwrap(),
+            (born, None)
+        );
 
         // Remove born
-        EntryWriter::new(&app, &mut entry).set_person_dates(&None, &died).await.unwrap();
-        assert_eq!(EntryWriter::new(&app, &mut entry).get_person_dates().await.unwrap(), (None, died));
+        EntryWriter::new(&app, &mut entry)
+            .set_person_dates(&None, &died)
+            .await
+            .unwrap();
+        assert_eq!(
+            EntryWriter::new(&app, &mut entry)
+                .get_person_dates()
+                .await
+                .unwrap(),
+            (None, died)
+        );
 
         // Remove entire row
-        EntryWriter::new(&app, &mut entry).set_person_dates(&None, &None).await.unwrap();
-        assert_eq!(EntryWriter::new(&app, &mut entry).get_person_dates().await.unwrap(), (None, None));
+        EntryWriter::new(&app, &mut entry)
+            .set_person_dates(&None, &None)
+            .await
+            .unwrap();
+        assert_eq!(
+            EntryWriter::new(&app, &mut entry)
+                .get_person_dates()
+                .await
+                .unwrap(),
+            (None, None)
+        );
     }
 
     #[tokio::test]
@@ -1174,17 +1204,44 @@ mod tests {
         let cl = CoordinateLocation::new(1.234, -5.678);
 
         // Set a known value
-        EntryWriter::new(&app, &mut entry).set_coordinate_location(&Some(cl)).await.unwrap();
-        assert_eq!(EntryWriter::new(&app, &mut entry).get_coordinate_location().await.unwrap(), Some(cl));
+        EntryWriter::new(&app, &mut entry)
+            .set_coordinate_location(&Some(cl))
+            .await
+            .unwrap();
+        assert_eq!(
+            EntryWriter::new(&app, &mut entry)
+                .get_coordinate_location()
+                .await
+                .unwrap(),
+            Some(cl)
+        );
 
         // Switch lat/lon
         let cl2 = CoordinateLocation::new(cl.lon(), cl.lat());
-        EntryWriter::new(&app, &mut entry).set_coordinate_location(&Some(cl2)).await.unwrap();
-        assert_eq!(EntryWriter::new(&app, &mut entry).get_coordinate_location().await.unwrap(), Some(cl2));
+        EntryWriter::new(&app, &mut entry)
+            .set_coordinate_location(&Some(cl2))
+            .await
+            .unwrap();
+        assert_eq!(
+            EntryWriter::new(&app, &mut entry)
+                .get_coordinate_location()
+                .await
+                .unwrap(),
+            Some(cl2)
+        );
 
         // Remove
-        EntryWriter::new(&app, &mut entry).set_coordinate_location(&None).await.unwrap();
-        assert_eq!(EntryWriter::new(&app, &mut entry).get_coordinate_location().await.unwrap(), None);
+        EntryWriter::new(&app, &mut entry)
+            .set_coordinate_location(&None)
+            .await
+            .unwrap();
+        assert_eq!(
+            EntryWriter::new(&app, &mut entry)
+                .get_coordinate_location()
+                .await
+                .unwrap(),
+            None
+        );
     }
 
     #[tokio::test]
@@ -1199,7 +1256,10 @@ mod tests {
         assert!(entry.timestamp.is_none());
 
         // Set and check in-memory changes
-        EntryWriter::new(&app, &mut entry).set_match("Q1", 4).await.unwrap();
+        EntryWriter::new(&app, &mut entry)
+            .set_match("Q1", 4)
+            .await
+            .unwrap();
         assert_eq!(entry.q, Some(1));
         assert_eq!(entry.user, Some(4));
         assert!(entry.timestamp.is_some());
@@ -1240,11 +1300,23 @@ mod tests {
             .iter()
             .map(|s| s.to_string())
             .collect();
-        EntryWriter::new(&app, &mut entry).set_multi_match(&items).await.unwrap();
-        let result1 = EntryWriter::new(&app, &mut entry).get_multi_match().await.unwrap();
+        EntryWriter::new(&app, &mut entry)
+            .set_multi_match(&items)
+            .await
+            .unwrap();
+        let result1 = EntryWriter::new(&app, &mut entry)
+            .get_multi_match()
+            .await
+            .unwrap();
         assert_eq!(result1, items);
-        EntryWriter::new(&app, &mut entry).remove_multi_match().await.unwrap();
-        let result2 = EntryWriter::new(&app, &mut entry).get_multi_match().await.unwrap();
+        EntryWriter::new(&app, &mut entry)
+            .remove_multi_match()
+            .await
+            .unwrap();
+        let result2 = EntryWriter::new(&app, &mut entry)
+            .get_multi_match()
+            .await
+            .unwrap();
         let empty: Vec<String> = vec![];
         assert_eq!(result2, empty);
     }
@@ -1254,7 +1326,10 @@ mod tests {
         let app = test_support::test_app().await;
         let (_, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
         let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
-        EntryWriter::new(&app, &mut entry).set_match("Q12345", 4).await.unwrap();
+        EntryWriter::new(&app, &mut entry)
+            .set_match("Q12345", 4)
+            .await
+            .unwrap();
         assert_eq!(
             entry.get_item_url(),
             Some("https://www.wikidata.org/wiki/Q12345".to_string())
@@ -1270,7 +1345,9 @@ mod tests {
         let entry = Entry::from_id(entry_id, &app).await.unwrap();
         assert_eq!(
             entry.get_entry_url(),
-            Some(format!("https://mix-n-match.toolforge.org/#/entry/{entry_id}"))
+            Some(format!(
+                "https://mix-n-match.toolforge.org/#/entry/{entry_id}"
+            ))
         );
         let entry2 = Entry::new_from_catalog_and_ext_id(1, "234");
         assert_eq!(entry2.get_entry_url(), None);
@@ -1281,7 +1358,10 @@ mod tests {
         let app = test_support::test_app().await;
         let (_, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
         let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
-        EntryWriter::new(&app, &mut entry).set_match("Q12345", 4).await.unwrap();
+        EntryWriter::new(&app, &mut entry)
+            .set_match("Q12345", 4)
+            .await
+            .unwrap();
         assert!(!entry.is_unmatched());
         EntryWriter::new(&app, &mut entry).unmatch().await.unwrap();
         assert!(entry.is_unmatched());
@@ -1292,7 +1372,10 @@ mod tests {
         let app = test_support::test_app().await;
         let (_, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
         let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
-        EntryWriter::new(&app, &mut entry).set_match("Q12345", 0).await.unwrap();
+        EntryWriter::new(&app, &mut entry)
+            .set_match("Q12345", 0)
+            .await
+            .unwrap();
         assert!(entry.is_partially_matched());
         EntryWriter::new(&app, &mut entry).unmatch().await.unwrap();
         assert!(!entry.is_partially_matched());
@@ -1303,7 +1386,10 @@ mod tests {
         let app = test_support::test_app().await;
         let (_, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
         let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
-        EntryWriter::new(&app, &mut entry).set_match("Q12345", 4).await.unwrap();
+        EntryWriter::new(&app, &mut entry)
+            .set_match("Q12345", 4)
+            .await
+            .unwrap();
         assert!(entry.is_fully_matched());
         EntryWriter::new(&app, &mut entry).unmatch().await.unwrap();
         assert!(!entry.is_fully_matched());
@@ -1512,8 +1598,17 @@ mod tests {
         let (_, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
         let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
         let s = LocaleString::new("en", "test");
-        EntryWriter::new(&app, &mut entry).add_alias(&s).await.unwrap();
-        assert!(EntryWriter::new(&app, &mut entry).get_aliases().await.unwrap().contains(&s));
+        EntryWriter::new(&app, &mut entry)
+            .add_alias(&s)
+            .await
+            .unwrap();
+        assert!(
+            EntryWriter::new(&app, &mut entry)
+                .get_aliases()
+                .await
+                .unwrap()
+                .contains(&s)
+        );
     }
 
     #[test]

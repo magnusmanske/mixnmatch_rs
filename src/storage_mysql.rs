@@ -799,7 +799,6 @@ impl Storage for StorageMySQL {
         Ok(has_rows)
     }
 
-    //TODO test
     async fn get_random_active_catalog_id_with_property(&self) -> Option<usize> {
         let sql = "SELECT /* get_random_active_catalog_id_with_property */ id FROM catalog WHERE active=1 AND wd_prop IS NOT NULL and wd_qual IS NULL ORDER by rand() LIMIT 1";
         self.get_conn_ro()

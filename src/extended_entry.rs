@@ -45,7 +45,6 @@ impl ExtendedEntry {
         Ok(())
     }
 
-    //TODO test
     pub fn from_row(row: &csv::StringRecord, datasource: &mut DataSource) -> Result<Self> {
         let ext_id = row
             .get(datasource.ext_id_column)
@@ -103,7 +102,6 @@ impl ExtendedEntry {
         Ok(())
     }
 
-    //TODO test
     pub async fn update_existing(&mut self, entry: &mut Entry, app: &dyn AppContext) -> Result<()> {
         self.update_existing_basic_values(app, entry).await?;
         if self.born.is_some() || self.died.is_some() {
@@ -150,7 +148,7 @@ impl ExtendedEntry {
 
     // Adds new aliases to the existing DB entry.
     // Does NOT remove ones that don't exist anymore.
-    //TODO test
+
     pub async fn sync_aliases(&self, app: &dyn AppContext, entry: &mut Entry) -> Result<()> {
         let ew = EntryWriter::new(app, entry);
         let existing = ew.get_aliases().await?;
@@ -164,7 +162,7 @@ impl ExtendedEntry {
 
     // Adds/replaces new aux values on the existing DB entry.
     // Does NOT remove ones that don't exist anymore.
-    //TODO test
+
     pub async fn sync_auxiliary(&self, app: &dyn AppContext, entry: &mut Entry) -> Result<()> {
         let mut ew = EntryWriter::new(app, entry);
         let existing: HashSet<AuxiliaryRow> = ew.get_aux().await?.into_iter().collect();
@@ -179,7 +177,7 @@ impl ExtendedEntry {
 
     // Adds/replaces new language descriptions on the existing DB entry.
     // Does NOT remove ones that don't exist anymore.
-    //TODO test
+
     pub async fn sync_descriptions(&self, app: &dyn AppContext, entry: &mut Entry) -> Result<()> {
         let ew = EntryWriter::new(app, entry);
         let existing = ew.get_language_descriptions().await?;
@@ -193,7 +191,6 @@ impl ExtendedEntry {
     }
 
     /// Inserts a new entry and its associated data into the database
-    //TODO test
     pub async fn insert_new(&mut self, app: &dyn AppContext) -> Result<()> {
         let mut ew = EntryWriter::new(app, &mut self.entry);
         ew.insert_as_new().await?;
@@ -219,7 +216,6 @@ impl ExtendedEntry {
     }
 
     /// Processes a key-value pair, with keys from table columns, or matched patterns
-    //TODO test
     fn process_cell(&mut self, label: &str, cell: &str) -> Result<()> {
         if !self.parse_alias(label, cell)
             && !self.parse_description(label, cell)
@@ -258,18 +254,15 @@ impl ExtendedEntry {
         Ok(())
     }
 
-    //TODO test
     pub fn parse_type(type_name: &str) -> Option<String> {
         Self::get_capture(&RE_TYPE, type_name)
     }
 
-    //TODO test
     pub fn parse_date(date: &str) -> Option<PersonDate> {
         let captured = Self::get_capture(&RE_DATE, date)?;
         PersonDate::from_db_string(&captured)
     }
 
-    //TODO test
     fn parse_alias(&mut self, label: &str, cell: &str) -> bool {
         if let Some(s) = Self::get_capture(&RE_ALIAS, label) {
             self.aliases.push(LocaleString::new(s, cell.to_string()));
@@ -279,7 +272,6 @@ impl ExtendedEntry {
         }
     }
 
-    //TODO test
     fn parse_description(&mut self, label: &str, cell: &str) -> bool {
         if let Some(s) = Self::get_capture(&RE_DESCRIPTION, label) {
             self.descriptions.insert(s, cell.to_string());
@@ -289,7 +281,6 @@ impl ExtendedEntry {
         }
     }
 
-    //TODO test
     fn parse_property(&mut self, label: &str, cell: &str) -> Result<bool> {
         let property_num = match Self::get_capture(&RE_PROPERTY, label) {
             Some(s) => s.parse::<usize>()?,
@@ -307,7 +298,8 @@ impl ExtendedEntry {
             for part in cell.split('|') {
                 let part = part.trim();
                 if !part.is_empty() {
-                    self.aux.insert(AuxiliaryRow::new(property_num, part.to_string()));
+                    self.aux
+                        .insert(AuxiliaryRow::new(property_num, part.to_string()));
                 }
             }
         }
@@ -315,7 +307,6 @@ impl ExtendedEntry {
         Ok(true)
     }
 
-    //TODO test
     fn get_capture(regexp: &Regex, text: &str) -> Option<String> {
         regexp
             .captures(text)?
@@ -355,8 +346,14 @@ mod tests {
             ExtendedEntry::parse_date("2022-11"),
             Some(PersonDate::year_month(2022, 11))
         );
-        assert_eq!(ExtendedEntry::parse_date("2022"), Some(PersonDate::year_only(2022)));
-        assert_eq!(ExtendedEntry::parse_date("800"), Some(PersonDate::year_only(800)));
+        assert_eq!(
+            ExtendedEntry::parse_date("2022"),
+            Some(PersonDate::year_only(2022))
+        );
+        assert_eq!(
+            ExtendedEntry::parse_date("800"),
+            Some(PersonDate::year_only(800))
+        );
     }
 
     #[test]
@@ -407,7 +404,10 @@ mod tests {
     fn test_parse_property() {
         let mut ee = ExtendedEntry::default();
         assert!(ee.parse_property("P214", "12345").unwrap());
-        assert!(ee.aux.contains(&AuxiliaryRow::new(214, "12345".to_string())));
+        assert!(
+            ee.aux
+                .contains(&AuxiliaryRow::new(214, "12345".to_string()))
+        );
     }
 
     #[test]
@@ -561,7 +561,10 @@ mod tests {
         let mut ee = ExtendedEntry::default();
         assert!(ee.parse_property("P214", "12345").unwrap());
         assert_eq!(ee.aux.len(), 1);
-        assert!(ee.aux.contains(&AuxiliaryRow::new(214, "12345".to_string())));
+        assert!(
+            ee.aux
+                .contains(&AuxiliaryRow::new(214, "12345".to_string()))
+        );
     }
 
     #[test]
@@ -569,8 +572,14 @@ mod tests {
         let mut ee = ExtendedEntry::default();
         assert!(ee.parse_property("P214", "12345|67890").unwrap());
         assert_eq!(ee.aux.len(), 2);
-        assert!(ee.aux.contains(&AuxiliaryRow::new(214, "12345".to_string())));
-        assert!(ee.aux.contains(&AuxiliaryRow::new(214, "67890".to_string())));
+        assert!(
+            ee.aux
+                .contains(&AuxiliaryRow::new(214, "12345".to_string()))
+        );
+        assert!(
+            ee.aux
+                .contains(&AuxiliaryRow::new(214, "67890".to_string()))
+        );
     }
 
     #[test]

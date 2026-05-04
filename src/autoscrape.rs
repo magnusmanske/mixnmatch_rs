@@ -46,7 +46,6 @@ pub enum AutoscrapeError {
 impl Error for AutoscrapeError {}
 
 impl fmt::Display for AutoscrapeError {
-    //TODO test
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             AutoscrapeError::UnknownLevelType(s) => write!(f, "{s}"), // user-facing output
@@ -60,7 +59,6 @@ impl fmt::Display for AutoscrapeError {
 }
 
 pub trait JsonStuff {
-    //TODO test
     fn json_as_str(json: &Value, key: &str) -> Result<String, AutoscrapeError> {
         Ok(json
             .get(key)
@@ -70,7 +68,6 @@ pub trait JsonStuff {
             .to_string())
     }
 
-    //TODO test
     fn json_as_u64(json: &Value, key: &str) -> Result<u64, AutoscrapeError> {
         let value = json
             .get(key)
@@ -113,11 +110,10 @@ pub struct Autoscrape {
 }
 
 impl Jobbable for Autoscrape {
-    //TODO test
     fn set_current_job(&mut self, job: &Job) {
         self.job = Some(job.clone());
     }
-    //TODO test
+
     fn get_current_job(&self) -> Option<&Job> {
         self.job.as_ref()
     }
@@ -128,7 +124,6 @@ impl Jobbable for Autoscrape {
 }
 
 impl Autoscrape {
-    //TODO test
     pub async fn new(catalog_id: usize, app: Arc<dyn AppContext>) -> Result<Self> {
         let results = app.storage().autoscrape_get_for_catalog(catalog_id).await?;
         let (id, json) = results
@@ -155,7 +150,6 @@ impl Autoscrape {
         &self.levels
     }
 
-    //TODO test
     fn options_from_json(&mut self, json: &Value) {
         // Accept bool, number, or string for each flag. The scraper wizard
         // sends JS booleans on test (via generateJSON) but stores numbers
@@ -166,7 +160,6 @@ impl Autoscrape {
         self.utf8_encode = json_flag(json.get("utf8_encode"));
     }
 
-    //TODO test
     pub async fn init(&mut self) {
         let mut levels = self.levels.clone();
         for level in &mut levels {
@@ -193,12 +186,10 @@ impl Autoscrape {
     }
 
     /// Returns the current values of all levels.
-    //TODO test
     pub fn current(&self) -> Vec<String> {
         self.levels.iter().map(|level| level.current()).collect()
     }
 
-    //TODO test
     async fn load_url(&mut self, url: &str) -> Option<String> {
         self.urls_loaded += 1;
         let crosses_threshold = self.urls_loaded.is_multiple_of(1000);
@@ -268,7 +259,6 @@ impl Autoscrape {
         Some(html)
     }
 
-    //TODO test
     async fn iterate_one(&mut self) {
         // Run current permutation
         let url = self.get_current_url().await;
@@ -282,29 +272,6 @@ impl Autoscrape {
         }
     }
 
-    //TODO test
-    // async fn iterate_batch(&mut self, batch_size: usize) -> bool {
-    //     let mut futures = vec![];
-    //     let mut ret = true;
-    //     for i in 1..batch_size {
-    //         let url = self.get_current_url().await;
-    //         let future = self.get_patched_html(url);
-    //         futures.push(future);
-    //         ret = self.tick().await;
-    //         if !ret {
-    //             break;
-    //         }
-    //     }
-    //     let htmls: Vec<ExtendedEntry> = join_all(futures).await
-    //         .into_iter()
-    //         .filter_map(|html|html)
-    //         .map(|html| self.scraper.process_html_page(&html,&self))
-    //         .flatten()
-    //         .collect();
-    //     ret
-    // }
-
-    //TODO test
     async fn add_batch(&mut self) -> Result<()> {
         if self.entry_batch.is_empty() {
             let _ = self.remember_state().await;
@@ -342,7 +309,6 @@ impl Autoscrape {
         Ok(())
     }
 
-    //TODO test
     pub async fn remember_state(&mut self) -> Result<()> {
         let json: Vec<Value> = self
             .levels
@@ -354,7 +320,6 @@ impl Autoscrape {
         Ok(())
     }
 
-    //TODO test
     pub async fn run(&mut self) -> Result<()> {
         self.init().await;
         let _ = self.start().await;
@@ -368,7 +333,6 @@ impl Autoscrape {
         Ok(())
     }
 
-    //TODO test
     pub async fn start(&mut self) -> Result<()> {
         let autoscrape_id = self.autoscrape_id;
         self.app_ref()
@@ -387,7 +351,6 @@ impl Autoscrape {
         Ok(())
     }
 
-    //TODO test
     pub async fn finish(&mut self) -> Result<()> {
         let _ = self.add_batch().await; // Flush
         let autoscrape_id = self.autoscrape_id;

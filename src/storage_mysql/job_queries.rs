@@ -29,7 +29,6 @@ impl crate::storage::JobQueries for StorageMySQL {
     }
 
     /// Resets all RUNNING jobs of certain types to TODO. Used when bot restarts.
-    //TODO test
     async fn reset_running_jobs(&self) -> Result<()> {
         let sql = format!(
             "UPDATE /* reset_running_jobs */ `jobs` SET `status`='{}' WHERE `status`='{}'",
@@ -65,7 +64,6 @@ impl crate::storage::JobQueries for StorageMySQL {
     }
 
     /// Resets all FAILED jobs of certain types to TODO. Used when bot restarts.
-    //TODO test
     async fn reset_failed_jobs(&self) -> Result<()> {
         let sql = format!(
             "UPDATE `jobs` SET `status`='{}' WHERE `status`='{}'",
@@ -90,9 +88,7 @@ impl crate::storage::JobQueries for StorageMySQL {
         let mut conn = self.get_conn().await?;
         conn.exec_drop(sql, params! {catalog_id,action,depends_on,status,timestamp})
             .await?;
-        let last_id = conn
-            .last_insert_id()
-            .ok_or(EntryError::EntryInsertFailed)? as usize;
+        let last_id = conn.last_insert_id().ok_or(EntryError::EntryInsertFailed)? as usize;
         Ok(last_id)
     }
 
@@ -158,14 +154,8 @@ impl crate::storage::JobQueries for StorageMySQL {
         Ok(())
     }
 
-    async fn jobs_set_note(
-        &self,
-        note: Option<String>,
-        job_id: usize,
-    ) -> Result<Option<String>> {
-        let note_cloned = note
-            .clone()
-            .map(|s| s.get(..127).unwrap_or(&s).to_string());
+    async fn jobs_set_note(&self, note: Option<String>, job_id: usize) -> Result<Option<String>> {
+        let note_cloned = note.clone().map(|s| s.get(..127).unwrap_or(&s).to_string());
         let sql = "UPDATE `jobs` SET `note`=substr(:note,1,250) WHERE `id`=:job_id";
         let mut conn = self.get_conn().await?;
         conn.exec_drop(sql, params! {job_id,note}).await?;

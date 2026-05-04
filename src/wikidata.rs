@@ -364,7 +364,6 @@ impl Wikidata {
         Ok(ret)
     }
 
-    //TODO test
     pub async fn set_wikipage_text(
         &mut self,
         title: &str,
@@ -386,7 +385,6 @@ impl Wikidata {
         Ok(())
     }
 
-    //TODO test
     pub async fn execute_commands(&mut self, commands: Vec<WikidataCommand>) -> Result<()> {
         if Self::testing() {
             error!("SKIPPING COMMANDS {commands:?}");
@@ -565,7 +563,7 @@ mod tests {
             p.push(name);
             std::fs::read_to_string(&p)
                 .unwrap_or_else(|e| panic!("missing fixture {}: {e}", p.display()))
-            }
+        }
 
         let server = MockServer::start().await;
 
@@ -645,7 +643,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_remove_meta_items() {
-        test_support::seed_wdt_meta_item_page("Q3522").await.unwrap();
+        test_support::seed_wdt_meta_item_page("Q3522")
+            .await
+            .unwrap();
         let app = test_support::test_app().await;
         let mut items: Vec<String> = ["Q1", "Q3522", "Q2"]
             .iter()
@@ -657,9 +657,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_search_db_with_type() {
-        test_support::seed_wbt_label(13520818, "Magnus Manske").await.unwrap();
+        test_support::seed_wbt_label(13520818, "Magnus Manske")
+            .await
+            .unwrap();
         let app = test_support::test_app().await;
-        let result = app.wdt().search_db_with_type("Magnus Manske", "Q5").await.unwrap();
-        assert!(result.contains(&"Q13520818".to_string()), "expected Q13520818 in {:?}", result);
+        let result = app
+            .wdt()
+            .search_db_with_type("Magnus Manske", "Q5")
+            .await
+            .unwrap();
+        assert!(
+            result.contains(&"Q13520818".to_string()),
+            "expected Q13520818 in {:?}",
+            result
+        );
     }
 }

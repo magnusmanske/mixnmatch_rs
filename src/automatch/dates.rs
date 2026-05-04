@@ -62,7 +62,9 @@ impl DateStringLength {
 /// ASCII letter immediately followed by a period (e.g. "M. Manske", "A. B. Smith").
 fn name_has_initials(name: &str) -> bool {
     let bytes = name.as_bytes();
-    bytes.windows(2).any(|w| w[0].is_ascii_uppercase() && w[1] == b'.')
+    bytes
+        .windows(2)
+        .any(|w| w[0].is_ascii_uppercase() && w[1] == b'.')
 }
 
 impl AutoMatch {
@@ -80,7 +82,9 @@ impl AutoMatch {
             0 => Ok(()),
             1 => {
                 let mut entry = Entry::from_id(entry_id, self.app.as_ref()).await?;
-                let _ = EntryWriter::new(self.app.as_ref(), &mut entry).set_match(&candidates[0], user_id).await?;
+                let _ = EntryWriter::new(self.app.as_ref(), &mut entry)
+                    .set_match(&candidates[0], user_id)
+                    .await?;
                 Ok(())
             }
             _ => {
@@ -320,7 +324,6 @@ impl AutoMatch {
         }
     }
 
-    //TODO test
     async fn search_person(&self, name: &str) -> Result<Vec<String>> {
         let name = Person::sanitize_simplify_name(name);
         self.app.wikidata().search_with_type_api(&name, "Q5").await
@@ -354,7 +357,6 @@ impl AutoMatch {
         Ok(items)
     }
 
-    //TODO test
     async fn subset_items_by_birth_death_year(
         &self,
         all_items: &[String],
@@ -394,8 +396,7 @@ impl AutoMatch {
                         // If we have a family name, require the candidate's English label to
                         // contain it (case-insensitive). Skip candidates with no label.
                         if !family_name.is_empty() {
-                            let label =
-                                b["qLabel"]["value"].as_str().unwrap_or("").to_lowercase();
+                            let label = b["qLabel"]["value"].as_str().unwrap_or("").to_lowercase();
                             if label.is_empty() || !label.contains(&family_name) {
                                 continue;
                             }
