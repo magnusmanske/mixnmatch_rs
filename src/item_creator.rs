@@ -1,5 +1,5 @@
 use crate::{
-    app_state::{AppContext, AppState},
+    app_state::AppContext,
     entry::{Entry, EntryWriter},
     wikidata_writer::WikidataWriter,
 };
@@ -18,12 +18,12 @@ pub struct ItemCreator {
 }
 
 impl ItemCreator {
-    pub fn new(app: &AppState) -> Self {
-        Self::new_with_writer(app, Box::new(app.wikidata().clone()))
+    pub fn new(app: Arc<dyn AppContext>) -> Self {
+        let wikidata = Box::new(app.wikidata().clone());
+        Self::new_with_writer(app, wikidata)
     }
 
-    pub(crate) fn new_with_writer(app: &AppState, wikidata: Box<dyn WikidataWriter>) -> Self {
-        let app: Arc<dyn AppContext> = Arc::new(app.clone());
+    pub(crate) fn new_with_writer(app: Arc<dyn AppContext>, wikidata: Box<dyn WikidataWriter>) -> Self {
         Self {
             app,
             wikidata,
@@ -170,7 +170,7 @@ mod tests {
         let app = test_support::test_app().await;
         let (_, entry_id) = test_support::seed_entry_with_name("Fritz Koch").await.unwrap();
         test_support::seed_person_dates(entry_id, "1869", "1941").await.unwrap();
-        let mut ic = ItemCreator::new(&app);
+        let mut ic = ItemCreator::new(Arc::new(app.clone()));
         ic.add_entries_by_id(&[entry_id]).await.unwrap();
         let item = ic.generate_item().await.unwrap();
         let claims = item.claims();
@@ -183,7 +183,7 @@ mod tests {
     #[tokio::test]
     async fn test_new_with_writer_stores_mock_and_as_any_works() {
         let app = test_support::test_app().await;
-        let mut ic = ItemCreator::new_with_writer(&app, Box::new(MockWikidataWriter::new()));
+        let mut ic = ItemCreator::new_with_writer(Arc::new(app.clone()), Box::new(MockWikidataWriter::new()));
         // No entries → errors before any writer calls.
         let err = ic.create_and_match_item().await.unwrap_err();
         assert!(err.to_string().contains("No entries"));
@@ -202,7 +202,7 @@ mod tests {
         let (_, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
         let mut mock = MockWikidataWriter::new();
         mock.next_qid = Some("Q-MOCK-ITEM".to_string());
-        let mut ic = ItemCreator::new_with_writer(&app, Box::new(mock));
+        let mut ic = ItemCreator::new_with_writer(Arc::new(app.clone()), Box::new(mock));
         ic.add_entries_by_id(&[entry_id]).await.unwrap();
         ic.create_and_match_item().await.unwrap();
         let mock_ref = ic.wikidata

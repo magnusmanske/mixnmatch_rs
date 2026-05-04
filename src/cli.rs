@@ -465,7 +465,7 @@ impl ShellCommands {
                 desc_hint,
             }) => {
                 let app = Self::path2app(config)?;
-                let mut process = Process::new(app);
+                let mut process = Process::new(std::sync::Arc::new(app));
                 process
                     .create_unmatched(
                         catalog_id, min_dates, min_aux, entry_type, try_search, desc_hint,

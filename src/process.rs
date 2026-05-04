@@ -1,18 +1,22 @@
 use crate::{
-    app_state::AppState, entry::{Entry, EntryWriter}, entry_query::EntryQuery, item_creator::ItemCreator,
+    app_state::AppContext,
+    entry::{Entry, EntryWriter},
+    entry_query::EntryQuery,
+    item_creator::ItemCreator,
     match_state::MatchState,
 };
 use anyhow::Result;
 use futures::prelude::*;
 use log::{info, warn};
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct Process {
-    app: AppState,
+    app: Arc<dyn AppContext>,
 }
 
 impl Process {
-    pub fn new(app: AppState) -> Self {
+    pub fn new(app: Arc<dyn AppContext>) -> Self {
         Self { app }
     }
 
@@ -84,11 +88,11 @@ impl Process {
             };
             if !results.is_empty() {
                 // These are supposed to be unmatched, use multimatch
-                let _ = EntryWriter::new(&self.app, &mut entry).set_multi_match(&results).await;
+                let _ = EntryWriter::new(&*self.app, &mut entry).set_multi_match(&results).await;
                 return None;
             }
         }
-        let mut ic = ItemCreator::new(&self.app);
+        let mut ic = ItemCreator::new(Arc::clone(&self.app));
         ic.add_entry(entry);
         let _ = ic.add_entries_by_aux().await;
         Some(ic)

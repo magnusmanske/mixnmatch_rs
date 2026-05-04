@@ -4,7 +4,7 @@
 use crate::api::common::{self, ApiError, Params, json_resp, ok};
 use crate::app_state::AppState;
 use axum::response::Response;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 fn re_q_only() -> &'static regex::Regex {
     static RE: OnceLock<regex::Regex> = OnceLock::new();
@@ -121,7 +121,7 @@ pub async fn query_prep_new_item(
     if entry_ids.is_empty() {
         return Err(ApiError("missing or empty 'entry_ids' parameter".into()));
     }
-    let mut ic = crate::item_creator::ItemCreator::new(app);
+    let mut ic = crate::item_creator::ItemCreator::new(Arc::new(app.clone()));
     ic.add_entries_by_id(&entry_ids)
         .await
         .map_err(|e| ApiError(format!("failed to load entries: {e}")))?;
