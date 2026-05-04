@@ -389,7 +389,7 @@ impl AutoMatch {
                             Some(u) => u,
                             None => continue,
                         };
-                        let q = match mw_api.extract_entity_from_uri(entity_url) {
+                        let q_value = match mw_api.extract_entity_from_uri(entity_url) {
                             Ok(q) => q,
                             Err(_) => continue,
                         };
@@ -401,7 +401,7 @@ impl AutoMatch {
                                 continue;
                             }
                         }
-                        ret.push(q);
+                        ret.push(q_value);
                     }
                 }
             }
@@ -538,7 +538,7 @@ impl AutoMatch {
         entries: &mut std::collections::HashMap<usize, Entry>,
         app: &dyn AppContext,
     ) {
-        let q = match api.extract_entity_from_uri(&row[0]) {
+        let q_value = match api.extract_entity_from_uri(&row[0]) {
             Ok(q) => q,
             Err(_) => return,
         };
@@ -554,7 +554,7 @@ impl AutoMatch {
 
         if let Some(entry) = entries.get_mut(&entry_candidates[0]) {
             let _ = EntryWriter::new(app, entry)
-                .set_auto_and_multi_match(&[q])
+                .set_auto_and_multi_match(&[q_value])
                 .await;
         }
     }

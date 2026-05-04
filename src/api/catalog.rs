@@ -145,18 +145,16 @@ pub async fn query_edit_catalog(
     app.storage()
         .api_edit_catalog(
             cid,
-            name,
-            data.get("url").and_then(|v| v.as_str()).unwrap_or(""),
-            data.get("desc").and_then(|v| v.as_str()).unwrap_or(""),
-            data.get("type").and_then(|v| v.as_str()).unwrap_or(""),
-            data.get("search_wp").and_then(|v| v.as_str()).unwrap_or(""),
-            data.get("wd_prop")
-                .and_then(|v| v.as_u64())
-                .map(|v| v as usize),
-            data.get("wd_qual")
-                .and_then(|v| v.as_u64())
-                .map(|v| v as usize),
-            active,
+            crate::storage::CatalogUpdate {
+                name: name.to_string(),
+                url: data.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                desc: data.get("desc").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                type_name: data.get("type").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                search_wp: data.get("search_wp").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                wd_prop: data.get("wd_prop").and_then(|v| v.as_u64()).map(|v| v as usize),
+                wd_qual: data.get("wd_qual").and_then(|v| v.as_u64()).map(|v| v as usize),
+                active,
+            },
         )
         .await?;
     // Apply kv_catalog writes. The frontend sends a flat `kv` object; empty

@@ -28,7 +28,6 @@ use wikimisc::wikibase::Value;
 use wikimisc::wikibase::entity_container::EntityContainer;
 
 impl AuxiliaryMatcher {
-    //TODO test
     pub async fn add_auxiliary_to_wikidata(&mut self, catalog_id: usize) -> Result<()> {
         if AUX_DO_NOT_SYNC_CATALOG_TO_WIKIDATA.contains(&catalog_id) {
             return Err(AuxiliaryMatcherError::BlacklistedCatalog.into());
@@ -93,7 +92,6 @@ impl AuxiliaryMatcher {
         Ok(())
     }
 
-    //TODO test
     pub(super) fn is_statement_in_entity(entity: &Entity, property: &str, value: &str) -> bool {
         entity
             .claims_with_property(property)
@@ -115,7 +113,6 @@ impl AuxiliaryMatcher {
             .any(|simplified_value| value == simplified_value)
     }
 
-    //TODO test
     pub(super) async fn entity_already_has_property(
         &self,
         aux: &AuxiliaryResults,
@@ -135,21 +132,20 @@ impl AuxiliaryMatcher {
         true
     }
 
-    //TODO test
     async fn aux2wd_process_item(
         &self,
         aux_data: &[AuxiliaryResults],
         sources: &HashMap<String, WikidataCommandPropertyValueGroup>,
         entities: &EntityContainer,
     ) -> Vec<WikidataCommand> {
-        let q = match aux_data.first() {
+        let q_value = match aux_data.first() {
             Some(aux) => aux.q(),
             None => {
                 return vec![];
             } // Empty input
         };
         let source: WikidataCommandPropertyValueGroup =
-            sources.get(&q).unwrap_or(&vec![]).to_owned();
+            sources.get(&q_value).unwrap_or(&vec![]).to_owned();
         let mut commands: Vec<WikidataCommand> = vec![];
         for aux in aux_data {
             self.aux2wd_process_item_aux(aux, entities, &mut commands, &source)
@@ -239,7 +235,6 @@ impl AuxiliaryMatcher {
     }
 
     /// Check if that property/value combination is on Wikidata. Returns true if something was found.
-    //TODO test
     async fn aux2wd_check_if_property_value_is_on_wikidata(&self, aux: &AuxiliaryResults) -> bool {
         if !self.properties_that_have_external_ids.contains(&aux.prop()) {
             return false;
@@ -280,7 +275,6 @@ impl AuxiliaryMatcher {
         true
     }
 
-    //TODO test
     async fn aux2wd_remap_results(
         &mut self,
         catalog_id: usize,
@@ -313,7 +307,6 @@ impl AuxiliaryMatcher {
         (aux, sources)
     }
 
-    //TODO test
     pub(super) async fn get_source_for_entry(
         &mut self,
         entry: &Entry,

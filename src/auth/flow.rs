@@ -335,6 +335,9 @@ fn unix_timestamp() -> String {
 // Signature — exact parity with PHP MW_OAuth::sign_request
 // ---------------------------------------------------------------------------
 
+const PORT_HTTPS: u16 = 443;
+const PORT_HTTP: u16 = 80;
+
 fn sign_request(
     method: &str,
     url: &str,
@@ -346,12 +349,12 @@ fn sign_request(
     let scheme = parsed.scheme();
     let host = parsed.host_str().unwrap_or("");
     let port = parsed.port().unwrap_or(match scheme {
-        "https" => 443,
-        _ => 80,
+        "https" => PORT_HTTPS,
+        _ => PORT_HTTP,
     });
     let path = parsed.path();
 
-    let default_port = matches!((scheme, port), ("https", 443) | ("http", 80));
+    let default_port = matches!((scheme, port), ("https", PORT_HTTPS) | ("http", PORT_HTTP));
     let host_with_port = if default_port {
         host.to_string()
     } else {

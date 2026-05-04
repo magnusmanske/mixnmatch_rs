@@ -29,3 +29,10 @@ pub const P_FORMATTER_URL: &str = "P1630";
 /// reference item that should be used as the P248 source when citing
 /// statements that use this property)
 pub const P_APPLICABLE_STATED_IN: &str = "P9073";
+
+// ---------------------------------------------------------------------------
+// Common entity Q-IDs
+// ---------------------------------------------------------------------------
+
+/// Q5 — human (person). Use this constant instead of the bare string "Q5".
+pub const Q_HUMAN: &str = "Q5";

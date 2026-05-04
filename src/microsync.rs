@@ -67,11 +67,9 @@ pub struct Microsync {
 }
 
 impl Jobbable for Microsync {
-    //TODO test
     fn set_current_job(&mut self, job: &Job) {
         self.job = Some(job.clone());
     }
-    //TODO test
     fn get_current_job(&self) -> Option<&Job> {
         self.job.as_ref()
     }
@@ -126,7 +124,6 @@ impl Microsync {
         Ok(())
     }
 
-    //TODO test
     async fn update_wiki_page(&mut self, catalog_id: usize, wikitext: &str) -> Result<()> {
         let page_title = format!("User:Magnus Manske/Mix'n'match report/{catalog_id}");
         let day = &TimeStamp::now()[0..8];
@@ -136,7 +133,6 @@ impl Microsync {
             .await
     }
 
-    //TODO test
     async fn wikitext_from_issues(
         &self,
         catalog: &Catalog,
@@ -180,8 +176,7 @@ impl Microsync {
                     let items: Vec<String> =
                         e.items.iter().map(|q| format!("{{{{Q|{q}}}}}")).collect();
                     let items = items.join("<br/>");
-                    let s = format!("|-\n| {ext_id} || {items}\n");
-                    ret += &s;
+                    ret += &format!("|-\n| {ext_id} || {items}\n");
                 }
                 ret += "|}\n\n";
             }
@@ -286,11 +281,10 @@ impl Microsync {
                     let ext_id = Self::format_ext_id(&e.ext_id, &e.ext_url, formatter_url);
                     let mnm_url =
                         format!("https://mix-n-match.toolforge.org/#/entry/{}", e.entry_id);
-                    let s = format!(
+                    *ret += &format!(
                         "|-\n| {ext_id} || {ext_name} || {{{{Q|{}}}}} || {{{{Q|{}}}}} || [{mnm_url} {}]\n",
                         e.q_wd, e.q_mnm, e.entry_id
                     );
-                    *ret += &s;
                 }
                 *ret += "|}\n\n";
             }
@@ -314,8 +308,7 @@ impl Microsync {
                 *ret += "{| class='wikitable'\n! External ID !! Item\n";
                 for e in &extid_not_in_mnm {
                     let ext_id = Self::format_ext_id(&e.ext_id, "", formatter_url);
-                    let s = format!("|-\n| {} || {{{{Q|{}}}}}\n", &ext_id, e.q);
-                    *ret += &s;
+                    *ret += &format!("|-\n| {} || {{{{Q|{}}}}}\n", &ext_id, e.q);
                 }
                 *ret += "|}\n\n";
             }
@@ -426,7 +419,6 @@ impl Microsync {
         Ok(results)
     }
 
-    //TODO test
     async fn get_q2ext_id_chunk(
         &self,
         reader: &mut csv::Reader<File>,
@@ -452,7 +444,6 @@ impl Microsync {
             .collect())
     }
 
-    //TODO test
     async fn get_differences_mnm_wd(
         &self,
         catalog_id: usize,
@@ -576,7 +567,6 @@ impl Microsync {
         Ok(())
     }
 
-    //TODO test
     async fn get_entries_for_ext_ids(
         &self,
         catalog_id: usize,

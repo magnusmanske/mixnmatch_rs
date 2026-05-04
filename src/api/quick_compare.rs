@@ -4,6 +4,7 @@
 
 use crate::api::common::{ApiError, Params, ok};
 use crate::app_state::AppState;
+use crate::storage::QcEntryFilter;
 use crate::util::wikidata_props as wp;
 use axum::response::Response;
 use serde_json::{Value, json};
@@ -58,18 +59,17 @@ pub fn parse_location_distance(s: &str) -> Option<f64> {
 fn build_entry_json(
     row: &Value,
     ec: &wikimisc::wikibase::entity_container::EntityContainer,
-    require_image: bool,
-    require_coordinates: bool,
+    filter: &QcEntryFilter,
     max_distance_m: Option<f64>,
 ) -> Option<Value> {
     let q_num = row["q"].as_i64().filter(|&q| q > 0)?;
     let q_str = format!("Q{q_num}");
     let item = ec.get_entity(q_str.clone())?;
 
-    if require_image && item.claims_with_property(wp::P_IMAGE.to_string()).is_empty() {
+    if filter.require_image && item.claims_with_property(wp::P_IMAGE.to_string()).is_empty() {
         return None;
     }
-    if require_coordinates && item.claims_with_property(wp::P_COORDINATES.to_string()).is_empty() {
+    if filter.require_coordinates && item.claims_with_property(wp::P_COORDINATES.to_string()).is_empty() {
         return None;
     }
 
@@ -99,7 +99,7 @@ fn build_entry_json(
     if let Some(img) = row.get("image_url").and_then(|v| v.as_str()) {
         if !img.is_empty() {
             entry_json["ext_img"] = json!(img);
-        } else if require_image {
+        } else if filter.require_image {
             return None;
         }
     }
@@ -112,8 +112,10 @@ fn build_entry_json(
 pub async fn run(app: &AppState, params: &Params) -> Result<Value, ApiError> {
     let catalog_id = parse_catalog(params)?;
     let entry_id = opt_usize(params, "entry_id");
-    let require_image = opt_str(params, "require_image") == Some("1");
-    let require_coordinates = opt_str(params, "require_coordinates") == Some("1");
+    let filter = QcEntryFilter {
+        require_image: opt_str(params, "require_image") == Some("1"),
+        require_coordinates: opt_str(params, "require_coordinates") == Some("1"),
+    };
 
     // Resolve max-distance: catalog default (kv pair) overridden by request
     // param if provided.
@@ -135,7 +137,7 @@ pub async fn run(app: &AppState, params: &Params) -> Result<Value, ApiError> {
 
         let rows = app
             .storage()
-            .qc_get_entries(catalog_id, entry_id, require_image, require_coordinates, random_threshold, MAX_RESULTS)
+            .qc_get_entries(catalog_id, entry_id, filter, random_threshold, MAX_RESULTS)
             .await
             .map_err(|e| ApiError(format!("query failed: {e}")))?;
 
@@ -152,7 +154,7 @@ pub async fn run(app: &AppState, params: &Params) -> Result<Value, ApiError> {
         let _ = ec.load_entities(&mw_api, &q_values).await;
 
         for row in &rows {
-            if let Some(entry) = build_entry_json(row, &ec, require_image, require_coordinates, max_distance_m) {
+            if let Some(entry) = build_entry_json(row, &ec, &filter, max_distance_m) {
                 result_entries.push(entry);
             }
         }

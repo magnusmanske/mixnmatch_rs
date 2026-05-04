@@ -26,8 +26,9 @@ use crate::{
     prop_todo::PropTodo,
     storage::{
         AutomatchSearchRow, AutoscrapeQueries, CandidateDatesRow, CatalogEntryListFilter,
-        DescriptionAuxRule, Download2Filter, EXT_URL_UNIQUE_SEPARATOR, GroupedEntry,
-        MergeableMatch, OverviewTableRow, PersonDateMatchRow, PropertyCacheRow,
+        CatalogUpdate, CommonNamesQuery, DescriptionAuxRule, Download2Filter,
+        EXT_URL_UNIQUE_SEPARATOR, EntrySearchOptions, GroupedEntry, MergeableMatch,
+        OverviewTableRow, PersonDateMatchRow, PropertyCacheRow, QcEntryFilter,
         ResultInOriginalCatalog, ResultInOtherCatalog, WdMatchRow,
     },
     taxon_matcher::TaxonNameField,
@@ -2983,12 +2984,13 @@ impl Storage for StorageMySQL {
     async fn api_search_entries(
         &self,
         words: &[String],
-        description_search: bool,
-        no_label_search: bool,
+        options: EntrySearchOptions,
         exclude: &[usize],
         include: &[usize],
         max_results: usize,
     ) -> Result<Vec<Entry>> {
+        let description_search = options.description_search;
+        let no_label_search = options.no_label_search;
         let Some(sql) = Self::build_api_search_entries_sql(
             words,
             description_search,
@@ -3407,12 +3409,9 @@ impl Storage for StorageMySQL {
         &self,
         catalog_id: usize,
         type_q: &str,
-        other_cats_desc: bool,
-        min: usize,
-        max: usize,
-        limit: usize,
-        offset: usize,
+        query: CommonNamesQuery,
     ) -> Result<Vec<serde_json::Value>> {
+        let CommonNamesQuery { other_cats_desc, min, max, limit, offset } = query;
         let cond1 = if other_cats_desc {
             " AND e2.ext_desc!=''"
         } else {
@@ -3605,15 +3604,9 @@ impl Storage for StorageMySQL {
     async fn api_edit_catalog(
         &self,
         catalog_id: usize,
-        name: &str,
-        url: &str,
-        desc: &str,
-        type_name: &str,
-        search_wp: &str,
-        wd_prop: Option<usize>,
-        wd_qual: Option<usize>,
-        active: bool,
+        update: CatalogUpdate,
     ) -> Result<()> {
+        let CatalogUpdate { name, url, desc, type_name, search_wp, wd_prop, wd_qual, active } = update;
         let active_val: u8 = if active { 1 } else { 0 };
         // Coerce 0 → NULL before the UPDATE; the frontend form yields 0 when
         // a user clears the property field (input type=number), and leaving
@@ -4471,11 +4464,11 @@ impl Storage for StorageMySQL {
         &self,
         catalog_id: usize,
         entry_id: Option<usize>,
-        require_image: bool,
-        require_coordinates: bool,
+        filter: QcEntryFilter,
         random_threshold: f64,
         max_results: usize,
     ) -> Result<Vec<serde_json::Value>> {
+        let QcEntryFilter { require_image, require_coordinates } = filter;
         let mut select = "SELECT entry.*, catalog.search_wp AS language".to_string();
         let mut from = " FROM entry, catalog".to_string();
         let mut where_clause;

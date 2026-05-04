@@ -135,8 +135,8 @@ impl AutoMatch {
     }
 
     fn parse_sparql_row(api: &Api, row: &csv::StringRecord) -> Option<(String, usize)> {
-        let q = api.extract_entity_from_uri(row.get(0)?).ok()?;
-        let q_numeric = q.get(1..)?.parse::<usize>().ok()?;
+        let q_str = api.extract_entity_from_uri(row.get(0)?).ok()?;
+        let q_numeric = q_str.get(1..)?.parse::<usize>().ok()?;
         let label = row.get(1)?.to_lowercase();
         Some((label, q_numeric))
     }
@@ -544,7 +544,7 @@ impl AutoMatch {
         r: &ResultInOtherCatalog,
         name_type2id: &HashMap<(String, String), Vec<usize>>,
     ) {
-        let q = match r.q {
+        let q_value = match r.q {
             Some(q) => format!("Q{q}"),
             None => return,
         };
@@ -553,7 +553,7 @@ impl AutoMatch {
             for entry_id in v {
                 if let Ok(mut entry) = Entry::from_id(*entry_id, self.app.as_ref()).await {
                     let _ = EntryWriter::new(self.app.as_ref(), &mut entry)
-                        .set_match(&q, USER_AUTO)
+                        .set_match(&q_value, USER_AUTO)
                         .await;
                 };
             }

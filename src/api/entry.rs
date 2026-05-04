@@ -102,8 +102,10 @@ pub async fn query_search(app: &dyn ExternalServicesContext, params: &Params) ->
             app.storage()
                 .api_search_entries(
                     &words,
-                    desc_search,
-                    no_label,
+                    crate::storage::EntrySearchOptions {
+                        description_search: desc_search,
+                        no_label_search: no_label,
+                    },
                     &exclude,
                     &include,
                     max_results,

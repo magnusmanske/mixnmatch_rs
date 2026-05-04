@@ -126,6 +126,48 @@ pub struct CurrentScraper {
 /// rather than in either consumer alone.
 pub const EXT_URL_UNIQUE_SEPARATOR: &str = "!@£$%^&|";
 
+/// Search options for `api_search_entries`.
+///
+/// Grouping the two boolean flags prevents opaque `true/false` literals at
+/// every call site and makes adding future flags backwards-compatible.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EntrySearchOptions {
+    /// Include description text in the full-text search.
+    pub description_search: bool,
+    /// Skip label columns and search only in description / aliases.
+    pub no_label_search: bool,
+}
+
+/// Filter flags for `qc_get_entries` (quick-compare micro-API).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct QcEntryFilter {
+    pub require_image: bool,
+    pub require_coordinates: bool,
+}
+
+/// Pagination and filter parameters for `api_get_common_names`.
+#[derive(Debug, Clone, Copy)]
+pub struct CommonNamesQuery {
+    pub other_cats_desc: bool,
+    pub min: usize,
+    pub max: usize,
+    pub limit: usize,
+    pub offset: usize,
+}
+
+/// Fields to update when editing a catalog via `api_edit_catalog`.
+#[derive(Debug, Clone)]
+pub struct CatalogUpdate {
+    pub name: String,
+    pub url: String,
+    pub desc: String,
+    pub type_name: String,
+    pub search_wp: String,
+    pub wd_prop: Option<usize>,
+    pub wd_qual: Option<usize>,
+    pub active: bool,
+}
+
 /// Filter criteria for `query=catalog` (paginated entry listing).
 ///
 /// The boolean `show_*` flags interact in non-trivial ways (multi-match is
@@ -939,7 +981,7 @@ pub trait Storage:
     async fn api_get_all_issues(&self, mode: &str) -> Result<Vec<serde_json::Value>>;
 
     // Search
-    async fn api_search_entries(&self, words: &[String], description_search: bool, no_label_search: bool, exclude: &[usize], include: &[usize], max_results: usize) -> Result<Vec<Entry>>;
+    async fn api_search_entries(&self, words: &[String], options: EntrySearchOptions, exclude: &[usize], include: &[usize], max_results: usize) -> Result<Vec<Entry>>;
     async fn api_search_by_q(&self, q: isize, exclude_catalogs: &[usize]) -> Result<Vec<Entry>>;
 
     // Recent changes
@@ -987,7 +1029,7 @@ pub trait Storage:
     // Additional API support methods
     async fn api_get_wd_props(&self) -> Result<Vec<usize>>;
     async fn api_get_top_missing(&self, catalogs: &str) -> Result<Vec<serde_json::Value>>;
-    async fn api_get_common_names(&self, catalog_id: usize, type_q: &str, other_cats_desc: bool, min: usize, max: usize, limit: usize, offset: usize) -> Result<Vec<serde_json::Value>>;
+    async fn api_get_common_names(&self, catalog_id: usize, type_q: &str, query: CommonNamesQuery) -> Result<Vec<serde_json::Value>>;
     async fn api_get_locations_bbox(&self, lon_min: f64, lat_min: f64, lon_max: f64, lat_max: f64) -> Result<Vec<serde_json::Value>>;
     async fn api_get_locations_in_catalog(&self, catalog_id: usize) -> Result<Vec<serde_json::Value>>;
     async fn api_get_download_entries(&self, catalog_id: usize) -> Result<Vec<(isize, String, String, String, Option<usize>)>>; // (q, ext_id, ext_url, ext_name, user_id)
@@ -1015,7 +1057,7 @@ pub trait Storage:
         prefix: &str,
         suffix: &str,
     ) -> Result<()>;
-    async fn api_edit_catalog(&self, catalog_id: usize, name: &str, url: &str, desc: &str, type_name: &str, search_wp: &str, wd_prop: Option<usize>, wd_qual: Option<usize>, active: bool) -> Result<()>;
+    async fn api_edit_catalog(&self, catalog_id: usize, update: CatalogUpdate) -> Result<()>;
     async fn api_get_catalog_overview_for_ids(&self, catalog_ids: &[usize]) -> Result<Vec<serde_json::Value>>;
     async fn api_match_q_multi(&self, catalog_id: usize, ext_id: &str, q: isize, user_id: usize) -> Result<bool>;
     async fn api_remove_all_q(&self, catalog_id: usize, q: isize) -> Result<()>;
@@ -1062,7 +1104,7 @@ pub trait Storage:
     async fn cc_get_entries_by_names_active(&self, names: &[String], type_filter: Option<&str>, birth_year: Option<&str>, death_year: Option<&str>) -> Result<Vec<Entry>>;
 
     // Micro-API: quick_compare
-    async fn qc_get_entries(&self, catalog_id: usize, entry_id: Option<usize>, require_image: bool, require_coordinates: bool, random_threshold: f64, max_results: usize) -> Result<Vec<serde_json::Value>>;
+    async fn qc_get_entries(&self, catalog_id: usize, entry_id: Option<usize>, filter: QcEntryFilter, random_threshold: f64, max_results: usize) -> Result<Vec<serde_json::Value>>;
 
     // Lightweight catalog endpoints (ported from PHP API.php)
     async fn api_search_catalogs(&self, q: &str, limit: usize) -> Result<Vec<serde_json::Value>>;

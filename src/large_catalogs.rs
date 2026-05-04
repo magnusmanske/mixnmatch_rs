@@ -146,16 +146,16 @@ impl LargeCatalogs {
     ) -> Result<Vec<Value>> {
         let mut sql = format!("SELECT * FROM report WHERE catalog_id={catalog_id}");
         if !status.is_empty() {
-            let s = status.replace('\'', "''");
-            sql += &format!(" AND `status`='{s}'");
+            let escaped_status = status.replace('\'', "''");
+            sql += &format!(" AND `status`='{escaped_status}'");
         }
         if !report_type.is_empty() {
-            let t = report_type.replace('\'', "''");
-            sql += &format!(" AND `type`='{t}'");
+            let escaped_type = report_type.replace('\'', "''");
+            sql += &format!(" AND `type`='{escaped_type}'");
         }
         if !user.is_empty() {
-            let u = user.replace('\'', "''");
-            sql += &format!(" AND `user`='{u}'");
+            let escaped_user = user.replace('\'', "''");
+            sql += &format!(" AND `user`='{escaped_user}'");
         }
         if !prop.is_empty() {
             if let Ok(p) = prop.parse::<usize>() {

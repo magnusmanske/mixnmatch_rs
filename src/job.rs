@@ -35,12 +35,10 @@ pub trait Jobbable {
     fn get_current_job(&self) -> Option<&Job>;
     fn get_current_job_mut(&mut self) -> Option<&mut Job>;
 
-    //TODO test
     async fn get_last_job_data(&self) -> Option<serde_json::Value> {
         self.get_current_job()?.get_json_value().await
     }
 
-    //TODO test
     async fn remember_job_data(&mut self, json: &serde_json::Value) -> Result<()> {
         match self.get_current_job_mut() {
             Some(job) => job.set_json(Some(json.to_owned())).await,
@@ -48,7 +46,6 @@ pub trait Jobbable {
         }
     }
 
-    //TODO test
     async fn get_last_job_offset(&self) -> usize {
         let job = match self.get_current_job() {
             Some(job) => job,
@@ -64,7 +61,6 @@ pub trait Jobbable {
         })
     }
 
-    //TODO test
     async fn remember_offset(&mut self, offset: usize) -> Result<()> {
         let job = match self.get_current_job_mut() {
             Some(job) => job,
@@ -75,7 +71,6 @@ pub trait Jobbable {
         Ok(())
     }
 
-    //TODO test
     async fn clear_offset(&mut self) -> Result<()> {
         match self.get_current_job_mut() {
             Some(job) => job.set_json(None).await,
@@ -93,7 +88,6 @@ pub enum JobError {
 impl Error for JobError {}
 
 impl fmt::Display for JobError {
-    //TODO test
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             JobError::S(s) => write!(f, "JobError::S: {s}"),
@@ -118,7 +112,6 @@ impl Job {
         }
     }
 
-    //TODO test
     pub async fn set_next(&mut self) -> Result<bool> {
         match self.get_next_job_id().await {
             Some(job_id) => self.set_from_id(job_id).await,
@@ -136,7 +129,6 @@ impl Job {
         }
     }
 
-    //TODO test
     pub async fn run(&mut self) -> Result<()> {
         let catalog_id = self.get_catalog().await?;
         let action = self.get_action().await?;
@@ -176,7 +168,6 @@ impl Job {
         Ok(())
     }
 
-    //TODO test
     pub async fn set_status(&mut self, status: JobStatus) -> Result<()> {
         let job_id = self.get_id().await?;
         let timestamp = TimeStamp::now();
@@ -188,7 +179,6 @@ impl Job {
         Ok(())
     }
 
-    //TODO test
     pub async fn set_note(&mut self, note: Option<String>) -> Result<()> {
         let job_id = self.get_id().await?;
         let note_cloned = self.app.storage().jobs_set_note(note, job_id).await?;
@@ -196,7 +186,6 @@ impl Job {
         Ok(())
     }
 
-    //TODO test
     pub async fn get_next_job_id(&self) -> Option<usize> {
         // Tiny TODO / HIGH_PRIORITY jobs are cheap and must never be
         // starved by the big-job gating that populates `skip_actions`.
@@ -263,12 +252,10 @@ impl Job {
     }
 
     /// Returns the current `json` as an Option<`serde_json::Value`>
-    //TODO test
     pub async fn get_json_value(&self) -> Option<serde_json::Value> {
         serde_json::from_str(self.get_json().await.ok()?.as_ref()?).ok()
     }
 
-    //TODO test
     pub async fn queue_simple_job(
         app: &dyn ExternalServicesContext,
         catalog_id: usize,
@@ -281,7 +268,6 @@ impl Job {
     }
 
     /// Sets the value for `json` locally and in database, from a `serde_json::Value`
-    //TODO test
     pub async fn set_json(&mut self, json: Option<serde_json::Value>) -> Result<()> {
         let job_id = self.get_id().await?;
         let timestamp = TimeStamp::now();
@@ -307,7 +293,6 @@ impl Job {
 
     // PRIVATE METHODS
 
-    //TODO test
     async fn run_this_job(&mut self) -> Result<()> {
         if self.data.status == JobStatus::Blocked {
             return Err(anyhow!("Job::run_this_job: Blocked"));
@@ -325,46 +310,37 @@ impl Job {
         handler(self, catalog_id).await
     }
 
-    //TODO test
     async fn data(&self) -> Result<JobRow> {
         Ok(self.data.clone())
     }
-    //TODO test
     pub async fn get_id(&self) -> Result<usize> {
         Ok(self.data.id)
     }
-    //TODO test
     pub async fn get_action(&self) -> Result<String> {
         Ok(self.data.action.clone())
     }
-    //TODO test
     async fn get_catalog(&self) -> Result<usize> {
         Ok(self.data.catalog)
     }
-    //TODO test
     async fn get_json(&self) -> Result<Option<String>> {
         Ok(self.data.json.clone())
     }
 
-    //TODO test
     async fn put_status(&mut self, status: JobStatus) -> Result<()> {
         self.data.status = status;
         Ok(())
     }
 
-    //TODO test
     async fn put_json(&mut self, json: Option<String>) -> Result<()> {
         self.data.json = json;
         Ok(())
     }
 
-    //TODO test
     async fn put_note(&mut self, note: Option<String>) -> Result<()> {
         self.data.note = note;
         Ok(())
     }
 
-    //TODO test
     async fn put_next_ts(&mut self, next_ts: &str) -> Result<()> {
         self.data.next_ts = next_ts.to_string();
         Ok(())
@@ -385,7 +361,6 @@ impl Job {
         Ok(next_ts)
     }
 
-    //TODO test
     async fn update_next_ts(&mut self) -> Result<()> {
         let next_ts = self.get_next_ts().await?;
         let job_id = self.get_id().await?;
@@ -397,7 +372,6 @@ impl Job {
         Ok(())
     }
 
-    //TODO test
     pub async fn get_next_high_priority_job(&self) -> Option<usize> {
         self.app
             .storage()
@@ -405,7 +379,6 @@ impl Job {
             .await
     }
 
-    //TODO test
     async fn get_next_low_priority_job(&self) -> Option<usize> {
         self.app
             .storage()
@@ -413,7 +386,6 @@ impl Job {
             .await
     }
 
-    //TODO test
     async fn get_next_dependent_job(&self) -> Option<usize> {
         self.app
             .storage()
@@ -426,7 +398,6 @@ impl Job {
             .await
     }
 
-    //TODO test
     async fn get_next_initial_allowed_job(&self, avoid: &[String]) -> Option<usize> {
         if avoid.is_empty() {
             return None;
@@ -439,7 +410,6 @@ impl Job {
             .await
     }
 
-    //TODO test
     async fn get_next_initial_job(&self) -> Option<usize> {
         self.app
             .storage()
@@ -447,7 +417,6 @@ impl Job {
             .await
     }
 
-    //TODO test
     async fn get_next_scheduled_job(&self) -> Option<usize> {
         let timestamp = TimeStamp::now();
         self.app

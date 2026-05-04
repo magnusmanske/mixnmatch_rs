@@ -23,6 +23,12 @@ const LUA_MEMORY_LIMIT: usize = 1_048_576;
 /// Instruction limit for Lua VM (100,000 instructions)
 const LUA_INSTRUCTION_LIMIT: u32 = 100_000;
 
+/// Maximum plausible lifespan in years for born/died date validation.
+const MAX_HUMAN_LIFESPAN_YEARS: i64 = 120;
+
+/// Upper bound for plausible birth or death years (far future = data error).
+const MAX_PLAUSIBLE_YEAR: i64 = 2050;
+
 /// Convert an mlua::Error to anyhow::Error (since mlua::Error is not Send+Sync).
 fn lua_err(e: mlua::Error) -> anyhow::Error {
     anyhow!("{e}")
@@ -251,28 +257,31 @@ fn set_instruction_limit(lua: &Lua) {
     );
 }
 
-/// Sets up the entry object (`o`) as a Lua global table.
+/// Sets up the entry object as a Lua global table named `o`.
+///
+/// Lua scripts access entry fields via the global `o` (e.g. `o.type`, `o.q`).
+/// The name `o` is part of the Lua API contract; only the Rust binding is renamed.
 fn set_entry_global(lua: &Lua, entry: &LuaEntry) -> Result<()> {
-    let o = lua.create_table().map_err(lua_err)?;
-    o.set("id", entry.id).map_err(lua_err)?;
-    o.set("catalog", entry.catalog).map_err(lua_err)?;
-    o.set("ext_id", entry.ext_id.as_str()).map_err(lua_err)?;
-    o.set("ext_url", entry.ext_url.as_str()).map_err(lua_err)?;
-    o.set("ext_name", entry.ext_name.as_str()).map_err(lua_err)?;
-    o.set("ext_desc", entry.ext_desc.as_str()).map_err(lua_err)?;
+    let entry_table = lua.create_table().map_err(lua_err)?;
+    entry_table.set("id", entry.id).map_err(lua_err)?;
+    entry_table.set("catalog", entry.catalog).map_err(lua_err)?;
+    entry_table.set("ext_id", entry.ext_id.as_str()).map_err(lua_err)?;
+    entry_table.set("ext_url", entry.ext_url.as_str()).map_err(lua_err)?;
+    entry_table.set("ext_name", entry.ext_name.as_str()).map_err(lua_err)?;
+    entry_table.set("ext_desc", entry.ext_desc.as_str()).map_err(lua_err)?;
     match entry.q {
-        Some(q) => o.set("q", q).map_err(lua_err)?,
-        None => o.set("q", Value::Nil).map_err(lua_err)?,
+        Some(q) => entry_table.set("q", q).map_err(lua_err)?,
+        None => entry_table.set("q", Value::Nil).map_err(lua_err)?,
     }
     match entry.user {
-        Some(u) => o.set("user", u).map_err(lua_err)?,
-        None => o.set("user", Value::Nil).map_err(lua_err)?,
+        Some(u) => entry_table.set("user", u).map_err(lua_err)?,
+        None => entry_table.set("user", Value::Nil).map_err(lua_err)?,
     }
     match &entry.type_name {
-        Some(t) => o.set("type", t.as_str()).map_err(lua_err)?,
-        None => o.set("type", Value::Nil).map_err(lua_err)?,
+        Some(t) => entry_table.set("type", t.as_str()).map_err(lua_err)?,
+        None => entry_table.set("type", Value::Nil).map_err(lua_err)?,
     }
-    lua.globals().set("o", o).map_err(lua_err)?;
+    lua.globals().set("o", entry_table).map_err(lua_err)?;
     Ok(())
 }
 
@@ -743,15 +752,11 @@ pub fn try_get_three_letter_month(month: &str) -> String {
 /// # Panics
 /// Will not panic in practice; the regex patterns are valid literals.
 pub fn clean_html(html: &str) -> String {
-    // Replace &nbsp; with space
-    let s = html.replace("&nbsp;", " ");
-    // Remove HTML tags
-    let s = RE_HTML_TAGS.replace_all(&s, " ");
-    // Collapse whitespace
-    let s = RE_WHITESPACE.replace_all(&s, " ");
-    // Decode HTML entities
-    let s = html_escape::decode_html_entities(&s);
-    s.trim().to_string()
+    let no_nbsp = html.replace("&nbsp;", " ");
+    let no_tags = RE_HTML_TAGS.replace_all(&no_nbsp, " ");
+    let normalized = RE_WHITESPACE.replace_all(&no_tags, " ");
+    let decoded = html_escape::decode_html_entities(&normalized);
+    decoded.trim().to_string()
 }
 
 /// Simple regex match helper, returns captures.
@@ -810,18 +815,18 @@ pub(super) fn validate_born_died(born_raw: &str, died_raw: &str) -> Option<(Stri
         if by > dy {
             return None; // Born after death
         }
-        if dy - by > 120 {
-            return None; // Older than 120
+        if dy - by > MAX_HUMAN_LIFESPAN_YEARS {
+            return None; // Older than maximum plausible lifespan
         }
     }
 
     if let Some(by) = born_year {
-        if by > 2050 {
+        if by > MAX_PLAUSIBLE_YEAR {
             return None;
         }
     }
     if let Some(dy) = died_year {
-        if dy > 2050 {
+        if dy > MAX_PLAUSIBLE_YEAR {
             return None;
         }
     }
@@ -850,10 +855,10 @@ pub(super) fn get_new_description(old_desc: &str, new_parts: &[String]) -> Strin
         parts.push(old_desc.to_string());
     }
 
-    let d = parts.join("; ");
-    let d = RE_HTML_TAGS.replace_all(&d, " ");
-    let d = RE_WHITESPACE.replace_all(&d, " ");
-    d.trim().to_string()
+    let joined = parts.join("; ");
+    let no_tags = RE_HTML_TAGS.replace_all(&joined, " ");
+    let normalized = RE_WHITESPACE.replace_all(&no_tags, " ");
+    normalized.trim().to_string()
 }
 
 // ==========

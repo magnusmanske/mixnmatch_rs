@@ -43,7 +43,11 @@ pub async fn query_get_common_names(app: &AppState, params: &Params) -> Result<R
     let other_cats_desc = common::get_param_int(params, "other_cats_desc", 0) != 0;
     let data = app
         .storage()
-        .api_get_common_names(cid, &type_q, other_cats_desc, min, max, limit, offset)
+        .api_get_common_names(
+            cid,
+            &type_q,
+            crate::storage::CommonNamesQuery { other_cats_desc, min, max, limit, offset },
+        )
         .await?;
     Ok(ok(serde_json::json!({"entries": data})))
 }
