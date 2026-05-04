@@ -254,6 +254,155 @@ mod tests {
         assert_eq!(entry_after.q, None);
     }
 
+    // ── wikidata_sync: update_ext_urls_from_pattern ──────────────────────────
+
+    #[tokio::test]
+    async fn test_update_ext_urls_rejects_zero_catalog() {
+        let app = test_support::test_app().await;
+        let ms = Maintenance::new(Arc::new(app.clone()));
+        let err = ms.update_ext_urls_from_pattern(0, "https://example.com/$1").await;
+        assert!(err.is_err(), "catalog_id=0 must be rejected");
+    }
+
+    #[tokio::test]
+    async fn test_update_ext_urls_rejects_missing_dollar_one() {
+        let app = test_support::test_app().await;
+        let (catalog_id, _entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
+        let ms = Maintenance::new(Arc::new(app.clone()));
+        let err = ms.update_ext_urls_from_pattern(catalog_id, "https://example.com/NOREPLACE").await;
+        assert!(err.is_err(), "pattern without '$1' must be rejected");
+    }
+
+    #[tokio::test]
+    async fn test_update_ext_urls_rewrites_urls() {
+        let app = test_support::test_app().await;
+        let (catalog_id, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
+        let ms = Maintenance::new(Arc::new(app.clone()));
+        ms.update_ext_urls_from_pattern(catalog_id, "https://example.com/$1/view")
+            .await
+            .unwrap();
+        let entry = Entry::from_id(entry_id, &app).await.unwrap();
+        let expected = format!("https://example.com/ext_{catalog_id}/view");
+        assert_eq!(entry.ext_url, expected);
+    }
+
+    // ── wikidata_sync: overwrite_from_wikidata (validation paths) ────────────
+
+    #[tokio::test]
+    async fn test_overwrite_from_wikidata_rejects_zero_catalog() {
+        let app = test_support::test_app().await;
+        let ms = Maintenance::new(Arc::new(app.clone()));
+        let err = ms.overwrite_from_wikidata(0).await;
+        assert!(err.is_err(), "catalog_id=0 must be rejected");
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_from_wikidata_rejects_missing_wd_prop() {
+        // seed_minimal_entry creates a catalog with wd_prop=NULL
+        let app = test_support::test_app().await;
+        let (catalog_id, _entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
+        let ms = Maintenance::new(Arc::new(app.clone()));
+        let err = ms.overwrite_from_wikidata(catalog_id).await;
+        assert!(err.is_err(), "catalog without wd_prop must be rejected");
+        let msg = err.unwrap_err().to_string();
+        assert!(msg.contains("wd_prop"), "error should mention wd_prop; got: {msg}");
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_from_wikidata_rejects_inactive_catalog() {
+        let app = test_support::test_app().await;
+        let catalog_id = test_support::seed_inactive_catalog().await.unwrap();
+        let ms = Maintenance::new(Arc::new(app.clone()));
+        let err = ms.overwrite_from_wikidata(catalog_id).await;
+        assert!(err.is_err(), "inactive catalog must be rejected");
+        let msg = err.unwrap_err().to_string();
+        assert!(msg.contains("not active"), "error should mention 'not active'; got: {msg}");
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_from_wikidata_rejects_wd_qual_catalog() {
+        let app = test_support::test_app().await;
+        let catalog_id = test_support::seed_catalog_with_wd_qual(214, 813).await.unwrap();
+        let ms = Maintenance::new(Arc::new(app.clone()));
+        let err = ms.overwrite_from_wikidata(catalog_id).await;
+        assert!(err.is_err(), "catalog with wd_qual must be rejected");
+        let msg = err.unwrap_err().to_string();
+        assert!(msg.contains("wd_qual"), "error should mention wd_qual; got: {msg}");
+    }
+
+    // ── wikidata_sync: delete_multi_match_for_fully_matched ──────────────────
+
+    #[tokio::test]
+    async fn test_delete_multi_match_removes_fully_matched() {
+        let app = test_support::test_app().await;
+        let (catalog_id, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
+        // Fully match the entry (user > 0)
+        let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
+        EntryWriter::new(&app, &mut entry).set_match("Q42", 2).await.unwrap();
+        // Seed a multi_match row for the now-fully-matched entry
+        test_support::seed_multi_match(entry_id, catalog_id).await.unwrap();
+        assert!(test_support::multi_match_entry_exists(entry_id).await.unwrap());
+        let ms = Maintenance::new(Arc::new(app.clone()));
+        ms.delete_multi_match_for_fully_matched().await.unwrap();
+        assert!(
+            !test_support::multi_match_entry_exists(entry_id).await.unwrap(),
+            "fully-matched entry's multi_match row must be deleted"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_delete_multi_match_spares_unmatched_entry() {
+        let app = test_support::test_app().await;
+        let (catalog_id, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
+        // Entry remains unmatched (q=NULL, user=NULL)
+        test_support::seed_multi_match(entry_id, catalog_id).await.unwrap();
+        assert!(test_support::multi_match_entry_exists(entry_id).await.unwrap());
+        let ms = Maintenance::new(Arc::new(app.clone()));
+        ms.delete_multi_match_for_fully_matched().await.unwrap();
+        assert!(
+            test_support::multi_match_entry_exists(entry_id).await.unwrap(),
+            "unmatched entry's multi_match row must be preserved"
+        );
+    }
+
+    // ── wikidata_sync: fixup_wd_matches ──────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_fixup_wd_matches_removes_inactive_catalog_rows() {
+        let app = test_support::test_app().await;
+        let inactive_catalog_id = test_support::seed_inactive_catalog().await.unwrap();
+        // Use a synthetic entry_id that won't clash with seeded entries
+        let synthetic_entry_id = inactive_catalog_id + 9_000_000;
+        test_support::seed_wd_match(synthetic_entry_id, inactive_catalog_id).await.unwrap();
+        assert!(test_support::wd_match_entry_exists(synthetic_entry_id).await.unwrap());
+        let ms = Maintenance::new(Arc::new(app.clone()));
+        ms.fixup_wd_matches().await.unwrap();
+        assert!(
+            !test_support::wd_match_entry_exists(synthetic_entry_id).await.unwrap(),
+            "wd_matches row for an inactive catalog must be deleted"
+        );
+    }
+
+    // ── wikidata_sync: apply_description_aux ─────────────────────────────────
+
+    #[tokio::test]
+    async fn test_apply_description_aux_rejects_zero_catalog() {
+        let app = test_support::test_app().await;
+        let ms = Maintenance::new(Arc::new(app.clone()));
+        let err = ms.apply_description_aux(0).await;
+        assert!(err.is_err(), "catalog_id=0 must be rejected");
+    }
+
+    #[tokio::test]
+    async fn test_apply_description_aux_noop_when_no_rules() {
+        // The testcontainer schema ships with an empty description_aux table.
+        let app = test_support::test_app().await;
+        let (catalog_id, _entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
+        let ms = Maintenance::new(Arc::new(app.clone()));
+        ms.apply_description_aux(catalog_id).await.unwrap();
+        // No assertion on side effects — success here is "no panic/error"
+    }
+
     #[tokio::test]
     #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
     async fn test_update_auxiliary_fix_table() {

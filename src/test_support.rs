@@ -301,6 +301,103 @@ pub async fn seed_wdt_meta_item_page(q: &str) -> Result<()> {
     Ok(())
 }
 
+/// Insert a catalog with `active=0` and return its `catalog_id`.
+pub async fn seed_inactive_catalog() -> Result<usize> {
+    let (pool, mut conn) = seed_conn().await?;
+    let catalog_id = unique_catalog_id();
+    r"INSERT INTO catalog
+       (id, name, url, `desc`, type, search_wp, active, owner, note, has_person_date, taxon_run)
+       VALUES (:id, :name, '', '', 'person', 'en', 0, 0, '', '', 0)"
+        .with(params! {
+            "id" => catalog_id,
+            "name" => format!("test_catalog_{catalog_id}"),
+        })
+        .ignore(&mut conn)
+        .await?;
+    drop(conn);
+    pool.disconnect().await.ok();
+    Ok(catalog_id)
+}
+
+/// Insert an active catalog with `wd_prop` and `wd_qual` both set; return its `catalog_id`.
+pub async fn seed_catalog_with_wd_qual(wd_prop: usize, wd_qual: usize) -> Result<usize> {
+    let (pool, mut conn) = seed_conn().await?;
+    let catalog_id = unique_catalog_id();
+    r"INSERT INTO catalog
+       (id, name, url, `desc`, type, search_wp, active, owner, note, has_person_date, taxon_run, wd_prop, wd_qual)
+       VALUES (:id, :name, '', '', 'person', 'en', 1, 0, '', '', 0, :wd_prop, :wd_qual)"
+        .with(params! {
+            "id" => catalog_id,
+            "name" => format!("test_catalog_{catalog_id}"),
+            "wd_prop" => wd_prop,
+            "wd_qual" => wd_qual,
+        })
+        .ignore(&mut conn)
+        .await?;
+    drop(conn);
+    pool.disconnect().await.ok();
+    Ok(catalog_id)
+}
+
+/// Insert a `multi_match` row for `entry_id` in `catalog`. The candidates
+/// field is set to a placeholder string; the count to 2.
+pub async fn seed_multi_match(entry_id: usize, catalog_id: usize) -> Result<()> {
+    let (pool, mut conn) = seed_conn().await?;
+    "INSERT INTO multi_match (entry_id, catalog, candidates, candidate_count) \
+     VALUES (:entry_id, :catalog, 'Q1|Q2', 2)"
+        .with(params! {
+            "entry_id" => entry_id,
+            "catalog" => catalog_id,
+        })
+        .ignore(&mut conn)
+        .await?;
+    drop(conn);
+    pool.disconnect().await.ok();
+    Ok(())
+}
+
+/// Insert a `wd_matches` row for `entry_id` in `catalog`.
+pub async fn seed_wd_match(entry_id: usize, catalog_id: usize) -> Result<()> {
+    let (pool, mut conn) = seed_conn().await?;
+    "INSERT INTO wd_matches (entry_id, catalog, status, timestamp) \
+     VALUES (:entry_id, :catalog, 'UNKNOWN', '')"
+        .with(params! {
+            "entry_id" => entry_id,
+            "catalog" => catalog_id,
+        })
+        .ignore(&mut conn)
+        .await?;
+    drop(conn);
+    pool.disconnect().await.ok();
+    Ok(())
+}
+
+/// Return `true` if a `multi_match` row exists for `entry_id`.
+pub async fn multi_match_entry_exists(entry_id: usize) -> Result<bool> {
+    let (pool, mut conn) = seed_conn().await?;
+    let count: Option<u64> =
+        "SELECT COUNT(*) FROM multi_match WHERE entry_id = :entry_id"
+            .with(params! { "entry_id" => entry_id })
+            .first(&mut conn)
+            .await?;
+    drop(conn);
+    pool.disconnect().await.ok();
+    Ok(count.unwrap_or(0) > 0)
+}
+
+/// Return `true` if a `wd_matches` row exists for `entry_id`.
+pub async fn wd_match_entry_exists(entry_id: usize) -> Result<bool> {
+    let (pool, mut conn) = seed_conn().await?;
+    let count: Option<u64> =
+        "SELECT COUNT(*) FROM wd_matches WHERE entry_id = :entry_id"
+            .with(params! { "entry_id" => entry_id })
+            .first(&mut conn)
+            .await?;
+    drop(conn);
+    pool.disconnect().await.ok();
+    Ok(count.unwrap_or(0) > 0)
+}
+
 /// Seed the wbt_* chain for `item_id` with label `name`.
 /// Used by test_search_db_with_type: seeds Magnus Manske → Q13520818.
 pub async fn seed_wbt_label(item_id: u64, name: &str) -> Result<()> {
