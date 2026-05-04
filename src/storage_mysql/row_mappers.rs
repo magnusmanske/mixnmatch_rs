@@ -10,6 +10,22 @@ use crate::entry::Entry;
 use mysql_async::Row;
 use serde_json::json;
 
+fn get_str(row: &Row, col: &str) -> String {
+    row.get::<Option<String>, _>(col).flatten().unwrap_or_default()
+}
+
+fn get_opt_usize(row: &Row, col: &str) -> Option<usize> {
+    row.get::<Option<usize>, _>(col).flatten()
+}
+
+fn get_u8(row: &Row, col: &str) -> u8 {
+    row.get::<Option<u8>, _>(col).flatten().unwrap_or(0)
+}
+
+fn get_isize(row: &Row, col: &str) -> isize {
+    row.get::<Option<isize>, _>(col).flatten().unwrap_or(0)
+}
+
 impl StorageMySQL {
     pub(super) fn location_row_from_row(row: &Row) -> Option<LocationRow> {
         Some(LocationRow {
@@ -58,51 +74,21 @@ impl StorageMySQL {
 
     pub(super) fn overview_row_to_json(row: Row) -> serde_json::Value {
         // Catalog fields — every column is Option<T> to survive NULLs.
-        let id: usize = row.get::<Option<usize>, _>("c_id").flatten().unwrap_or(0);
-        let name: String = row
-            .get::<Option<String>, _>("c_name")
-            .flatten()
-            .unwrap_or_default();
-        let url: String = row
-            .get::<Option<String>, _>("c_url")
-            .flatten()
-            .unwrap_or_default();
-        let desc: String = row
-            .get::<Option<String>, _>("c_desc")
-            .flatten()
-            .unwrap_or_default();
-        let type_name: String = row
-            .get::<Option<String>, _>("c_type")
-            .flatten()
-            .unwrap_or_default();
-        let wd_prop: Option<usize> = row.get::<Option<usize>, _>("c_wd_prop").flatten();
-        let wd_qual: Option<usize> = row.get::<Option<usize>, _>("c_wd_qual").flatten();
-        let search_wp: String = row
-            .get::<Option<String>, _>("c_search_wp")
-            .flatten()
-            .unwrap_or_default();
-        let active: u8 = row.get::<Option<u8>, _>("c_active").flatten().unwrap_or(0);
-        let owner: Option<usize> = row.get::<Option<usize>, _>("c_owner").flatten();
-        let note: String = row
-            .get::<Option<String>, _>("c_note")
-            .flatten()
-            .unwrap_or_default();
-        let source_item: Option<usize> = row.get::<Option<usize>, _>("c_source_item").flatten();
-        let has_person_date: String = row
-            .get::<Option<String>, _>("c_has_person_date")
-            .flatten()
-            .unwrap_or_default();
-        let taxon_run: u8 = row
-            .get::<Option<u8>, _>("c_taxon_run")
-            .flatten()
-            .unwrap_or(0);
-
         let mut out = json!({
-            "id": id, "name": name, "url": url, "desc": desc, "type": type_name,
-            "wd_prop": wd_prop, "wd_qual": wd_qual, "search_wp": search_wp,
-            "active": active, "owner": owner, "note": note,
-            "source_item": source_item, "has_person_date": has_person_date,
-            "taxon_run": taxon_run,
+            "id":              get_opt_usize(&row, "c_id").unwrap_or(0),
+            "name":            get_str(&row, "c_name"),
+            "url":             get_str(&row, "c_url"),
+            "desc":            get_str(&row, "c_desc"),
+            "type":            get_str(&row, "c_type"),
+            "wd_prop":         get_opt_usize(&row, "c_wd_prop"),
+            "wd_qual":         get_opt_usize(&row, "c_wd_qual"),
+            "search_wp":       get_str(&row, "c_search_wp"),
+            "active":          get_u8(&row, "c_active"),
+            "owner":           get_opt_usize(&row, "c_owner"),
+            "note":            get_str(&row, "c_note"),
+            "source_item":     get_opt_usize(&row, "c_source_item"),
+            "has_person_date": get_str(&row, "c_has_person_date"),
+            "taxon_run":       get_u8(&row, "c_taxon_run"),
         });
 
         // Username — only surface when the owner FK actually resolved,
@@ -110,70 +96,31 @@ impl StorageMySQL {
         // no `username` key in the JSON at all). Gate on the user PK
         // rather than `name`, so a user row with a NULL/empty name is
         // still treated as "the join succeeded".
-        let user_joined = row.get::<Option<usize>, _>("u_id").flatten().is_some();
-        if user_joined {
-            let username: String = row
-                .get::<Option<String>, _>("u_name")
-                .flatten()
-                .unwrap_or_default();
-            out["username"] = json!(username);
+        if get_opt_usize(&row, "u_id").is_some() {
+            out["username"] = json!(get_str(&row, "u_name"));
         }
 
         // Overview fields — merged iff the overview row existed. Gate on
         // `overview.catalog` (the PK, NOT NULL), not on any of the count
         // columns, so a legitimately zero `total` doesn't look like a miss.
-        let overview_joined = row.get::<Option<usize>, _>("o_catalog").flatten().is_some();
-        if overview_joined {
-            out["total"] = json!(
-                row.get::<Option<isize>, _>("o_total")
-                    .flatten()
-                    .unwrap_or(0)
-            );
-            out["noq"] = json!(row.get::<Option<isize>, _>("o_noq").flatten().unwrap_or(0));
-            out["autoq"] = json!(
-                row.get::<Option<isize>, _>("o_autoq")
-                    .flatten()
-                    .unwrap_or(0)
-            );
-            out["na"] = json!(row.get::<Option<isize>, _>("o_na").flatten().unwrap_or(0));
-            out["manual"] = json!(
-                row.get::<Option<isize>, _>("o_manual")
-                    .flatten()
-                    .unwrap_or(0)
-            );
-            out["nowd"] = json!(row.get::<Option<isize>, _>("o_nowd").flatten().unwrap_or(0));
-            out["multi_match"] = json!(
-                row.get::<Option<isize>, _>("o_multi_match")
-                    .flatten()
-                    .unwrap_or(0)
-            );
-            out["types"] = json!(
-                row.get::<Option<String>, _>("o_types")
-                    .flatten()
-                    .unwrap_or_default()
-            );
+        if get_opt_usize(&row, "o_catalog").is_some() {
+            out["total"]       = json!(get_isize(&row, "o_total"));
+            out["noq"]         = json!(get_isize(&row, "o_noq"));
+            out["autoq"]       = json!(get_isize(&row, "o_autoq"));
+            out["na"]          = json!(get_isize(&row, "o_na"));
+            out["manual"]      = json!(get_isize(&row, "o_manual"));
+            out["nowd"]        = json!(get_isize(&row, "o_nowd"));
+            out["multi_match"] = json!(get_isize(&row, "o_multi_match"));
+            out["types"]       = json!(get_str(&row, "o_types"));
         }
 
         // Autoscrape fields — merged iff the autoscrape row existed.
         // Gate on `autoscrape.catalog` (the PK) so a NULL last_update
         // doesn't suppress an otherwise-present row.
-        let autoscrape_joined = row.get::<Option<usize>, _>("a_catalog").flatten().is_some();
-        if autoscrape_joined {
-            out["last_update"] = json!(
-                row.get::<Option<String>, _>("a_last_update")
-                    .flatten()
-                    .unwrap_or_default()
-            );
-            out["do_auto_update"] = json!(
-                row.get::<Option<u8>, _>("a_do_auto_update")
-                    .flatten()
-                    .unwrap_or(0)
-            );
-            out["autoscrape_json"] = json!(
-                row.get::<Option<String>, _>("a_json")
-                    .flatten()
-                    .unwrap_or_default()
-            );
+        if get_opt_usize(&row, "a_catalog").is_some() {
+            out["last_update"]     = json!(get_str(&row, "a_last_update"));
+            out["do_auto_update"]  = json!(get_u8(&row, "a_do_auto_update"));
+            out["autoscrape_json"] = json!(get_str(&row, "a_json"));
         }
 
         out

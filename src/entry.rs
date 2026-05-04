@@ -363,16 +363,19 @@ impl<'a> EntryWriter<'a> {
             .await
     }
 
-    /// Add a localised alias for the entry. **Canonical implementation.**
-    /// `Entry::add_alias` forwards to the shared helper [`write_alias`].
     pub async fn add_alias(&self, s: &LocaleString) -> Result<()> {
-        write_alias(self.ctx, self.entry.get_valid_id()?, s).await
+        self.ctx
+            .storage()
+            .entry_add_alias(self.entry.get_valid_id()?, s.language(), s.value())
+            .await?;
+        Ok(())
     }
 
-    /// Update the entry's `is_matched` flag in `entry`/`person_dates`.
-    /// Forwards to [`write_match_status`].
     pub async fn set_match_status(&self, status: &str, is_matched: bool) -> Result<()> {
-        write_match_status(self.ctx, self.entry.get_valid_id()?, status, is_matched).await
+        self.ctx
+            .storage()
+            .entry_set_match_status(self.entry.get_valid_id()?, status, i32::from(is_matched))
+            .await
     }
 
     /// Set or clear a language description. Forwards to
@@ -493,7 +496,10 @@ impl<'a> EntryWriter<'a> {
     }
 
     pub async fn set_auxiliary_in_wikidata(&self, aux_id: DbId, in_wikidata: bool) -> Result<()> {
-        write_auxiliary_in_wikidata(self.ctx, aux_id, in_wikidata).await
+        self.ctx
+            .storage()
+            .entry_set_auxiliary_in_wikidata(in_wikidata, aux_id)
+            .await
     }
 
     pub async fn add_mnm_relation(
@@ -501,7 +507,9 @@ impl<'a> EntryWriter<'a> {
         prop_numeric: PropertyId,
         target_entry_id: DbId,
     ) -> Result<()> {
-        write_mnm_relation(self.ctx, self.entry.get_valid_id()?, prop_numeric, target_entry_id)
+        self.ctx
+            .storage()
+            .add_mnm_relation(self.entry.get_valid_id()?, prop_numeric, target_entry_id)
             .await
     }
 
@@ -807,46 +815,6 @@ async fn read_multi_match(ctx: &dyn AppContext, entry_id: DbId) -> Result<Vec<St
         .map(|q| format!("Q{q}"))
         .collect();
     Ok(ret)
-}
-
-async fn write_alias(ctx: &dyn AppContext, entry_id: DbId, s: &LocaleString) -> Result<()> {
-    ctx.storage()
-        .entry_add_alias(entry_id, s.language(), s.value())
-        .await?;
-    Ok(())
-}
-
-async fn write_auxiliary_in_wikidata(
-    ctx: &dyn AppContext,
-    aux_id: DbId,
-    in_wikidata: bool,
-) -> Result<()> {
-    ctx.storage()
-        .entry_set_auxiliary_in_wikidata(in_wikidata, aux_id)
-        .await
-}
-
-async fn write_mnm_relation(
-    ctx: &dyn AppContext,
-    entry_id: DbId,
-    prop_numeric: PropertyId,
-    target_entry_id: DbId,
-) -> Result<()> {
-    ctx.storage()
-        .add_mnm_relation(entry_id, prop_numeric, target_entry_id)
-        .await
-}
-
-async fn write_match_status(
-    ctx: &dyn AppContext,
-    entry_id: DbId,
-    status: &str,
-    is_matched: bool,
-) -> Result<()> {
-    let is_matched = if is_matched { 1 } else { 0 };
-    ctx.storage()
-        .entry_set_match_status(entry_id, status, is_matched)
-        .await
 }
 
 async fn write_language_description(
