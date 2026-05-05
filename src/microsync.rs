@@ -10,7 +10,7 @@ use crate::wikidata_writer::WikidataWriter;
 use std::sync::Arc;
 use anyhow::Result;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use wikimisc::timestamp::TimeStamp;
 
@@ -471,9 +471,50 @@ impl Microsync {
                 break;
             }
         }
+        match_differs = self.resolve_redirect_mismatches(match_differs).await;
         extid_not_in_mnm.sort();
         match_differs.sort();
         Ok((extid_not_in_mnm, match_differs))
+    }
+
+    /// Filters `match_differs` by resolving cases where MnM's stored Q is a Wikidata redirect
+    /// to the canonical Q that Wikidata currently reports. For each such case the redirect is
+    /// fixed globally (all entries pointing at the old Q get updated to the canonical Q, preserving
+    /// the original user/timestamp) and the entry is dropped from the mismatch list so it does not
+    /// surface as a false discrepancy on the sync report.
+    async fn resolve_redirect_mismatches(&self, match_differs: Vec<MatchDiffers>) -> Vec<MatchDiffers> {
+        if match_differs.is_empty() {
+            return match_differs;
+        }
+        let unique_mnm_qs: Vec<String> = match_differs
+            .iter()
+            .map(|md| format!("Q{}", md.q_mnm))
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        let redirects = match self.app.wikidata().get_redirected_items(&unique_mnm_qs).await {
+            Ok(r) => r,
+            Err(_) => return match_differs,
+        };
+        let redirect_map: HashMap<isize, isize> = redirects
+            .iter()
+            .filter_map(|(from, to)| Some((item2numeric(from)?, item2numeric(to)?)))
+            .collect();
+        if redirect_map.is_empty() {
+            return match_differs;
+        }
+        let mut remaining = Vec::with_capacity(match_differs.len());
+        let mut fixed_pairs: HashSet<(isize, isize)> = HashSet::new();
+        for md in match_differs {
+            if redirect_map.get(&md.q_mnm) == Some(&md.q_wd) {
+                if fixed_pairs.insert((md.q_mnm, md.q_wd)) {
+                    let _ = self.app.storage().maintenance_fix_redirects(md.q_mnm, md.q_wd).await;
+                }
+            } else {
+                remaining.push(md);
+            }
+        }
+        remaining
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -764,6 +805,47 @@ mod tests {
         let app = get_test_app();
         let mut ms = Microsync::new(Arc::new(app.clone()));
         ms.check_catalog(22).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_resolve_redirect_mismatches_removes_resolved() {
+        let app = test_support::test_app().await;
+        let (_catalog_id, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
+        let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
+        // Human match to Q85756032, which is a redirect to Q3819700
+        EntryWriter::new(&app, &mut entry).set_match("Q85756032", 2).await.unwrap();
+        test_support::seed_wdt_redirect("Q85756032", "Q3819700").await.unwrap();
+
+        let ms = Microsync::new(Arc::new(app.clone()));
+        let match_differs = vec![MatchDiffers {
+            ext_id: "test".to_string(),
+            q_wd: 3819700,
+            q_mnm: 85756032,
+            entry_id,
+            ext_url: String::new(),
+        }];
+        let remaining = ms.resolve_redirect_mismatches(match_differs).await;
+
+        assert!(remaining.is_empty(), "redirect mismatch should be resolved and removed");
+        let entry_after = Entry::from_id(entry_id, &app).await.unwrap();
+        assert_eq!(entry_after.q, Some(3819700), "entry q should be updated to canonical item");
+        assert_eq!(entry_after.user, Some(2), "user attribution should be preserved");
+    }
+
+    #[tokio::test]
+    async fn test_resolve_redirect_mismatches_keeps_genuine_mismatches() {
+        let app = test_support::test_app().await;
+        let ms = Microsync::new(Arc::new(app.clone()));
+        // Two Q-numbers that have no redirect relationship between them
+        let match_differs = vec![MatchDiffers {
+            ext_id: "test".to_string(),
+            q_wd: 1,
+            q_mnm: 2,
+            entry_id: usize::MAX,
+            ext_url: String::new(),
+        }];
+        let remaining = ms.resolve_redirect_mismatches(match_differs).await;
+        assert_eq!(remaining.len(), 1, "genuine mismatch should be preserved");
     }
 
     #[tokio::test]
