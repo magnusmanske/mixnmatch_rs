@@ -13,6 +13,7 @@ export default Vue.extend({
             per_page: 50,
             start: 0,
             selected_function: this.function_filter || '',
+            search: '',
             row_langs: {},   // row.id -> 'lua' | 'php'
             copied_id: null, // id of the row whose code was just copied
         };
@@ -37,6 +38,7 @@ export default Vue.extend({
             try {
                 const d = await mnm_api('get_code_examples', {
                     function: me.selected_function,
+                    search: me.search,
                     start: me.start,
                     max: me.per_page,
                 });
@@ -63,6 +65,15 @@ export default Vue.extend({
         clearFilter: function () {
             this.selected_function = '';
             this.applyFilter();
+        },
+        searchCode: function () {
+            this.start = 0;
+            this.load();
+        },
+        clearSearch: function () {
+            this.search = '';
+            this.start = 0;
+            this.load();
         },
         goToPage: function (offset) {
             this.start = offset;
@@ -111,6 +122,16 @@ export default Vue.extend({
         </select>
         <button v-if='selected_function' class='btn btn-outline-secondary btn-sm'
             @click.prevent='clearFilter' title='Clear filter'>&times;</button>
+        <label class='form-label mb-0 ms-3 me-1' style='white-space:nowrap'>Search code:</label>
+        <div class='d-flex gap-1'>
+            <input class='form-control form-control-sm' style='width:200px'
+                v-model='search' placeholder='e.g. wikibase'
+                @keyup.enter='searchCode'>
+            <button class='btn btn-outline-primary btn-sm' @click.prevent='searchCode'
+                :disabled='loading'>&#128269;</button>
+            <button v-if='search' class='btn btn-outline-secondary btn-sm'
+                @click.prevent='clearSearch' title='Clear search'>&times;</button>
+        </div>
         <span v-if='loaded && !loading' class='text-muted ms-2' style='font-size:0.85rem'>
             {{total}} fragment<span v-if='total!==1'>s</span>
         </span>

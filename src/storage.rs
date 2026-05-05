@@ -1089,6 +1089,7 @@ pub trait Storage:
     async fn get_code_examples(
         &self,
         function_filter: &str,
+        search: &str,
         start: usize,
         max: usize,
     ) -> Result<(Vec<serde_json::Value>, usize)>;

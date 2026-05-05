@@ -4201,22 +4201,32 @@ impl Storage for StorageMySQL {
     async fn get_code_examples(
         &self,
         function_filter: &str,
+        search: &str,
         start: usize,
         max: usize,
     ) -> Result<(Vec<serde_json::Value>, usize)> {
-        let where_clause = if function_filter.is_empty() {
-            "1=1".to_string()
+        let function_clause = if function_filter.is_empty() {
+            String::new()
         } else {
             // function is a short enum-like string from a closed set — safe to
             // format directly since it was validated by the caller.
-            format!("`cf`.`function`='{function_filter}'")
+            format!("AND cf.`function`='{function_filter}'")
+        };
+        let (search_clause, search_params) = if search.is_empty() {
+            (String::new(), Params::Empty)
+        } else {
+            let search_like = format!("%{search}%");
+            (
+                "AND (cf.`php` LIKE :search OR cf.`lua` LIKE :search)".to_string(),
+                params! { "search" => search_like },
+            )
         };
         let mut conn = self.get_conn_ro().await?;
         let count_sql = format!(
-            "SELECT COUNT(*) FROM `code_fragments` cf WHERE {where_clause}"
+            "SELECT COUNT(*) FROM `code_fragments` cf WHERE 1=1 {function_clause} {search_clause}"
         );
         let total: usize = conn
-            .exec_first(&count_sql, ())
+            .exec_first(&count_sql, search_params.clone())
             .await?
             .flatten()
             .unwrap_or(0);
@@ -4226,12 +4236,12 @@ impl Storage for StorageMySQL {
              c.`name` AS `catalog_name` \
              FROM `code_fragments` cf \
              LEFT JOIN `catalog` c ON c.`id`=cf.`catalog` \
-             WHERE {where_clause} \
+             WHERE 1=1 {function_clause} {search_clause} \
              ORDER BY cf.`function`,cf.`catalog` \
              LIMIT {max} OFFSET {start}"
         );
         let rows: Vec<serde_json::Value> = conn
-            .exec_iter(sql, ())
+            .exec_iter(sql, search_params)
             .await?
             .map_and_drop(|row: mysql_async::Row| {
                 let id: usize = row.get::<Option<usize>, _>("id").flatten().unwrap_or(0);

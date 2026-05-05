@@ -50,13 +50,15 @@ pub async fn query_get_code_fragments(
     Ok(ok(data))
 }
 
-/// `?query=get_code_examples&function=…&start=…&max=…` — cross-catalog list
-/// of code fragments, optionally filtered by function name. Public read.
+/// `?query=get_code_examples&function=…&search=…&start=…&max=…` — cross-catalog
+/// list of code fragments, optionally filtered by function name and/or a
+/// full-text search across the code body. Public read.
 pub async fn query_get_code_examples(
     app: &AppState,
     params: &Params,
 ) -> Result<Response, ApiError> {
     let function_filter = common::get_param(params, "function", "");
+    let search = common::get_param(params, "search", "");
     let start = common::get_param(params, "start", "0")
         .parse::<usize>()
         .unwrap_or(0);
@@ -73,9 +75,16 @@ pub async fn query_get_code_examples(
         return Err(ApiError("invalid function name".into()));
     }
 
+    // Limit search length to avoid pathologically slow LIKE scans.
+    let search = if search.len() > 200 {
+        search[..200].to_string()
+    } else {
+        search
+    };
+
     let (rows, total) = app
         .storage()
-        .get_code_examples(&function_filter, start, max)
+        .get_code_examples(&function_filter, &search, start, max)
         .await
         .map_err(|e| ApiError(format!("database error: {e}")))?;
 
