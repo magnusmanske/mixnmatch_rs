@@ -4198,6 +4198,68 @@ impl Storage for StorageMySQL {
         Ok(rows)
     }
 
+    async fn get_code_examples(
+        &self,
+        function_filter: &str,
+        start: usize,
+        max: usize,
+    ) -> Result<(Vec<serde_json::Value>, usize)> {
+        let where_clause = if function_filter.is_empty() {
+            "1=1".to_string()
+        } else {
+            // function is a short enum-like string from a closed set — safe to
+            // format directly since it was validated by the caller.
+            format!("`cf`.`function`='{function_filter}'")
+        };
+        let mut conn = self.get_conn_ro().await?;
+        let count_sql = format!(
+            "SELECT COUNT(*) FROM `code_fragments` cf WHERE {where_clause}"
+        );
+        let total: usize = conn
+            .exec_first(&count_sql, ())
+            .await?
+            .flatten()
+            .unwrap_or(0);
+        let sql = format!(
+            "SELECT cf.`id`,cf.`function`,cf.`catalog`,cf.`php`,cf.`is_active`,\
+             cf.`note`,CAST(cf.`last_run` AS CHAR) AS `last_run`,cf.`lua`,\
+             c.`name` AS `catalog_name` \
+             FROM `code_fragments` cf \
+             LEFT JOIN `catalog` c ON c.`id`=cf.`catalog` \
+             WHERE {where_clause} \
+             ORDER BY cf.`function`,cf.`catalog` \
+             LIMIT {max} OFFSET {start}"
+        );
+        let rows: Vec<serde_json::Value> = conn
+            .exec_iter(sql, ())
+            .await?
+            .map_and_drop(|row: mysql_async::Row| {
+                let id: usize = row.get::<Option<usize>, _>("id").flatten().unwrap_or(0);
+                let function: String = row.get::<Option<String>, _>("function").flatten().unwrap_or_default();
+                let catalog: usize = row.get::<Option<usize>, _>("catalog").flatten().unwrap_or(0);
+                let php: String = row.get::<Option<String>, _>("php").flatten().unwrap_or_default();
+                let is_active: i8 = row.get::<Option<i8>, _>("is_active").flatten().unwrap_or(0);
+                let note: Option<String> = row.get::<Option<String>, _>("note").flatten().filter(|s| !s.is_empty());
+                let last_run: Option<String> = row.get::<Option<String>, _>("last_run").flatten();
+                let lua: Option<String> = row.get::<Option<String>, _>("lua").flatten().filter(|s| !s.is_empty());
+                let catalog_name: Option<String> = row.get::<Option<String>, _>("catalog_name").flatten();
+                serde_json::json!({
+                    "id": id,
+                    "function": function,
+                    "catalog": catalog,
+                    "catalog_name": catalog_name,
+                    "has_php": !php.is_empty(),
+                    "has_lua": lua.is_some(),
+                    "lua": lua,
+                    "is_active": is_active,
+                    "note": note,
+                    "last_run": last_run,
+                })
+            })
+            .await?;
+        Ok((rows, total))
+    }
+
     async fn save_code_fragment(&self, fragment: &serde_json::Value) -> Result<usize> {
         let php = fragment["php"].as_str().unwrap_or("");
         let lua_val = &fragment["lua"];

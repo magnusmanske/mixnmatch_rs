@@ -124,6 +124,7 @@ var Scraper           = lazy(function () { return import('./scraper.js'); });
 var SparqlList        = lazy(function () { return import('./sparql_list.js'); });
 var TopMissingEntries = lazy(function () { return import('./top_missing_entries.js'); });
 var CodePage          = lazy(function () { return import('./codepage.js'); });
+var CodeExamples      = lazy(function () { return import('./code_examples.js'); });
 var TopGroups         = lazy(function () { return import('./top_groups.js'); });
 var MapPage           = lazy(function () { return import('./map_page.js'); });
 var MobileMatch       = lazy(function () { return import('./mobile_match.js'); });
@@ -180,6 +181,7 @@ export {
 	SparqlList,
 	TopMissingEntries,
 	CodePage,
+	CodeExamples,
 	TopGroups,
 	MapPage,
 	MobileMatch,

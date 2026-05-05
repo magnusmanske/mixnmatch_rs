@@ -129,6 +129,8 @@ document.addEventListener('DOMContentLoaded', function () {
 			{ path: '/top_missing/', component: mnm.TopMissingEntries, props: true },
 			{ path: '/top_missing/:catalogs', component: mnm.TopMissingEntries, props: true },
 			{ path: '/code/:catalog_id', component: mnm.CodePage, props: true },
+			{ path: '/code_examples', component: mnm.CodeExamples, props: true },
+			{ path: '/code_examples/:function_filter', component: mnm.CodeExamples, props: true },
 			{ path: '/top_groups', component: mnm.TopGroups, props: true },
 			{ path: '/top_groups/:id', component: mnm.TopGroups, props: true },
 			{ path: '/map/:id', component: mnm.MapPage, props: true },

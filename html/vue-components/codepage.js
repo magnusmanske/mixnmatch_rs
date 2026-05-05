@@ -131,6 +131,11 @@ export default Vue.extend({
                 <span>{{fn.replace(/_/g,' ')}}</span>
             </button>
         </div>
+
+        <div class='mt-3' style='font-size:0.85rem;'>
+            <router-link to='/code_examples'>Browse existing code examples</router-link>
+            &nbsp;&mdash;&nbsp;see Lua (and PHP) fragments from other catalogs for inspiration.
+        </div>
     </div>
     <div v-else-if="error!=''" class="alert alert-danger" role="alert">
         {{error}}

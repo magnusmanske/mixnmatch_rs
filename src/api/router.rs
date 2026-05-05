@@ -376,6 +376,7 @@ const ROUTES: &[(&str, ApiHandler)] = &[
     route!("sparql_list",                  sparql::query_sparql_list, app_params),
     route!("quick_compare",                quick_compare::query_quick_compare, app_params),
     route!("get_code_fragments",           code_fragments::query_get_code_fragments, app_params),
+    route!("get_code_examples",            code_fragments::query_get_code_examples, app_params),
     route!("save_code_fragment",           code_fragments::query_save_code_fragment),
     route!("test_code_fragment",           lua::query_test_code_fragment),
 

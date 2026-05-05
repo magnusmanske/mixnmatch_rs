@@ -50,6 +50,48 @@ pub async fn query_get_code_fragments(
     Ok(ok(data))
 }
 
+/// `?query=get_code_examples&function=…&start=…&max=…` — cross-catalog list
+/// of code fragments, optionally filtered by function name. Public read.
+pub async fn query_get_code_examples(
+    app: &AppState,
+    params: &Params,
+) -> Result<Response, ApiError> {
+    let function_filter = common::get_param(params, "function", "");
+    let start = common::get_param(params, "start", "0")
+        .parse::<usize>()
+        .unwrap_or(0);
+    let max = common::get_param(params, "max", "50")
+        .parse::<usize>()
+        .unwrap_or(50)
+        .min(200);
+
+    // Validate function_filter: allow only alphanumeric + underscore to
+    // prevent SQL injection via the format! in the storage layer.
+    if !function_filter.is_empty()
+        && !function_filter.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    {
+        return Err(ApiError("invalid function name".into()));
+    }
+
+    let (rows, total) = app
+        .storage()
+        .get_code_examples(&function_filter, start, max)
+        .await
+        .map_err(|e| ApiError(format!("database error: {e}")))?;
+
+    let all_functions = app
+        .storage()
+        .get_all_code_fragment_functions()
+        .await
+        .unwrap_or_default();
+
+    Ok(ok(json!({
+        "rows": rows,
+        "total": total,
+        "all_functions": all_functions,
+    })))
+}
+
 /// `?query=save_code_fragment&fragment=<json>` — gated behind OAuth +
 /// `ALLOWED_USER_IDS`.
 pub async fn query_save_code_fragment(
