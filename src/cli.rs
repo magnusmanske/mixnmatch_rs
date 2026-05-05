@@ -1,5 +1,9 @@
 use crate::import_catalog::ImportMode;
-use crate::{app_state::{AppState, is_on_toolforge}, extended_entry::ExtendedEntry, process::Process};
+use crate::{
+    app_state::{AppState, is_on_toolforge},
+    extended_entry::ExtendedEntry,
+    process::Process,
+};
 use anyhow::{Result, anyhow};
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
@@ -273,10 +277,7 @@ impl ShellCommands {
         // repo instead of the baked-in `./html`. Either way the cache loads
         // once into RAM and a background watcher refreshes individual files
         // when they change on disk.
-        let effective_html_dir = app
-            .html_dir_override()
-            .map(|p| p.as_ref())
-            .unwrap_or(html_dir);
+        let effective_html_dir = app.html_dir_override().unwrap_or(html_dir);
         if !effective_html_dir.exists() {
             return Err(anyhow!(
                 "html directory not found: {}",
@@ -355,9 +356,7 @@ impl ShellCommands {
         // (cookie parsing, response cookie refresh, CORS header injection)
         // that compounds across the dozens of ES-module fetches the SPA
         // makes on first load.
-        let api_router = crate::api::router(app)
-            .layer(session_layer)
-            .layer(cors);
+        let api_router = crate::api::router(app).layer(session_layer).layer(cors);
 
         // Serve the in-memory snapshot as the fallback handler. Every miss
         // returns 404 — we don't fall back to disk, because anything a
