@@ -119,6 +119,13 @@ enum Commands {
         #[arg(long, default_value = "html")]
         html_dir: PathBuf,
 
+        /// Watch the html directory for file changes and reload them
+        /// automatically without restarting. Serves with Cache-Control: no-store
+        /// so browsers always pick up the latest version. Intended for local
+        /// development; do not use in production.
+        #[arg(long)]
+        watch: bool,
+
         /// Serve HTTPS with a self-signed certificate (for local dev only —
         /// browsers will show a warning on first visit). Toolforge terminates
         /// TLS upstream, so leave this off in production.
@@ -262,54 +269,72 @@ impl ShellCommands {
     ///   POST     /api/v1/import_catalog
     ///   GET      everything else -> static files from `html_dir`
     #[allow(clippy::print_stdout)]
-    async fn run_webserver(app: AppState, port: u16, html_dir: &Path, tls: bool) -> Result<()> {
+    async fn run_webserver(app: AppState, port: u16, html_dir: &Path, watch: bool, tls: bool) -> Result<()> {
         use axum::Router;
         use axum::http::{HeaderName, Method};
         use axum::routing::get;
         use tower_http::cors::{AllowOrigin, CorsLayer};
         use tower_sessions::{Expiry, SessionManagerLayer, cookie::SameSite};
 
-        // `html_dir_override` in config wins over the CLI argument and
-        // switches us into live (no-cache) serving — handy for production
-        // deployments that point at a checked-out repo so HTML/JS edits
-        // surface without rebuilding the deploy image. Without the
-        // override, walk `html/` once at startup and serve from RAM with a
-        // short browser cache header (the production default).
-        let static_cache = if let Some(override_path) = app.html_dir_override() {
-            if !override_path.exists() {
-                return Err(anyhow!(
-                    "html_dir_override directory not found: {}",
-                    override_path.display()
-                ));
-            }
-            let cache = crate::static_cache::StaticCache::live(override_path).map_err(|e| {
-                anyhow!(
-                    "failed to set up live static dir at {}: {e}",
-                    override_path.display()
-                )
-            })?;
+        // Mode selection (highest-priority first):
+        //   --watch              → Watched: serve from RAM, auto-reload on change
+        //   config.html_dir_override → Disk: read every file from disk, no-store
+        //   (default)            → Memory: snapshot at startup, max-age=300
+        let effective_html_dir = app
+            .html_dir_override()
+            .map(|p| p.as_ref())
+            .unwrap_or(html_dir);
+        if !effective_html_dir.exists() {
+            return Err(anyhow!(
+                "html directory not found: {}",
+                effective_html_dir.display()
+            ));
+        }
+        let static_cache = if watch {
+            let cache =
+                crate::static_cache::StaticCache::watch(effective_html_dir).map_err(|e| {
+                    anyhow!(
+                        "failed to set up watched static dir at {}: {e}",
+                        effective_html_dir.display()
+                    )
+                })?;
+            let msg = format!(
+                "webserver: watched {} static files ({} bytes) from {} (auto-reload on change)",
+                cache.len(),
+                cache.total_bytes(),
+                effective_html_dir.display()
+            );
+            println!("{msg}");
+            log::info!("{msg}");
+            cache
+        } else if app.html_dir_override().is_some() {
+            let cache =
+                crate::static_cache::StaticCache::live(effective_html_dir).map_err(|e| {
+                    anyhow!(
+                        "failed to set up live static dir at {}: {e}",
+                        effective_html_dir.display()
+                    )
+                })?;
             let msg = format!(
                 "webserver: live static serving (no cache) from {} (config.html_dir_override)",
-                override_path.display()
+                effective_html_dir.display()
             );
             println!("{msg}");
             log::info!("{msg}");
             cache
         } else {
-            if !html_dir.exists() {
-                return Err(anyhow!("html directory not found: {}", html_dir.display()));
-            }
-            let cache = crate::static_cache::StaticCache::load(html_dir).map_err(|e| {
-                anyhow!(
-                    "failed to load static cache from {}: {e}",
-                    html_dir.display()
-                )
-            })?;
+            let cache =
+                crate::static_cache::StaticCache::load(effective_html_dir).map_err(|e| {
+                    anyhow!(
+                        "failed to load static cache from {}: {e}",
+                        effective_html_dir.display()
+                    )
+                })?;
             let msg = format!(
                 "webserver: cached {} static files ({} bytes) from {}",
                 cache.len(),
                 cache.total_bytes(),
-                html_dir.display()
+                effective_html_dir.display()
             );
             println!("{msg}");
             log::info!("{msg}");
@@ -545,10 +570,11 @@ impl ShellCommands {
                 config,
                 port,
                 html_dir,
+                watch,
                 tls,
             }) => {
                 let app = Self::path2app(config)?;
-                Self::run_webserver(app, *port, html_dir, *tls).await?;
+                Self::run_webserver(app, *port, html_dir, *watch, *tls).await?;
             }
             Some(Commands::SyncWdMatches { config, batch_size }) => {
                 let app = Self::path2app(config)?;

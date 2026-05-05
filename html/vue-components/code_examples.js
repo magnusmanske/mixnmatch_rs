@@ -141,11 +141,11 @@ export default Vue.extend({
         <table class='table table-sm table-hover' id='ce-table' style='font-size:0.875rem'>
             <thead>
                 <tr>
-                    <th style='white-space:nowrap'>Function</th>
-                    <th style='width:7rem'>Catalog</th>
-                    <th>Lang</th>
-                    <th>Code preview</th>
-                    <th>Last run</th>
+                    <th class='ce-fn'>Function</th>
+                    <th class='ce-catalog'>Catalog</th>
+                    <th class='ce-lang-col'>Lang</th>
+                    <th class='ce-code-col'>Code preview</th>
+                    <th class='ce-lastrun'>Last run</th>
                 </tr>
             </thead>
             <tbody>
@@ -153,18 +153,18 @@ export default Vue.extend({
                     <td colspan='5' class='text-muted fst-italic text-center'>No fragments found.</td>
                 </tr>
                 <tr v-for='row in rows' :key='row.id'>
-                    <td style='white-space:nowrap'>
+                    <td class='ce-fn'>
                         <router-link :to='"/code_examples/" + row.function'>
                             {{row.function.replace(/_/g,' ')}}
                         </router-link>
                     </td>
-                    <td style='width:7rem;word-break:break-word'>
+                    <td class='ce-catalog'>
                         <router-link :to='"/code/"+row.catalog'>
                             <span v-if='row.catalog_name'>{{row.catalog_name}}</span>
                             <span v-else class='text-muted'>#{{row.catalog}}</span>
                         </router-link>
                     </td>
-                    <td style='white-space:nowrap'>
+                    <td class='ce-lang-col'>
                         <button v-if='row.has_lua' class='ce-lang ce-lua'
                             :style='rowLang(row)==="lua" ? "" : "opacity:0.35"'
                             @click.prevent='setRowLang(row, "lua")'>Lua</button>
@@ -172,7 +172,7 @@ export default Vue.extend({
                             :style='rowLang(row)==="php" ? "" : "opacity:0.35"'
                             @click.prevent='setRowLang(row, "php")'>PHP</button>
                     </td>
-                    <td style='width:99%'>
+                    <td class='ce-code-col'>
                         <div class='ce-code-wrap'>
                             <code class='ce-code' v-if='rowCode(row)'>{{rowCode(row)}}</code>
                             <span v-else class='text-muted fst-italic' style='font-size:0.8rem'>No code</span>
@@ -184,7 +184,7 @@ export default Vue.extend({
                             </button>
                         </div>
                     </td>
-                    <td style='white-space:nowrap;font-size:0.75rem;color:#6c757d'>
+                    <td class='ce-lastrun'>
                         {{row.last_run ? row.last_run.substr(0,10) : ''}}
                     </td>
                 </tr>

@@ -22,7 +22,11 @@ use anyhow::{Context, Result, anyhow};
 use axum::body::Body;
 use axum::http::{HeaderValue, Response, StatusCode, Uri, header};
 use bytes::Bytes;
+use dashmap::DashMap;
+use log::warn;
+use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::HashMap;
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -35,10 +39,22 @@ pub struct CachedFile {
     content_type: HeaderValue,
 }
 
-/// Either an in-memory snapshot of `html/` (production default) or a
-/// pointer to a live directory served straight off disk per request
-/// (development / live-edit mode). Cheaply cloneable in either variant.
+/// Wraps a `RecommendedWatcher` so `StaticCache` can derive `Clone` and
+/// `Debug` even though the watcher itself implements neither.
+pub(self) struct WatcherHandle(#[allow(dead_code)] RecommendedWatcher);
+
+impl fmt::Debug for WatcherHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("WatcherHandle")
+    }
+}
+
+/// Either an in-memory snapshot of `html/` (production default), a live
+/// directory served straight off disk per request (development / live-edit
+/// mode), or a watched in-memory cache that reloads individual files when
+/// they change on disk. Cheaply cloneable in all variants.
 #[derive(Clone, Debug)]
+#[allow(private_interfaces)]
 pub enum StaticCache {
     Memory {
         files: Arc<HashMap<String, CachedFile>>,
@@ -47,6 +63,15 @@ pub enum StaticCache {
     Disk {
         root: Arc<PathBuf>,
         canonical_root: Arc<PathBuf>,
+    },
+    /// Like `Memory` but a background watcher reloads changed files
+    /// automatically. Sends `Cache-Control: no-store` so browsers always
+    /// revalidate — edits appear on the next browser refresh.
+    Watched {
+        files: Arc<DashMap<String, CachedFile>>,
+        root: Arc<PathBuf>,
+        /// Kept alive for the lifetime of the cache; dropping it stops the watcher.
+        _watcher: Arc<WatcherHandle>,
     },
 }
 
@@ -81,11 +106,77 @@ impl StaticCache {
         })
     }
 
-    /// Number of cached files. `0` for live mode (we don't enumerate the
-    /// tree). Used at startup for logging.
+    /// Walk `root`, load all files into a `DashMap`, then spawn a background
+    /// task that watches the directory tree with OS-native notifications
+    /// (inotify / FSEvents / ReadDirectoryChangesW, polling fallback) and
+    /// reloads any file that changes. Responds with `Cache-Control: no-store`
+    /// so browsers always revalidate; the server still answers from RAM.
+    pub fn watch(root: &Path) -> Result<Self> {
+        if !root.exists() {
+            return Err(anyhow!("html directory does not exist: {}", root.display()));
+        }
+        // Canonicalize so that the root stored in `root_arc` is an absolute
+        // path. `notify` delivers events with absolute paths; `strip_prefix`
+        // in `handle_watch_event` would silently fail (and every reload would
+        // be dropped) if `root` were a relative path like `"html"`.
+        let root = root
+            .canonicalize()
+            .with_context(|| format!("canonicalize {}", root.display()))?;
+        let root = root.as_path();
+
+        // Load the initial snapshot into a DashMap.
+        let mut initial = HashMap::new();
+        load_dir(root, root, &mut initial)
+            .with_context(|| format!("loading static watch-cache from {}", root.display()))?;
+        let files: Arc<DashMap<String, CachedFile>> = Arc::new(DashMap::new());
+        for (k, v) in initial {
+            files.insert(k, v);
+        }
+
+        let root_arc = Arc::new(root.to_path_buf());
+
+        // Channel from the notify callback (sync) into the async handler task.
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<notify::Result<notify::Event>>(64);
+
+        let mut watcher = RecommendedWatcher::new(
+            move |result: notify::Result<notify::Event>| {
+                // blocking_send is fine here: the channel has 64 slots and the
+                // handler task drains it promptly; a saturated channel just
+                // drops the event, which is acceptable for a dev-mode watcher.
+                let _ = tx.blocking_send(result);
+            },
+            notify::Config::default(),
+        )
+        .context("creating file-system watcher")?;
+
+        watcher
+            .watch(root, RecursiveMode::Recursive)
+            .with_context(|| format!("watching {}", root.display()))?;
+
+        // Spawn the handler that updates the DashMap on every FS event.
+        let files_bg = Arc::clone(&files);
+        let root_bg = Arc::clone(&root_arc);
+        tokio::spawn(async move {
+            while let Some(result) = rx.recv().await {
+                match result {
+                    Ok(event) => handle_watch_event(&event, &root_bg, &files_bg),
+                    Err(e) => warn!("static_cache watcher error: {e}"),
+                }
+            }
+        });
+
+        Ok(Self::Watched {
+            files,
+            root: root_arc,
+            _watcher: Arc::new(WatcherHandle(watcher)),
+        })
+    }
+
+    /// Number of cached files. `0` for live (disk) mode.
     pub fn len(&self) -> usize {
         match self {
             Self::Memory { files, .. } => files.len(),
+            Self::Watched { files, .. } => files.len(),
             Self::Disk { .. } => 0,
         }
     }
@@ -93,28 +184,32 @@ impl StaticCache {
     pub fn is_empty(&self) -> bool {
         match self {
             Self::Memory { files, .. } => files.is_empty(),
+            Self::Watched { files, .. } => files.is_empty(),
             // We don't know without walking the tree; treat as non-empty so
             // startup logging doesn't claim "no files".
             Self::Disk { .. } => false,
         }
     }
 
-    /// Total bytes held in memory. `0` for live mode.
+    /// Total bytes held in memory. `0` for live (disk) mode.
     pub fn total_bytes(&self) -> usize {
         match self {
             Self::Memory { files, .. } => files.values().map(|f| f.body.len()).sum(),
+            Self::Watched { files, .. } => files.iter().map(|e| e.body.len()).sum(),
             Self::Disk { .. } => 0,
         }
     }
 
-    /// True if this cache reads from disk on every request.
+    /// True if this cache reads from disk on every request (not in-memory).
     pub fn is_live(&self) -> bool {
         matches!(self, Self::Disk { .. })
     }
 
     pub fn root(&self) -> &Path {
         match self {
-            Self::Memory { root, .. } | Self::Disk { root, .. } => root.as_path(),
+            Self::Memory { root, .. } | Self::Disk { root, .. } | Self::Watched { root, .. } => {
+                root.as_path()
+            }
         }
     }
 
@@ -134,6 +229,7 @@ impl StaticCache {
 
         match self {
             Self::Memory { files, .. } => serve_from_memory(files, &key),
+            Self::Watched { files, .. } => serve_from_watched(files, &key),
             Self::Disk {
                 root,
                 canonical_root,
@@ -178,6 +274,63 @@ fn serve_from_memory(files: &HashMap<String, CachedFile>, key: &str) -> Response
                 .unwrap_or_else(|_| not_found())
         }
         None => not_found(),
+    }
+}
+
+fn serve_from_watched(files: &DashMap<String, CachedFile>, key: &str) -> Response<Body> {
+    match files.get(key) {
+        Some(file) => {
+            let mut builder = Response::builder().status(StatusCode::OK);
+            if let Some(h) = builder.headers_mut() {
+                h.insert(header::CONTENT_TYPE, file.content_type.clone());
+                h.insert(
+                    header::CACHE_CONTROL,
+                    HeaderValue::from_static("no-store"),
+                );
+            }
+            builder
+                .body(Body::from(file.body.clone()))
+                .unwrap_or_else(|_| not_found())
+        }
+        None => not_found(),
+    }
+}
+
+/// Called from the background watcher task for each notify event. Updates
+/// the DashMap in-place: reloads created/modified files, removes deleted ones.
+fn handle_watch_event(
+    event: &notify::Event,
+    root: &Path,
+    files: &DashMap<String, CachedFile>,
+) {
+    for path in &event.paths {
+        let Ok(rel) = path.strip_prefix(root) else {
+            continue;
+        };
+        let key = path_to_key(rel);
+        match event.kind {
+            EventKind::Create(_) | EventKind::Modify(_) => {
+                if !path.is_file() {
+                    continue;
+                }
+                match std::fs::read(path) {
+                    Ok(bytes) => {
+                        files.insert(
+                            key,
+                            CachedFile {
+                                body: Bytes::from(bytes),
+                                content_type: mime_for(path),
+                            },
+                        );
+                    }
+                    Err(e) => warn!("static_cache watch: failed to reload {}: {e}", path.display()),
+                }
+            }
+            EventKind::Remove(_) => {
+                files.remove(&key);
+            }
+            _ => {}
+        }
     }
 }
 
