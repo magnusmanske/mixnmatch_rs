@@ -9,7 +9,7 @@ use super::{
     AutoMatch, AutomatchSearchRow, ResultInOriginalCatalog, ResultInOtherCatalog,
     SPARQL_FALLBACK_BATCH_SIZE, SPARQL_PROCESS_CHUNK_SIZE,
 };
-use crate::app_state::USER_AUTO;
+use crate::app_state::{USER_AUTO, item2numeric};
 use crate::catalog::Catalog;
 use crate::entry::{Entry, EntryWriter};
 use crate::entry_query::EntryQuery;
@@ -18,15 +18,28 @@ use crate::match_state::MatchState;
 use anyhow::{Result, anyhow};
 use futures::StreamExt;
 use futures::future::join_all;
-use itertools::Itertools;
 use mediawiki::api::Api;
 use std::collections::HashMap;
 
 impl AutoMatch {
-    /// Helper method to sort and deduplicate a vector of strings
+    /// Sort by numeric Q-id and deduplicate. Used by callers whose item
+    /// list has no inherent relevance order (e.g. raw term-store SQL
+    /// results); numeric sort puts the smallest Q first, which acts as a
+    /// notability heuristic since lower Q-ids tend to be older/more
+    /// established items. Downstream `set_auto_and_multi_match` then picks
+    /// items[0] as the auto-match.
     pub(super) fn sort_and_dedup(items: &mut Vec<String>) {
-        items.sort();
+        items.sort_by_key(|s| item2numeric(s).unwrap_or(0));
         items.dedup();
+    }
+
+    /// Deduplicate keeping the first occurrence of each item; preserves
+    /// the input order. Used by callers whose list already encodes a
+    /// preference order (e.g. Wikidata search-API results, which return
+    /// exact-title matches first). Codeberg #90.
+    pub(super) fn dedup_preserving_order(items: &mut Vec<String>) {
+        let mut seen = std::collections::HashSet::new();
+        items.retain(|item| seen.insert(item.clone()));
     }
 
     pub async fn automatch_with_sparql(&mut self, catalog_id: usize) -> Result<()> {
@@ -262,7 +275,10 @@ impl AutoMatch {
         if items.is_empty() {
             return None;
         }
-        Self::sort_and_dedup(&mut items);
+        // Wikidata search returns results in relevance order (exact-title
+        // matches first); preserve that so the auto-match picker downstream
+        // chooses the most relevant candidate, not the smallest Q-id.
+        Self::dedup_preserving_order(&mut items);
         Some((entry_id, items))
     }
 
@@ -380,14 +396,20 @@ impl AutoMatch {
             }
         }
 
-        let mut search_results = join_all(futures)
+        // Preserve per-future relevance order across the flat-map: label
+        // search runs before alias searches, so label-match candidates
+        // appear before alias-match candidates per entry. Order-preserving
+        // dedup keeps the first occurrence of each (entry_id, q) pair so
+        // the auto-match picker still chooses the most relevant. Codeberg #90.
+        let mut seen: std::collections::HashSet<(usize, String)> =
+            std::collections::HashSet::new();
+        let search_results: Vec<(usize, String)> = join_all(futures)
             .await
             .into_iter()
             .flatten()
-            .flat_map(|(entry_id, items)| items.into_iter().map(move |q| (entry_id, q.to_string())))
-            .collect_vec();
-        search_results.sort();
-        search_results.dedup();
+            .flat_map(|(entry_id, items)| items.into_iter().map(move |q| (entry_id, q)))
+            .filter(|pair| seen.insert(pair.clone()))
+            .collect();
         search_results
     }
 

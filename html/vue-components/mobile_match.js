@@ -159,9 +159,19 @@ export default Vue.extend({
         }, { method: 'POST' });
         if (q * 1 > 0 && d.entry && d.entry.wd_prop && parseInt(d.entry.wd_prop) > 0 &&
           d.entry.wd_qual === null && !(d.entry.ext_id || '').match(/^fake_id_/)) {
-          var prop = 'P' + ('' + d.entry.wd_prop).replace(/\D/g, '');
+          // Codeberg #49: dispatch via wbeditentity with the canonical
+          // reference set so the confirmed match isn't an unsourced
+          // statement on Wikidata.
           var qid = 'Q' + q;
-          me.getWidar({ botmode: 1, action: 'set_string', id: qid, prop: prop, text: d.entry.ext_id }, function () { callback(); });
+          var pc = await mnm_api('prep_match_claim', { entry: me.current_entry.id });
+          var hasClaim = pc && pc.data && pc.data.claims &&
+            (Array.isArray(pc.data.claims) ? pc.data.claims.length > 0 : Object.keys(pc.data.claims).length > 0);
+          if (!hasClaim) { callback(); return; }
+          me.getWidar({
+            botmode: 1,
+            action: 'generic',
+            json: JSON.stringify({ action: 'wbeditentity', id: qid, data: pc.data })
+          }, function () { callback(); });
         } else {
           callback();
         }

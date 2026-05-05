@@ -319,6 +319,60 @@ pub async fn seed_inactive_catalog() -> Result<usize> {
     Ok(catalog_id)
 }
 
+/// Insert an active catalog with `wd_prop` and `source_item` set (no `wd_qual`)
+/// and one minimal entry pointing at it. Returns `(catalog_id, entry_id)`.
+/// Used by tests that need a catalog/entry pair where the catalog has a
+/// primary external-id property — e.g. `prep_match_claim` reference building.
+pub async fn seed_entry_with_catalog_wd_prop(
+    wd_prop: usize,
+    source_item: usize,
+) -> Result<(usize, usize)> {
+    let (pool, mut conn) = seed_conn().await?;
+    let catalog_id = unique_catalog_id();
+    r"INSERT INTO catalog
+       (id, name, url, `desc`, type, search_wp, active, owner, note, has_person_date, taxon_run, wd_prop, source_item)
+       VALUES (:id, :name, '', '', 'person', 'en', 1, 0, '', '', 0, :wd_prop, :source_item)"
+        .with(params! {
+            "id" => catalog_id,
+            "name" => format!("test_catalog_{catalog_id}"),
+            "wd_prop" => wd_prop,
+            "source_item" => source_item,
+        })
+        .ignore(&mut conn)
+        .await?;
+    "INSERT INTO entry (catalog, ext_id, ext_url, ext_name, ext_desc, type, random) \
+     VALUES (:catalog, :ext_id, '', :name, '', 'Q5', 0.5)"
+        .with(params! {
+            "catalog" => catalog_id,
+            "ext_id"  => format!("ext_{catalog_id}"),
+            "name"    => "Test Person",
+        })
+        .ignore(&mut conn)
+        .await?;
+    let entry_id: u64 = "SELECT LAST_INSERT_ID()".first(&mut conn).await?.unwrap();
+    drop(conn);
+    pool.disconnect().await.ok();
+    Ok((catalog_id, entry_id as usize))
+}
+
+/// Insert a minimal entry into an existing catalog. Returns the new `entry_id`.
+pub async fn seed_entry_in_catalog(catalog_id: usize, name: &str) -> Result<usize> {
+    let (pool, mut conn) = seed_conn().await?;
+    "INSERT INTO entry (catalog, ext_id, ext_url, ext_name, ext_desc, type, random) \
+     VALUES (:catalog, :ext_id, '', :name, '', 'Q5', 0.5)"
+        .with(params! {
+            "catalog" => catalog_id,
+            "ext_id"  => format!("ext_{catalog_id}_{name}"),
+            "name"    => name,
+        })
+        .ignore(&mut conn)
+        .await?;
+    let entry_id: u64 = "SELECT LAST_INSERT_ID()".first(&mut conn).await?.unwrap();
+    drop(conn);
+    pool.disconnect().await.ok();
+    Ok(entry_id as usize)
+}
+
 /// Insert an active catalog with `wd_prop` and `wd_qual` both set; return its `catalog_id`.
 pub async fn seed_catalog_with_wd_qual(wd_prop: usize, wd_qual: usize) -> Result<usize> {
     let (pool, mut conn) = seed_conn().await?;

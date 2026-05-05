@@ -396,22 +396,30 @@ impl<'a> EntryWriter<'a> {
     }
 
     /// Set the auto-match (q[0]) and, if more candidates remain,
-    /// also write the multi-match list. **Canonical implementation.**
-    /// `Entry::set_auto_and_multi_match` forwards here.
+    /// also write the multi-match list. The caller is responsible for
+    /// ordering `items` by preference — search-based callers pass items
+    /// in relevance order (exact match first), so dedup preserves that
+    /// order rather than rewriting it numerically. Codeberg #90.
+    /// **Canonical implementation.** `Entry::set_auto_and_multi_match` forwards here.
     pub async fn set_auto_and_multi_match(&mut self, items: &[String]) -> Result<()> {
-        let mut qs_numeric: Vec<ItemId> = items.iter().filter_map(|q| item2numeric(q)).collect();
+        let mut seen: std::collections::HashSet<ItemId> = std::collections::HashSet::new();
+        let qs_numeric: Vec<ItemId> = items
+            .iter()
+            .filter_map(|q| item2numeric(q))
+            .filter(|q| seen.insert(*q))
+            .collect();
         if qs_numeric.is_empty() {
             return Ok(());
         }
-        qs_numeric.sort();
-        qs_numeric.dedup();
         if self.entry.q == Some(qs_numeric[0]) {
             return Ok(()); // Automatch already there; skip multimatch.
         }
         self.set_match(&format!("Q{}", qs_numeric[0]), USER_AUTO)
             .await?;
         if qs_numeric.len() > 1 {
-            self.set_multi_match(items).await?;
+            let items_deduped: Vec<String> =
+                qs_numeric.iter().map(|q| format!("Q{q}")).collect();
+            self.set_multi_match(&items_deduped).await?;
         }
         Ok(())
     }
@@ -1939,5 +1947,42 @@ mod tests {
         Entry::add_claim_or_references(&mut item, stmt_item("P31", "Q5"));
         Entry::add_claim_or_references(&mut item, stmt_item("P31", "Q16521"));
         assert_eq!(item.claims().len(), 2);
+    }
+
+    /// `set_auto_and_multi_match` must respect caller-supplied order: the
+    /// first item in the input list is the chosen auto-match. Search-based
+    /// callers pass items in relevance order (exact match first), so picking
+    /// the smallest numeric Q would override the search engine's preference.
+    /// Codeberg #90.
+    #[tokio::test]
+    async fn set_auto_and_multi_match_picks_first_item_not_smallest_q() {
+        let app = test_support::test_app().await;
+        let (_, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
+        let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
+        let items: Vec<String> = ["Q500", "Q1", "Q300"].iter().map(|s| s.to_string()).collect();
+        EntryWriter::new(&app, &mut entry)
+            .set_auto_and_multi_match(&items)
+            .await
+            .unwrap();
+        let after = Entry::from_id(entry_id, &app).await.unwrap();
+        assert_eq!(after.q, Some(500), "first item in input must win, not smallest numeric Q");
+    }
+
+    /// Dedup must keep the first occurrence and discard later duplicates,
+    /// preserving the relative order of remaining items. Codeberg #90.
+    #[tokio::test]
+    async fn set_auto_and_multi_match_dedup_keeps_first_occurrence() {
+        let app = test_support::test_app().await;
+        let (_, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
+        let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
+        let items: Vec<String> = ["Q500", "Q1", "Q500", "Q1"].iter().map(|s| s.to_string()).collect();
+        EntryWriter::new(&app, &mut entry)
+            .set_auto_and_multi_match(&items)
+            .await
+            .unwrap();
+        let after = Entry::from_id(entry_id, &app).await.unwrap();
+        assert_eq!(after.q, Some(500));
+        let multimatch = EntryWriter::new(&app, &mut entry).get_multi_match().await.unwrap();
+        assert_eq!(multimatch, vec!["Q500".to_string(), "Q1".to_string()]);
     }
 }

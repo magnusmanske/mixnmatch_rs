@@ -79,9 +79,11 @@ MapSourceMnM.prototype.action_remove_match = async function (data, callback) {
 };
 // Shared by `action_match_to_item` and `action_confirm_match`: write a
 // claim on behalf of the logged-in user, then update MnM to record the
-// match. Posts to Widar with `action: 'set_string'`; the backend
-// (`api/widar.rs` handle_set_string) signs `wbcreateclaim` with the
-// session's OAuth token.
+// match. The wd_prop path posts a wbeditentity payload (built server-side
+// via prep_match_claim) so the statement carries the canonical
+// reference set; the P973 fallback path still uses set_string because
+// it's a different statement shape with no shared reference logic.
+// Codeberg #49.
 MapSourceMnM.prototype._match_entry_to_q = function (data, q_norm, callback) {
 	let self = this;
 	if (!self.catalog) {
@@ -89,24 +91,9 @@ MapSourceMnM.prototype._match_entry_to_q = function (data, q_norm, callback) {
 		return callback(false);
 	}
 	let entry = data.entry.aux.entry;
-	let value = entry.ext_id;
-	let prop;
-	// Catalogs with a wd_prop and no wd_qual get the canonical external-id
-	// claim; everything else falls back to P973 'described at URL' so the
-	// link still lands on the Wikidata item in some form.
-	if (self.catalog.wd_prop != null && self.catalog.wd_qual == null) {
-		prop = 'P' + self.catalog.wd_prop;
-	} else {
-		prop = 'P973';
-		value = entry.ext_url;
-		if (value == null || value == '') {
-			mnm_notify('Catalog has no property, and entry has no URL', 'danger');
-			return callback(false);
-		}
-	}
 	let summary = 'Matched to [[:toollabs:mix-n-match/#/entry/' + entry.id + '|' + entry.ext_name + ' (#' + entry.id + ')]]';
-	let params = { botmode: 1, action: 'set_string', id: q_norm, prop: prop, text: value, summary: summary };
-	widar.run(params, function (d) {
+
+	function onWidarReply(d) {
 		if (d.error != 'OK') {
 			mnm_notify(d.error, 'danger');
 			return callback(false);
@@ -118,7 +105,41 @@ MapSourceMnM.prototype._match_entry_to_q = function (data, q_norm, callback) {
 		// skip_wikidata_edit=true because we just did it above; setEntryQ
 		// only needs to update the MnM side.
 		self.edit_mixin.methods.setEntryQ(entry, q_norm, true, function () { callback(true); }, function () { callback(false); });
-	});
+	}
+
+	// wd_prop path: dispatch wbeditentity with prep_match_claim payload (with refs).
+	if (self.catalog.wd_prop != null && self.catalog.wd_qual == null) {
+		mnm_api('prep_match_claim', { entry: entry.id })
+			.then(function (pc) {
+				var hasClaim = pc && pc.data && pc.data.claims &&
+					(Array.isArray(pc.data.claims) ? pc.data.claims.length > 0 : Object.keys(pc.data.claims).length > 0);
+				if (!hasClaim) {
+					// Server returned no claim — treat as already-OK and proceed
+					// with MnM-side bookkeeping only.
+					return onWidarReply({ error: 'OK' });
+				}
+				widar.run({
+					botmode: 1,
+					action: 'generic',
+					summary: summary,
+					json: JSON.stringify({ action: 'wbeditentity', id: q_norm, data: pc.data })
+				}, onWidarReply);
+			})
+			.catch(function (e) {
+				mnm_notify(e.message, 'danger');
+				callback(false);
+			});
+		return;
+	}
+
+	// P973 fallback path: described-at-URL with no specialised reference set.
+	let value = entry.ext_url;
+	if (value == null || value == '') {
+		mnm_notify('Catalog has no property, and entry has no URL', 'danger');
+		return callback(false);
+	}
+	let params = { botmode: 1, action: 'set_string', id: q_norm, prop: 'P973', text: value, summary: summary };
+	widar.run(params, onWidarReply);
 };
 
 MapSourceMnM.prototype.action_match_to_item = function (data, callback) {

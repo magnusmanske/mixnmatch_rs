@@ -412,6 +412,7 @@ const ROUTES: &[(&str, ApiHandler)] = &[
     route!("dg_log_action",                dg::query_dg_log_action, app_params),
 
     route!("prep_new_item",                data::query_prep_new_item, app_params),
+    route!("prep_match_claim",             data::query_prep_match_claim, app_params),
     route!("autoscrape_test",              import::query_autoscrape_test, params_only),
     route!("save_scraper",                 import::query_save_scraper, app_params),
     route!("get_scraper",                  import::query_get_scraper, app_params),
@@ -467,6 +468,7 @@ mod tests {
             "download2",
             "upload_import_file",
             "dg_desc",
+            "prep_match_claim",
         ] {
             assert!(
                 names.contains(required),

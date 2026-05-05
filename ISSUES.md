@@ -29,13 +29,6 @@ catalog type (e.g. "video game remake" as a subclass of "video game"). Fixing re
 `wdt:P31/wdt:P279*` traversal in `src/automatch/strategies.rs`, but this carries
 a SPARQL performance risk.
 
-### [#90 — Automatch never prefers the exact title match](https://codeberg.org/magnusmanske/mixnmatch/issues/90)
-When a search returns multiple candidates (e.g. "Diablo" and "Diablo II"), the lowest
-numeric Q-ID is picked rather than the one whose label exactly matches the query.
-Root cause: `sort_and_dedup` in `src/automatch/strategies.rs` destroys the relevance
-ordering returned by the Wikidata search API before `set_auto_and_multi_match` picks
-the first item.
-
 ### [#85 — Creation candidates (human) shows no results](https://codeberg.org/magnusmanske/mixnmatch/issues/85)
 `/#/creation_candidates/human` returns "No results, parameters might be too restrictive".
 Needs reproduction against a live database.
@@ -70,11 +63,6 @@ Fix options: fetch fresh P21, use gender-neutral wording, or drop pronoun entire
 ### [#51 — Error 413 on large file upload](https://codeberg.org/magnusmanske/mixnmatch/issues/51)
 Uploading a TSV file larger than the server's `client_max_body_size` returns HTTP 413.
 Server/nginx configuration change required.
-
-### [#49 — Confirming a match does not add a reference URL](https://codeberg.org/magnusmanske/mixnmatch/issues/49)
-When confirming an automatch, the WiDaR `set_string` call in `html/vue-components/mnm-mixins.js`
-(`setEntryQ`) does not attach a "stated in: Mix'n'match" reference. The new-item creation
-path does add a reference. The WiDaR action call needs a `references` block added.
 
 ### [#16 — Catalog URL truncated to 128 characters](https://codeberg.org/magnusmanske/mixnmatch/issues/16)
 Long catalog URLs are silently cut at 128 characters on import.

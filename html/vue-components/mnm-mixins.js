@@ -71,14 +71,36 @@ export const editEntryMixin = {
 
 			running++;
 			var summary = 'Matched to [[:toollabs:mix-n-match/#/entry/' + entry.id + '|' + entry.ext_name + ' (#' + entry.id + ')]] in [[:toollabs:mix-n-match/#/catalog/' + catalog.id + '|' + catalog.name + ']]';
-			widar.run({ botmode: 1, action: 'set_string', id: 'Q' + q, prop: 'P' + catalog.wd_prop, text: entry.ext_id, summary: summary }, function (d) {
-				if (d.error != 'OK') {
-					mnm_notify(d.error, 'danger');
+			// Codeberg #49: fetch a wbeditentity payload that carries the
+			// canonical reference set, so the confirmed match has the same
+			// source attribution as a freshly-created item rather than an
+			// unsourced bare statement.
+			mnm_api('prep_match_claim', { entry: entry.id })
+				.then(function (d) {
+					if (!d.data || !d.data.claims || (Array.isArray(d.data.claims) ? d.data.claims.length === 0 : Object.keys(d.data.claims).length === 0)) {
+						// Catalog has no eligible claim (e.g. no wd_prop). Treat the
+						// MnM-side match as the whole operation; nothing to push to WD.
+						fin();
+						return;
+					}
+					widar.run({
+						botmode: 1,
+						action: 'generic',
+						summary: summary,
+						json: JSON.stringify({ action: 'wbeditentity', id: 'Q' + q, data: d.data })
+					}, function (wd) {
+						if (wd.error != 'OK') {
+							mnm_notify(wd.error, 'danger');
+							if (typeof callback_fail === 'function') callback_fail();
+							return;
+						}
+						fin();
+					});
+				})
+				.catch(function (e) {
+					mnm_notify(e.message, 'danger');
 					if (typeof callback_fail === 'function') callback_fail();
-					return;
-				}
-				fin();
-			});
+				});
 		},
 		removeAllMultimatches: async function (entry) {
 			try {

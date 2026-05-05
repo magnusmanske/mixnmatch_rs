@@ -137,6 +137,52 @@ pub async fn query_prep_new_item(
     Ok(ok(item.to_json()))
 }
 
+/// `prep_match_claim`: build the `wbeditentity` data payload for confirming
+/// an automatch. The frontend used to dispatch the match via Widar's
+/// `set_string` action, which sets the catalog property without a
+/// reference, leaving every confirmed match unsourced on Wikidata. This
+/// endpoint returns the same catalog-property claim that the new-item
+/// path produces, with the canonical reference set (P248 stated_in,
+/// P{wd_prop}/P_REFERENCE_URL, P_RETRIEVED) attached. The frontend
+/// wraps the returned `data` in a `wbeditentity` action targeting the
+/// existing item. Codeberg #49.
+pub async fn query_prep_match_claim(
+    app: &AppState,
+    params: &Params,
+) -> Result<Response, ApiError> {
+    use wikimisc::wikibase::EntityTrait;
+    let entry_id = common::get_param_int(params, "entry", 0);
+    if entry_id <= 0 {
+        return Err(ApiError("missing or invalid 'entry' parameter".into()));
+    }
+    let item = build_match_claim_item(app, entry_id as usize)
+        .await
+        .map_err(|e| ApiError(format!("failed to build claim: {e}")))?;
+    Ok(ok(item.to_json()))
+}
+
+/// Build an `ItemEntity` containing only the catalog's primary
+/// external-id claim (P{wd_prop}=ext_id) with the catalog's reference
+/// set attached, or an empty item when the catalog has no `wd_prop`
+/// or has a `wd_qual` (qualifier-based catalog — primary statement is
+/// constructed differently and not handled by the confirm-match path).
+async fn build_match_claim_item(
+    app: &AppState,
+    entry_id: usize,
+) -> anyhow::Result<wikimisc::wikibase::ItemEntity> {
+    use wikimisc::wikibase::{EntityTrait, ItemEntity, Snak, Statement};
+    let entry = crate::entry::Entry::from_id(entry_id, app).await?;
+    let catalog = crate::catalog::Catalog::from_id(entry.catalog, app).await?;
+    let mut item = ItemEntity::new_empty();
+    if let (Some(prop), None) = (catalog.wd_prop(), catalog.wd_qual()) {
+        let references = catalog.references(app, &entry).await;
+        let snak = Snak::new_external_id(format!("P{prop}"), entry.ext_id.clone());
+        let claim = Statement::new_normal(snak, vec![], references);
+        item.add_claim(claim);
+    }
+    Ok(item)
+}
+
 /// Parse the `entry_ids=1,2,3` query parameter, dropping anything that
 /// isn't a positive integer. Pure so it's covered by unit tests.
 fn parse_entry_ids(s: String) -> Vec<usize> {
@@ -149,6 +195,8 @@ fn parse_entry_ids(s: String) -> Vec<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support;
+    use wikimisc::wikibase::EntityTrait;
 
     #[test]
     fn parse_entry_ids_csv() {
@@ -170,5 +218,42 @@ mod tests {
     #[test]
     fn parse_entry_ids_trims_whitespace() {
         assert_eq!(parse_entry_ids(" 1 , 2 ".into()), vec![1, 2]);
+    }
+
+    /// `build_match_claim_item` must produce an item with a single claim on
+    /// the catalog's `wd_prop`, and that claim must carry a non-empty
+    /// reference list — otherwise confirming a match writes an unsourced
+    /// statement to Wikidata. Codeberg #49.
+    #[tokio::test]
+    async fn build_match_claim_item_includes_references() {
+        let app = test_support::test_app().await;
+        let (_catalog_id, entry_id) =
+            test_support::seed_entry_with_catalog_wd_prop(214, 28054658).await.unwrap();
+        let item = build_match_claim_item(&app, entry_id).await.unwrap();
+        let claims = item.claims();
+        assert_eq!(claims.len(), 1, "exactly one claim for the catalog property");
+        assert_eq!(claims[0].property(), "P214", "claim is on wd_prop");
+        let refs = claims[0].references();
+        assert!(!refs.is_empty(), "claim must carry at least one reference");
+        // Reference must include P248 (stated_in) pointing at the catalog source item.
+        let stated_in_present = refs.iter().any(|r| {
+            r.snaks().iter().any(|s| s.property() == "P248")
+        });
+        assert!(stated_in_present, "reference must include P248 stated_in");
+    }
+
+    /// When the catalog has `wd_qual` set, the existing new-item path
+    /// skips the catalog-property claim entirely (qualifier-based catalogs
+    /// don't have a primary external-id statement). The match-claim helper
+    /// must mirror that and return an empty item.
+    #[tokio::test]
+    async fn build_match_claim_item_skips_when_wd_qual_set() {
+        let app = test_support::test_app().await;
+        let catalog_id = test_support::seed_catalog_with_wd_qual(195, 217).await.unwrap();
+        let entry_id = test_support::seed_entry_in_catalog(catalog_id, "qual_entry")
+            .await
+            .unwrap();
+        let item = build_match_claim_item(&app, entry_id).await.unwrap();
+        assert!(item.claims().is_empty(), "wd_qual catalogs produce no match claim");
     }
 }
