@@ -9,10 +9,6 @@ import { mnm_api, mnm_fetch_json, mnm_notify, tt_update_interface, widar, tt } f
 		link.href = 'https://tools-static.wmflabs.org/cdnjs/ajax/libs/leaflet/1.9.4/leaflet.min.css';
 		document.head.appendChild(link);
 	}
-	const s = document.createElement('style');
-	s.textContent = `span.wikidatamap_note { border-right: 1px dotted #ccc; }
-span.wikidatamap_note:last-of-type { border-right: none; }`;
-	document.head.appendChild(s);
 })();
 
 // ********************************************************************************

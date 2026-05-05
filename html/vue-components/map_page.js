@@ -2,18 +2,6 @@ import { MapSourceMnM, MapSourceWikidata } from './wikidatamap.js';
 import { MapSourceCommons, MapSourceFlickr } from '../resources/vue_es6/wikidatamap.js';
 import { mnm_api, mnm_notify, ensure_catalog, get_specific_catalog, tt_update_interface, tt } from './store.js';
 
-(function () {
-	const s = document.createElement('style');
-	s.textContent = `form.test_entry_form > div { margin-right:0.2rem; }
-.mnm-map-container { min-height: 70vh; }
-.mnm-map-container .wikidatamap_map { height: 70vh !important; }
-@media (max-width: 767.98px) {
-    .mnm-map-container { min-height: 50vh; }
-    .mnm-map-container .wikidatamap_map { height: 50vh !important; }
-}`;
-	document.head.appendChild(s);
-})();
-
 export default Vue.extend({
 	props: ['id', 'entry_id'],
 	data: function () {

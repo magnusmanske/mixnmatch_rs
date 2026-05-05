@@ -1,18 +1,5 @@
 import { mnm_api, mnm_notify, mnm_loading, ensure_catalogs, get_specific_catalog, tt_update_interface, widar } from './store.js';
 
-(function () {
-	const s = document.createElement('style');
-	s.textContent = `.tg-search-results { max-height: 300px; overflow-y: auto; }
-.tg-group-item { cursor: pointer; padding: 6px 12px; }
-.tg-group-item:hover, .tg-group-item.active { background: #e9ecef; }
-.tg-catalog-tag { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px;
-    background: #e9ecef; border-radius: 14px; font-size: 0.85rem; }
-.tg-catalog-tag .tg-remove { cursor: pointer; color: #888; font-weight: bold; }
-.tg-catalog-tag .tg-remove:hover { color: #c00; }
-`;
-	document.head.appendChild(s);
-})();
-
 export default Vue.extend({
 	props: ['id'],
 	data: function () {

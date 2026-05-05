@@ -9,30 +9,6 @@ const SINCE_OPTIONS = [
 
 const PER_PAGE = 100;
 
-(function () {
-	// Toolbar + empty-state styles only — the event-list CSS lives with
-	// the shared rc-events-list component.
-	if (document.querySelector('style[data-mnm="rc-page"]')) return;
-	const s = document.createElement('style');
-	s.setAttribute('data-mnm', 'rc-page');
-	s.textContent = `
-.mnm-rc-toolbar { display:flex; flex-wrap:wrap; gap:0.5rem; align-items:center;
-	padding:0.5rem 0.75rem; border:1px solid var(--mnm-border,#dee2e6);
-	border-radius:0.25rem; background:var(--mnm-bg-alt,#f4f6f8);
-	margin-bottom:0.75rem; }
-.mnm-rc-toolbar .mnm-rc-toolbar-spacer { flex:1 1 auto; }
-.mnm-rc-toolbar .btn-group .btn { font-size:0.8125rem; }
-.mnm-rc-meta { color:var(--mnm-text-muted,#6c757d); font-size:0.8125rem; }
-
-.mnm-rc-empty { text-align:center; padding:2rem 1rem;
-	color:var(--mnm-text-muted,#6c757d);
-	border:1px dashed var(--mnm-border,#dee2e6); border-radius:0.25rem;
-	background:var(--mnm-bg-alt,#f4f6f8); }
-.mnm-rc-empty-icon { font-size:2rem; line-height:1; margin-bottom:0.5rem; }
-`;
-	document.head.appendChild(s);
-})();
-
 export default Vue.extend({
 	props: ['catalog'],
 	data: function () {

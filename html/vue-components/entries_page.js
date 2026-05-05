@@ -1,18 +1,3 @@
-(function() {
-  const s = document.createElement('style');
-  s.textContent = `
-	div.section {
-		margin-bottom: 0.5rem;
-	}
-
-	div.section span {
-		margin-left: 0.1rem;
-		margin-right: 0.2rem;
-	}
-`;
-  document.head.appendChild(s);
-})();
-
 import { mnm_api, tt_update_interface } from './store.js';
 
 let entries_page_default_values = {

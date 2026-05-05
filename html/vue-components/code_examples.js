@@ -1,36 +1,5 @@
 import { mnm_api, tt_update_interface } from './store.js';
 
-(function () {
-    const s = document.createElement('style');
-    s.textContent = `
-#ce-table .ce-lua  { background:#00007f; color:#fff; }
-#ce-table .ce-php  { background:#777bb3; color:#fff; }
-#ce-table .ce-lang {
-    display:inline-block;
-    font-size:0.7rem;
-    font-weight:bold;
-    padding:1px 5px;
-    border-radius:3px;
-    margin-right:2px;
-}
-#ce-table .ce-code {
-    font-family: monospace;
-    font-size: 0.78rem;
-    white-space: pre-wrap;
-    word-break: break-all;
-    max-height: 6rem;
-    overflow: hidden;
-    color: inherit;
-    background: transparent;
-    border: none;
-    padding: 0;
-    margin: 0;
-    display: block;
-}
-#ce-table td { vertical-align: top; }
-`;
-    document.head.appendChild(s);
-})();
 
 export default Vue.extend({
     props: ['function_filter'],

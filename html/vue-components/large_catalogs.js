@@ -23,25 +23,6 @@ function prettyTime(ts) {
 		+ ' ' + ts.substr(8, 2) + ':' + ts.substr(10, 2) + ':' + ts.substr(12, 2);
 }
 
-(function () {
-	// Page-local styles. Kept inline so the file stays self-contained.
-	const s = document.createElement('style');
-	s.textContent = `
-.mnm-lc-catalog-card { transition: box-shadow 0.15s; }
-.mnm-lc-catalog-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
-.mnm-lc-toolbar { display:flex; flex-wrap:wrap; gap:0.5rem; align-items:center;
-	padding:0.5rem; border:1px solid var(--mnm-border,#dee2e6); border-radius:0.25rem;
-	background:var(--mnm-bg-alt,#f4f6f8); margin-bottom:0.75rem; }
-.mnm-lc-filters .badge { font-size:0.75rem; }
-.mnm-lc-filters .badge a { color:inherit; text-decoration:none; margin-left:0.4em; opacity:0.9; }
-.mnm-lc-report-table { table-layout:auto; }
-.mnm-lc-report-table th, .mnm-lc-report-table td { vertical-align:middle; }
-.mnm-lc-report-table td.num, .mnm-lc-report-table th.num { text-align:right; min-width:4em; }
-.mnm-lc-action-cell { min-width:5.5em; white-space:nowrap; }
-`;
-	document.head.appendChild(s);
-})();
-
 // ── Catalog list (top-level) ────────────────────────────────────────
 
 var LcCatalogList = Vue.extend({

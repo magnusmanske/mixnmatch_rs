@@ -1,45 +1,5 @@
 import { mnm_api, mnm_fetch_json, mnm_notify, get_all_catalogs, tt_update_interface, wd, tt, widar } from './store.js';
 
-(function () {
-	const s = document.createElement('style');
-	s.textContent = `
-.vm-page #app { max-width:none; margin:0; padding:0; }
-.vm-header {
-	position:fixed; top:1em; left:1em; right:1em; height:6em;
-	border:1px solid #DDD; padding:3px; background:#fff; z-index:10;
-}
-.vm-entry {
-	position:fixed; top:8em; left:1em; right:1em; height:5em;
-	border:1px solid #DDD; padding:3px; background:#fff; z-index:10;
-}
-.vm-left {
-	position:fixed; left:1em; top:14em; bottom:1em; width:35%;
-	border:1px solid #DDD;
-}
-.vm-right {
-	position:fixed; right:1em; top:14em; bottom:1em; width:35%;
-	border:1px solid #DDD;
-}
-.vm-middle {
-	position:fixed; left:37%; right:37%; top:14em; bottom:1em;
-	border:1px solid #DDD; overflow:auto;
-}
-.vm-left iframe, .vm-right iframe {
-	position:absolute; left:0; width:100%; height:100%; border:0;
-}
-.vm-search-result {
-	margin:2px; margin-bottom:5px; padding-left:5px; padding-right:2px; cursor:pointer;
-}
-.vm-search-result:hover { background:#f0f0f0; }
-.vm-search-result.vm-current { background-color:#CEDEF4; }
-.vm-search-result.vm-has-prop { border-left:3px solid #FF4848; }
-.vm-qdesc { font-size:9pt; color:#666; }
-.vm-qimg { float:right; margin-left:3px; margin-bottom:2px; }
-.vm-highlight { background-color:#FFFFAA; color:#666; padding:1px; }
-`;
-	document.head.appendChild(s);
-})();
-
 function escHtml(s) {
 	var d = document.createElement('div');
 	d.textContent = s;

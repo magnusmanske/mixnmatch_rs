@@ -1,48 +1,5 @@
 import { mnm_api, mnm_notify, tt_update_interface, widar } from './store.js';
 
-(function () {
-    const s = document.createElement('style');
-    s.textContent = `
-div.cf_bar {
-    display:flex;
-    flex-direction:row;
-    margin-top:0.2rem;
-}
-div.cf_bar > div {
-    margin-left:1rem;
-    white-space:nowrap;
-}
-span.test_result_value {
-    background-color: #BBDAFF;
-    font-family:Courier;
-    line-height:0;
-}
-.cf-lang-label {
-    display:inline-block;
-    font-size:0.75rem;
-    font-weight:bold;
-    padding:1px 6px;
-    border-radius:3px;
-    margin-bottom:2px;
-}
-.cf-lang-lua { background:#00007f; color:#fff; }
-.cf-lang-php { background:#777bb3; color:#fff; }
-.cf-deprecated {
-    opacity:0.6;
-    border-left:3px solid #dc3545;
-    padding-left:0.5rem;
-}
-.cf-deprecated-label {
-    font-size:0.7rem;
-    color:#dc3545;
-    font-weight:bold;
-    text-transform:uppercase;
-    margin-left:0.5rem;
-}
-`;
-    document.head.appendChild(s);
-})();
-
 var code_editor_counter = 0;
 
 export default {

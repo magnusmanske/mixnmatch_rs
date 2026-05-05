@@ -8,29 +8,6 @@ function sameIdList(a, b) {
 	return true;
 }
 
-(function() {
-  const s = document.createElement('style');
-  s.textContent = `
-.csp-wrapper { position: relative; }
-.csp-input { width: 100%; }
-.csp-results {
-    position: absolute; z-index: 500; left: 0; right: 0; max-height: 300px;
-    overflow-y: auto; background: #fff; border: 1px solid #dee2e6;
-    border-top: none; border-radius: 0 0 6px 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-}
-.csp-result-item { cursor: pointer; }
-.csp-result-item:hover, .csp-result-item.csp-active { background: #e9ecef; }
-.csp-selected-list { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
-.csp-tag {
-    display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px;
-    background: #e9ecef; border-radius: 12px; font-size: 0.82rem;
-}
-.csp-tag-remove { cursor: pointer; color: #666; font-weight: bold; }
-.csp-tag-remove:hover { color: #c00; }
-`;
-  document.head.appendChild(s);
-})();
-
 export default {
 	name: 'catalog-search-picker',
 	props: {

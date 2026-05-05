@@ -1,14 +1,5 @@
 import { mnm_api, mnm_notify, ensure_catalog, get_specific_catalog, tt_update_interface, widar } from './store.js';
 
-(function () {
-    const s = document.createElement('style');
-    s.textContent = `
-form.test_entry_form > div {
-    margin-right:0.2rem;
-}
-`;
-    document.head.appendChild(s);
-})();
 
 export default Vue.extend({
     props: ['catalog_id'],

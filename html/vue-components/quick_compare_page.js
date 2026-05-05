@@ -1,14 +1,6 @@
 import { MapSourceMnM, MapSourceWikidata } from './wikidatamap.js';
 import { mnm_api, mnm_notify, ensure_catalog, get_specific_catalog, tt_update_interface, tt } from './store.js';
 
-(function () {
-	const s = document.createElement('style');
-	s.textContent = `.td-center { text-align: center; }
-.td-small { font-size: 9pt; }
-table.quick_compare_table td { width: 50%; }`;
-	document.head.appendChild(s);
-})();
-
 export default Vue.extend({
 	props: ['catalog_id'],
 	data: function () {

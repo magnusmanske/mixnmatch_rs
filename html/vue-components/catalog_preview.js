@@ -1,17 +1,3 @@
-(function() {
-  const s = document.createElement('style');
-  s.textContent = `
-.cat-preview { padding: 8px 10px; border-bottom: 1px solid var(--mnm-border, #dee2e6); }
-.cat-preview:nth-child(odd) { background: var(--mnm-bg-alt, #f4f6f8); }
-.cat-preview-name { font-weight: 600; font-size: 0.95rem; }
-.cat-preview-name a { color: var(--mnm-blue, #36c); }
-.cat-preview-name a:hover { text-decoration: underline; }
-.cat-preview-desc { font-size: 0.8rem; color: var(--mnm-text-muted, #6c757d); line-height: 1.3; margin-top: 1px; }
-.cat-preview-meta { font-size: 0.75rem; color: var(--mnm-text-light, #767676); margin-top: 1px; }
-`;
-  document.head.appendChild(s);
-})();
-
 export default {
 	name: 'catalog-preview',
 	props: {

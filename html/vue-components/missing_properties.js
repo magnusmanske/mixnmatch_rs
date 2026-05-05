@@ -16,23 +16,6 @@ const STATUS_BADGE = {
 	'BROKEN': 'bg-danger',
 };
 
-(function () {
-	// Page-local styles. Kept inline so the file stays self-contained.
-	const s = document.createElement('style');
-	s.textContent = `
-.mnm-mp-toolbar { display:flex; flex-wrap:wrap; gap:0.75rem; align-items:center;
-	padding:0.5rem; border:1px solid var(--mnm-border,#dee2e6); border-radius:0.25rem;
-	background:var(--mnm-bg-alt,#f4f6f8); margin-bottom:0.75rem; }
-.mnm-mp-toolbar > .group { display:flex; flex-wrap:wrap; gap:0.5rem; align-items:center; }
-.mnm-mp-toolbar label { margin-bottom:0; cursor:pointer; }
-.mnm-mp-status-cell .badge { font-size:0.75rem; }
-.mnm-mp-row.last-clicked { background-color:#fff3cd !important; }
-.mnm-mp-progress { height:1rem; }
-.mnm-mp-progress .progress-bar { font-size:0.7rem; line-height:1rem; }
-`;
-	document.head.appendChild(s);
-})();
-
 export default Vue.extend({
 	data: function () {
 		return {

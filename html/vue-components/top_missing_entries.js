@@ -1,33 +1,6 @@
 import { editEntryMixin } from './mnm-mixins.js';
 import { mnm_api, mnm_notify, mnm_loading, ensure_catalogs, get_specific_catalog, tt_update_interface } from './store.js';
 
-(function () {
-    var s = document.createElement('style');
-    s.textContent = `
-.tm-row { display: flex; align-items: baseline; gap: 0.5rem; padding: 0.35rem 0.5rem; border-radius: 4px; transition: background 0.15s; }
-.tm-row:nth-child(odd) { background: var(--mnm-bg-alt, #f8f9fa); }
-.tm-row:hover { background: #e2e6ea; }
-.tm-row.tm-visited { background: #fff3cd; }
-.tm-row.tm-visited:hover { background: #ffe69c; }
-.tm-rank { min-width: 2rem; text-align: right; color: #6c757d; font-size: 0.82rem; }
-.tm-name { flex: 1; }
-.tm-cnt { white-space: nowrap; color: #6c757d; font-size: 0.85rem; }
-.tm-bar-wrap { width: 60px; height: 6px; background: #e9ecef; border-radius: 3px; overflow: hidden; flex-shrink: 0; }
-.tm-bar { height: 100%; background: var(--mnm-blue, #36c); border-radius: 3px; }
-.tm-search-bar { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center;
-    padding: 0.5rem 0.75rem; border: 1px solid var(--mnm-border, #dee2e6);
-    border-radius: 0.25rem; background: var(--mnm-bg-alt, #f4f6f8);
-    margin-bottom: 0.75rem; }
-.tm-search-bar .tm-spacer { flex: 1 1 auto; }
-.tm-hint { font-size: 0.8125rem; color: var(--mnm-text-muted, #6c757d); }
-.tm-stale { font-size: 0.8125rem; color: #9a7a00;
-    padding: 0.4rem 0.6rem; border: 1px solid #ffe08a; background: #fff8d9;
-    border-radius: 0.25rem; margin-bottom: 0.5rem;
-    display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
-`;
-    document.head.appendChild(s);
-})();
-
 export default Vue.extend({
     mixins: [editEntryMixin],
     props: ['catalogs'],
