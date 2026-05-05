@@ -4243,13 +4243,15 @@ impl Storage for StorageMySQL {
                 let last_run: Option<String> = row.get::<Option<String>, _>("last_run").flatten();
                 let lua: Option<String> = row.get::<Option<String>, _>("lua").flatten().filter(|s| !s.is_empty());
                 let catalog_name: Option<String> = row.get::<Option<String>, _>("catalog_name").flatten();
+                let php_opt: Option<String> = if php.is_empty() { None } else { Some(php) };
                 serde_json::json!({
                     "id": id,
                     "function": function,
                     "catalog": catalog,
                     "catalog_name": catalog_name,
-                    "has_php": !php.is_empty(),
+                    "has_php": php_opt.is_some(),
                     "has_lua": lua.is_some(),
+                    "php": php_opt,
                     "lua": lua,
                     "is_active": is_active,
                     "note": note,

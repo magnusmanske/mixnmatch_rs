@@ -9,10 +9,12 @@ export default Vue.extend({
             total: 0,
             all_functions: [],
             loaded: false,
+            loading: false,
             per_page: 50,
             start: 0,
-            // local copy of the filter so the dropdown doesn't mutate the prop
             selected_function: this.function_filter || '',
+            row_langs: {},   // row.id -> 'lua' | 'php'
+            copied_id: null, // id of the row whose code was just copied
         };
     },
     watch: {
@@ -31,18 +33,23 @@ export default Vue.extend({
     methods: {
         load: async function () {
             const me = this;
-            me.loaded = false;
+            me.loading = true;
             try {
                 const d = await mnm_api('get_code_examples', {
                     function: me.selected_function,
                     start: me.start,
                     max: me.per_page,
                 });
-                me.rows = d.rows || [];
-                me.total = d.total || 0;
-                me.all_functions = d.all_functions || [];
+                const rows = d.data.rows || [];
+                const langs = {};
+                rows.forEach(function (r) { langs[r.id] = r.has_lua ? 'lua' : 'php'; });
+                me.rows = rows;
+                me.row_langs = langs;
+                me.total = d.data.total || 0;
+                me.all_functions = d.data.all_functions || [];
             } finally {
                 me.loaded = true;
+                me.loading = false;
             }
         },
         applyFilter: function () {
@@ -62,7 +69,24 @@ export default Vue.extend({
             this.load();
             window.scrollTo(0, 0);
         },
-        // Returns first N non-empty lines of a code string for the preview.
+        rowLang: function (row) {
+            return this.row_langs[row.id] || (row.has_lua ? 'lua' : 'php');
+        },
+        setRowLang: function (row, lang) {
+            Vue.set(this.row_langs, row.id, lang);
+        },
+        rowCode: function (row) {
+            return this.rowLang(row) === 'lua' ? (row.lua || '') : (row.php || '');
+        },
+        copyCode: function (row) {
+            var me = this;
+            var code = me.rowCode(row);
+            if (!code) return;
+            navigator.clipboard.writeText(code).then(function () {
+                me.copied_id = row.id;
+                setTimeout(function () { if (me.copied_id === row.id) me.copied_id = null; }, 1500);
+            });
+        },
         codePreview: function (code) {
             if (!code) return '';
             return code
@@ -87,19 +111,20 @@ export default Vue.extend({
         </select>
         <button v-if='selected_function' class='btn btn-outline-secondary btn-sm'
             @click.prevent='clearFilter' title='Clear filter'>&times;</button>
-        <span v-if='loaded' class='text-muted ms-2' style='font-size:0.85rem'>
+        <span v-if='loaded && !loading' class='text-muted ms-2' style='font-size:0.85rem'>
             {{total}} fragment<span v-if='total!==1'>s</span>
         </span>
+        <span v-if='loading' tt='loading' class='ms-2'></span>
     </div>
 
-    <div v-if='!loaded' class='text-muted fst-italic' tt='loading'></div>
+    <div v-if='!loaded' tt='loading'></div>
 
     <template v-if='loaded'>
         <pagination v-if='total > per_page'
             :offset='start' :items-per-page='per_page' :total='total'
             :show-first-last='true' @go-to-page='goToPage'></pagination>
 
-        <div class='table-responsive'>
+        <div class='table-responsive' :style='loading ? "opacity:0.45;pointer-events:none" : ""'>
         <table class='table table-sm table-hover' id='ce-table' style='font-size:0.875rem'>
             <thead>
                 <tr>
@@ -127,12 +152,24 @@ export default Vue.extend({
                         </router-link>
                     </td>
                     <td style='white-space:nowrap'>
-                        <span v-if='row.has_lua' class='ce-lang ce-lua'>Lua</span>
-                        <span v-if='row.has_php' class='ce-lang ce-php'>PHP</span>
+                        <button v-if='row.has_lua' class='ce-lang ce-lua'
+                            :style='rowLang(row)==="lua" ? "" : "opacity:0.35"'
+                            @click.prevent='setRowLang(row, "lua")'>Lua</button>
+                        <button v-if='row.has_php' class='ce-lang ce-php'
+                            :style='rowLang(row)==="php" ? "" : "opacity:0.35"'
+                            @click.prevent='setRowLang(row, "php")'>PHP</button>
                     </td>
                     <td style='width:99%'>
-                        <code class='ce-code' v-if='row.has_lua'>{{codePreview(row.lua)}}</code>
-                        <span v-else class='text-muted fst-italic' style='font-size:0.8rem'>PHP only</span>
+                        <div class='ce-code-wrap'>
+                            <code class='ce-code' v-if='rowCode(row)'>{{codePreview(rowCode(row))}}</code>
+                            <span v-else class='text-muted fst-italic' style='font-size:0.8rem'>No code</span>
+                            <button v-if='rowCode(row)' class='ce-copy-btn'
+                                @click.prevent='copyCode(row)'
+                                :title='copied_id===row.id ? "Copied!" : "Copy code"'>
+                                <span v-if='copied_id===row.id'>&#10003;</span>
+                                <span v-else>&#10696;</span>
+                            </button>
+                        </div>
                     </td>
                     <td style='white-space:nowrap;font-size:0.75rem;color:#6c757d'>
                         {{row.last_run ? row.last_run.substr(0,10) : ''}}

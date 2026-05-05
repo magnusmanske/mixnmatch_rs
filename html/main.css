@@ -742,6 +742,20 @@ span.test_result_value {
 }
 #ce-table td { vertical-align: top; }
 
+button.ce-lang { border: none; cursor: pointer; }
+
+.ce-code-wrap { position: relative; }
+.ce-copy-btn {
+	position: absolute; top: 0; right: 0;
+	opacity: 0; transition: opacity 0.15s;
+	background: rgba(255,255,255,0.92);
+	border: 1px solid #dee2e6; border-radius: 3px;
+	padding: 1px 6px; font-size: 0.75rem; line-height: 1.5;
+	cursor: pointer; color: inherit;
+}
+.ce-code-wrap:hover .ce-copy-btn { opacity: 1; }
+[data-bs-theme="dark"] .ce-copy-btn { background: rgba(33,37,41,0.92); border-color: var(--mnm-border); }
+
 /* ========== Test entry form ========== */
 
 form.test_entry_form > div { margin-right: 0.2rem; }
