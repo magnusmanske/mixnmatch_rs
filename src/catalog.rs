@@ -332,4 +332,18 @@ mod tests {
         let catalog = Catalog::from_id(catalog_id, &app).await.unwrap();
         assert_eq!(catalog.name.unwrap(), format!("test_catalog_{catalog_id}"));
     }
+
+    #[tokio::test]
+    async fn test_catalog_url_not_truncated() {
+        // Issue #16: catalog.url was VARCHAR(128); URLs longer than 128 chars
+        // were silently truncated. Column is now VARCHAR(512).
+        let long_url = "https://example.org/".to_string() + &"a".repeat(200);
+        assert_eq!(long_url.len(), 220);
+        let app = test_support::test_app().await;
+        let catalog_id = test_support::seed_catalog_with_url(&long_url)
+            .await
+            .unwrap();
+        let catalog = Catalog::from_id(catalog_id, &app).await.unwrap();
+        assert_eq!(catalog.url().map(|s| s.as_str()), Some(long_url.as_str()));
+    }
 }

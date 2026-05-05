@@ -493,3 +493,22 @@ pub async fn seed_wbt_label(item_id: u64, name: &str) -> Result<()> {
     pool.disconnect().await.ok();
     Ok(())
 }
+
+/// Insert a catalog with a specific URL; return its `catalog_id`.
+pub async fn seed_catalog_with_url(url: &str) -> Result<usize> {
+    let (pool, mut conn) = seed_conn().await?;
+    let catalog_id = unique_catalog_id();
+    r"INSERT INTO catalog
+       (id, name, url, `desc`, type, search_wp, active, owner, note, has_person_date, taxon_run)
+       VALUES (:id, :name, :url, '', 'person', 'en', 1, 0, '', '', 0)"
+        .with(params! {
+            "id"   => catalog_id,
+            "name" => format!("test_catalog_{catalog_id}"),
+            "url"  => url,
+        })
+        .ignore(&mut conn)
+        .await?;
+    drop(conn);
+    pool.disconnect().await.ok();
+    Ok(catalog_id)
+}

@@ -64,11 +64,6 @@ Fix options: fetch fresh P21, use gender-neutral wording, or drop pronoun entire
 Uploading a TSV file larger than the server's `client_max_body_size` returns HTTP 413.
 Server/nginx configuration change required.
 
-### [#16 — Catalog URL truncated to 128 characters](https://codeberg.org/magnusmanske/mixnmatch/issues/16)
-Long catalog URLs are silently cut at 128 characters on import.
-Requires widening the `catalog.url` column in the database schema and the corresponding
-SQL in `mnm_db_migrations.sql`.
-
 ### [#48 / #47 — Autoscraper does not handle UTF-8 HTML entities](https://codeberg.org/magnusmanske/mixnmatch/issues/48)
 The autoscraper fails to decode UTF-8 HTML entities in scraped content.
 May have improved since the 2019 report; needs verification.

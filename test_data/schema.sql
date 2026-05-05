@@ -148,7 +148,7 @@ CREATE TABLE `auxiliary_props` (
 CREATE TABLE `catalog` (
   `id` int(11) unsigned NOT NULL AUTO_INCREMENT,
   `name` varchar(128) DEFAULT NULL,
-  `url` varchar(128) DEFAULT NULL,
+  `url` varchar(512) DEFAULT NULL,
   `desc` varchar(255) NOT NULL,
   `type` varchar(64) NOT NULL DEFAULT '',
   `wd_prop` int(11) DEFAULT NULL,
