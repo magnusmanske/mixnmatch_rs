@@ -8,7 +8,7 @@
 
 use super::{
     DescFromHtmlResult, RE_WHITESPACE, entry_to_lua_entry, get_new_description, run_aux_from_desc,
-    run_desc_from_html, run_person_date, validate_born_died,
+    run_coords_from_html, run_desc_from_html, run_person_date, validate_born_died,
 };
 use super::{LuaCommand, LuaEntry};
 use crate::app_state::{AppContext, ExternalServicesContext};
@@ -159,6 +159,67 @@ pub async fn run_aux_from_desc_job(catalog_id: usize, app: &dyn AppContext) -> R
 
     app.storage()
         .touch_code_fragment("AUX_FROM_DESC", catalog_id)
+        .await?;
+
+    Ok(LuaJobOutcome::Done)
+}
+
+/// Run the `update_coordinates_from_url` job for a catalog using Lua.
+///
+/// Fetches HTML from each entry's `ext_url` (or the URL returned by
+/// `preprocess_url` in legacy PHP) and passes it as the `html` global to the
+/// COORDS_FROM_HTML Lua script. The script should call `setLocation(entry_id,
+/// lat, lon)`.
+///
+/// See [`run_person_dates_job`] for return-value semantics.
+pub async fn run_coords_from_html_job(catalog_id: usize, app: &dyn AppContext) -> Result<LuaJobOutcome> {
+    let lua_code_opt = app
+        .storage()
+        .get_code_fragment_lua("COORDS_FROM_HTML", catalog_id)
+        .await?;
+    if !lua_code_present(&lua_code_opt) {
+        return Ok(LuaJobOutcome::NoLuaCode);
+    }
+    let lua_code = lua_code_opt.unwrap_or_default();
+    let client = app.http_client().clone();
+
+    let mut offset = 0;
+    loop {
+        let entries = app
+            .storage()
+            .get_entry_batch(catalog_id, ENTRY_BATCH_SIZE, offset)
+            .await?;
+        if entries.is_empty() {
+            break;
+        }
+        let batch_len = entries.len();
+        for entry in &entries {
+            let lua_entry = entry_to_lua_entry(entry);
+            if lua_entry.ext_url.is_empty() {
+                continue;
+            }
+            let Some(html) = fetch_html(&client, &lua_entry.ext_url).await else {
+                continue;
+            };
+            let result = match run_coords_from_html(&lua_code, &lua_entry, &html) {
+                Ok(r) => r,
+                Err(e) => {
+                    warn!("Lua error for COORDS_FROM_HTML entry {}: {e}", lua_entry.id);
+                    continue;
+                }
+            };
+            let mut entry_clone = entry.clone();
+            for cmd in &result.commands {
+                if let Err(e) = apply_command(app, cmd, &mut entry_clone).await {
+                    warn!("Error applying COORDS_FROM_HTML command for entry {}: {e}", lua_entry.id);
+                }
+            }
+        }
+        offset += batch_len;
+    }
+
+    app.storage()
+        .touch_code_fragment("COORDS_FROM_HTML", catalog_id)
         .await?;
 
     Ok(LuaJobOutcome::Done)

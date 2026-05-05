@@ -663,6 +663,14 @@ const JOB_HANDLER_REGISTRY: &[(&str, JobHandlerFn)] = &[
             }
         }
     })) as JobHandlerFn),
+    ("update_coordinates_from_url", (|job, catalog_id| Box::pin(async move {
+        match code_fragment::run_coords_from_html_job(catalog_id, &*job.app).await? {
+            code_fragment::LuaJobOutcome::Done => Ok(()),
+            code_fragment::LuaJobOutcome::NoLuaCode => {
+                PhpWrapper::update_coordinates_from_url(catalog_id, &*job.app)
+            }
+        }
+    })) as JobHandlerFn),
 
     // --- Misc ---
     ("match_by_coordinates", (|job, catalog_id| Box::pin(async move {
@@ -726,6 +734,7 @@ mod tests {
             "sync_wd_matches",
             "bespoke_scraper",
             "update_person_dates",
+            "update_coordinates_from_url",
             "match_by_coordinates",
             "sync_from_cersei",
             "reference_fixer",

@@ -47,4 +47,8 @@ impl PhpWrapper {
     pub fn import_aux_from_url(catalog_id: usize, app: &dyn RuntimeConfig) -> Result<()> {
         Self::run_command_with_catalog_id(catalog_id, "import_aux_from_url.php", app)
     }
+
+    pub fn update_coordinates_from_url(catalog_id: usize, app: &dyn RuntimeConfig) -> Result<()> {
+        Self::run_command_with_catalog_id(catalog_id, "update_coordinates_from_url.php", app)
+    }
 }

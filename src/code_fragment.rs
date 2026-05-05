@@ -1,7 +1,8 @@
 mod jobs;
 
 pub use jobs::{
-    LuaJobOutcome, run_aux_from_desc_job, run_desc_from_html_job, run_person_dates_job,
+    LuaJobOutcome, run_aux_from_desc_job, run_coords_from_html_job, run_desc_from_html_job,
+    run_person_dates_job,
 };
 
 use crate::entry::Entry;
@@ -227,6 +228,12 @@ pub struct AuxFromDescResult {
     pub commands: Vec<LuaCommand>,
 }
 
+/// Result from running a COORDS_FROM_HTML code fragment.
+#[derive(Debug, Clone, Default)]
+pub struct CoordsFromHtmlResult {
+    pub commands: Vec<LuaCommand>,
+}
+
 /// Creates a new sandboxed Lua VM with memory and instruction limits.
 fn create_lua() -> Result<Lua> {
     // Only load safe standard libraries (no os, io, debug, package, ffi)
@@ -306,6 +313,134 @@ fn register_date_helpers(lua: &Lua) -> Result<()> {
     lua.globals().set("clean_html", clean_html_fn).map_err(lua_err)?;
 
     Ok(())
+}
+
+/// Register PCRE-style regex helpers using Rust's `regex` crate.
+///
+/// ## Function signatures
+///
+/// `re_match(pattern, text)` — Returns a table of captures (1-indexed) on
+/// match, or `nil` on no match. When the pattern has no capture groups the
+/// table contains just the full match at index 1; otherwise index 1 is the
+/// first capture group, index 2 the second, etc.  This mirrors PHP's
+/// `preg_match('/…/', $text, $m)` where `$m[1]` maps to `m[1]`.
+///
+/// `re_test(pattern, text)` — Returns `true`/`false`; like PHP
+/// `(bool)preg_match(…)` without a capture array.
+///
+/// `re_find_all(pattern, text)` — Returns a table of match-tables in the
+/// same capture layout as `re_match`. Like PHP `preg_match_all`.
+///
+/// `re_sub(pattern, replacement, text)` — Returns the string with all
+/// occurrences replaced. Replacement uses `$1`, `$2` … for back-references.
+/// Like PHP `preg_replace` (always replaces all, no limit parameter yet).
+fn register_regex_helpers(lua: &Lua) -> Result<()> {
+    let re_match_fn = lua.create_function(|lua_inner, (pattern, text): (String, String)| {
+        let re = regex::Regex::new(&pattern)
+            .map_err(|e| mlua::Error::RuntimeError(format!("re_match: bad pattern: {e}")))?;
+        match re.captures(&text) {
+            None => Ok(mlua::Value::Nil),
+            Some(caps) => {
+                let t = lua_inner.create_table()?;
+                let n = caps.len();
+                if n == 1 {
+                    // No capture groups — expose full match at index 1.
+                    t.set(1, caps.get(0).map_or("", |m| m.as_str()).to_string())?;
+                } else {
+                    for i in 1..n {
+                        let v = caps.get(i).map_or("", |m| m.as_str()).to_string();
+                        t.set(i as i64, v)?;
+                    }
+                }
+                Ok(mlua::Value::Table(t))
+            }
+        }
+    }).map_err(lua_err)?;
+    lua.globals().set("re_match", re_match_fn).map_err(lua_err)?;
+
+    let re_test_fn = lua.create_function(|_, (pattern, text): (String, String)| {
+        let re = regex::Regex::new(&pattern)
+            .map_err(|e| mlua::Error::RuntimeError(format!("re_test: bad pattern: {e}")))?;
+        Ok(re.is_match(&text))
+    }).map_err(lua_err)?;
+    lua.globals().set("re_test", re_test_fn).map_err(lua_err)?;
+
+    let re_find_all_fn = lua.create_function(|lua_inner, (pattern, text): (String, String)| {
+        let re = regex::Regex::new(&pattern)
+            .map_err(|e| mlua::Error::RuntimeError(format!("re_find_all: bad pattern: {e}")))?;
+        let results = lua_inner.create_table()?;
+        let has_groups = re.captures_len() > 1;
+        for (idx, caps) in re.captures_iter(&text).enumerate() {
+            let t = lua_inner.create_table()?;
+            let n = caps.len();
+            if !has_groups {
+                t.set(1, caps.get(0).map_or("", |m| m.as_str()).to_string())?;
+            } else {
+                for i in 1..n {
+                    let v = caps.get(i).map_or("", |m| m.as_str()).to_string();
+                    t.set(i as i64, v)?;
+                }
+            }
+            results.set(idx + 1, t)?;
+        }
+        Ok(results)
+    }).map_err(lua_err)?;
+    lua.globals().set("re_find_all", re_find_all_fn).map_err(lua_err)?;
+
+    let re_sub_fn = lua.create_function(|_, (pattern, replacement, text): (String, String, String)| {
+        let re = regex::Regex::new(&pattern)
+            .map_err(|e| mlua::Error::RuntimeError(format!("re_sub: bad pattern: {e}")))?;
+        Ok(re.replace_all(&text, replacement.as_str()).to_string())
+    }).map_err(lua_err)?;
+    lua.globals().set("re_sub", re_sub_fn).map_err(lua_err)?;
+
+    Ok(())
+}
+
+/// Register JSON helper exposed to Lua.
+///
+/// `json_decode(s)` — Parses a JSON string and returns a Lua value. JSON
+/// objects become tables with string keys, arrays become integer-keyed tables
+/// (1-indexed), booleans and numbers pass through, `null` becomes `nil`.
+/// Like PHP `json_decode($s)`.
+fn register_json_helpers(lua: &Lua) -> Result<()> {
+    let json_decode_fn = lua.create_function(|lua_inner, s: String| {
+        let val: serde_json::Value = serde_json::from_str(&s)
+            .map_err(|e| mlua::Error::RuntimeError(format!("json_decode: {e}")))?;
+        json_to_lua(lua_inner, val)
+    }).map_err(lua_err)?;
+    lua.globals().set("json_decode", json_decode_fn).map_err(lua_err)?;
+    Ok(())
+}
+
+/// Recursively convert a [`serde_json::Value`] into an [`mlua::Value`].
+fn json_to_lua(lua: &Lua, val: serde_json::Value) -> std::result::Result<mlua::Value, mlua::Error> {
+    match val {
+        serde_json::Value::Null => Ok(mlua::Value::Nil),
+        serde_json::Value::Bool(b) => Ok(mlua::Value::Boolean(b)),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Ok(mlua::Value::Integer(i))
+            } else {
+                Ok(mlua::Value::Number(n.as_f64().unwrap_or(0.0)))
+            }
+        }
+        serde_json::Value::String(s) => Ok(mlua::Value::String(lua.create_string(s.as_bytes())?)),
+        serde_json::Value::Array(arr) => {
+            let t = lua.create_table()?;
+            for (i, v) in arr.into_iter().enumerate() {
+                t.set(i + 1, json_to_lua(lua, v)?)?;
+            }
+            Ok(mlua::Value::Table(t))
+        }
+        serde_json::Value::Object(map) => {
+            let t = lua.create_table()?;
+            for (k, v) in map {
+                t.set(k, json_to_lua(lua, v)?)?;
+            }
+            Ok(mlua::Value::Table(t))
+        }
+    }
 }
 
 /// Register command callback functions (setAux, setMatch, setLocation, etc.)
@@ -433,6 +568,8 @@ pub fn run_person_date(lua_code: &str, entry: &LuaEntry) -> Result<PersonDateRes
     set_instruction_limit(&lua);
     set_entry_global(&lua, entry)?;
     register_date_helpers(&lua)?;
+    register_regex_helpers(&lua)?;
+    register_json_helpers(&lua)?;
 
     // Set up the born/died variables
     lua.globals().set("born", "").map_err(lua_err)?;
@@ -456,6 +593,8 @@ pub fn run_desc_from_html(
     set_instruction_limit(&lua);
     set_entry_global(&lua, entry)?;
     register_date_helpers(&lua)?;
+    register_regex_helpers(&lua)?;
+    register_json_helpers(&lua)?;
     register_command_functions(&lua)?;
 
     // Set up all the variables the code fragment can write to
@@ -545,12 +684,37 @@ pub fn run_aux_from_desc(lua_code: &str, entry: &LuaEntry) -> Result<AuxFromDesc
     set_instruction_limit(&lua);
     set_entry_global(&lua, entry)?;
     register_date_helpers(&lua)?;
+    register_regex_helpers(&lua)?;
+    register_json_helpers(&lua)?;
     register_command_functions(&lua)?;
 
     lua.load(lua_code).exec().map_err(lua_err)?;
 
     let commands = collect_commands(&lua)?;
     Ok(AuxFromDescResult { commands })
+}
+
+/// Run a COORDS_FROM_HTML Lua code fragment.
+///
+/// The runner fetches HTML externally and passes it as the `html` global,
+/// identical to DESC_FROM_HTML. Lua scripts should call `setLocation(entry_id,
+/// lat, lon)` to record a result. All other command callbacks (`setAux`,
+/// `setMatch`, etc.) are also available for rare multi-output fragments.
+pub fn run_coords_from_html(lua_code: &str, entry: &LuaEntry, html: &str) -> Result<CoordsFromHtmlResult> {
+    let lua = create_lua()?;
+    set_instruction_limit(&lua);
+    set_entry_global(&lua, entry)?;
+    register_date_helpers(&lua)?;
+    register_regex_helpers(&lua)?;
+    register_json_helpers(&lua)?;
+    register_command_functions(&lua)?;
+
+    lua.globals().set("html", html).map_err(lua_err)?;
+
+    lua.load(lua_code).exec().map_err(lua_err)?;
+
+    let commands = collect_commands(&lua)?;
+    Ok(CoordsFromHtmlResult { commands })
 }
 
 /// Convert a Lua table representing a command into a LuaCommand.
@@ -1259,6 +1423,186 @@ died = string.match(html, "Died: (%d%d%d%d)") or ""
         let result = run_desc_from_html(lua, &entry, html).unwrap();
         assert_eq!(result.born, "1850");
         assert_eq!(result.died, "1920");
+    }
+
+    // ---- re_match / re_test / re_find_all / re_sub tests ----
+
+    // NOTE: Lua strings process backslash escapes, so regex patterns with
+    // special sequences like \d, \s, \b must use double-backslash (\\d) or
+    // Lua long-string syntax [[\d]] when written inside Lua string literals.
+
+    #[test]
+    fn test_re_match_basic_capture() {
+        let lua = r#"
+local m = re_match([[(\d{4})-(\d{4})]], o.ext_desc)
+if m then born = m[1] died = m[2] end
+"#;
+        let mut entry = test_entry();
+        entry.ext_desc = "1850-1920".into();
+        let result = run_person_date(lua, &entry).unwrap();
+        assert_eq!(result.born, "1850");
+        assert_eq!(result.died, "1920");
+    }
+
+    #[test]
+    fn test_re_match_no_capture_groups() {
+        // Without capture groups the full match is returned at index 1.
+        let lua = r#"
+local m = re_match([[\d{4}]], o.ext_desc)
+if m then born = m[1] end
+"#;
+        let mut entry = test_entry();
+        entry.ext_desc = "born 1920".into();
+        let result = run_person_date(lua, &entry).unwrap();
+        assert_eq!(result.born, "1920");
+    }
+
+    #[test]
+    fn test_re_match_no_match_returns_nil() {
+        let lua = r#"
+local m = re_match('NOPE', o.ext_desc)
+if m then born = "matched" end
+"#;
+        let entry = test_entry();
+        let result = run_person_date(lua, &entry).unwrap();
+        assert_eq!(result.born, "");
+    }
+
+    #[test]
+    fn test_re_match_word_boundary_and_i_flag() {
+        // Long-string syntax [[ ]] avoids escape-processing in Lua.
+        let lua = r#"
+local m = re_match([[(?i)\bborn\b.*?(\d{4})]], o.ext_desc)
+if m then born = m[1] end
+"#;
+        let mut entry = test_entry();
+        entry.ext_desc = "BORN in 1885".into();
+        let result = run_person_date(lua, &entry).unwrap();
+        assert_eq!(result.born, "1885");
+    }
+
+    #[test]
+    fn test_re_test_true_and_false() {
+        let lua = r#"
+if re_test('Q5', o.type) then born = "human" end
+if not re_test('Q99', o.type) then died = "notq99" end
+"#;
+        let entry = test_entry();
+        let result = run_person_date(lua, &entry).unwrap();
+        assert_eq!(result.born, "human");
+        assert_eq!(result.died, "notq99");
+    }
+
+    #[test]
+    fn test_re_find_all_multiple_matches() {
+        let lua = r#"
+for _, m in ipairs(re_find_all([[P(\d+):(\w+)]], o.ext_desc)) do
+    setAux(o.id, m[1], m[2])
+end
+"#;
+        let mut entry = test_entry();
+        entry.ext_desc = "P214:12345 P496:67890".into();
+        let result = run_aux_from_desc(lua, &entry).unwrap();
+        assert_eq!(result.commands.len(), 2);
+        assert_eq!(result.commands[0], LuaCommand::SetAux { entry_id: 42, property: "214".into(), value: "12345".into() });
+        assert_eq!(result.commands[1], LuaCommand::SetAux { entry_id: 42, property: "496".into(), value: "67890".into() });
+    }
+
+    #[test]
+    fn test_re_sub_replaces_all() {
+        let lua = r#"
+local cleaned = re_sub([[\s+]], ' ', o.ext_desc)
+local m = re_match([[(\d{4})]], cleaned)
+if m then born = m[1] end
+"#;
+        let mut entry = test_entry();
+        entry.ext_desc = "born   in   1950".into();
+        let result = run_person_date(lua, &entry).unwrap();
+        assert_eq!(result.born, "1950");
+    }
+
+    #[test]
+    fn test_re_sub_backreference() {
+        let lua = r#"
+local s = re_sub([[(\d{2})\.(\d{2})\.(\d{4})]], '$3-$2-$1', o.ext_desc)
+local m = re_match([[(\d{4}-\d{2}-\d{2})]], s)
+if m then born = m[1] end
+"#;
+        let mut entry = test_entry();
+        entry.ext_desc = "15.03.1920".into();
+        let result = run_person_date(lua, &entry).unwrap();
+        assert_eq!(result.born, "1920-03-15");
+    }
+
+    // ---- json_decode tests ----
+
+    #[test]
+    fn test_json_decode_object() {
+        let lua = r#"
+local j = json_decode(o.ext_desc)
+if j and j.born then born = j.born end
+if j and j.died then died = j.died end
+"#;
+        let mut entry = test_entry();
+        entry.ext_desc = r#"{"born":"1920","died":"2000"}"#.into();
+        let result = run_person_date(lua, &entry).unwrap();
+        assert_eq!(result.born, "1920");
+        assert_eq!(result.died, "2000");
+    }
+
+    #[test]
+    fn test_json_decode_array() {
+        let lua = r#"
+local j = json_decode(o.ext_desc)
+if j and j[1] then born = j[1] end
+"#;
+        let mut entry = test_entry();
+        entry.ext_desc = r#"["1920","2000"]"#.into();
+        let result = run_person_date(lua, &entry).unwrap();
+        assert_eq!(result.born, "1920");
+    }
+
+    #[test]
+    fn test_json_decode_invalid_returns_error() {
+        let lua = r#"
+local ok, j = pcall(json_decode, "not json")
+if not ok then born = "error" end
+"#;
+        let entry = test_entry();
+        let result = run_person_date(lua, &entry).unwrap();
+        assert_eq!(result.born, "error");
+    }
+
+    // ---- COORDS_FROM_HTML tests ----
+
+    #[test]
+    fn test_coords_from_html_set_location() {
+        let lua = r#"
+local m = re_match('lat=([0-9.]+)&lon=([0-9.]+)', html)
+if m then setLocation(o.id, tonumber(m[1]), tonumber(m[2])) end
+"#;
+        let entry = test_entry();
+        let result = run_coords_from_html(lua, &entry, "lat=52.5&lon=13.4").unwrap();
+        assert_eq!(result.commands.len(), 1);
+        match &result.commands[0] {
+            LuaCommand::SetLocation { entry_id, lat, lon } => {
+                assert_eq!(*entry_id, 42);
+                assert!((lat - 52.5).abs() < 0.001);
+                assert!((lon - 13.4).abs() < 0.001);
+            }
+            _ => panic!("Expected SetLocation"),
+        }
+    }
+
+    #[test]
+    fn test_coords_from_html_no_match() {
+        let lua = r#"
+local m = re_match('lat=([0-9.]+)', html)
+if m then setLocation(o.id, tonumber(m[1]), 0.0) end
+"#;
+        let entry = test_entry();
+        let result = run_coords_from_html(lua, &entry, "no coords here").unwrap();
+        assert!(result.commands.is_empty());
     }
 
     // ---- Sandboxing tests ----
