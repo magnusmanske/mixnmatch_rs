@@ -167,8 +167,12 @@ MapSourceMnM.prototype.action_create_new_item = async function (data, callback) 
 				mnm_notify(d.error, 'danger');
 				return callback();
 			}
+			if (!d.res || !d.res.entity || !d.res.entity.id) {
+				mnm_notify('Problem creating new item on Wikidata', 'danger');
+				return callback();
+			}
 			let q = d.res.entity.id.replace(/\D/g, '');
-			if (typeof q == 'undefined' || q == 0 || q === null) {
+			if (!q || q === '0') {
 				mnm_notify('Missing/invalid QID', 'danger');
 				return callback();
 			}

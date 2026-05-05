@@ -192,6 +192,7 @@ export const editEntryMixin = {
 				json: JSON.stringify({ action: 'wbeditentity', 'new': 'item', data: d.data })
 			}, function (d) {
 				if (d.error != 'OK') { mnm_notify(d.error, 'danger'); return; }
+				if (!d.res || !d.res.entity || !d.res.entity.id) { mnm_notify('Problem creating new item on Wikidata', 'danger'); return; }
 				var q = d.res.entity.id.replace(/\D/g, '');
 				if (!q || q == 0) return;
 				me.last_created_q = q;
