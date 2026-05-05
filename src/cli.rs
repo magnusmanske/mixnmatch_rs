@@ -119,13 +119,6 @@ enum Commands {
         #[arg(long, default_value = "html")]
         html_dir: PathBuf,
 
-        /// Watch the html directory for file changes and reload them
-        /// automatically without restarting. Serves with Cache-Control: no-store
-        /// so browsers always pick up the latest version. Intended for local
-        /// development; do not use in production.
-        #[arg(long)]
-        watch: bool,
-
         /// Serve HTTPS with a self-signed certificate (for local dev only —
         /// browsers will show a warning on first visit). Toolforge terminates
         /// TLS upstream, so leave this off in production.
@@ -269,17 +262,17 @@ impl ShellCommands {
     ///   POST     /api/v1/import_catalog
     ///   GET      everything else -> static files from `html_dir`
     #[allow(clippy::print_stdout)]
-    async fn run_webserver(app: AppState, port: u16, html_dir: &Path, watch: bool, tls: bool) -> Result<()> {
+    async fn run_webserver(app: AppState, port: u16, html_dir: &Path, tls: bool) -> Result<()> {
         use axum::Router;
         use axum::http::{HeaderName, Method};
         use axum::routing::get;
         use tower_http::cors::{AllowOrigin, CorsLayer};
         use tower_sessions::{Expiry, SessionManagerLayer, cookie::SameSite};
 
-        // Mode selection (highest-priority first):
-        //   --watch              → Watched: serve from RAM, auto-reload on change
-        //   config.html_dir_override → Disk: read every file from disk, no-store
-        //   (default)            → Memory: snapshot at startup, max-age=300
+        // `config.html_dir_override` lets a deployment point at a checked-out
+        // repo instead of the baked-in `./html`. Either way the cache loads
+        // once into RAM and a background watcher refreshes individual files
+        // when they change on disk.
         let effective_html_dir = app
             .html_dir_override()
             .map(|p| p.as_ref())
@@ -290,56 +283,21 @@ impl ShellCommands {
                 effective_html_dir.display()
             ));
         }
-        let static_cache = if watch {
-            let cache =
-                crate::static_cache::StaticCache::watch(effective_html_dir).map_err(|e| {
-                    anyhow!(
-                        "failed to set up watched static dir at {}: {e}",
-                        effective_html_dir.display()
-                    )
-                })?;
-            let msg = format!(
-                "webserver: watched {} static files ({} bytes) from {} (auto-reload on change)",
-                cache.len(),
-                cache.total_bytes(),
-                effective_html_dir.display()
-            );
-            println!("{msg}");
-            log::info!("{msg}");
-            cache
-        } else if app.html_dir_override().is_some() {
-            let cache =
-                crate::static_cache::StaticCache::live(effective_html_dir).map_err(|e| {
-                    anyhow!(
-                        "failed to set up live static dir at {}: {e}",
-                        effective_html_dir.display()
-                    )
-                })?;
-            let msg = format!(
-                "webserver: live static serving (no cache) from {} (config.html_dir_override)",
-                effective_html_dir.display()
-            );
-            println!("{msg}");
-            log::info!("{msg}");
-            cache
-        } else {
-            let cache =
-                crate::static_cache::StaticCache::load(effective_html_dir).map_err(|e| {
-                    anyhow!(
-                        "failed to load static cache from {}: {e}",
-                        effective_html_dir.display()
-                    )
-                })?;
-            let msg = format!(
-                "webserver: cached {} static files ({} bytes) from {}",
-                cache.len(),
-                cache.total_bytes(),
-                effective_html_dir.display()
-            );
-            println!("{msg}");
-            log::info!("{msg}");
-            cache
-        };
+        let static_cache =
+            crate::static_cache::StaticCache::load(effective_html_dir).map_err(|e| {
+                anyhow!(
+                    "failed to load static cache from {}: {e}",
+                    effective_html_dir.display()
+                )
+            })?;
+        let msg = format!(
+            "webserver: cached {} static files ({} bytes) from {} (auto-reload on change)",
+            static_cache.len(),
+            static_cache.total_bytes(),
+            effective_html_dir.display()
+        );
+        println!("{msg}");
+        log::info!("{msg}");
 
         let oauth_cfg = app
             .oauth_config()
@@ -570,11 +528,10 @@ impl ShellCommands {
                 config,
                 port,
                 html_dir,
-                watch,
                 tls,
             }) => {
                 let app = Self::path2app(config)?;
-                Self::run_webserver(app, *port, html_dir, *watch, *tls).await?;
+                Self::run_webserver(app, *port, html_dir, *tls).await?;
             }
             Some(Commands::SyncWdMatches { config, batch_size }) => {
                 let app = Self::path2app(config)?;
