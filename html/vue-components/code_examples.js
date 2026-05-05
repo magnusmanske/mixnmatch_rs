@@ -2,112 +2,104 @@ import { mnm_api, tt_update_interface } from './store.js';
 
 
 export default Vue.extend({
-    props: ['function_filter'],
-    data: function () {
-        return {
-            rows: [],
-            total: 0,
-            all_functions: [],
-            loaded: false,
-            loading: false,
-            per_page: 50,
-            start: 0,
-            selected_function: this.function_filter || '',
-            search: '',
-            row_langs: {},   // row.id -> 'lua' | 'php'
-            copied_id: null, // id of the row whose code was just copied
-        };
-    },
-    watch: {
-        // Respond to back/forward navigation that changes the prop
-        function_filter: function (val) {
-            this.selected_function = val || '';
-            this.start = 0;
-            this.load();
-        },
-    },
-    created: async function () {
-        await this.load();
-    },
-    updated: function () { tt_update_interface(); },
-    mounted: function () { tt_update_interface(); },
-    methods: {
-        load: async function () {
-            const me = this;
-            me.loading = true;
-            try {
-                const d = await mnm_api('get_code_examples', {
-                    function: me.selected_function,
-                    search: me.search,
-                    start: me.start,
-                    max: me.per_page,
-                });
-                const rows = d.data.rows || [];
-                const langs = {};
-                rows.forEach(function (r) { langs[r.id] = r.has_lua ? 'lua' : 'php'; });
-                me.rows = rows;
-                me.row_langs = langs;
-                me.total = d.data.total || 0;
-                me.all_functions = d.data.all_functions || [];
-            } finally {
-                me.loaded = true;
-                me.loading = false;
-            }
-        },
-        applyFilter: function () {
-            const me = this;
-            me.start = 0;
-            const path = me.selected_function
-                ? '/code_examples/' + encodeURIComponent(me.selected_function)
-                : '/code_examples';
-            me.$router.push(path);
-        },
-        clearFilter: function () {
-            this.selected_function = '';
-            this.applyFilter();
-        },
-        searchCode: function () {
-            this.start = 0;
-            this.load();
-        },
-        clearSearch: function () {
-            this.search = '';
-            this.start = 0;
-            this.load();
-        },
-        goToPage: function (offset) {
-            this.start = offset;
-            this.load();
-            window.scrollTo(0, 0);
-        },
-        rowLang: function (row) {
-            return this.row_langs[row.id] || (row.has_lua ? 'lua' : 'php');
-        },
-        setRowLang: function (row, lang) {
-            Vue.set(this.row_langs, row.id, lang);
-        },
-        rowCode: function (row) {
-            return this.rowLang(row) === 'lua' ? (row.lua || '') : (row.php || '');
-        },
-        copyCode: function (row) {
-            var me = this;
-            var code = me.rowCode(row);
-            if (!code) return;
-            navigator.clipboard.writeText(code).then(function () {
-                me.copied_id = row.id;
-                setTimeout(function () { if (me.copied_id === row.id) me.copied_id = null; }, 1500);
-            });
-        },
-        codePreview: function (code) {
-            if (!code) return '';
-            return code
-                .split('\n')
-                .filter(function (l) { return l.trim().length > 0; })
-                .slice(0, 5)
-                .join('\n');
-        },
-    },
-    template: `
+	props: ['function_filter'],
+	data: function () {
+		return {
+			rows: [],
+			total: 0,
+			all_functions: [],
+			loaded: false,
+			loading: false,
+			per_page: 50,
+			start: 0,
+			selected_function: this.function_filter || '',
+			search: '',
+			row_langs: {},   // row.id -> 'lua' | 'php'
+			copied_id: null, // id of the row whose code was just copied
+		};
+	},
+	watch: {
+		// Respond to back/forward navigation that changes the prop
+		function_filter: function (val) {
+			this.selected_function = val || '';
+			this.start = 0;
+			this.load();
+		},
+	},
+	created: async function () {
+		await this.load();
+	},
+	updated: function () { tt_update_interface(); },
+	mounted: function () { tt_update_interface(); },
+	methods: {
+		load: async function () {
+			const me = this;
+			me.loading = true;
+			try {
+				const d = await mnm_api('get_code_examples', {
+					function: me.selected_function,
+					search: me.search,
+					start: me.start,
+					max: me.per_page,
+				});
+				const rows = d.data.rows || [];
+				const langs = {};
+				rows.forEach(function (r) { langs[r.id] = r.has_lua ? 'lua' : 'php'; });
+				me.rows = rows;
+				me.row_langs = langs;
+				me.total = d.data.total || 0;
+				me.all_functions = d.data.all_functions || [];
+			} finally {
+				me.loaded = true;
+				me.loading = false;
+			}
+		},
+		applyFilter: function () {
+			const me = this;
+			me.start = 0;
+			const path = me.selected_function
+				? '/code_examples/' + encodeURIComponent(me.selected_function)
+				: '/code_examples';
+			me.$router.push(path);
+		},
+		clearFilter: function () {
+			this.selected_function = '';
+			this.applyFilter();
+		},
+		searchCode: function () {
+			this.start = 0;
+			this.load();
+		},
+		clearSearch: function () {
+			this.search = '';
+			this.start = 0;
+			this.load();
+		},
+		goToPage: function (offset) {
+			this.start = offset;
+			this.load();
+			window.scrollTo(0, 0);
+		},
+		rowLang: function (row) {
+			return this.row_langs[row.id] || (row.has_lua ? 'lua' : 'php');
+		},
+		setRowLang: function (row, lang) {
+			Vue.set(this.row_langs, row.id, lang);
+		},
+		rowCode: function (row) {
+			return this.rowLang(row) === 'lua' ? (row.lua || '') : (row.php || '');
+		},
+		copyCode: function (row) {
+			var me = this;
+			var code = me.rowCode(row);
+			if (!code) return;
+			navigator.clipboard.writeText(code).then(function () {
+				me.copied_id = row.id;
+				setTimeout(function () { if (me.copied_id === row.id) me.copied_id = null; }, 1500);
+			});
+		},
+	},
+	template: `
 <div class='mt-2'>
     <mnm-breadcrumb :crumbs="[{text: 'Code examples'}]"></mnm-breadcrumb>
     <h2>Code examples</h2>
@@ -125,7 +117,7 @@ export default Vue.extend({
         <label class='form-label mb-0 ms-3 me-1' style='white-space:nowrap'>Search code:</label>
         <div class='d-flex gap-1'>
             <input class='form-control form-control-sm' style='width:200px'
-                v-model='search' placeholder='e.g. wikibase'
+                v-model='search' placeholder='e.g. 227/GND'
                 @keyup.enter='searchCode'>
             <button class='btn btn-outline-primary btn-sm' @click.prevent='searchCode'
                 :disabled='loading'>&#128269;</button>
@@ -135,7 +127,7 @@ export default Vue.extend({
         <span v-if='loaded && !loading' class='text-muted ms-2' style='font-size:0.85rem'>
             {{total}} fragment<span v-if='total!==1'>s</span>
         </span>
-        <span v-if='loading' tt='loading' class='ms-2'></span>
+        <span v-if='loading' class='ms-2'><i tt='loading'></i></span>
     </div>
 
     <div v-if='!loaded' tt='loading'></div>
@@ -150,7 +142,7 @@ export default Vue.extend({
             <thead>
                 <tr>
                     <th style='white-space:nowrap'>Function</th>
-                    <th>Catalog</th>
+                    <th style='width:7rem'>Catalog</th>
                     <th>Lang</th>
                     <th>Code preview</th>
                     <th>Last run</th>
@@ -166,7 +158,7 @@ export default Vue.extend({
                             {{row.function.replace(/_/g,' ')}}
                         </router-link>
                     </td>
-                    <td style='white-space:nowrap'>
+                    <td style='width:7rem;word-break:break-word'>
                         <router-link :to='"/code/"+row.catalog'>
                             <span v-if='row.catalog_name'>{{row.catalog_name}}</span>
                             <span v-else class='text-muted'>#{{row.catalog}}</span>
@@ -182,7 +174,7 @@ export default Vue.extend({
                     </td>
                     <td style='width:99%'>
                         <div class='ce-code-wrap'>
-                            <code class='ce-code' v-if='rowCode(row)'>{{codePreview(rowCode(row))}}</code>
+                            <code class='ce-code' v-if='rowCode(row)'>{{rowCode(row)}}</code>
                             <span v-else class='text-muted fst-italic' style='font-size:0.8rem'>No code</span>
                             <button v-if='rowCode(row)' class='ce-copy-btn'
                                 @click.prevent='copyCode(row)'

@@ -4166,11 +4166,11 @@ impl Storage for StorageMySQL {
                     String,
                     String,
                     i8,
-                    String,
+                    Option<String>,
                     Option<String>,
                     Option<String>,
                 ) = from_row(row);
-                let note: Option<String> = if note.is_empty() { None } else { Some(note) };
+                let note: Option<String> = note.filter(|s| !s.is_empty());
                 serde_json::json!({
                     "id": id,
                     "function": function,
