@@ -300,15 +300,11 @@ impl ReferenceFixer {
     /// Process the entity JSON body (split out for testability — the
     /// decision logic is all offline once we have the JSON in hand).
     async fn check_item_json(&mut self, item: &Value) -> Result<()> {
-        let claims = match item.get("claims").and_then(|v| v.as_object()) {
-            Some(o) => o.clone(),
-            None => return Ok(()),
+        let Some(claims) = item.get("claims").and_then(|v| v.as_object()).cloned() else {
+            return Ok(());
         };
         for (_property, statements) in claims {
-            let statements = match statements.as_array() {
-                Some(a) => a.clone(),
-                None => continue,
-            };
+            let Some(statements) = statements.as_array().cloned() else { continue };
             for statement in statements {
                 if let Err(e) = self.check_statement(&statement).await {
                     warn!("reference_fixer: statement skipped: {e}");
@@ -319,13 +315,11 @@ impl ReferenceFixer {
     }
 
     async fn check_statement(&mut self, statement: &Value) -> Result<()> {
-        let references = match statement.get("references").and_then(|v| v.as_array()) {
-            Some(a) => a.clone(),
-            None => return Ok(()),
+        let Some(references) = statement.get("references").and_then(|v| v.as_array()).cloned() else {
+            return Ok(());
         };
-        let statement_id = match statement.get("id").and_then(|v| v.as_str()) {
-            Some(s) => s.to_string(),
-            None => return Ok(()),
+        let Some(statement_id) = statement.get("id").and_then(|v| v.as_str()).map(str::to_string) else {
+            return Ok(());
         };
         let mut remove_hashes: Vec<String> = Vec::new();
         for reference_group in references {
@@ -408,20 +402,15 @@ impl ReferenceFixer {
     /// Is this reference group nothing but "the statement's main property
     /// as a reference", ignoring stated-in/retrieved?
     fn is_self_reference(statement: &Value, group: &Value) -> bool {
-        let mainsnak = match statement.get("mainsnak") {
-            Some(v) => v,
-            None => return false,
-        };
+        let Some(mainsnak) = statement.get("mainsnak") else { return false };
         if mainsnak.get("datatype").and_then(|v| v.as_str()) != Some("external-id") {
             return false;
         }
-        let main_prop = match mainsnak.get("property").and_then(|v| v.as_str()) {
-            Some(p) => p,
-            None => return false,
+        let Some(main_prop) = mainsnak.get("property").and_then(|v| v.as_str()) else {
+            return false;
         };
-        let snaks = match group.get("snaks").and_then(|v| v.as_object()) {
-            Some(o) => o,
-            None => return false,
+        let Some(snaks) = group.get("snaks").and_then(|v| v.as_object()) else {
+            return false;
         };
         let mut matches_main = false;
         for prop in snaks.keys() {

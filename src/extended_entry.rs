@@ -227,15 +227,8 @@ impl ExtendedEntry {
                 "desc" => self.entry.ext_desc = cell.to_string(),
                 "url" => self.entry.ext_url = cell.to_string(),
                 "q" | "autoq" => {
-                    self.entry.q = cell.to_string().replace('Q', "").parse::<isize>().ok();
-                    if let Some(i) = self.entry.q {
-                        // Don't accept invalid or N/A item IDs
-                        if i <= 0 {
-                            self.entry.q = None;
-                        }
-                    }
+                    self.entry.q = cell.replace('Q', "").parse::<isize>().ok().filter(|&i| i > 0);
                     if self.entry.q.is_some() {
-                        // q is set, also set user and timestamp
                         self.entry.user = Some(4); // Auxiliary data matcher
                         self.entry.timestamp = Some(TimeStamp::now());
                     }
