@@ -11,6 +11,8 @@ export default Vue.extend({
 	methods: {
 		loadData: async function () {
 			const me = this;
+			me.assign_q_input = {};
+			me.assigning_q = {};
 			let min = 0;
 			if (me.mode == 'human') min = 4;
 			if (me.mode == 'dates') min = 2;
@@ -289,7 +291,11 @@ export default Vue.extend({
 			var doneRow = document.querySelector('div.entry_row[entry="' + me.edits_todo[0].id + '"]');
 			if (doneRow) doneRow.classList.remove('inactive');
 			me.edits_todo.shift();
-			if (me.edits_todo.length == 0) return; // All done
+			if (me.edits_todo.length == 0) {
+				// Bump after children re-render so checkedInGroup reads the updated DOM
+				me.$nextTick(function () { me.checkbox_generation++; });
+				return;
+			}
 			var q = ('' + (me.last_created_q || '')).replace(/\D/g, '');
 			if (!q || q === '0') {
 				// Creation failed — abort without assigning Q0 to remaining entries
