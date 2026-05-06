@@ -1,7 +1,7 @@
 //! Matching mutation endpoints. All write paths gate behind `auth::guard`.
 
 use crate::api::common::{self, ApiError, Params, json_resp, ok};
-use crate::app_state::{AppContext, ExternalServicesContext};
+use crate::app_state::{AppContext, ExternalServicesContext, USER_AUX_MATCH};
 use crate::auth;
 use crate::entry::EntryWriter;
 use axum::response::{IntoResponse, Response};
@@ -49,7 +49,33 @@ pub async fn query_match_q_multi(
     let uid = common::require_user_id(app, session, params).await?;
     let data_str = common::get_param(params, "data", "[]");
     let data: Vec<serde_json::Value> = serde_json::from_str(&data_str).unwrap_or_default();
+    do_match_q_multi(app, catalog, uid, data).await
+}
 
+/// Sync-page variant of `match_q_multi`: authenticates the caller but
+/// attributes every match to the auxiliary-data-matcher bot (user 4)
+/// rather than to the human pressing the button, since the data originates
+/// from Wikidata itself rather than human judgement.
+pub async fn query_sync_match_q_multi(
+    app: &dyn ExternalServicesContext,
+    session: &Session,
+    params: &Params,
+) -> Result<Response, ApiError> {
+    let catalog = common::get_catalog(params)?;
+    auth::guard::require_user_from_params(app, session, params).await?;
+    let data_str = common::get_param(params, "data", "[]");
+    let data: Vec<serde_json::Value> = serde_json::from_str(&data_str).unwrap_or_default();
+    do_match_q_multi(app, catalog, USER_AUX_MATCH, data).await
+}
+
+/// Shared batch-matching core. Runs up to `WRITE_FANOUT` concurrent DB
+/// writes and collects the first 100 ext_ids that had no matching entry.
+async fn do_match_q_multi(
+    app: &dyn ExternalServicesContext,
+    catalog: usize,
+    uid: usize,
+    data: Vec<serde_json::Value>,
+) -> Result<Response, ApiError> {
     // Sequentially-awaited `api_match_q_multi` calls used to dominate this
     // handler when the frontend sent a few hundred items. Run them with
     // bounded concurrency; results funnel through a single mutex so the

@@ -13,7 +13,7 @@ export default Vue.extend({
 			const me = this;
 			me.update_mnm_status = 'updating';
 			try {
-				var d = await mnm_api('match_q_multi', {
+				var d = await mnm_api('sync_match_q_multi', {
 					catalog: me.id,
 					tusc_user: widar.getUserName(),
 					data: JSON.stringify(me.data.wd_no_mm)

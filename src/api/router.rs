@@ -316,6 +316,7 @@ const ROUTES: &[(&str, ApiHandler)] = &[
     // Matching — all DB-writing actions are gated behind OAuth
     route!("match_q",                      matching::query_match_q),
     route!("match_q_multi",                matching::query_match_q_multi),
+    route!("sync_match_q_multi",           matching::query_sync_match_q_multi),
     route!("remove_q",                     matching::query_remove_q),
     route!("remove_all_q",                 matching::query_remove_all_q),
     route!("remove_all_multimatches",      matching::query_remove_all_multimatches),
@@ -463,6 +464,7 @@ mod tests {
             "catalogs",
             "search",
             "match_q",
+            "sync_match_q_multi",
             "widar",
             "get_jobs",
             "rc",
