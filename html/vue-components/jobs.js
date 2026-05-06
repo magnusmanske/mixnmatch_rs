@@ -6,9 +6,12 @@ import { mnm_api, mnm_notify, ensure_catalog, get_specific_catalog, tt_update_in
 // filtered server-side (always hidden) so it never appears here.
 const KNOWN_JOB_STATUSES = [
     'RUNNING', 'TODO', 'HIGH_PRIORITY', 'LOW_PRIORITY',
-    'FAILED', 'DONE', 'DEACTIVATED'
+    'PAUSED', 'FAILED', 'DONE', 'DEACTIVATED'
 ];
 const DEFAULT_HIDDEN_STATUSES = ['DEACTIVATED'];
+// Statuses that are still in-flight or waiting — these jobs can be
+// stopped or paused by an authorised user.
+const ACTIVE_JOB_STATUSES = new Set(['RUNNING', 'TODO', 'HIGH_PRIORITY', 'LOW_PRIORITY']);
 
 export default Vue.extend({
     props : ['id'] ,
@@ -212,6 +215,30 @@ export default Vue.extend({
             this.load();
             if (typeof window != 'undefined' && window.scrollTo) window.scrollTo(0, 0);
         },
+        // Returns true if the current user may control (stop/pause/resume) this job.
+        // Mirrors the server-side is_job_manager check.
+        can_control_job : function(job) {
+            if (!widar || !widar.loaded || !widar.is_logged_in) return false;
+            if (widar.is_catalog_admin) return true;
+            if (widar.mnm_user_id && (
+                (job.user_id && job.user_id == widar.mnm_user_id) ||
+                job.user_name === 'automatic'
+            )) return true;
+            return false;
+        },
+        manage_job : async function(job_id, action) {
+            let me = this;
+            try {
+                await mnm_api('manage_job', {
+                    job_id: job_id,
+                    action: action,
+                    username: widar.getUserName()
+                });
+                me.load();
+            } catch(e) {
+                mnm_notify(e.message, 'danger');
+            }
+        },
     },
     template: `
 <div class='mt-2'>
@@ -293,7 +320,20 @@ export default Vue.extend({
                     </template>
                 </td>
                 <td class='jobs-action'>{{job.action.replace(/_/g,' ')}}</td>
-                <td><span :class='"jobs-"+job.status.toLowerCase()'>{{job.status}}</span></td>
+                <td>
+                    <span :class='"jobs-"+job.status.toLowerCase()'>{{job.status}}</span>
+                    <span v-if='can_control_job(job)' class='jobs-controls ms-1'>
+                        <button v-if='job.status==="PAUSED" || job.status==="DEACTIVATED"'
+                            class='jobs-ctrl-btn btn btn-sm btn-outline-success'
+                            title='Resume job' @click.prevent='manage_job(job.id,"resume")'>&#x25B6;</button>
+                        <button v-if='job.status!=="PAUSED" && job.status!=="DONE" && job.status!=="FAILED" && job.status!=="DEACTIVATED"'
+                            class='jobs-ctrl-btn btn btn-sm btn-outline-warning'
+                            title='Pause job' @click.prevent='manage_job(job.id,"pause")'>&#x23F8;</button>
+                        <button v-if='job.status!=="DONE" && job.status!=="FAILED" && job.status!=="DEACTIVATED"'
+                            class='jobs-ctrl-btn btn btn-sm btn-outline-danger'
+                            title='Stop job' @click.prevent='manage_job(job.id,"stop")'>&#x23F9;</button>
+                    </span>
+                </td>
                 <td class='jobs-ts'>
                     <span class='jobs-ts-date'>{{date_part(job.last_ts)}}</span>
                     <span class='jobs-ts-time'>{{time_part(job.last_ts)}}</span>

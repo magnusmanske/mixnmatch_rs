@@ -9,6 +9,7 @@ pub enum JobStatus {
     LowPriority,
     Blocked,
     Deactivated,
+    Paused,
 }
 
 impl JobStatus {
@@ -22,6 +23,7 @@ impl JobStatus {
             "LOW_PRIORITY" => Some(JobStatus::LowPriority),
             "BLOCKED" => Some(JobStatus::Blocked),
             "DEACTIVATED" => Some(JobStatus::Deactivated),
+            "PAUSED" => Some(JobStatus::Paused),
             _ => None,
         }
     }
@@ -35,6 +37,7 @@ impl JobStatus {
             JobStatus::LowPriority => "LOW_PRIORITY",
             JobStatus::Blocked => "BLOCKED",
             JobStatus::Deactivated => "DEACTIVATED",
+            JobStatus::Paused => "PAUSED",
         }
     }
 }
@@ -56,6 +59,7 @@ mod tests {
         assert_eq!(JobStatus::new("LOW_PRIORITY"), Some(JobStatus::LowPriority));
         assert_eq!(JobStatus::new("BLOCKED"), Some(JobStatus::Blocked));
         assert_eq!(JobStatus::new("DEACTIVATED"), Some(JobStatus::Deactivated));
+        assert_eq!(JobStatus::new("PAUSED"), Some(JobStatus::Paused));
     }
 
     #[test]
@@ -76,6 +80,7 @@ mod tests {
             JobStatus::LowPriority,
             JobStatus::Blocked,
             JobStatus::Deactivated,
+            JobStatus::Paused,
         ];
         for status in &statuses {
             let s = status.as_str();

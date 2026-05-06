@@ -262,8 +262,18 @@ impl Job {
         action: &str,
         depends_on: Option<usize>,
     ) -> Result<usize> {
+        Self::queue_simple_job_for_user(app, catalog_id, action, depends_on, 0).await
+    }
+
+    pub async fn queue_simple_job_for_user(
+        app: &dyn ExternalServicesContext,
+        catalog_id: usize,
+        action: &str,
+        depends_on: Option<usize>,
+        user_id: usize,
+    ) -> Result<usize> {
         app.storage()
-            .jobs_queue_simple_job(catalog_id, action, depends_on, "TODO", TimeStamp::now())
+            .jobs_queue_simple_job(catalog_id, action, depends_on, "TODO", TimeStamp::now(), user_id)
             .await
     }
 

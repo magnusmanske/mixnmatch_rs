@@ -462,6 +462,7 @@ pub trait JobQueries: std::fmt::Debug + Send + Sync {
         depends_on: Option<usize>,
         status: &str,
         timestamp: String,
+        user_id: usize,
     ) -> Result<usize>;
     async fn jobs_reset_json(&self, job_id: usize, timestamp: String) -> Result<()>;
     async fn jobs_set_json(

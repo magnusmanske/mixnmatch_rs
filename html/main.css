@@ -1073,6 +1073,27 @@ table.quick_compare_table td {
 	}
 }
 
+#jobs_table .jobs-paused {
+	color: #6c757d !important;
+	font-style: italic;
+}
+
+#jobs_table .jobs-deactivated {
+	color: #adb5bd !important;
+}
+
+.jobs-controls {
+	display: inline-flex;
+	gap: 0.2rem;
+	vertical-align: middle;
+}
+
+.jobs-ctrl-btn {
+	padding: 0.1rem 0.3rem;
+	font-size: 0.75rem;
+	line-height: 1;
+}
+
 /* ========== Large catalogs ========== */
 
 .mnm-lc-catalog-card {

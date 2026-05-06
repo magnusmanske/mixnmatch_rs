@@ -325,6 +325,7 @@ const ROUTES: &[(&str, ApiHandler)] = &[
     // Jobs
     route!("get_jobs",                     jobs::query_get_jobs, app_params),
     route!("start_new_job",                jobs::query_start_new_job),
+    route!("manage_job",                   jobs::query_manage_job),
 
     // Issues
     route!("get_issues",                   issues::query_get_issues, app_params),
@@ -467,6 +468,8 @@ mod tests {
             "sync_match_q_multi",
             "widar",
             "get_jobs",
+            "start_new_job",
+            "manage_job",
             "rc",
             "download2",
             "upload_import_file",

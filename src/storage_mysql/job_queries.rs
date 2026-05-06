@@ -82,11 +82,14 @@ impl crate::storage::JobQueries for StorageMySQL {
         depends_on: Option<usize>,
         status: &str,
         timestamp: String,
+        user_id: usize,
     ) -> Result<usize> {
-        let sql = "INSERT INTO `jobs` (catalog,action,status,depends_on,last_ts) VALUES (:catalog_id,:action,:status,:depends_on,:timestamp)
+        // user_id is only set on first insert; ON DUPLICATE KEY UPDATE does not
+        // overwrite it so that re-queued system jobs don't clobber the original owner.
+        let sql = "INSERT INTO `jobs` (catalog,action,status,depends_on,last_ts,user_id) VALUES (:catalog_id,:action,:status,:depends_on,:timestamp,:user_id)
             ON DUPLICATE KEY UPDATE status=:status,depends_on=:depends_on,last_ts=:timestamp";
         let mut conn = self.get_conn().await?;
-        conn.exec_drop(sql, params! {catalog_id,action,depends_on,status,timestamp})
+        conn.exec_drop(sql, params! {catalog_id,action,depends_on,status,timestamp,user_id})
             .await?;
         let last_id = conn.last_insert_id().ok_or(EntryError::EntryInsertFailed)? as usize;
         Ok(last_id)
