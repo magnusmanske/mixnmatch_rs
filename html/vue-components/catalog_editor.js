@@ -119,9 +119,10 @@ export default Vue.extend({
 			const me = this;
 			try {
 				const d = await mnm_api('get_scraper', { catalog: me.id });
-				me.has_autoscraper = !!(d && d.found);
+				const j = (d && d.data) || {};
+				me.has_autoscraper = !!j.found;
 				if (me.has_autoscraper) {
-					me.autoscraper_repeat = me.secsToRepeatKey(d.repeat_after_sec);
+					me.autoscraper_repeat = me.secsToRepeatKey(j.repeat_after_sec);
 				}
 			} catch (e) {
 				me.has_autoscraper = false;
