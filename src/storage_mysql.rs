@@ -1284,10 +1284,17 @@ impl Storage for StorageMySQL {
 
     // Unlink deleted Wikidata items (item IDs in `deletions`).
     // Returns the catalog ID that were affected by this.
+    //
+    // Manual matches (`user > 0`) are preserved on the theory that a human
+    // curator's confirmed match is more trustworthy than a transient "this
+    // Q is gone" signal — the deletion check has misfired in the past
+    // (Codeberg #124, GitHub #6) and we'd rather leave a stale Q-pointer
+    // for cleanup than silently wipe a person's curation work.
     async fn maintenance_apply_deletions(&self, deletions: Vec<isize>) -> Result<Vec<usize>> {
         let deletions_string = deletions.iter().join(",");
-        let sql1 =
-            format!("SELECT DISTINCT `catalog` FROM `entry` WHERE `q` IN ({deletions_string})");
+        let sql1 = format!(
+            "SELECT DISTINCT `catalog` FROM `entry` WHERE `q` IN ({deletions_string}) AND (`user` IS NULL OR `user`=0)"
+        );
         let mut conn = self.get_conn().await?;
         let catalog_ids = conn
             .exec_iter(sql1, ())
@@ -1295,7 +1302,7 @@ impl Storage for StorageMySQL {
             .map_and_drop(from_row::<usize>)
             .await?;
         let sql2 = format!(
-            "UPDATE `entry` SET `q`=NULL,`user`=NULL,`timestamp`=NULL WHERE `q` IN ({deletions_string})"
+            "UPDATE `entry` SET `q`=NULL,`user`=NULL,`timestamp`=NULL WHERE `q` IN ({deletions_string}) AND (`user` IS NULL OR `user`=0)"
         );
         conn.exec_drop(sql2, ()).await?;
         Ok(catalog_ids)
@@ -1340,13 +1347,28 @@ impl Storage for StorageMySQL {
         Ok(())
     }
 
-    async fn maintenance_unlink_item_matches(&self, items: Vec<String>) -> Result<()> {
+    // Wipe automatic matches whose target Q is in `items` for one catalog.
+    //
+    // Two filters that the original SQL was missing — both reproduced
+    // false-mass-unlink incidents (GitHub #6, Codeberg #124):
+    //   * `catalog` — microsync runs per-catalog; without this, one
+    //     transient Wikidata-replica blip during a per-catalog sync
+    //     wipes the same Q from every catalog in the tool.
+    //   * `user IS NULL OR user=0` — preserve human-confirmed matches.
+    //     A curator's match outranks a "the Q seems gone" signal,
+    //     especially since the detection itself can misfire on
+    //     replica/timeout edge cases.
+    async fn maintenance_unlink_item_matches(
+        &self,
+        catalog_id: usize,
+        items: Vec<String>,
+    ) -> Result<()> {
         let sql = format!(
-            "UPDATE `entry` SET `q`=NULL,`user`=NULL,`timestamp`=NULL WHERE `q` IN ({})",
+            "UPDATE `entry` SET `q`=NULL,`user`=NULL,`timestamp`=NULL WHERE `catalog`=:catalog_id AND `q` IN ({}) AND (`user` IS NULL OR `user`=0)",
             items.join(",")
         );
         let mut conn = self.get_conn().await?;
-        conn.exec_drop(sql, Empty).await?;
+        conn.exec_drop(sql, params! {catalog_id}).await?;
         Ok(())
     }
 

@@ -218,6 +218,23 @@ mod tests {
 
     #[tokio::test]
     async fn test_unlink_meta_items() {
+        // Auto-matched (user=0) entry pointing at a meta item should get unlinked.
+        let app = test_support::test_app().await;
+        let (catalog_id, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
+        let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
+        EntryWriter::new(&app, &mut entry).set_match("Q16456", 0).await.unwrap();
+        test_support::seed_wdt_meta_item_page("Q16456").await.unwrap();
+        let maintenance = Maintenance::new(Arc::new(app.clone()));
+        maintenance.unlink_meta_items(catalog_id, &MatchState::any_matched()).await.unwrap();
+        assert_eq!(Entry::from_id(entry_id, &app).await.unwrap().q, None);
+    }
+
+    #[tokio::test]
+    async fn test_unlink_meta_items_preserves_manual_match() {
+        // Regression for GitHub #6: when a curator has manually confirmed a
+        // match (`user > 0`), unlink_meta_items must leave it alone — the
+        // detection itself can misfire on Wikidata-replica edge cases, and
+        // we'd rather keep a stale Q-pointer than wipe a person's curation.
         let app = test_support::test_app().await;
         let (catalog_id, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
         let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
@@ -225,7 +242,35 @@ mod tests {
         test_support::seed_wdt_meta_item_page("Q16456").await.unwrap();
         let maintenance = Maintenance::new(Arc::new(app.clone()));
         maintenance.unlink_meta_items(catalog_id, &MatchState::any_matched()).await.unwrap();
-        assert_eq!(Entry::from_id(entry_id, &app).await.unwrap().q, None);
+        let after = Entry::from_id(entry_id, &app).await.unwrap();
+        assert_eq!(after.q, Some(16456), "manual match must be preserved");
+        assert_eq!(after.user, Some(2));
+    }
+
+    #[tokio::test]
+    async fn test_unlink_meta_items_only_affects_target_catalog() {
+        // Regression for GitHub #6: a per-catalog microsync run must not
+        // wipe matches in *other* catalogs. The pre-fix SQL had no catalog
+        // filter, so one catalog's transient blip wiped the same Q
+        // tool-wide.
+        let app = test_support::test_app().await;
+        let (catalog_a, entry_a) = test_support::seed_minimal_entry(&app).await.unwrap();
+        let (catalog_b, entry_b) = test_support::seed_minimal_entry(&app).await.unwrap();
+        let mut e_a = Entry::from_id(entry_a, &app).await.unwrap();
+        EntryWriter::new(&app, &mut e_a).set_match("Q16456", 0).await.unwrap();
+        let mut e_b = Entry::from_id(entry_b, &app).await.unwrap();
+        EntryWriter::new(&app, &mut e_b).set_match("Q16456", 0).await.unwrap();
+        test_support::seed_wdt_meta_item_page("Q16456").await.unwrap();
+        let maintenance = Maintenance::new(Arc::new(app.clone()));
+        maintenance.unlink_meta_items(catalog_a, &MatchState::any_matched()).await.unwrap();
+        assert_eq!(Entry::from_id(entry_a, &app).await.unwrap().q, None, "target catalog should be unlinked");
+        assert_eq!(
+            Entry::from_id(entry_b, &app).await.unwrap().q,
+            Some(16456),
+            "other catalog's match must survive — no global wipe"
+        );
+        // Touch catalog_b to silence "unused" without changing semantics.
+        let _ = catalog_b;
     }
 
     #[tokio::test]
@@ -243,15 +288,68 @@ mod tests {
 
     #[tokio::test]
     async fn test_unlink_deleted_items() {
+        // Auto-match (user=0) pointing at a Q absent from `page` (treated as
+        // deleted) gets unlinked.
+        let app = test_support::test_app().await;
+        let (catalog_id, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
+        let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
+        EntryWriter::new(&app, &mut entry).set_match("Q115205673", 0).await.unwrap();
+        // Q115205673 intentionally not seeded in `page` → treated as deleted
+        let ms = Maintenance::new(Arc::new(app.clone()));
+        ms.unlink_deleted_items(catalog_id, &MatchState::any_matched()).await.unwrap();
+        let entry_after = Entry::from_id(entry_id, &app).await.unwrap();
+        assert_eq!(entry_after.q, None);
+    }
+
+    #[tokio::test]
+    async fn test_apply_deletions_preserves_manual_match() {
+        // Regression for GitHub #6: the global WDRC `apply_deletions` cron
+        // walks every entry whose Q was reported deleted and historically
+        // wiped them all in one UPDATE — including manual matches. With the
+        // user filter, manual matches survive even when the deletion signal
+        // is a false positive (Codeberg #124).
+        let app = test_support::test_app().await;
+        let (_catalog_auto, entry_auto) = test_support::seed_minimal_entry(&app).await.unwrap();
+        let (_catalog_manual, entry_manual) = test_support::seed_minimal_entry(&app).await.unwrap();
+        let mut e_auto = Entry::from_id(entry_auto, &app).await.unwrap();
+        EntryWriter::new(&app, &mut e_auto).set_match("Q999000111", 0).await.unwrap();
+        let mut e_manual = Entry::from_id(entry_manual, &app).await.unwrap();
+        EntryWriter::new(&app, &mut e_manual).set_match("Q999000111", 7).await.unwrap();
+
+        app.storage()
+            .maintenance_apply_deletions(vec![999_000_111])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            Entry::from_id(entry_auto, &app).await.unwrap().q,
+            None,
+            "auto match should be wiped"
+        );
+        let after_manual = Entry::from_id(entry_manual, &app).await.unwrap();
+        assert_eq!(
+            after_manual.q,
+            Some(999_000_111),
+            "manual match must survive a deletion sweep"
+        );
+        assert_eq!(after_manual.user, Some(7));
+    }
+
+    #[tokio::test]
+    async fn test_unlink_deleted_items_preserves_manual_match() {
+        // Regression for GitHub #6: a manually-confirmed match must survive
+        // the "Q is missing from `page`" check — that signal is not strong
+        // enough to override a curator's decision.
         let app = test_support::test_app().await;
         let (catalog_id, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
         let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
         EntryWriter::new(&app, &mut entry).set_match("Q115205673", 2).await.unwrap();
-        // Q115205673 intentionally not seeded in `page` → treated as deleted
+        // Q115205673 intentionally not seeded in `page` → would be flagged as deleted
         let ms = Maintenance::new(Arc::new(app.clone()));
-        ms.unlink_deleted_items(catalog_id, &MatchState::fully_matched()).await.unwrap();
-        let entry_after = Entry::from_id(entry_id, &app).await.unwrap();
-        assert_eq!(entry_after.q, None);
+        ms.unlink_deleted_items(catalog_id, &MatchState::any_matched()).await.unwrap();
+        let after = Entry::from_id(entry_id, &app).await.unwrap();
+        assert_eq!(after.q, Some(115205673), "manual match must be preserved");
+        assert_eq!(after.user, Some(2));
     }
 
     // ── wikidata_sync: update_ext_urls_from_pattern ──────────────────────────

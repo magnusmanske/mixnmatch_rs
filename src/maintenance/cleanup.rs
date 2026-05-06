@@ -48,7 +48,7 @@ impl Maintenance {
                 return Ok(());
             }
             offset += unique_qs.len();
-            let _ = self.unlink_meta_items_batch(&unique_qs).await; // Ignore errors
+            let _ = self.unlink_meta_items_batch(catalog_id, &unique_qs).await; // Ignore errors
         }
     }
 
@@ -65,7 +65,7 @@ impl Maintenance {
                 return Ok(());
             }
             offset += unique_qs.len();
-            let _ = self.unlink_deleted_items_batch(&unique_qs).await; // Ignore error
+            let _ = self.unlink_deleted_items_batch(catalog_id, &unique_qs).await; // Ignore error
         }
     }
 
@@ -84,8 +84,8 @@ impl Maintenance {
             }
             offset += unique_qs.len();
             let _ = self.fix_redirected_items_batch(&unique_qs).await; // Ignore error
-            let _ = self.unlink_deleted_items_batch(&unique_qs).await; // Ignore error
-            let _ = self.unlink_meta_items_batch(&unique_qs).await; // Ignore errors
+            let _ = self.unlink_deleted_items_batch(catalog_id, &unique_qs).await; // Ignore error
+            let _ = self.unlink_meta_items_batch(catalog_id, &unique_qs).await; // Ignore errors
         }
     }
 
@@ -108,21 +108,31 @@ impl Maintenance {
     }
 
     /// Finds deleted items in a batch of items, and unlinks app matches to them.
-    async fn unlink_deleted_items_batch(&self, unique_qs: &[String]) -> Result<()> {
+    async fn unlink_deleted_items_batch(
+        &self,
+        catalog_id: usize,
+        unique_qs: &[String],
+    ) -> Result<()> {
         let not_found = self.app.wikidata().get_deleted_items(unique_qs).await?;
-        self.unlink_item_matches(&not_found).await?;
+        self.unlink_item_matches(catalog_id, &not_found).await?;
         Ok(())
     }
 
     /// Finds meta items (disambig etc) in a batch of items, and unlinks app matches to them.
-    async fn unlink_meta_items_batch(&self, unique_qs: &[String]) -> Result<()> {
+    async fn unlink_meta_items_batch(
+        &self,
+        catalog_id: usize,
+        unique_qs: &[String],
+    ) -> Result<()> {
         let meta_items = self.app.wikidata().get_meta_items(unique_qs).await?;
-        self.unlink_item_matches(&meta_items).await?;
+        self.unlink_item_matches(catalog_id, &meta_items).await?;
         Ok(())
     }
 
-    /// Unlinks app matches to items in a list.
-    pub async fn unlink_item_matches(&self, items: &[String]) -> Result<()> {
+    /// Unlinks automatic matches in `catalog_id` whose target Q is in `items`.
+    /// Manual matches (`user > 0`) are left alone — see the storage method
+    /// for the rationale.
+    pub async fn unlink_item_matches(&self, catalog_id: usize, items: &[String]) -> Result<()> {
         let items: Vec<isize> = items
             .iter()
             .filter_map(|q| item2numeric(q))
@@ -132,7 +142,7 @@ impl Maintenance {
             let items: Vec<String> = items.iter().map(|q| q.to_string()).collect();
             self.app
                 .storage()
-                .maintenance_unlink_item_matches(items)
+                .maintenance_unlink_item_matches(catalog_id, items)
                 .await?;
         }
         Ok(())

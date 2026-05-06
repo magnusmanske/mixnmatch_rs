@@ -767,7 +767,11 @@ pub trait Storage:
         ext_ids: Vec<String>,
     ) -> Result<Vec<(usize, String, Option<usize>)>>;
     async fn maintenance_fix_redirects(&self, from: isize, to: isize) -> Result<()>;
-    async fn maintenance_unlink_item_matches(&self, items: Vec<String>) -> Result<()>;
+    async fn maintenance_unlink_item_matches(
+        &self,
+        catalog_id: usize,
+        items: Vec<String>,
+    ) -> Result<()>;
     async fn automatch_people_with_birth_year(&self, catalog_id: usize) -> Result<()>;
     async fn use_automatchers(&self, catalog_id: usize, use_automatchers: u8) -> Result<()>;
     async fn maintenance_automatch(&self) -> Result<()>;
