@@ -220,10 +220,17 @@ mod tests {
         let entry2 = Entry::from_id(entry_id, &app).await.unwrap();
         assert!(entry2.is_fully_matched());
 
-        // Switch to an automatch (user==0)
+        // Switch to an automatch (user==0). Use a *different* Q than the
+        // manual match above: `entry_unmatch` now writes a `remove_q`
+        // audit row (GitHub #6), and `entry_set_match` consults that log
+        // (`avoid_auto_match`) to suppress auto-matching anything a user
+        // previously removed. Re-matching the same Q would be silently
+        // dropped by that guard. The test only cares that *some*
+        // auto-match exists for `purge_automatches` to wipe, so any Q
+        // works.
         let mut entry3 = Entry::from_id(entry_id, &app).await.unwrap();
         EntryWriter::new(&app, &mut entry3).unmatch().await.unwrap();
-        EntryWriter::new(&app, &mut entry3).set_match("Q1", 0).await.unwrap();
+        EntryWriter::new(&app, &mut entry3).set_match("Q2", 0).await.unwrap();
         assert!(entry3.is_partially_matched());
 
         // Purge catalog — automatch must be removed

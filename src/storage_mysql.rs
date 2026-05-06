@@ -2233,8 +2233,32 @@ impl Storage for StorageMySQL {
     }
 
     async fn entry_unmatch(&self, entry_id: usize) -> Result<()> {
+        // Audit log (GitHub #6 follow-up): if the entry is currently a
+        // fully-matched row (`user>0 AND q>0`) — i.e. somebody's
+        // confirmed match — record a `remove_q` row in `log` *before*
+        // wiping the entry, so the trail of who-did-what survives the
+        // UPDATE. Attribution is `user=0` (system) since the storage
+        // layer doesn't know which caller triggered the unmatch.
+        // Auto-matches and already-unmatched entries do not log
+        // (the SELECT subquery returns zero rows in those cases, and
+        // INSERT…SELECT happily inserts nothing).
+        //
+        // Run serially with the UPDATE rather than in `tokio::try_join!`
+        // — the log row records the entry's *pre-unmatch* state, so it
+        // must be written before the wipe. The wd_matches status
+        // update at the end is independent and stays parallel.
+        let timestamp = TimeStamp::now();
         let f1 = async {
             let mut conn = self.get_conn().await?;
+            conn.exec_drop(
+                r"INSERT INTO `log` (action, entry_id, user, timestamp, q)
+                  SELECT 'remove_q', :entry_id, 0, :timestamp, q
+                  FROM `entry`
+                  WHERE id=:entry_id AND `user`>0 AND `q`>0",
+                params! {entry_id, timestamp},
+            )
+            .await
+            .map_err(|e| anyhow!(e))?;
             conn.exec_drop(
                 r"UPDATE `entry` SET `q`=NULL,`user`=NULL,`timestamp`=NULL WHERE `id`=:entry_id",
                 params! {entry_id},

@@ -1143,6 +1143,80 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn entry_unmatch_logs_remove_q_for_fully_matched() {
+        // GitHub #6 follow-up: unmatching a confirmed (`user>0`) match
+        // must record a `remove_q` row in the audit log so the trail
+        // survives the entry UPDATE. Attribution is `user=0` (system).
+        let app = test_support::test_app().await;
+        let (_catalog_id, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
+        let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
+        EntryWriter::new(&app, &mut entry)
+            .set_match("Q424242", 7)
+            .await
+            .unwrap();
+
+        EntryWriter::new(&app, &mut entry).unmatch().await.unwrap();
+
+        let log_rows = app
+            .storage()
+            .meta_entry_get_log_entries(entry_id)
+            .await
+            .unwrap();
+        let remove_q: Vec<_> = log_rows.iter().filter(|r| r.action == "remove_q").collect();
+        assert_eq!(remove_q.len(), 1, "exactly one remove_q row expected");
+        assert_eq!(remove_q[0].q, Some(424242), "logged q should be the prior match");
+        assert_eq!(remove_q[0].user, Some(0), "system attribution");
+    }
+
+    #[tokio::test]
+    async fn entry_unmatch_does_not_log_for_auto_match() {
+        // Auto-matches (`user=0`) are not "fully matched" — the SQL filter
+        // skips them so their unmatch leaves no log row, keeping the
+        // audit volume tied to actual curation undoings.
+        let app = test_support::test_app().await;
+        let (_catalog_id, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
+        let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
+        EntryWriter::new(&app, &mut entry)
+            .set_match("Q555555", 0)
+            .await
+            .unwrap();
+
+        EntryWriter::new(&app, &mut entry).unmatch().await.unwrap();
+
+        let log_rows = app
+            .storage()
+            .meta_entry_get_log_entries(entry_id)
+            .await
+            .unwrap();
+        assert!(
+            !log_rows.iter().any(|r| r.action == "remove_q"),
+            "auto-match unmatch must not log remove_q"
+        );
+    }
+
+    #[tokio::test]
+    async fn entry_unmatch_is_noop_log_for_already_unmatched() {
+        // Unmatching an entry that's already unmatched (q IS NULL) must
+        // not write a log row — there's nothing to record.
+        let app = test_support::test_app().await;
+        let (_catalog_id, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
+        let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
+        // Don't set any match — entry stays unmatched.
+
+        EntryWriter::new(&app, &mut entry).unmatch().await.unwrap();
+
+        let log_rows = app
+            .storage()
+            .meta_entry_get_log_entries(entry_id)
+            .await
+            .unwrap();
+        assert!(
+            !log_rows.iter().any(|r| r.action == "remove_q"),
+            "unmatching an already-unmatched entry must not log"
+        );
+    }
+
+    #[tokio::test]
     async fn test_person_dates() {
         let app = test_support::test_app().await;
         let (_, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
