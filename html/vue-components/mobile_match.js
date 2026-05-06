@@ -163,7 +163,9 @@ export default Vue.extend({
           // reference set so the confirmed match isn't an unsourced
           // statement on Wikidata.
           var qid = 'Q' + q;
-          var pc = await mnm_api('prep_match_claim', { entry: me.current_entry.id });
+          // Pass `q` so the server returns no claim when the target item
+          // already carries the catalog property+value, preventing dupes.
+          var pc = await mnm_api('prep_match_claim', { entry: me.current_entry.id, q: q });
           var hasClaim = pc && pc.data && pc.data.claims &&
             (Array.isArray(pc.data.claims) ? pc.data.claims.length > 0 : Object.keys(pc.data.claims).length > 0);
           if (!hasClaim) { callback(); return; }

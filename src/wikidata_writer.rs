@@ -59,6 +59,15 @@ pub trait WikidataWriter: std::fmt::Debug + Send + Sync + 'static {
     /// patch to the existing item via `wbeditentity`.
     async fn perform_ac2wd(&mut self, q: &str) -> Result<String>;
 
+    /// Re-fetch the just-edited item and merge any duplicate claims
+    /// (same property + main value + qualifiers). Run after
+    /// `perform_ac2wd`, which routinely re-adds external-id statements
+    /// that mixnmatch already wrote — wbeditentity merges those in
+    /// without deduplication, and the AC2WD reference block is typically
+    /// a strict superset of mixnmatch's (with a useless self-referential
+    /// snak), so we collapse the pair and keep only the legitimate refs.
+    async fn merge_duplicate_claims(&mut self, q: &str) -> Result<()>;
+
     /// Enables downcasting to the concrete type in test code.
     /// Not intended for production use.
     fn as_any(&self) -> &dyn std::any::Any;
@@ -94,6 +103,10 @@ impl WikidataWriter for Wikidata {
         Wikidata::perform_ac2wd(self, q).await
     }
 
+    async fn merge_duplicate_claims(&mut self, q: &str) -> Result<()> {
+        Wikidata::merge_duplicate_claims(self, q).await
+    }
+
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
@@ -119,6 +132,8 @@ pub struct MockWikidataWriter {
     pub create_calls: Vec<(serde_json::Value, String)>,
     /// QIDs passed to `perform_ac2wd`.
     pub ac2wd_calls: Vec<String>,
+    /// QIDs passed to `merge_duplicate_claims`.
+    pub merge_duplicate_calls: Vec<String>,
     /// If set, the next mutating call returns this error instead of
     /// `Ok(())`. Used to exercise error-handling paths in callers.
     pub next_error: Option<String>,
@@ -189,6 +204,14 @@ impl WikidataWriter for MockWikidataWriter {
         Ok(self.take_qid())
     }
 
+    async fn merge_duplicate_claims(&mut self, q: &str) -> Result<()> {
+        if let Some(e) = self.take_error() {
+            return Err(e);
+        }
+        self.merge_duplicate_calls.push(q.to_string());
+        Ok(())
+    }
+
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
@@ -223,6 +246,14 @@ mod tests {
         let got = WikidataWriter::perform_ac2wd(&mut w, "Q1").await.unwrap();
         assert_eq!(got, "Q42");
         assert_eq!(w.ac2wd_calls, vec!["Q1".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn mock_records_merge_duplicate_calls() {
+        let mut w = MockWikidataWriter::new();
+        WikidataWriter::merge_duplicate_claims(&mut w, "Q1").await.unwrap();
+        WikidataWriter::merge_duplicate_claims(&mut w, "Q2").await.unwrap();
+        assert_eq!(w.merge_duplicate_calls, vec!["Q1".to_string(), "Q2".to_string()]);
     }
 
     #[tokio::test]

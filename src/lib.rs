@@ -57,6 +57,7 @@ pub mod bespoke_scrapers;
 pub mod catalog;
 pub mod catalog_merger;
 pub mod cersei;
+pub mod claim_dedup;
 pub mod cli;
 pub mod code_fragment;
 pub mod coordinate_matcher;

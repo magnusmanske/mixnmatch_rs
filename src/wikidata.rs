@@ -353,6 +353,26 @@ impl Wikidata {
         Ok(new_id)
     }
 
+    /// Re-fetch `q` and collapse any duplicate claims that share property
+    /// + main value + qualifiers into a single statement, merging their
+    /// references and dropping self-referential ref snaks. Intended to
+    /// run right after `perform_ac2wd`, which lets duplicates slip in
+    /// because `wbeditentity` does not deduplicate when merging
+    /// caller-supplied claim arrays into existing items.
+    pub async fn merge_duplicate_claims(&mut self, q: &str) -> Result<()> {
+        self.api_log_in().await?;
+        let mw_api = self
+            .mw_api
+            .as_mut()
+            .ok_or_else(|| anyhow!("Failed to get mutable reference to MW API"))?;
+        crate::claim_dedup::merge_duplicate_claims_on_wikidata(
+            mw_api,
+            q,
+            "Mix'n'match: merging duplicate statements after item creation",
+        )
+        .await
+    }
+
     /// Performs a Wikidata API search for the query string. Returns item IDs matching the query.
     pub async fn search_api(&self, query: &str) -> Result<Vec<String>> {
         self.search_with_limit(query, None).await

@@ -306,7 +306,12 @@ export default Vue.extend({
 				me.edits_todo = [];
 				return;
 			}
-			me.setEntryQ(me.edits_todo[0], me.last_created_q, false, me.doNextEdit, undefined, { silent: true });
+			// skip_wikidata_edit=true: prep_new_item already added every
+			// selected entry's catalog property to the new item with
+			// canonical references, so re-running prep_match_claim per
+			// follow-up entry would duplicate every external-id statement
+			// (with a self-referential snak in the dupe's reference block).
+			me.setEntryQ(me.edits_todo[0], me.last_created_q, true, me.doNextEdit, undefined, { silent: true });
 		}
 	},
 	watch: {

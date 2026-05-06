@@ -109,7 +109,9 @@ MapSourceMnM.prototype._match_entry_to_q = function (data, q_norm, callback) {
 
 	// wd_prop path: dispatch wbeditentity with prep_match_claim payload (with refs).
 	if (self.catalog.wd_prop != null && self.catalog.wd_qual == null) {
-		mnm_api('prep_match_claim', { entry: entry.id })
+		// Pass `q_norm` so the server returns no claim when the target
+		// item already carries the catalog property+value, preventing dupes.
+		mnm_api('prep_match_claim', { entry: entry.id, q: q_norm })
 			.then(function (pc) {
 				var hasClaim = pc && pc.data && pc.data.claims &&
 					(Array.isArray(pc.data.claims) ? pc.data.claims.length > 0 : Object.keys(pc.data.claims).length > 0);

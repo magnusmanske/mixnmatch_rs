@@ -972,115 +972,12 @@ impl Entry {
         &self.ext_desc
     }
 
-    fn add_claim_or_references(item: &mut ItemEntity, mut claim: Statement) {
-        // Normalise the incoming claim in isolation: strip self-referencing
-        // snaks per-snak (not per-block, so a 3-snak reference block keeps
-        // its two legitimate snaks if one of them happens to echo the main
-        // snak), dedupe snaks inside each reference block, drop empty
-        // blocks, and dedupe the reference blocks themselves so equivalent
-        // blocks with snaks in different orders collapse into one.
-        Self::normalise_claim(&mut claim);
-
-        // Merge into a structurally-equivalent existing claim (same main
-        // snak AND same multiset of qualifier snaks). Comparing on main_snak
-        // alone was lossy: qualifier-bearing claims were merged with ones
-        // that didn't share those qualifiers, silently dropping them.
-        for existing in item.claims_mut() {
-            if Self::claim_core_equivalent(existing, &claim) {
-                let mut refs = existing.references().to_vec();
-                for r in claim.references() {
-                    if !refs
-                        .iter()
-                        .any(|existing_ref| Self::reference_equivalent(existing_ref, r))
-                    {
-                        refs.push(r.clone());
-                    }
-                }
-                existing.set_references(refs);
-                return;
-            }
-        }
-
-        item.add_claim(claim);
-    }
-
-    /// Clean up a claim before it enters the item: dedupe qualifiers and
-    /// references without changing the claim's meaning.
-    fn normalise_claim(claim: &mut Statement) {
-        // Qualifiers: drop exact duplicates, preserving order.
-        let mut qs: Vec<Snak> = Vec::with_capacity(claim.qualifiers().len());
-        for q in claim.qualifiers() {
-            if !qs.contains(q) {
-                qs.push(q.clone());
-            }
-        }
-        claim.set_qualifier_snaks(qs);
-
-        // References: per block, drop snaks equal to the main snak (those
-        // are circular and add no provenance value) and drop duplicate
-        // snaks. Drop blocks that end up empty. Then dedupe whole blocks.
-        let main = claim.main_snak().clone();
-        let mut new_refs: Vec<Reference> = Vec::new();
-        for r in claim.references() {
-            let mut snaks: Vec<Snak> = Vec::with_capacity(r.snaks().len());
-            for s in r.snaks() {
-                if Self::snaks_value_equivalent(s, &main) {
-                    continue;
-                }
-                if snaks.contains(s) {
-                    continue;
-                }
-                snaks.push(s.clone());
-            }
-            if snaks.is_empty() {
-                continue;
-            }
-            let candidate = Reference::new(snaks);
-            if !new_refs
-                .iter()
-                .any(|existing| Self::reference_equivalent(existing, &candidate))
-            {
-                new_refs.push(candidate);
-            }
-        }
-        claim.set_references(new_refs);
-    }
-
-    /// Two reference blocks are equivalent if they carry the same snaks in
-    /// any order. `Reference`'s derived `PartialEq` is order-sensitive, so
-    /// callers that merge references across entries need this instead.
-    /// Both inputs are expected to be dedup'd already (via `normalise_claim`).
-    fn reference_equivalent(a: &Reference, b: &Reference) -> bool {
-        let sa = a.snaks();
-        let sb = b.snaks();
-        sa.len() == sb.len() && sa.iter().all(|s| sb.contains(s))
-    }
-
-    /// Two snaks have the same identity for deduplication purposes: same
-    /// property, same snak_type, same data_value. `SnakDataType` (e.g.
-    /// ExternalId vs String) is intentionally ignored — both use
-    /// `DataValueType::StringType` internally, so the data_value comparison
-    /// already captures the actual value. This prevents spurious duplicates
-    /// when one code path emits ExternalId snaks and another emits String
-    /// snaks for the same property+value combination.
-    fn snaks_value_equivalent(a: &Snak, b: &Snak) -> bool {
-        a.property() == b.property()
-            && a.snak_type() == b.snak_type()
-            && a.data_value() == b.data_value()
-    }
-
-    /// Two claims are equivalent enough to merge (i.e. same main snak and
-    /// same qualifier set, order-insensitive). Qualifier-bearing variants
-    /// are kept separate from bare claims so we don't lose qualifiers.
-    /// Ignores rank/type/id — those don't affect the claim's identity for
-    /// the new-item-creation use case.
-    fn claim_core_equivalent(a: &Statement, b: &Statement) -> bool {
-        if !Self::snaks_value_equivalent(a.main_snak(), b.main_snak()) {
-            return false;
-        }
-        let aq = a.qualifiers();
-        let bq = b.qualifiers();
-        aq.len() == bq.len() && aq.iter().all(|s| bq.contains(s))
+    /// Thin wrapper around `crate::claim_dedup::add_claim_or_references`
+    /// kept on `Entry` so the dozens of in-tree call sites need not change.
+    /// All the logic lives in `claim_dedup` so the same primitives can be
+    /// reused for post-creation cleanup of items on Wikidata.
+    fn add_claim_or_references(item: &mut ItemEntity, claim: Statement) {
+        crate::claim_dedup::add_claim_or_references(item, claim);
     }
 
     /// Before q query or an update to the entry in the database, checks if this is a valid entry ID (eg not a new entry)

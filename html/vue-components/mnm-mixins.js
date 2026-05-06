@@ -75,7 +75,12 @@ export const editEntryMixin = {
 			// canonical reference set, so the confirmed match has the same
 			// source attribution as a freshly-created item rather than an
 			// unsourced bare statement.
-			mnm_api('prep_match_claim', { entry: entry.id })
+			// Pass `q` so the server can short-circuit when the target
+			// item already carries the catalog property+value claim —
+			// e.g. multiple entries from the same catalog being
+			// matched to the same Q via assignQToChecked. Without
+			// this, each follow-up match stamps a duplicate.
+			mnm_api('prep_match_claim', { entry: entry.id, q: q })
 				.then(function (d) {
 					if (!d.data || !d.data.claims || (Array.isArray(d.data.claims) ? d.data.claims.length === 0 : Object.keys(d.data.claims).length === 0)) {
 						// Catalog has no eligible claim (e.g. no wd_prop). Treat the

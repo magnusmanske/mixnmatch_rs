@@ -124,6 +124,14 @@ impl ItemCreator {
             .create_new_wikidata_item(&item, &comment)
             .await?;
         let _ = self.wikidata.perform_ac2wd(&new_id).await; // Ignore error
+        // AC2WD's wbeditentity payload may re-add external-id claims that
+        // mixnmatch already wrote, with reference blocks that are a strict
+        // superset of the original (typically a self-referential P-X = value
+        // snak on top of the legitimate P248 stated-in). wbeditentity does
+        // not deduplicate on merge, so we end up with two structurally
+        // equivalent statements. Collapse them now while we still know
+        // which item was just touched.
+        let _ = self.wikidata.merge_duplicate_claims(&new_id).await;
         for e in self.entries.values_mut() {
             let _ = EntryWriter::new(self.app.as_ref(), e).set_match(&new_id, 4).await;
         }
@@ -211,5 +219,10 @@ mod tests {
             .expect("should be MockWikidataWriter");
         assert_eq!(mock_ref.create_calls.len(), 1, "create_new_wikidata_item called once");
         assert_eq!(mock_ref.ac2wd_calls, vec!["Q-MOCK-ITEM"], "perform_ac2wd called with the new QID");
+        assert_eq!(
+            mock_ref.merge_duplicate_calls,
+            vec!["Q-MOCK-ITEM"],
+            "merge_duplicate_claims called with the new QID after AC2WD",
+        );
     }
 }
