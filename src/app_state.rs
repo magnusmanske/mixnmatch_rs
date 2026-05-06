@@ -27,6 +27,36 @@ use wikimisc::timestamp::TimeStamp;
 
 pub const MICRO_API_PORT: u16 = 8089;
 
+/// Per-action concurrency caps enforced by the job runner. When a given
+/// action has at least this many jobs running, the SQL job picker skips
+/// queued rows for that action until a slot frees up.
+///
+/// `microsync` is capped to keep the user-triggered "manual sync on every
+/// catalog containing Q" pattern (GitHub #6) from saturating the Wikidata
+/// replica connection pool — each microsync runs `fix_matched_items`,
+/// which in turn calls `get_deleted_items` against the replica, and the
+/// pool has only a handful of connections in production. Two concurrent
+/// microsyncs comfortably fit; a thundering herd does not. Other actions
+/// either don't hit the Wikidata replica or aren't user-triggered, so
+/// they don't need a cap here.
+const ACTION_CONCURRENCY_CAPS: &[(&str, usize)] = &[("microsync", 2)];
+
+/// Append any action whose running count meets or exceeds its
+/// `ACTION_CONCURRENCY_CAPS` entry to `skip_actions`. Pulled out of
+/// `get_next_job` so the cap policy is independently unit-testable
+/// without spinning up an `AppState`.
+fn apply_action_concurrency_caps(
+    skip_actions: &mut Vec<String>,
+    action_counts: &DashMap<String, usize>,
+) {
+    for (action, cap) in ACTION_CONCURRENCY_CAPS {
+        let running = action_counts.get(*action).map(|v| *v).unwrap_or(0);
+        if running >= *cap && !skip_actions.iter().any(|a| a == *action) {
+            skip_actions.push((*action).to_string());
+        }
+    }
+}
+
 /// Global function for tests.
 /// # Panics
 /// Used for testing only, panics if the config file is not found.
@@ -397,7 +427,7 @@ impl AppState {
     }
 
     pub async fn forever_loop(&self) -> Result<()> {
-        let current_jobs = self.forever_loop_initalize().await?;
+        let (current_jobs, action_counts) = self.forever_loop_initalize().await?;
         let threshold_job_size = TaskSize::Medium;
         let threshold_percent = 50;
 
@@ -415,7 +445,12 @@ impl AppState {
                 continue;
             }
             match self
-                .forever_loop_run_job(&current_jobs, &threshold_job_size, threshold_percent)
+                .forever_loop_run_job(
+                    &current_jobs,
+                    &action_counts,
+                    &threshold_job_size,
+                    threshold_percent,
+                )
                 .await
             {
                 Ok(_) => {}
@@ -425,8 +460,16 @@ impl AppState {
         // self.disconnect().await?; // Never happens
     }
 
-    async fn forever_loop_initalize(&self) -> Result<Arc<DashMap<usize, TaskSize>>> {
+    async fn forever_loop_initalize(
+        &self,
+    ) -> Result<(
+        Arc<DashMap<usize, TaskSize>>,
+        Arc<DashMap<String, usize>>,
+    )> {
         let current_jobs: Arc<DashMap<usize, TaskSize>> = Arc::new(DashMap::new());
+        // Per-action running counts. Used to enforce per-action concurrency
+        // caps via `ACTION_CONCURRENCY_CAPS` — see `get_next_job`.
+        let action_counts: Arc<DashMap<String, usize>> = Arc::new(DashMap::new());
         // Cut any query still in flight from a previous instance BEFORE the
         // reset flips those jobs to TODO. If the old process is still alive,
         // killing its query unblocks the connection and its `set_status(Done)`
@@ -457,21 +500,28 @@ impl AppState {
         self.storage()
             .set_kv_value("forever_loop_start", &current_time_str)
             .await?;
-        Ok(current_jobs)
+        Ok((current_jobs, action_counts))
     }
 
     async fn forever_loop_run_job(
         &self,
         current_jobs: &Arc<DashMap<usize, TaskSize>>,
+        action_counts: &Arc<DashMap<String, usize>>,
         threshold_job_size: &TaskSize,
         threshold_percent: usize,
     ) -> Result<()> {
         let (mut job, task_size) = self
-            .get_next_job(self, current_jobs, threshold_job_size, threshold_percent)
+            .get_next_job(
+                self,
+                current_jobs,
+                action_counts,
+                threshold_job_size,
+                threshold_percent,
+            )
             .await?;
         match job.set_next().await {
             Ok(true) => {
-                Self::run_job(job, task_size, current_jobs).await;
+                Self::run_job(job, task_size, current_jobs, action_counts).await;
                 let current_job_ids = current_jobs
                     .iter()
                     .map(|x| x.key().to_owned())
@@ -494,6 +544,7 @@ impl AppState {
         &self,
         app: &AppState,
         current_jobs: &Arc<DashMap<usize, TaskSize>>,
+        action_counts: &Arc<DashMap<String, usize>>,
         threshold_job_size: &TaskSize,
         threshold_percent: usize,
     ) -> Result<(Job, HashMap<String, TaskSize>)> {
@@ -512,6 +563,12 @@ impl AppState {
             .filter(|(_action, size)| **size > max_job_size)
             .map(|(action, _size)| action.to_string())
             .collect();
+        // Per-action concurrency caps. Keeps the user-triggered "manual
+        // sync on every catalog containing Q" pattern (GitHub #6) from
+        // saturating the Wikidata replica connection pool — when the cap
+        // for an action is reached, the SQL job picker skips it and lets
+        // the rows wait in TODO until a slot frees up.
+        apply_action_concurrency_caps(&mut job.skip_actions, action_counts);
         Ok((job, task_size))
     }
 
@@ -547,6 +604,7 @@ impl AppState {
         mut job: Job,
         task_size: HashMap<String, TaskSize>,
         current_jobs: &Arc<DashMap<usize, TaskSize>>,
+        action_counts: &Arc<DashMap<String, usize>>,
     ) {
         let _ = job.set_status(JobStatus::Running).await;
         let action = match job.get_action().await {
@@ -565,15 +623,28 @@ impl AppState {
             }
         };
         current_jobs.insert(job_id, job_size);
+        // Bump per-action running count BEFORE the spawn so the next
+        // `get_next_job` call (on the main loop) sees the increment.
+        *action_counts.entry(action.clone()).or_insert(0) += 1;
         let current_time_str = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
         info!("{current_time_str}: {} jobs running", current_jobs.len());
         Self::print_sysinfo();
         let current_jobs = current_jobs.clone();
+        let action_counts = action_counts.clone();
         tokio::spawn(async move {
             if let Err(e) = job.run().await {
                 error!("Job {job_id} failed with error {e}");
             }
             current_jobs.remove(&job_id);
+            // Saturating decrement — a panic between the increment and
+            // here would leave the count one above reality; the
+            // `if > 0` guard keeps a leaked count from going negative
+            // on a subsequent successful run.
+            if let Some(mut entry) = action_counts.get_mut(&action) {
+                if *entry > 0 {
+                    *entry -= 1;
+                }
+            }
         });
     }
 
@@ -623,6 +694,54 @@ mod tests {
 
         let app4 = crate::test_support::test_app().await;
         let _dyn_ctx: &dyn AppContext = &app4;
+    }
+
+    #[test]
+    fn action_cap_skips_when_at_capacity() {
+        let counts: DashMap<String, usize> = DashMap::new();
+        // Cap for microsync is 2 in ACTION_CONCURRENCY_CAPS.
+        counts.insert("microsync".to_string(), 2);
+        let mut skip: Vec<String> = vec![];
+        apply_action_concurrency_caps(&mut skip, &counts);
+        assert!(skip.iter().any(|a| a == "microsync"));
+    }
+
+    #[test]
+    fn action_cap_does_not_skip_below_capacity() {
+        let counts: DashMap<String, usize> = DashMap::new();
+        counts.insert("microsync".to_string(), 1);
+        let mut skip: Vec<String> = vec![];
+        apply_action_concurrency_caps(&mut skip, &counts);
+        assert!(
+            !skip.iter().any(|a| a == "microsync"),
+            "1 running, cap is 2 — must not skip"
+        );
+    }
+
+    #[test]
+    fn action_cap_does_not_double_add() {
+        // If `microsync` is already in skip_actions (e.g. because it was
+        // marked too-big upstream), don't append a duplicate.
+        let counts: DashMap<String, usize> = DashMap::new();
+        counts.insert("microsync".to_string(), 5);
+        let mut skip: Vec<String> = vec!["microsync".to_string()];
+        apply_action_concurrency_caps(&mut skip, &counts);
+        assert_eq!(
+            skip.iter().filter(|a| **a == "microsync").count(),
+            1,
+            "microsync must appear at most once in skip_actions"
+        );
+    }
+
+    #[test]
+    fn action_cap_handles_unknown_action() {
+        // An action that has no entry in ACTION_CONCURRENCY_CAPS must
+        // never be added to skip_actions by the cap logic.
+        let counts: DashMap<String, usize> = DashMap::new();
+        counts.insert("auxiliary_matcher".to_string(), 100);
+        let mut skip: Vec<String> = vec![];
+        apply_action_concurrency_caps(&mut skip, &counts);
+        assert!(skip.is_empty(), "uncapped action must not be skipped");
     }
 
     #[test]
