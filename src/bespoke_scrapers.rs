@@ -1,4 +1,4 @@
-use crate::{app_state::AppContext, entry::{Entry, EntryWriter}, extended_entry::ExtendedEntry};
+use crate::{app_state::AppContext, catalog::Catalog, entry::{Entry, EntryWriter}, extended_entry::ExtendedEntry};
 use anyhow::Result;
 use async_trait::async_trait;
 use futures::future::BoxFuture;
@@ -202,8 +202,11 @@ pub async fn run_bespoke_scraper(catalog_id: usize, app: Arc<dyn AppContext>) ->
         .iter()
         .find(|(id, _)| *id == catalog_id)
         .map(|(_, run)| *run)
-        .ok_or_else(|| anyhow::anyhow!("No bespoke scraper for catalog {catalog_id}"))?(app)
-    .await
+        .ok_or_else(|| anyhow::anyhow!("No bespoke scraper for catalog {catalog_id}"))?(app.clone())
+        .await?;
+    let mut catalog = Catalog::from_id(catalog_id, app.as_ref()).await?;
+    let _ = catalog.check_and_set_person_date(app.as_ref()).await;
+    Ok(())
 }
 
 /// Number of buffered entries that triggers an intermediate `process_cache` flush.

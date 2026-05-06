@@ -150,6 +150,8 @@ impl UpdateCatalog {
         }
         datasource.clear_tmp_file();
         let _ = self.clear_offset().await;
+        let mut catalog = Catalog::from_id(catalog_id, self.app.as_ref()).await?;
+        let _ = catalog.check_and_set_person_date(self.app.as_ref()).await;
         /*
         // TODO?
         $this->app->queue_job($this->catalog_id(),'microsync');

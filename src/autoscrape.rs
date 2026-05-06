@@ -359,8 +359,9 @@ impl Autoscrape {
             .storage()
             .autoscrape_finish(autoscrape_id, last_run_urls)
             .await?;
-        let catalog = Catalog::from_id(self.catalog_id, self.app_ref()).await?;
+        let mut catalog = Catalog::from_id(self.catalog_id, self.app_ref()).await?;
         let _ = catalog.refresh_overview_table(self.app_ref()).await;
+        let _ = catalog.check_and_set_person_date(self.app_ref()).await;
         let _ = self.clear_offset().await;
         let _ = Job::queue_simple_job(self.app_ref(), self.catalog_id, "automatch_by_search", None)
             .await;

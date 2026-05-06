@@ -1,4 +1,5 @@
 use crate::app_state::{AppContext, ExternalServicesContext};
+use crate::catalog::Catalog;
 use crate::entry::Entry;
 use crate::meta_entry::MetaEntry;
 use crate::DbId;
@@ -168,6 +169,10 @@ pub async fn import_meta_entries(
             Ok(count) => result.deleted = count,
             Err(e) => result.errors.push(format!("delete phase: {e}")),
         }
+    }
+
+    if let Ok(mut catalog) = Catalog::from_id(catalog_id, app).await {
+        let _ = catalog.check_and_set_person_date(app).await;
     }
 
     Ok(result)
