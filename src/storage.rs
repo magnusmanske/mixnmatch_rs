@@ -429,6 +429,16 @@ pub trait AutoscrapeQueries: std::fmt::Debug + Send + Sync {
     ) -> Result<Vec<(String, usize)>>;
     async fn autoscrape_start(&self, autoscrape_id: usize) -> Result<()>;
     async fn autoscrape_finish(&self, autoscrape_id: usize, last_run_urls: usize) -> Result<()>;
+    /// Delete the autoscrape row and its associated job for a catalog.
+    async fn delete_autoscraper(&self, catalog_id: usize) -> Result<()>;
+    /// Get the repeat_after_sec for the autoscrape job of a catalog (None if job missing or not set).
+    async fn get_autoscrape_job_repeat(&self, catalog_id: usize) -> Result<Option<usize>>;
+    /// Set (or clear) the repeat_after_sec for the autoscrape job of a catalog.
+    async fn set_autoscrape_job_repeat(
+        &self,
+        catalog_id: usize,
+        repeat_after_sec: Option<usize>,
+    ) -> Result<()>;
 }
 
 /// ISP-segregated sub-trait covering the `jobs` table:

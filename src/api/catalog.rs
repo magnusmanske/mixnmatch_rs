@@ -188,12 +188,45 @@ pub async fn query_edit_catalog(
             );
         }
     }
+    // Update autoscraper repeat schedule if the payload includes the field
+    // and an autoscraper actually exists for this catalog.
+    if let Some(repeat_val) = data.get("autoscraper_repeat") {
+        let has_scraper = !app
+            .storage()
+            .autoscrape_get_for_catalog(cid)
+            .await?
+            .is_empty();
+        if has_scraper {
+            let repeat_secs: Option<usize> = match repeat_val {
+                serde_json::Value::Null => None,
+                serde_json::Value::Number(n) => n.as_u64().map(|v| v as usize),
+                _ => None,
+            };
+            app.storage()
+                .set_autoscrape_job_repeat(cid, repeat_secs)
+                .await?;
+        }
+    }
     // Refresh in the background — the materialised overview is not on the
     // critical response path, so don't make the user wait for the rebuild.
     let app_bg = app.clone();
     tokio::spawn(async move {
         let _ = app_bg.storage().catalog_refresh_overview_table(cid).await;
     });
+    Ok(ok(serde_json::json!({})))
+}
+
+pub async fn query_delete_autoscraper(
+    app: &AppState,
+    session: &Session,
+    params: &Params,
+) -> Result<Response, ApiError> {
+    let cid = common::get_catalog(params)?;
+    auth::guard::require_catalog_admin_or_owner_from_params(app, session, params, cid).await?;
+    app.storage()
+        .delete_autoscraper(cid)
+        .await
+        .map_err(|e| ApiError(format!("delete autoscraper: {e}")))?;
     Ok(ok(serde_json::json!({})))
 }
 

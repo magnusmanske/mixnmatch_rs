@@ -351,6 +351,11 @@ pub async fn query_get_scraper(app: &dyn ExternalServicesContext, params: &Param
             })));
         }
     };
+    let repeat_after_sec = app
+        .storage()
+        .get_autoscrape_job_repeat(catalog_id)
+        .await
+        .unwrap_or(None);
     let stored: serde_json::Value = serde_json::from_str(&raw)
         .map_err(|e| ApiError(format!("stored autoscrape JSON is malformed: {e}")))?;
 
@@ -399,5 +404,6 @@ pub async fn query_get_scraper(app: &dyn ExternalServicesContext, params: &Param
         "options": options,
         "levels": levels,
         "meta": meta,
+        "repeat_after_sec": repeat_after_sec,
     })))
 }

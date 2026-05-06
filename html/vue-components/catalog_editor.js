@@ -1,5 +1,12 @@
 import { mnm_api, mnm_fetch_json, mnm_notify, ensure_catalog, get_specific_catalog, tt_update_interface, widar } from './store.js';
 
+// Seconds for autoscraper repeat options.
+const REPEAT_SECONDS = {
+	off:      null,
+	'3month': 3 * 30 * 24 * 3600,
+	'1year':  365 * 24 * 3600,
+};
+
 // Default-on booleans: present in kv_catalog with value "0" means opted out;
 // absent/any-other-value means the default (on) applies.
 const BOOL_KEYS_DEFAULT_ON = ['use_automatchers', 'use_description_for_new'];
@@ -42,6 +49,8 @@ export default Vue.extend({
 			catalog: {},
 			loaded: false,
 			saving: false,
+			has_autoscraper: false,
+			autoscraper_repeat: 'off',
 			kv: {
 				use_automatchers: true,
 				use_description_for_new: true,
@@ -61,7 +70,7 @@ export default Vue.extend({
 		};
 	},
 	created: async function () {
-		await Promise.all([this.reload(), this.updateTypes()]);
+		await Promise.all([this.reload(), this.updateTypes(), this.loadAutoscraper()]);
 	},
 	updated: function () { tt_update_interface(); },
 	mounted: function () { tt_update_interface(); },
@@ -105,6 +114,39 @@ export default Vue.extend({
 			const t = (this.catalog || {}).type || '';
 			if (t && this.types.indexOf(t) === -1) return [t].concat(this.types);
 			return this.types;
+		},
+		loadAutoscraper: async function () {
+			const me = this;
+			try {
+				const d = await mnm_api('get_scraper', { catalog: me.id });
+				me.has_autoscraper = !!(d && d.found);
+				if (me.has_autoscraper) {
+					me.autoscraper_repeat = me.secsToRepeatKey(d.repeat_after_sec);
+				}
+			} catch (e) {
+				me.has_autoscraper = false;
+			}
+		},
+		secsToRepeatKey: function (secs) {
+			if (!secs) return 'off';
+			if (secs === REPEAT_SECONDS['3month']) return '3month';
+			if (secs === REPEAT_SECONDS['1year']) return '1year';
+			return 'off';
+		},
+		deleteAutoscraper: async function () {
+			const me = this;
+			if (!confirm('Delete this autoscraper? This cannot be undone.')) return;
+			try {
+				await mnm_api('delete_autoscraper', {
+					username: widar.getUserName(),
+					catalog: me.id,
+				}, { method: 'POST' });
+				me.has_autoscraper = false;
+				me.autoscraper_repeat = 'off';
+				mnm_notify('Autoscraper deleted', 'success');
+			} catch (e) {
+				mnm_notify('Delete failed: ' + (e.message || e), 'danger');
+			}
 		},
 		reload: async function () {
 			const me = this;
@@ -230,6 +272,9 @@ export default Vue.extend({
 					active: !!me.catalog.active,
 					kv: me.buildKvPayload(),
 				};
+				if (me.has_autoscraper) {
+					payload.autoscraper_repeat = REPEAT_SECONDS[me.autoscraper_repeat] || null;
+				}
 				await mnm_api('edit_catalog', {
 					username: widar.getUserName(),
 					catalog: me.id,
@@ -423,6 +468,36 @@ export default Vue.extend({
 								<span class='input-group-text'>metres</span>
 							</div>
 							<div class='form-text'>{{ fieldHelp('location_distance') }}</div>
+						</div>
+					</div>
+				</div>
+
+				<!-- ─── Autoscraper (only if one exists for this catalog) ─── -->
+				<div class='card mb-3' v-if='has_autoscraper'>
+					<div class='card-body'>
+						<h5 class='card-title mb-3'>Autoscraper</h5>
+
+						<div class='mb-3'>
+							<label class='form-label d-block'>Repeat schedule</label>
+							<div class='form-check'>
+								<input class='form-check-input' type='radio' id='repeat-off' value='off' v-model='autoscraper_repeat' />
+								<label class='form-check-label' for='repeat-off'>Off (run once, no repeat)</label>
+							</div>
+							<div class='form-check'>
+								<input class='form-check-input' type='radio' id='repeat-3month' value='3month' v-model='autoscraper_repeat' />
+								<label class='form-check-label' for='repeat-3month'>Every three months</label>
+							</div>
+							<div class='form-check'>
+								<input class='form-check-input' type='radio' id='repeat-1year' value='1year' v-model='autoscraper_repeat' />
+								<label class='form-check-label' for='repeat-1year'>Once a year</label>
+							</div>
+						</div>
+
+						<div v-if='can_edit'>
+							<button type='button' class='btn btn-danger' @click='deleteAutoscraper'>
+								Delete autoscraper
+							</button>
+							<div class='form-text text-danger mt-1'>Permanently removes the autoscraper configuration and cancels its scheduled job.</div>
 						</div>
 					</div>
 				</div>

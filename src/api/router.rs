@@ -301,6 +301,7 @@ const ROUTES: &[(&str, ApiHandler)] = &[
     route!("get_catalog_info",             catalog::query_get_catalog_info, app_params),
     route!("catalog",                      catalog::query_catalog, app_params),
     route!("edit_catalog",                 catalog::query_edit_catalog),
+    route!("delete_autoscraper",           catalog::query_delete_autoscraper),
     route!("catalog_overview",             catalog::query_catalog_overview, app_params),
 
     // Entry

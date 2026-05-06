@@ -60,4 +60,48 @@ impl crate::storage::AutoscrapeQueries for StorageMySQL {
         }
         Ok(())
     }
+
+    async fn delete_autoscraper(&self, catalog_id: usize) -> Result<()> {
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop(
+            "DELETE FROM `autoscrape` WHERE `catalog`=:catalog_id",
+            params! {catalog_id},
+        )
+        .await?;
+        conn.exec_drop(
+            "DELETE FROM `jobs` WHERE `catalog`=:catalog_id AND `action`='autoscrape'",
+            params! {catalog_id},
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn get_autoscrape_job_repeat(&self, catalog_id: usize) -> Result<Option<usize>> {
+        let rows: Vec<Option<usize>> = self
+            .get_conn_ro()
+            .await?
+            .exec_iter(
+                "SELECT `repeat_after_sec` FROM `jobs` WHERE `catalog`=:catalog_id AND `action`='autoscrape' LIMIT 1",
+                params! {catalog_id},
+            )
+            .await?
+            .map_and_drop(|row| from_row::<Option<usize>>(row))
+            .await?;
+        Ok(rows.into_iter().next().flatten())
+    }
+
+    async fn set_autoscrape_job_repeat(
+        &self,
+        catalog_id: usize,
+        repeat_after_sec: Option<usize>,
+    ) -> Result<()> {
+        self.get_conn()
+            .await?
+            .exec_drop(
+                "UPDATE `jobs` SET `repeat_after_sec`=:repeat_after_sec WHERE `catalog`=:catalog_id AND `action`='autoscrape'",
+                params! {catalog_id, repeat_after_sec},
+            )
+            .await?;
+        Ok(())
+    }
 }
