@@ -1,8 +1,14 @@
 import { mnm_api, mnm_notify, mnm_loading, ensure_catalog, get_specific_catalog, tt_update_interface } from './store.js';
 
+// Actions that indicate a catalog is being scraped from an external source.
+const SCRAPING_ACTIONS = new Set(['autoscrape']);
+// Actions that indicate a catalog is being imported or updated from a file/feed.
+const IMPORTING_ACTIONS = new Set(['update_from_tabbed_file']);
+
 export default Vue.extend({
 	props: ['id'],
-	data: function () { return { catalog: {}, meta: {}, loaded: false, not_found: false, ext_url_pattern: '' } },
+	data: function () { return { catalog: {}, meta: {}, loaded: false, not_found: false, ext_url_pattern: '',
+		running_scraping: false, running_importing: false, job_check_interval: null } },
 	created: async function () {
 		await ensure_catalog(this.id);
 		this.catalog = get_specific_catalog(this.id);
@@ -13,6 +19,13 @@ export default Vue.extend({
 		}
 		if (typeof this.catalog != 'undefined' && this.catalog.unmatched < 0) this.updateStats();
 		else this.loadCatalog(this.id);
+		this.restartJobCheck();
+	},
+	beforeDestroy: function () {
+		if (this.job_check_interval) {
+			clearInterval(this.job_check_interval);
+			this.job_check_interval = null;
+		}
 	},
 	updated: function () { tt_update_interface() },
 	mounted: function () { tt_update_interface(); },
@@ -66,11 +79,34 @@ export default Vue.extend({
 			const me = this;
 			await mnm_api('update_overview', { catalog: me.id });
 			me.loadCatalog(me.id);
-		}
+		},
+		checkRunningJobs: async function () {
+			const me = this;
+			try {
+				const d = await mnm_api('get_jobs', { catalog: me.id, status_filter: 'RUNNING' });
+				let scraping = false, importing = false;
+				(d.data || []).forEach(function (job) {
+					if (SCRAPING_ACTIONS.has(job.action)) scraping = true;
+					if (IMPORTING_ACTIONS.has(job.action)) importing = true;
+				});
+				me.running_scraping = scraping;
+				me.running_importing = importing;
+			} catch (e) { /* silently ignore — indicator is best-effort */ }
+		},
+		restartJobCheck: function () {
+			const me = this;
+			if (me.job_check_interval) {
+				clearInterval(me.job_check_interval);
+				me.job_check_interval = null;
+			}
+			me.checkRunningJobs();
+			me.job_check_interval = setInterval(function () { me.checkRunningJobs(); }, 30000);
+		},
 	},
 	watch: {
 		'$route'(to, from) {
 			this.loadCatalog(to.params.id);
+			this.restartJobCheck();
 		}
 	},
 	template: `
@@ -95,6 +131,15 @@ export default Vue.extend({
 			<p v-if='isNaN(catalog.total)'><b>
 					This catalog appears to be empty, maybe the initial scraping is still running
 				</b></p>
+
+			<div v-if='running_scraping || running_importing' class='alert alert-info d-flex align-items-center gap-2 py-2 mt-2'>
+				<span class='spinner-border spinner-border-sm flex-shrink-0' role='status' aria-hidden='true'></span>
+				<span v-if='running_scraping && running_importing'>
+					<span tt='catalog_scraping_in_progress'></span> &middot; <span tt='catalog_importing_in_progress'></span>
+				</span>
+				<span v-else-if='running_scraping' tt='catalog_scraping_in_progress'></span>
+				<span v-else tt='catalog_importing_in_progress'></span>
+			</div>
 
 			<p>
 				<span v-if='typeof catalog.username!="undefined"'><span tt='imported_by_user'></span>
