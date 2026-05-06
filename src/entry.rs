@@ -758,7 +758,12 @@ fn add_own_id_to_item(
     item: &mut ItemEntity,
 ) {
     if let (Some(prop), None) = (catalog.wd_prop(), catalog.wd_qual()) {
-        let snak = Snak::new_external_id(&format!("P{prop}"), &entry.ext_id);
+        let prop_str = format!("P{prop}");
+        // Normalize the value the same way get_claim_for_aux does, so that
+        // claim_core_equivalent can merge own-ID and aux-sourced statements
+        // for the same property+value (e.g. ISNI P213 without spaces).
+        let value = AuxiliaryRow::fix_external_id(&prop_str, &entry.ext_id);
+        let snak = Snak::new_external_id(&prop_str, &value);
         let claim = Statement::new_normal(snak, vec![], references.to_owned());
         Entry::add_claim_or_references(item, claim);
     }
@@ -1019,7 +1024,7 @@ impl Entry {
         for r in claim.references() {
             let mut snaks: Vec<Snak> = Vec::with_capacity(r.snaks().len());
             for s in r.snaks() {
-                if *s == main {
+                if Self::snaks_value_equivalent(s, &main) {
                     continue;
                 }
                 if snaks.contains(s) {
@@ -1051,13 +1056,26 @@ impl Entry {
         sa.len() == sb.len() && sa.iter().all(|s| sb.contains(s))
     }
 
+    /// Two snaks have the same identity for deduplication purposes: same
+    /// property, same snak_type, same data_value. `SnakDataType` (e.g.
+    /// ExternalId vs String) is intentionally ignored — both use
+    /// `DataValueType::StringType` internally, so the data_value comparison
+    /// already captures the actual value. This prevents spurious duplicates
+    /// when one code path emits ExternalId snaks and another emits String
+    /// snaks for the same property+value combination.
+    fn snaks_value_equivalent(a: &Snak, b: &Snak) -> bool {
+        a.property() == b.property()
+            && a.snak_type() == b.snak_type()
+            && a.data_value() == b.data_value()
+    }
+
     /// Two claims are equivalent enough to merge (i.e. same main snak and
     /// same qualifier set, order-insensitive). Qualifier-bearing variants
     /// are kept separate from bare claims so we don't lose qualifiers.
     /// Ignores rank/type/id — those don't affect the claim's identity for
     /// the new-item-creation use case.
     fn claim_core_equivalent(a: &Statement, b: &Statement) -> bool {
-        if a.main_snak() != b.main_snak() {
+        if !Self::snaks_value_equivalent(a.main_snak(), b.main_snak()) {
             return false;
         }
         let aq = a.qualifiers();
@@ -2020,6 +2038,38 @@ mod tests {
         let mut item = ItemEntity::new_empty();
         Entry::add_claim_or_references(&mut item, stmt_item("P31", "Q5"));
         Entry::add_claim_or_references(&mut item, stmt_item("P31", "Q16521"));
+        assert_eq!(item.claims().len(), 2);
+    }
+
+    fn stmt_ext_id(prop: &str, v: &str) -> Statement {
+        Statement::new_normal(Snak::new_external_id(prop, v), vec![], vec![])
+    }
+
+    #[test]
+    fn dedup_merges_ext_id_and_string_snak_same_prop_value() {
+        // When one code path creates an ExternalId snak and another creates
+        // a String snak for the same property+value, they should merge into
+        // one statement. The DataValue (StringType + string) is identical for
+        // both; only SnakDataType differs, which is irrelevant for identity.
+        let ext_id_claim = with_refs(stmt_ext_id("P214", "123"), vec![r_url("https://viaf.org")]);
+        let string_claim = with_refs(
+            Statement::new_normal(Snak::new_string("P214", "123"), vec![], vec![]),
+            vec![r_url("https://other-source.org")],
+        );
+        let mut item = ItemEntity::new_empty();
+        Entry::add_claim_or_references(&mut item, ext_id_claim);
+        Entry::add_claim_or_references(&mut item, string_claim);
+        assert_eq!(item.claims().len(), 1, "ExternalId and String for same property/value should merge");
+        assert_eq!(item.claims()[0].references().len(), 2, "both reference blocks should be kept");
+    }
+
+    #[test]
+    fn dedup_different_values_same_snak_type_stay_separate() {
+        // Sanity-check: two ExternalId snaks for the same property but
+        // different values must remain separate statements.
+        let mut item = ItemEntity::new_empty();
+        Entry::add_claim_or_references(&mut item, stmt_ext_id("P213", "0000000012345678"));
+        Entry::add_claim_or_references(&mut item, stmt_ext_id("P213", "9999999987654321"));
         assert_eq!(item.claims().len(), 2);
     }
 
