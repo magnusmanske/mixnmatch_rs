@@ -1,4 +1,6 @@
-use crate::{mysql_misc::MySQLMisc, util::wikidata_props as wp, wikidata_commands::WikidataCommand};
+use crate::{
+    mysql_misc::MySQLMisc, util::wikidata_props as wp, wikidata_commands::WikidataCommand,
+};
 use anyhow::{Result, anyhow};
 use itertools::Itertools;
 use log::error;
@@ -684,7 +686,7 @@ mod tests {
         // QIDs in a range no other test seeds; the page-table will return
         // ~zero hits, which exceeds the 10%-or-50-items missing threshold.
         let app = test_support::test_app().await;
-        let qs: Vec<String> = (9_990_000_001..=9_990_000_100u64)
+        let qs: Vec<String> = (9_990_000_001..=9_990_000_100_u64)
             .map(|n| format!("Q{n}"))
             .collect();
         let result = app.wikidata().get_deleted_items(&qs).await;

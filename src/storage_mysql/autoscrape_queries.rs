@@ -85,7 +85,7 @@ impl crate::storage::AutoscrapeQueries for StorageMySQL {
                 params! {catalog_id},
             )
             .await?
-            .map_and_drop(|row| from_row::<Option<usize>>(row))
+            .map_and_drop(from_row::<Option<usize>>)
             .await?;
         Ok(rows.into_iter().next().flatten())
     }

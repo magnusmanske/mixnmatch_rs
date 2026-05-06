@@ -31,13 +31,3 @@ ALTER TABLE `entry`
 -- ---------------------------------------------------------------
 ALTER TABLE `entry`
     ADD INDEX IF NOT EXISTS `user_timestamp` (`user`, `timestamp`);
-
--- ---------------------------------------------------------------
--- 3) catalog.url VARCHAR(128) → VARCHAR(512)
---
--- Issue #16: long catalog URLs were silently truncated to 128 chars
--- on import. Widened to 512 to accommodate real-world deep URLs.
--- Safe INPLACE on any table size; catalog rows are few.
--- ---------------------------------------------------------------
-ALTER TABLE `catalog`
-    MODIFY COLUMN `url` varchar(512) DEFAULT NULL;

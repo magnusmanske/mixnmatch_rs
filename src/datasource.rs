@@ -206,7 +206,7 @@ impl DataSource {
             }
             DataSourceLocation::FilePath(path) => {
                 let mut file = File::open(&path)?;
-                let mut header = [0u8; 3];
+                let mut header = [0_u8; 3];
                 let has_bom = file.read(&mut header)? == 3 && &header == b"\xEF\xBB\xBF";
                 if !has_bom {
                     file.seek(SeekFrom::Start(0))?;
