@@ -158,8 +158,24 @@ impl Wikidata {
         Ok(results)
     }
 
-    /// Returns a list of deleted items
+    /// Returns the subset of `unique_qs` that is *not* present in the
+    /// Wikidata replica's `page` table — i.e. the items the caller should
+    /// treat as "deleted on Wikidata".
+    ///
+    /// Sanity gate (GitHub #6, Codeberg #124): when too many items appear
+    /// missing the underlying query has likely been truncated by replica
+    /// lag, query timeout, max_allowed_packet, or a transient replica
+    /// problem. In that mode the original "absence = deletion" rule wipes
+    /// live matches en masse. Instead, return `Err` so the caller's bulk
+    /// UPDATE never runs. The threshold is `max(50, 10% of input)`
+    /// missing — small batches keep working at full sensitivity, large
+    /// batches must produce a near-complete hit list before any deletion
+    /// is confirmed. Real Wikidata-item deletion volume is far below this
+    /// floor on any normal day, so a legitimate result will pass.
     pub async fn get_deleted_items(&self, unique_qs: &[String]) -> Result<Vec<String>> {
+        if unique_qs.is_empty() {
+            return Ok(vec![]);
+        }
         let placeholders = Self::sql_placeholders(unique_qs.len());
         let sql = format!(
             "SELECT page_title FROM `page` WHERE `page_namespace`=0 AND `page_title` IN ({placeholders})"
@@ -173,6 +189,20 @@ impl Wikidata {
             .await?
             .into_iter()
             .collect();
+
+        let missing = unique_qs.len().saturating_sub(found_items.len());
+        let max_allowed_missing = std::cmp::max(50, unique_qs.len() / 10);
+        if missing > max_allowed_missing {
+            log::warn!(
+                "get_deleted_items: {missing} of {} items missing from page table (limit: {max_allowed_missing}); refusing to declare deletions — likely replica/query issue",
+                unique_qs.len()
+            );
+            return Err(anyhow!(
+                "get_deleted_items: {missing}/{} items missing exceeds threshold ({max_allowed_missing})",
+                unique_qs.len()
+            ));
+        }
+
         let not_found: Vec<String> = unique_qs
             .iter()
             .filter(|q| !found_items.contains(*q))
@@ -612,6 +642,36 @@ mod tests {
         // `expect(1)` on each mock guarantees both production code paths
         // were exercised exactly once and that the empty-string call did
         // NOT touch the wire.
+    }
+
+    #[tokio::test]
+    async fn test_get_deleted_items_empty_input() {
+        // Empty input short-circuits to an empty result (and skips the SQL,
+        // which would build the syntactically-invalid `IN ()` if reached).
+        let app = test_support::test_app().await;
+        let out = app.wikidata().get_deleted_items(&[]).await.unwrap();
+        assert!(out.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_get_deleted_items_bails_on_implausible_result() {
+        // Regression for GitHub #6: when the page-table query returns far
+        // fewer hits than expected (the failure mode that caused the
+        // mass-unmatch incidents), `get_deleted_items` must return Err
+        // rather than declare every "missing" Q as deleted. We feed it 100
+        // QIDs in a range no other test seeds; the page-table will return
+        // ~zero hits, which exceeds the 10%-or-50-items missing threshold.
+        let app = test_support::test_app().await;
+        let qs: Vec<String> = (9_990_000_001..=9_990_000_100u64)
+            .map(|n| format!("Q{n}"))
+            .collect();
+        let result = app.wikidata().get_deleted_items(&qs).await;
+        assert!(result.is_err(), "must bail on implausibly short result");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("missing") && msg.contains("threshold"),
+            "error should mention missing items and threshold; got: {msg}"
+        );
     }
 
     #[tokio::test]
