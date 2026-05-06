@@ -48,7 +48,16 @@ impl Maintenance {
                 return Ok(());
             }
             offset += unique_qs.len();
-            let _ = self.unlink_meta_items_batch(catalog_id, &unique_qs).await; // Ignore errors
+            // Per-batch errors are logged but don't abort the loop — one
+            // batch's API/replica blip shouldn't prevent the remaining
+            // batches from being checked. The sanity gates in
+            // `get_deleted_items` and the API call in `get_meta_items`
+            // already prevent a bad result from causing damage.
+            if let Err(e) = self.unlink_meta_items_batch(catalog_id, &unique_qs).await {
+                log::warn!(
+                    "unlink_meta_items: catalog {catalog_id} batch (offset {offset}) failed: {e}"
+                );
+            }
         }
     }
 
@@ -65,12 +74,24 @@ impl Maintenance {
                 return Ok(());
             }
             offset += unique_qs.len();
-            let _ = self.unlink_deleted_items_batch(catalog_id, &unique_qs).await; // Ignore error
+            if let Err(e) = self.unlink_deleted_items_batch(catalog_id, &unique_qs).await {
+                log::warn!(
+                    "unlink_deleted_items: catalog {catalog_id} batch (offset {offset}) failed: {e}"
+                );
+            }
         }
     }
 
     /// Fixes redirected items, and unlinks deleted and meta items.
     /// This is more efficient than calling the functions individually, because it uses the same batching run.
+    ///
+    /// Each per-batch step is independent and logs its own failure
+    /// rather than aborting the whole catalog run: one transient
+    /// hiccup (replica lag, API timeout) on the deleted-items pass
+    /// shouldn't keep the redirect or meta-items pass from running, and
+    /// the next batch can still proceed. The downstream storage calls
+    /// are guarded by per-catalog and per-user filters (GitHub #6
+    /// fixes 1+2), so a logged warning here is *not* a crisis.
     pub async fn fix_matched_items(&self, catalog_id: usize, state: &MatchState) -> Result<()> {
         let mut offset = 0;
         loop {
@@ -83,9 +104,21 @@ impl Maintenance {
                 return Ok(());
             }
             offset += unique_qs.len();
-            let _ = self.fix_redirected_items_batch(&unique_qs).await; // Ignore error
-            let _ = self.unlink_deleted_items_batch(catalog_id, &unique_qs).await; // Ignore error
-            let _ = self.unlink_meta_items_batch(catalog_id, &unique_qs).await; // Ignore errors
+            if let Err(e) = self.fix_redirected_items_batch(&unique_qs).await {
+                log::warn!(
+                    "fix_matched_items: catalog {catalog_id} fix_redirects batch (offset {offset}) failed: {e}"
+                );
+            }
+            if let Err(e) = self.unlink_deleted_items_batch(catalog_id, &unique_qs).await {
+                log::warn!(
+                    "fix_matched_items: catalog {catalog_id} unlink_deleted batch (offset {offset}) failed: {e}"
+                );
+            }
+            if let Err(e) = self.unlink_meta_items_batch(catalog_id, &unique_qs).await {
+                log::warn!(
+                    "fix_matched_items: catalog {catalog_id} unlink_meta batch (offset {offset}) failed: {e}"
+                );
+            }
         }
     }
 
