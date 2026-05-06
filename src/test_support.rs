@@ -269,38 +269,6 @@ pub async fn seed_wdt_redirect(from_q: &str, to_q: &str) -> Result<()> {
     Ok(())
 }
 
-/// Seed `q` as a page that links to one of the META_ITEMS (Q4167410) so that
-/// `Wikidata::get_meta_items` will return it as a meta-item.
-/// Uses INSERT IGNORE throughout so parallel tests don't fail on duplicates.
-pub async fn seed_wdt_meta_item_page(q: &str) -> Result<()> {
-    let (pool, mut conn) = seed_conn().await?;
-    // Ensure Q4167410 (Wikimedia disambiguation page) exists in linktarget.
-    "INSERT IGNORE INTO linktarget (lt_namespace, lt_title) VALUES (0, 'Q4167410')"
-        .ignore(&mut conn)
-        .await?;
-    let lt_id: u64 =
-        "SELECT lt_id FROM linktarget WHERE lt_namespace=0 AND lt_title='Q4167410'"
-            .first(&mut conn)
-            .await?
-            .expect("lt_id must exist after insert");
-    "INSERT IGNORE INTO page (page_namespace, page_title, page_is_redirect) VALUES (0, :title, 0)"
-        .with(params! { "title" => q })
-        .ignore(&mut conn)
-        .await?;
-    let page_id: u64 = "SELECT page_id FROM page WHERE page_namespace=0 AND page_title=:title"
-        .with(params! { "title" => q })
-        .first(&mut conn)
-        .await?
-        .expect("page_id must exist after insert");
-    "INSERT IGNORE INTO pagelinks (pl_from, pl_target_id) VALUES (:from, :to)"
-        .with(params! { "from" => page_id, "to" => lt_id })
-        .ignore(&mut conn)
-        .await?;
-    drop(conn);
-    pool.disconnect().await.ok();
-    Ok(())
-}
-
 /// Insert a catalog with `active=0` and return its `catalog_id`.
 pub async fn seed_inactive_catalog() -> Result<usize> {
     let (pool, mut conn) = seed_conn().await?;

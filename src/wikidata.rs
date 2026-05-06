@@ -1,4 +1,4 @@
-use crate::{mysql_misc::MySQLMisc, wikidata_commands::WikidataCommand};
+use crate::{mysql_misc::MySQLMisc, util::wikidata_props as wp, wikidata_commands::WikidataCommand};
 use anyhow::{Result, anyhow};
 use itertools::Itertools;
 use log::error;
@@ -81,46 +81,68 @@ impl Wikidata {
         Ok(wd_matches)
     }
 
-    async fn get_meta_items_link_targets(&self) -> Result<Vec<String>> {
-        let sql = format!(
-            "SELECT lt_id FROM linktarget WHERE lt_namespace=0 AND lt_title IN ('{}')",
-            &META_ITEMS.join("','")
-        );
-        let meta_items_link_target_ids = self
-            .get_conn()
-            .await?
-            .exec_iter(sql, ())
-            .await?
-            .map_and_drop(from_row::<u64>)
-            .await?
-            .iter()
-            .map(|i| i.to_string())
-            .collect();
-        Ok(meta_items_link_target_ids)
-    }
-
-    /// Returns a list of items that link to meta items (disambiguation pages etc)
+    /// Returns the subset of `unique_qs` whose `instance of` (P31) is one
+    /// of the meta classes in [`META_ITEMS`] — i.e. items that should
+    /// never be a real Mix'n'match target (disambiguation pages, templates,
+    /// categories, list articles, …).
+    ///
+    /// Implemented against the live `wbgetentities` API rather than the
+    /// replica's `pagelinks` table. The previous SQL had two problems
+    /// (GitHub #6):
+    ///
+    /// * It joined `linktarget` into the FROM with no condition tying it
+    ///   to the rest of the query — a Cartesian product against a
+    ///   multi-million-row table that ballooned the intermediate result
+    ///   set, made the query slow and timeout-prone, and offered nothing
+    ///   in return.
+    /// * It looked at *pagelinks*, not P31. A statement value (qualifier,
+    ///   reference, …) that happened to point at a meta-class Q-id was
+    ///   enough to flag the source item, even though P31 said nothing of
+    ///   the sort. Combined with the bulk-UPDATE blast radius (since
+    ///   fixed), one such false positive wiped real matches across every
+    ///   catalog in the tool.
+    ///
+    /// `wbgetentities` answers the question we actually want — "is P31
+    /// one of these classes?" — directly. It is slower per call than a
+    /// replica query but the volumes in question (per-catalog batches)
+    /// stay well inside the API budget; chunking is delegated to
+    /// `EntityContainer`.
     pub async fn get_meta_items(&self, unique_qs: &[String]) -> Result<Vec<String>> {
-        let meta_items_link_target_ids = self.get_meta_items_link_targets().await?;
-        let placeholders = Self::sql_placeholders(unique_qs.len());
-        let sql = format!(
-            "SELECT DISTINCT page_title AS page_title
-            FROM page,pagelinks,linktarget
-	        WHERE page_namespace=0
-	        AND lt_namespace=0
-	        AND page_title IN ({placeholders})
-	        AND pl_from=page_id
-	        AND pl_target_id IN ({})",
-            &meta_items_link_target_ids.join(",")
-        );
-        let results = self
-            .get_conn()
-            .await?
-            .exec_iter(sql, unique_qs.to_vec())
-            .await?
-            .map_and_drop(from_row::<String>)
-            .await?;
-        Ok(results)
+        if unique_qs.is_empty() {
+            return Ok(vec![]);
+        }
+        // wbgetentities caps at 50 ids per request. EntityContainer
+        // handles the inner chunking; we batch loosely at 200 to bound
+        // the number of in-flight responses kept around per call —
+        // matches the pattern in `Maintenance::sanity_check_one_batch`.
+        const BATCH_SIZE: usize = 200;
+        let api = self
+            .get_mw_api()
+            .await
+            .map_err(|e| anyhow!("get_meta_items: cannot reach Wikidata API: {e}"))?;
+        let entities = wikimisc::wikibase::entity_container::EntityContainer::new();
+        for chunk in unique_qs.chunks(BATCH_SIZE) {
+            entities
+                .load_entities(&api, &chunk.to_vec())
+                .await
+                .map_err(|e| anyhow!("get_meta_items: load_entities failed: {e}"))?;
+        }
+        let mut meta = Vec::new();
+        for q in unique_qs {
+            // Items that didn't load (network blip, deletion, redirect
+            // missed by `get_redirected_items`) are *not* flagged as
+            // meta — let the dedicated paths handle missing entities.
+            let Some(entity) = entities.get_entity(q.clone()) else {
+                continue;
+            };
+            if META_ITEMS
+                .iter()
+                .any(|m| entity.has_target_entity(wp::P_INSTANCE_OF, m))
+            {
+                meta.push(q.clone());
+            }
+        }
+        Ok(meta)
     }
 
     pub async fn search_without_type(&self, name: &str) -> Result<Vec<String>> {
@@ -676,16 +698,75 @@ mod tests {
 
     #[tokio::test]
     async fn test_remove_meta_items() {
-        test_support::seed_wdt_meta_item_page("Q3522")
-            .await
-            .unwrap();
-        let app = test_support::test_app().await;
+        // get_meta_items now goes through the live wbgetentities API and
+        // checks P31 directly, so the test mocks the API rather than
+        // seeding the replica's pagelinks (which is what the old SQL
+        // implementation read). Q3522 is set up with P31=Q4167410 (a
+        // meta class), Q1 and Q2 with P31=Q188451 (a non-meta class).
+        use wiremock::matchers::{method, query_param_contains};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        const SITEINFO_JSON: &str = include_str!("../test_data/wikidata/siteinfo.json");
+        const META_FIXTURE: &str =
+            include_str!("../test_data/wikidata/wbgetentities_meta_items.json");
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(query_param_contains("action", "query"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(SITEINFO_JSON))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(query_param_contains("action", "wbgetentities"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(META_FIXTURE))
+            .mount(&server)
+            .await;
+        let api_url = format!("{}/w/api.php", server.uri());
+        let app = test_support::test_app_with_wikidata_api_url(&api_url).await;
         let mut items: Vec<String> = ["Q1", "Q3522", "Q2"]
             .iter()
             .map(|s| s.to_string())
             .collect();
         app.wikidata().remove_meta_items(&mut items).await.unwrap();
         assert_eq!(items, ["Q1", "Q2"]);
+    }
+
+    #[tokio::test]
+    async fn test_get_meta_items_empty_input() {
+        // Empty input must short-circuit without hitting the API.
+        let app = test_support::test_app().await;
+        let out = app.wikidata().get_meta_items(&[]).await.unwrap();
+        assert!(out.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_get_meta_items_does_not_flag_non_meta_p31() {
+        // Regression for GitHub #6: a real item whose P31 is *not* one of
+        // the meta classes must not be flagged, even if its claims happen
+        // to mention a meta-class Q-id elsewhere. Under the old SQL the
+        // pagelinks check could surface such items as "meta"; the API
+        // path checks P31 directly so they pass through cleanly.
+        use wiremock::matchers::{method, query_param_contains};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        const SITEINFO_JSON: &str = include_str!("../test_data/wikidata/siteinfo.json");
+        // Q13520818 has P31=Q5 (human) — not a meta class.
+        const Q13520818_JSON: &str = include_str!("../test_data/wikidata/Q13520818.json");
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(query_param_contains("action", "query"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(SITEINFO_JSON))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(query_param_contains("action", "wbgetentities"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(Q13520818_JSON))
+            .mount(&server)
+            .await;
+        let api_url = format!("{}/w/api.php", server.uri());
+        let app = test_support::test_app_with_wikidata_api_url(&api_url).await;
+        let qs = vec!["Q13520818".to_string()];
+        let meta = app.wikidata().get_meta_items(&qs).await.unwrap();
+        assert!(meta.is_empty(), "non-meta item must not be flagged");
     }
 
     #[tokio::test]
