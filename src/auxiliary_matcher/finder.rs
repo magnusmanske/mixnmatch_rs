@@ -324,9 +324,6 @@ mod tests {
     use wiremock::matchers::{method, path, query_param_contains};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    const SITEINFO_JSON: &str =
-        include_str!("../../test_data/wikidata/siteinfo.json");
-
     /// Build a siteinfo JSON fragment that routes `wikibase-sparql` to `sparql_url`.
     fn siteinfo_with_sparql(sparql_url: &str) -> String {
         format!(

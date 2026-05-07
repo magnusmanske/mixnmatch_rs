@@ -17,7 +17,6 @@ use crate::job::Jobbable;
 use crate::match_state::MatchState;
 use anyhow::{Result, anyhow};
 use futures::StreamExt;
-use futures::future::join_all;
 use mediawiki::api::Api;
 use std::collections::HashMap;
 
@@ -262,26 +261,6 @@ impl AutoMatch {
         name2entries
     }
 
-    async fn search_with_type_and_entity_id(
-        &self,
-        entry_id: usize,
-        name: &str,
-        type_q: &str,
-    ) -> Option<(usize, Vec<String>)> {
-        let mut items = match self.app.wikidata().search_with_type_api(name, type_q).await {
-            Ok(items) => items,
-            Err(_e) => return None,
-        };
-        if items.is_empty() {
-            return None;
-        }
-        // Wikidata search returns results in relevance order (exact-title
-        // matches first); preserve that so the auto-match picker downstream
-        // chooses the most relevant candidate, not the smallest Q-id.
-        Self::dedup_preserving_order(&mut items);
-        Some((entry_id, items))
-    }
-
     async fn match_entries_to_items(
         &self,
         entry_id2items: &HashMap<usize, Vec<String>>,
@@ -308,11 +287,11 @@ impl AutoMatch {
             .task_specific_usize()
             .get("automatch_by_search_batch_size")
             .unwrap_or(&5000);
-        let search_batch_size = *self
+        let concurrent = *self
             .app
             .task_specific_usize()
             .get("automatch_by_search_search_batch_size")
-            .unwrap_or(&100);
+            .unwrap_or(&50);
 
         loop {
             let results = self
@@ -321,10 +300,8 @@ impl AutoMatch {
                 .automatch_by_search_get_results(catalog_id, offset, batch_size)
                 .await?;
 
-            for result_batch in results.chunks(search_batch_size) {
-                self.automatch_by_search_process_results_batch(result_batch)
-                    .await;
-            }
+            self.automatch_by_search_process_results_batch(&results, concurrent)
+                .await;
 
             if results.len() < batch_size {
                 break;
@@ -339,9 +316,10 @@ impl AutoMatch {
     async fn automatch_by_search_process_results_batch(
         &mut self,
         result_batch: &[AutomatchSearchRow],
+        concurrent: usize,
     ) {
         let mut search_results = self
-            .automatch_by_search_process_results_batch_process_futures(result_batch)
+            .automatch_by_search_process_results_batch_process_futures(result_batch, concurrent)
             .await;
         if search_results.is_empty() {
             return;
@@ -377,40 +355,66 @@ impl AutoMatch {
     async fn automatch_by_search_process_results_batch_process_futures(
         &self,
         result_batch: &[AutomatchSearchRow],
+        concurrent: usize,
     ) -> Vec<(usize, String)> {
-        let mut futures = vec![];
-        for result in result_batch {
-            let entry_id = result.entry_id;
-            let label = &result.ext_name;
-            let type_q = &result.type_name;
-            let aliases: Vec<&str> = result
-                .aliases
-                .split('|')
-                .filter(|alias| !alias.is_empty())
-                .collect();
-            let future = self.search_with_type_and_entity_id(entry_id, label, type_q);
-            futures.push(future);
-            for alias in &aliases {
-                let future_tmp = self.search_with_type_and_entity_id(entry_id, alias, type_q);
-                futures.push(future_tmp);
+        if result_batch.is_empty() {
+            return vec![];
+        }
+        let (label_map, alias_map) = Self::group_searches_by_text(result_batch);
+
+        // Two-phase search: labels first, aliases second.
+        // Running phases sequentially guarantees that each entry's label
+        // candidates are inserted before its alias candidates, preserving
+        // the relevance ordering required by Codeberg #90.
+        let label_results = run_search_phase(self, label_map, concurrent).await;
+        let alias_results = run_search_phase(self, alias_map, concurrent).await;
+
+        // Flatten: for each entry, label candidates first then alias extras,
+        // with per-entry order-preserving dedup.
+        let all_entry_ids: std::collections::HashSet<usize> = label_results
+            .keys()
+            .chain(alias_results.keys())
+            .copied()
+            .collect();
+        let mut flat: Vec<(usize, String)> = Vec::new();
+        for entry_id in all_entry_ids {
+            let mut seen = std::collections::HashSet::new();
+            let label_items = label_results.get(&entry_id).map_or(&[][..], |v| v.as_slice());
+            let alias_items = alias_results.get(&entry_id).map_or(&[][..], |v| v.as_slice());
+            for q in label_items.iter().chain(alias_items.iter()) {
+                if seen.insert(q.as_str()) {
+                    flat.push((entry_id, q.clone()));
+                }
             }
         }
+        flat
+    }
 
-        // Preserve per-future relevance order across the flat-map: label
-        // search runs before alias searches, so label-match candidates
-        // appear before alias-match candidates per entry. Order-preserving
-        // dedup keeps the first occurrence of each (entry_id, q) pair so
-        // the auto-match picker still chooses the most relevant. Codeberg #90.
-        let mut seen: std::collections::HashSet<(usize, String)> =
-            std::collections::HashSet::new();
-        let search_results: Vec<(usize, String)> = join_all(futures)
-            .await
-            .into_iter()
-            .flatten()
-            .flat_map(|(entry_id, items)| items.into_iter().map(move |q| (entry_id, q)))
-            .filter(|pair| seen.insert(pair.clone()))
-            .collect();
-        search_results
+    /// Groups entries in `result_batch` by their unique `(text, type_q)` search keys,
+    /// returning separate maps for label searches and alias searches.
+    /// Entries sharing the same label+type produce a single shared search key,
+    /// which eliminates duplicate Wikidata API calls.
+    pub(super) fn group_searches_by_text(
+        result_batch: &[AutomatchSearchRow],
+    ) -> (
+        HashMap<(String, String), Vec<usize>>,
+        HashMap<(String, String), Vec<usize>>,
+    ) {
+        let mut label_map: HashMap<(String, String), Vec<usize>> = HashMap::new();
+        let mut alias_map: HashMap<(String, String), Vec<usize>> = HashMap::new();
+        for row in result_batch {
+            label_map
+                .entry((row.ext_name.clone(), row.type_name.clone()))
+                .or_default()
+                .push(row.entry_id);
+            for alias in row.aliases.split('|').filter(|a| !a.is_empty()) {
+                alias_map
+                    .entry((alias.to_string(), row.type_name.clone()))
+                    .or_default()
+                    .push(row.entry_id);
+            }
+        }
+        (label_map, alias_map)
     }
 
     pub async fn automatch_creations(&mut self, catalog_id: usize) -> Result<()> {
@@ -657,6 +661,55 @@ impl AutoMatch {
     }
 }
 
+/// Executes a single Wikidata text search and attributes the results to all
+/// `entry_ids` that share this `(name, type_q)` key. Returns the same
+/// `entry_ids` alongside the de-ordered-deduped candidate Q-strings so the
+/// caller can fan results out to multiple entries at once.
+async fn search_unique_text(
+    am: &AutoMatch,
+    name: String,
+    type_q: String,
+    entry_ids: Vec<usize>,
+) -> (Vec<usize>, Vec<String>) {
+    let mut items = match am.app.wikidata().search_with_type_api(&name, &type_q).await {
+        Ok(items) => items,
+        Err(_) => return (entry_ids, vec![]),
+    };
+    AutoMatch::dedup_preserving_order(&mut items);
+    (entry_ids, items)
+}
+
+/// Runs all searches in `search_map` with up to `concurrent` in-flight
+/// at once. Returns a map of `entry_id → candidate Q-strings` built by
+/// fanning each search result out to every entry that shared the search key.
+async fn run_search_phase(
+    am: &AutoMatch,
+    search_map: HashMap<(String, String), Vec<usize>>,
+    concurrent: usize,
+) -> HashMap<usize, Vec<String>> {
+    if search_map.is_empty() {
+        return HashMap::new();
+    }
+    let futures: Vec<_> = search_map
+        .into_iter()
+        .map(|((name, type_q), entry_ids)| search_unique_text(am, name, type_q, entry_ids))
+        .collect();
+    let search_results = futures::stream::iter(futures)
+        .buffer_unordered(concurrent)
+        .collect::<Vec<_>>()
+        .await;
+    let mut entry2items: HashMap<usize, Vec<String>> = HashMap::new();
+    for (entry_ids, items) in search_results {
+        for entry_id in entry_ids {
+            entry2items
+                .entry(entry_id)
+                .or_default()
+                .extend_from_slice(&items);
+        }
+    }
+    entry2items
+}
+
 async fn get_json_from_url_and_entry(
     client: &reqwest::Client,
     url: String,
@@ -684,8 +737,80 @@ fn json_array_of_strings_to_vec_item_ids(json: &serde_json::Value) -> Vec<usize>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::ResultInOriginalCatalog;
+    use crate::storage::{AutomatchSearchRow, ResultInOriginalCatalog};
     use serde_json::json;
+
+    // ── group_searches_by_text ────────────────────────────────────────────
+
+    fn make_row(id: usize, label: &str, type_q: &str, aliases: &str) -> AutomatchSearchRow {
+        AutomatchSearchRow::new(id, label.into(), type_q.into(), aliases.into())
+    }
+
+    #[test]
+    fn group_searches_deduplicates_shared_labels() {
+        let rows = vec![
+            make_row(1, "John Smith", "Q5", ""),
+            make_row(2, "John Smith", "Q5", ""),
+            make_row(3, "Jane Doe", "Q5", ""),
+        ];
+        let (label_map, alias_map) = AutoMatch::group_searches_by_text(&rows);
+        assert_eq!(label_map.len(), 2);
+        let john_entries = &label_map[&("John Smith".to_string(), "Q5".to_string())];
+        assert_eq!(john_entries.len(), 2);
+        assert!(john_entries.contains(&1));
+        assert!(john_entries.contains(&2));
+        assert_eq!(label_map[&("Jane Doe".to_string(), "Q5".to_string())], vec![3]);
+        assert!(alias_map.is_empty());
+    }
+
+    #[test]
+    fn group_searches_separates_labels_and_aliases() {
+        let rows = vec![make_row(1, "John Smith", "Q5", "J. Smith|Smithy")];
+        let (label_map, alias_map) = AutoMatch::group_searches_by_text(&rows);
+        assert_eq!(label_map.len(), 1);
+        assert_eq!(alias_map.len(), 2);
+        assert_eq!(alias_map[&("J. Smith".to_string(), "Q5".to_string())], vec![1]);
+        assert_eq!(alias_map[&("Smithy".to_string(), "Q5".to_string())], vec![1]);
+    }
+
+    #[test]
+    fn group_searches_deduplicates_shared_aliases() {
+        let rows = vec![
+            make_row(1, "Alpha", "Q5", "Beta"),
+            make_row(2, "Gamma", "Q5", "Beta"),
+        ];
+        let (_, alias_map) = AutoMatch::group_searches_by_text(&rows);
+        assert_eq!(alias_map.len(), 1);
+        let beta_entries = &alias_map[&("Beta".to_string(), "Q5".to_string())];
+        assert_eq!(beta_entries.len(), 2);
+        assert!(beta_entries.contains(&1));
+        assert!(beta_entries.contains(&2));
+    }
+
+    #[test]
+    fn group_searches_empty_batch_gives_empty_maps() {
+        let (label_map, alias_map) = AutoMatch::group_searches_by_text(&[]);
+        assert!(label_map.is_empty());
+        assert!(alias_map.is_empty());
+    }
+
+    #[test]
+    fn group_searches_skips_empty_aliases() {
+        let rows = vec![make_row(1, "Alpha", "Q5", "||")];
+        let (label_map, alias_map) = AutoMatch::group_searches_by_text(&rows);
+        assert_eq!(label_map.len(), 1);
+        assert!(alias_map.is_empty(), "empty alias tokens must be skipped");
+    }
+
+    #[test]
+    fn group_searches_different_types_are_separate_keys() {
+        let rows = vec![
+            make_row(1, "River Thames", "Q4022", ""),
+            make_row(2, "River Thames", "Q355304", ""),
+        ];
+        let (label_map, _) = AutoMatch::group_searches_by_text(&rows);
+        assert_eq!(label_map.len(), 2, "same label but different types must be separate search keys");
+    }
 
     // ── automatch_by_sitelink_name2entries ────────────────────────────────
 

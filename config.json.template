@@ -35,7 +35,7 @@
 	"flickr_key_path": "/path/to/flickr.key",
 	"task_specific_usize": {
 		"automatch_by_search_batch_size": 1000,
-		"automatch_by_search_search_batch_size": 5,
+		"automatch_by_search_search_batch_size": 50,
 		"auxiliary_matcher_batch_size": 2000,
 		"auxiliary_matcher_search_batch_size": 50,
 		"auxiliary_matcher_sparql_batch_size": 200,
