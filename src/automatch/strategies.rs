@@ -221,17 +221,40 @@ impl AutoMatch {
         wd_matches: Vec<(usize, String)>,
         name2entries: HashMap<String, Vec<usize>>,
     ) {
+        let entry_id2q = Self::build_sitelink_entry_id2q(&wd_matches, &name2entries);
+        if entry_id2q.is_empty() {
+            return;
+        }
+        let entry_ids: Vec<usize> = entry_id2q.keys().copied().collect();
+        let Ok(mut entries) = Entry::multiple_from_ids(&entry_ids, self.app.as_ref()).await else {
+            return;
+        };
+        for (entry_id, entry) in &mut entries {
+            if let Some(q_value) = entry_id2q.get(entry_id) {
+                let _ = EntryWriter::new(self.app.as_ref(), entry)
+                    .set_match(q_value, USER_AUTO)
+                    .await;
+            }
+        }
+    }
+
+    /// Builds an `entry_id → "Q{n}"` map from Wikidata sitelink query results.
+    /// When the same `entry_id` is reached via multiple titles, the first match
+    /// in `wd_matches` order wins (preserves prior behaviour).
+    pub(super) fn build_sitelink_entry_id2q(
+        wd_matches: &[(usize, String)],
+        name2entries: &HashMap<String, Vec<usize>>,
+    ) -> HashMap<usize, String> {
+        let mut entry_id2q: HashMap<usize, String> = HashMap::new();
         for (q, title) in wd_matches {
-            if let Some(v) = name2entries.get(&title) {
-                for entry_id in v {
-                    if let Ok(mut entry) = Entry::from_id(*entry_id, self.app.as_ref()).await {
-                        let _ = EntryWriter::new(self.app.as_ref(), &mut entry)
-                            .set_match(&format!("Q{q}"), USER_AUTO)
-                            .await;
-                    }
+            if let Some(ids) = name2entries.get(title) {
+                let q_value = format!("Q{q}");
+                for entry_id in ids {
+                    entry_id2q.entry(*entry_id).or_insert(q_value.clone());
                 }
             }
         }
+        entry_id2q
     }
 
     async fn automatch_by_sitelink_get_wd_matches(
@@ -827,6 +850,61 @@ mod tests {
         ];
         let (label_map, _) = AutoMatch::group_searches_by_text(&rows);
         assert_eq!(label_map.len(), 2, "same label but different types must be separate search keys");
+    }
+
+    // ── build_sitelink_entry_id2q ─────────────────────────────────────────
+
+    #[test]
+    fn sitelink_entry_id2q_basic_match() {
+        let wd_matches = vec![(42_usize, "Albert Einstein".to_string())];
+        let name2entries: HashMap<String, Vec<usize>> =
+            [("Albert Einstein".to_string(), vec![1_usize])].into();
+        let map = AutoMatch::build_sitelink_entry_id2q(&wd_matches, &name2entries);
+        assert_eq!(map.len(), 1);
+        assert_eq!(map[&1], "Q42");
+    }
+
+    #[test]
+    fn sitelink_entry_id2q_shared_title_maps_all_entries() {
+        let wd_matches = vec![(7_usize, "Paris".to_string())];
+        let name2entries: HashMap<String, Vec<usize>> =
+            [("Paris".to_string(), vec![10_usize, 20_usize])].into();
+        let map = AutoMatch::build_sitelink_entry_id2q(&wd_matches, &name2entries);
+        assert_eq!(map.len(), 2);
+        assert_eq!(map[&10], "Q7");
+        assert_eq!(map[&20], "Q7");
+    }
+
+    #[test]
+    fn sitelink_entry_id2q_first_match_wins_on_collision() {
+        // Same entry_id reached by two different titles → first insertion wins.
+        let wd_matches = vec![
+            (1_usize, "Rome".to_string()),
+            (2_usize, "Roma".to_string()),
+        ];
+        let name2entries: HashMap<String, Vec<usize>> = [
+            ("Rome".to_string(), vec![99_usize]),
+            ("Roma".to_string(), vec![99_usize]),
+        ]
+        .into();
+        let map = AutoMatch::build_sitelink_entry_id2q(&wd_matches, &name2entries);
+        assert_eq!(map.len(), 1);
+        assert_eq!(map[&99], "Q1", "first match in wd_matches order must win");
+    }
+
+    #[test]
+    fn sitelink_entry_id2q_unrecognised_title_is_ignored() {
+        let wd_matches = vec![(5_usize, "Unknown Page".to_string())];
+        let name2entries: HashMap<String, Vec<usize>> =
+            [("Known Page".to_string(), vec![1_usize])].into();
+        let map = AutoMatch::build_sitelink_entry_id2q(&wd_matches, &name2entries);
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn sitelink_entry_id2q_empty_inputs_give_empty_map() {
+        let map = AutoMatch::build_sitelink_entry_id2q(&[], &HashMap::new());
+        assert!(map.is_empty());
     }
 
     // ── automatch_by_sitelink_name2entries ────────────────────────────────
