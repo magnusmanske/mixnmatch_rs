@@ -1,0 +1,59 @@
+{
+	"wikidata": {
+		"url": "mysql://MYSQL_USER:MYSQL_PASSWORD@127.0.0.1:3309/wikidatawiki_p",
+		"min_connections": 0,
+		"max_connections": 4,
+		"keep_sec": 2
+	},
+	"mixnmatch": {
+		"url": "mysql://MYSQL_USER:MYSQL_PASSWORD@127.0.0.1:3308/s51434__mixnmatch_p",
+		"min_connections": 0,
+		"max_connections": 4,
+		"keep_sec": 2
+	},
+	"mixnmatch_ro": {
+		"url": "mysql://MYSQL_USER:MYSQL_PASSWORD@127.0.0.1:3308/s51434__mixnmatch_p",
+		"min_connections": 0,
+		"max_connections": 8,
+		"keep_sec": 2
+	},
+	"wdrc": {
+		"url": "mysql://MYSQL_USER:MYSQL_PASSWORD@tools.db.svc.wikimedia.cloud/s55078__wdrc_p",
+		"min_connections": 0,
+		"max_connections": 1,
+		"keep_sec": 1
+	},
+	"wdt": {
+		"url": "mysql://MYSQL_USER:MYSQL_PASSWORD@127.0.0.1:3317/wikidatawiki_p",
+		"min_connections": 0,
+		"max_connections": 1,
+		"keep_sec": 1
+	},
+	"bot_name": "BOT_NAME (Reinheitsgebot)",
+	"bot_password": "BOT_PASSWORD",
+	"import_file_path": "/path/to/store/imported/files",
+	"flickr_key_path": "/path/to/flickr.key",
+	"task_specific_usize": {
+		"automatch_by_search_batch_size": 1000,
+		"automatch_by_search_search_batch_size": 5,
+		"auxiliary_matcher_batch_size": 2000,
+		"auxiliary_matcher_search_batch_size": 50,
+		"auxiliary_matcher_sparql_batch_size": 200,
+		"wdrc_sync_properties_batch_size": 10
+	},
+	"default_thread": 8,
+	"thread_stack_factor": 4,
+	"max_concurrent_jobs": 10,
+	"oauth": {
+		"ini_path": "./oauth.ini",
+		"callback_url": "http://localhost:8000/api.php",
+		"cookie_name": "mnm_session",
+		"cookie_secure": false,
+		"session_lifetime_days": 90,
+		"session_dir": "./sessions"
+	},
+	"wikibase": {
+		"api": "PATH_TO_EXPERIMENTAL_WIKIBASE_API",
+		"token": "WIKIBASE_API_TOKEN"
+	}
+}

@@ -28,8 +28,6 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
-use wikimisc::wikibase::Entity;
-use wikimisc::wikibase::Value;
 use wikimisc::wikibase::entity_container::EntityContainer;
 
 pub const AUX_BLACKLISTED_CATALOGS: &[usize] = &[506];
@@ -99,23 +97,6 @@ impl AuxiliaryResults {
         )
     }
 
-    //TODO test
-    pub(super) fn entity_has_statement(&self, entity: &Entity) -> bool {
-        entity
-            .claims_with_property(self.prop())
-            .iter()
-            .filter_map(|statement| statement.main_snak().data_value().to_owned())
-            .map(|datavalue| datavalue.value().to_owned())
-            .any(|v| {
-                if let Value::StringValue(s) = v {
-                    if AUX_PROPERTIES_ALSO_USING_LOWERCASE.contains(&self.property) {
-                        return s.to_lowercase() == self.value.to_lowercase();
-                    }
-                    return *s == self.value;
-                }
-                false
-            })
-    }
 }
 
 #[derive(Debug, Clone)]
