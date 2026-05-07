@@ -189,6 +189,15 @@ td.num {
 	opacity: 1;
 }
 
+/* ========== permalink-hover-after (radio-button mode) ========== */
+.permalink-hover-after {
+	opacity: 0;
+}
+
+.entry_cell_left:hover .permalink-hover-after {
+	opacity: 1;
+}
+
 .entry_cell_desc {
 	font-size: 0.875rem;
 	padding-right: 5px;
