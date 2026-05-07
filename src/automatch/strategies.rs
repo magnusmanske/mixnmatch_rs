@@ -551,10 +551,11 @@ impl AutoMatch {
                 .storage()
                 .automatch_from_other_catalogs_get_results2(&results_in_original_catalog, ext_names)
                 .await?;
-            for r in &results_in_other_catalogs {
-                self.automatch_from_other_catalogs_process_result(r, &name_type2id)
-                    .await;
-            }
+            self.automatch_from_other_catalogs_apply_matches(
+                &results_in_other_catalogs,
+                &name_type2id,
+            )
+            .await;
             if results_in_original_catalog.len() < batch_size {
                 break;
             }
@@ -565,23 +566,39 @@ impl AutoMatch {
         Ok(())
     }
 
-    async fn automatch_from_other_catalogs_process_result(
-        &mut self,
-        r: &ResultInOtherCatalog,
+    async fn automatch_from_other_catalogs_apply_matches(
+        &self,
+        results_in_other_catalogs: &[ResultInOtherCatalog],
         name_type2id: &HashMap<(String, String), Vec<usize>>,
     ) {
-        let q_value = match r.q {
-            Some(q) => format!("Q{q}"),
-            None => return,
+        // Build entry_id → q_value in one pass (no I/O).
+        // If an entry_id appears more than once (same name matched in multiple
+        // other catalogs) the first match wins, which is fine — a second pass
+        // would just try to re-match an already-matched entry.
+        let mut entry_id2q: HashMap<usize, String> = HashMap::new();
+        for r in results_in_other_catalogs {
+            let Some(q) = r.q else { continue };
+            let key = (r.ext_name.clone(), r.type_name.clone());
+            if let Some(ids) = name_type2id.get(&key) {
+                let q_value = format!("Q{q}");
+                for entry_id in ids {
+                    entry_id2q.entry(*entry_id).or_insert(q_value.clone());
+                }
+            }
+        }
+        if entry_id2q.is_empty() {
+            return;
+        }
+        // One batch load instead of N individual queries.
+        let entry_ids: Vec<usize> = entry_id2q.keys().copied().collect();
+        let Ok(mut entries) = Entry::multiple_from_ids(&entry_ids, self.app.as_ref()).await else {
+            return;
         };
-        let key = (r.ext_name.to_owned(), r.type_name.to_owned());
-        if let Some(v) = name_type2id.get(&key) {
-            for entry_id in v {
-                if let Ok(mut entry) = Entry::from_id(*entry_id, self.app.as_ref()).await {
-                    let _ = EntryWriter::new(self.app.as_ref(), &mut entry)
-                        .set_match(&q_value, USER_AUTO)
-                        .await;
-                };
+        for (entry_id, entry) in &mut entries {
+            if let Some(q_value) = entry_id2q.get(entry_id) {
+                let _ = EntryWriter::new(self.app.as_ref(), entry)
+                    .set_match(q_value, USER_AUTO)
+                    .await;
             }
         }
     }
