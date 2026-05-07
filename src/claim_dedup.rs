@@ -244,6 +244,53 @@ pub async fn merge_duplicate_claims_on_wikidata(
     Ok(())
 }
 
+/// Check whether item `q` on Wikidata already carries a top-level claim
+/// for `property` whose main snak's value equals `value`. Used as a
+/// pre-write guard so endpoints like `prep_match_claim` and Widar's
+/// `set_string` don't return a payload that the frontend would POST and
+/// thereby create a duplicate statement.
+///
+/// Uses the lightweight unauthenticated `wbgetclaims` API (no entity
+/// fetch, no auth, single property), matching the pattern in
+/// `api::widar::wikidata_string_claim_exists`. Network/parse failures
+/// fall through to `false` — risk an occasional duplicate over dropping
+/// a legitimate match because the API blipped.
+pub async fn external_id_claim_exists(q: &str, property: &str, value: &str) -> bool {
+    let url = format!(
+        "https://www.wikidata.org/w/api.php?action=wbgetclaims\
+         &entity={q}&property={property}&format=json"
+    );
+    let Ok(client) = wikimisc::wikidata::Wikidata::new().reqwest_client() else {
+        return false;
+    };
+    let Ok(resp) = client.get(&url).send().await else {
+        return false;
+    };
+    let Ok(json): Result<Value, _> = resp.json().await else {
+        return false;
+    };
+    claims_contain_value(&json, property, value)
+}
+
+/// Pure parser for a `wbgetclaims` response: does the claims array for
+/// `property` contain a main snak whose stringified value equals `value`?
+/// Rank/qualifiers/references are irrelevant for dedup of external-id
+/// statements.
+pub(crate) fn claims_contain_value(json: &Value, property: &str, value: &str) -> bool {
+    let Some(claims) = json
+        .pointer(&format!("/claims/{property}"))
+        .and_then(|v| v.as_array())
+    else {
+        return false;
+    };
+    claims.iter().any(|claim| {
+        claim
+            .pointer("/mainsnak/datavalue/value")
+            .and_then(|v| v.as_str())
+            == Some(value)
+    })
+}
+
 /// Render a plan as the array passed to `wbeditentity`'s `data.claims`.
 /// Keepers go in as full statements (id + merged refs preserved); removed
 /// ids go in as `{"id": …, "remove": ""}` stubs.
@@ -452,6 +499,57 @@ mod tests {
         let plan = DedupPlan::default();
         let claims = build_wbeditentity_claims(&plan).unwrap();
         assert!(claims.is_empty());
+    }
+
+    #[test]
+    fn claims_contain_value_matches_existing_string_value() {
+        let json = serde_json::json!({
+            "claims": {
+                "P3782": [
+                    {"mainsnak": {"snaktype": "value",
+                                  "datavalue": {"value": "alain-gaudin", "type": "string"}}}
+                ]
+            }
+        });
+        assert!(claims_contain_value(&json, "P3782", "alain-gaudin"));
+        assert!(!claims_contain_value(&json, "P3782", "different-value"));
+    }
+
+    #[test]
+    fn claims_contain_value_missing_property_returns_false() {
+        let json = serde_json::json!({ "claims": {} });
+        assert!(!claims_contain_value(&json, "P3782", "alain-gaudin"));
+    }
+
+    #[test]
+    fn claims_contain_value_handles_multiple_existing_claims() {
+        // Mirrors the Q139681605 post-bug shape: two claims with the same
+        // value. The check only needs *any* match — finding one is enough
+        // for dedup, and any second-pass cleanup is the merge_duplicate
+        // path's job.
+        let json = serde_json::json!({
+            "claims": {
+                "P3782": [
+                    {"mainsnak": {"snaktype": "value",
+                                  "datavalue": {"value": "alain-gaudin", "type": "string"}}},
+                    {"mainsnak": {"snaktype": "value",
+                                  "datavalue": {"value": "alain-gaudin", "type": "string"}}}
+                ]
+            }
+        });
+        assert!(claims_contain_value(&json, "P3782", "alain-gaudin"));
+    }
+
+    #[test]
+    fn claims_contain_value_skips_novalue_snaks() {
+        let json = serde_json::json!({
+            "claims": {
+                "P3782": [
+                    {"mainsnak": {"snaktype": "novalue"}}
+                ]
+            }
+        });
+        assert!(!claims_contain_value(&json, "P3782", "alain-gaudin"));
     }
 
     /// Smoke test for the main use case: `add_claim_or_references` should

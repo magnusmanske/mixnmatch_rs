@@ -210,7 +210,15 @@ async fn build_match_claim_item(
     let snak = Snak::new_external_id(&prop_str, &value);
 
     if let Some(q) = target_q {
-        if target_item_already_has_snak(app, q, &snak).await {
+        // Skip the edit if the target item already has a claim with this
+        // property and value. Uses `wbgetclaims` (lightweight,
+        // unauthenticated, single property) so we don't pay for a full
+        // entity fetch on every match. This is the server-side guard
+        // against the Q139681605-style bug: when prep_new_item creates an
+        // item with N catalog-property claims and the frontend then
+        // fires prep_match_claim per entry, the follow-up POSTs would
+        // otherwise stamp duplicate copies of every one of those claims.
+        if crate::claim_dedup::external_id_claim_exists(q, &prop_str, &value).await {
             return Ok(item);
         }
     }
@@ -223,44 +231,6 @@ async fn build_match_claim_item(
     // on Q139680563 visually distinguishable from the original.
     crate::claim_dedup::add_claim_or_references(&mut item, claim);
     Ok(item)
-}
-
-/// Fetch `q` from Wikidata and return true if it already carries a
-/// claim whose main snak matches `target_snak` (property + value).
-/// Network/parse failures fall through to `false` — better to risk an
-/// occasional duplicate than to drop a legitimate match because the
-/// API blipped.
-async fn target_item_already_has_snak(
-    app: &AppState,
-    q: &str,
-    target_snak: &wikimisc::wikibase::Snak,
-) -> bool {
-    use wikimisc::wikibase::entity_container::EntityContainer;
-    let Ok(api) = app.wikidata().get_mw_api().await else {
-        return false;
-    };
-    let ec = EntityContainer::new();
-    if ec.load_entities(&api, &vec![q.to_string()]).await.is_err() {
-        return false;
-    }
-    match ec.get_entity(q.to_string()) {
-        Some(entity) => entity_has_main_snak(&entity, target_snak),
-        None => false,
-    }
-}
-
-/// Pure helper: does any of `entity`'s top-level claims carry `target`
-/// as its main snak? Compared via `snaks_value_equivalent`, so an
-/// `ExternalId` snak matches a `String` snak with the same value.
-fn entity_has_main_snak(
-    entity: &wikimisc::wikibase::Entity,
-    target: &wikimisc::wikibase::Snak,
-) -> bool {
-    use wikimisc::wikibase::EntityTrait;
-    entity
-        .claims()
-        .iter()
-        .any(|c| crate::claim_dedup::snaks_value_equivalent(c.main_snak(), target))
 }
 
 /// Parse the `entry_ids=1,2,3` query parameter, dropping anything that
@@ -377,64 +347,4 @@ mod tests {
         assert_eq!(parse_q_param("Q-1"), None);
     }
 
-    #[test]
-    fn entity_has_main_snak_matches_by_property_and_value() {
-        use wikimisc::wikibase::{ItemEntity, Snak, Statement};
-        let mut item = ItemEntity::new_empty();
-        item.add_claim(Statement::new_normal(
-            Snak::new_external_id("P214", "12345"),
-            vec![],
-            vec![],
-        ));
-        let bare = wikimisc::wikibase::Entity::Item(ItemEntity::new_empty());
-        let target = Snak::new_external_id("P214", "12345");
-        assert!(!entity_has_main_snak(&bare, &target));
-        let entity_with_claim = wikimisc::wikibase::Entity::Item(item);
-        assert!(entity_has_main_snak(&entity_with_claim, &target));
-    }
-
-    #[test]
-    fn entity_has_main_snak_ignores_snak_datatype_variant() {
-        use wikimisc::wikibase::{ItemEntity, Snak, Statement};
-        // The catalog references path emits ExternalId snaks, but
-        // Wikidata-side claims for the same property+value may serialize
-        // back as String. snaks_value_equivalent is meant to bridge that.
-        let mut item = ItemEntity::new_empty();
-        item.add_claim(Statement::new_normal(
-            Snak::new_string("P214", "12345"),
-            vec![],
-            vec![],
-        ));
-        let entity = wikimisc::wikibase::Entity::Item(item);
-        let target = Snak::new_external_id("P214", "12345");
-        assert!(entity_has_main_snak(&entity, &target));
-    }
-
-    #[test]
-    fn entity_has_main_snak_distinguishes_different_values() {
-        use wikimisc::wikibase::{ItemEntity, Snak, Statement};
-        let mut item = ItemEntity::new_empty();
-        item.add_claim(Statement::new_normal(
-            Snak::new_external_id("P214", "11111"),
-            vec![],
-            vec![],
-        ));
-        let entity = wikimisc::wikibase::Entity::Item(item);
-        let target = Snak::new_external_id("P214", "22222");
-        assert!(!entity_has_main_snak(&entity, &target));
-    }
-
-    #[test]
-    fn entity_has_main_snak_distinguishes_different_properties() {
-        use wikimisc::wikibase::{ItemEntity, Snak, Statement};
-        let mut item = ItemEntity::new_empty();
-        item.add_claim(Statement::new_normal(
-            Snak::new_external_id("P214", "12345"),
-            vec![],
-            vec![],
-        ));
-        let entity = wikimisc::wikibase::Entity::Item(item);
-        let target = Snak::new_external_id("P227", "12345");
-        assert!(!entity_has_main_snak(&entity, &target));
-    }
 }
