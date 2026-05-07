@@ -66,10 +66,13 @@ export async function mnm_api(query, params, options) {
 	if (method === 'GET') {
 		var qs = new URLSearchParams(Object.assign({ query: query }, params));
 		url += '?' + qs.toString();
-		var resp = await fetch(url);
+		var fetchOpts = options.signal ? { signal: options.signal } : {};
+		var resp = await fetch(url, fetchOpts);
 	} else {
 		var form = new URLSearchParams(Object.assign({ query: query }, params));
-		var resp = await fetch(url, { method: method, body: form, headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+		var fetchOpts = { method: method, body: form, headers: { 'Content-Type': 'application/x-www-form-urlencoded' } };
+		if (options.signal) fetchOpts.signal = options.signal;
+		var resp = await fetch(url, fetchOpts);
 	}
 
 	if (!resp.ok) throw new Error('HTTP ' + resp.status + ' ' + resp.statusText);

@@ -49,8 +49,10 @@ export default Vue.extend({
 			if (me.birth_year != '') params.birth_year = me.birth_year;
 			if (me.death_year != '') params.death_year = me.death_year;
 			if (me.prop != '') params.prop = me.prop;
+			const controller = new AbortController();
+			const timeoutId = setTimeout(() => controller.abort(), 30000);
 			try {
-				var d = await mnm_api('creation_candidates', params);
+				var d = await mnm_api('creation_candidates', params, { signal: controller.signal });
 				Object.entries(d.data.entries).forEach(function ([k, v]) {
 					// Ensure reactive keys exist so Vue wires setters (Rust micro-API omits null fields)
 					if (typeof v.q === 'undefined') v.q = null;
@@ -68,7 +70,13 @@ export default Vue.extend({
 				me.loadDataWikidata();
 				var _ncc = document.querySelector('.next_cc_set'); if (_ncc) _ncc.focus();
 			} catch (e) {
-				mnm_notify("No results, parameters might be too restrictive", 'warning');
+				if (e.name === 'AbortError') {
+					mnm_notify("Loading timed out, please try again", 'warning');
+				} else {
+					mnm_notify("No results, parameters might be too restrictive", 'warning');
+				}
+			} finally {
+				clearTimeout(timeoutId);
 			}
 			me.loaded = true;
 			if (me.ext_name != '') {
@@ -330,7 +338,10 @@ export default Vue.extend({
 			</div>
 			<span tt='creation_candidates'></span>
 		</h2>
-		<div v-if="!loaded"><i tt='loading'></i></div>
+		<div v-if="!loaded" class="text-center py-4">
+			<span class="spinner-border spinner-border-sm me-2 text-secondary" role="status" aria-hidden="true"></span>
+			<i tt='loading'></i>
+		</div>
 		<div v-else-if="entries.length==0" class="text-muted py-3" tt="no_results"></div>
 		<div v-else>
 			<div v-if="can_group_by_birth_year" class="mb-2">
