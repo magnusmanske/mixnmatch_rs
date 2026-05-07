@@ -4,7 +4,7 @@ import { mnm_api, mnm_fetch_json, mnm_notify, ensure_catalogs, tt_update_interfa
 export default Vue.extend({
 	mixins: [editEntryMixin],
 	props: ['mode'],
-	data: function () { return { entries: [], edits_todo: [], grouped_entries: [], loaded: false, loaded_wd: false, wd_entries: [], has_commons_search_results: false, require_catalogs: [], min_catalogs_required: 0, require_catalogs_string: '', ext_name: '', birth_year: '', death_year: '', prop: '', group_by_birth_year: true, can_group_by_birth_year: false, checkbox_generation: 0, assign_q_input: {}, assigning_q: {} } },
+	data: function () { return { entries: [], edits_todo: [], grouped_entries: [], loading: true, loaded: false, loaded_wd: false, wd_entries: [], has_commons_search_results: false, require_catalogs: [], min_catalogs_required: 0, require_catalogs_string: '', ext_name: '', birth_year: '', death_year: '', prop: '', group_by_birth_year: true, can_group_by_birth_year: false, checkbox_generation: 0, assign_q_input: {}, assigning_q: {} } },
 	created: function () { this.loadData(); },
 	updated: function () { tt_update_interface() }, //  $('.next_cc_set').focus() ;
 	mounted: function () { tt_update_interface(); var _ncc = document.querySelector('.next_cc_set'); if (_ncc) _ncc.focus(); },
@@ -36,6 +36,7 @@ export default Vue.extend({
 				return;
 			}
 			if (typeof me.$route.query.prop != 'undefined') me.prop = me.$route.query.prop;
+			me.loading = true;
 			me.loaded = false;
 			me.loaded_wd = false;
 			var params = {
@@ -77,6 +78,7 @@ export default Vue.extend({
 				}
 			} finally {
 				clearTimeout(timeoutId);
+				me.loading = false;
 			}
 			me.loaded = true;
 			if (me.ext_name != '') {
@@ -248,8 +250,15 @@ export default Vue.extend({
 			me.checkbox_generation++;
 			if (done > 0) mnm_notify('Assigned Q' + q + ' to ' + done + ' ' + (done === 1 ? 'entry' : 'entries'), 'success');
 		},
+		hasSelectedRadioInGroup: function (groupIdx) {
+			void this.checkbox_generation;
+			var group = this.$el ? this.$el.querySelectorAll('div.cc-group')[groupIdx] : null;
+			if (!group) return false;
+			return group.querySelector('input.entry-list-item-default-entry:checked') !== null;
+		},
 		resetDefaultEntry: function () {
 			document.querySelectorAll('input.entry-list-item-default-entry').forEach(function (el) { el.checked = false; });
+			this.checkbox_generation++;
 		},
 		createNewItem: function () {
 			const me = this;
@@ -338,7 +347,7 @@ export default Vue.extend({
 			</div>
 			<span tt='creation_candidates'></span>
 		</h2>
-		<div v-if="!loaded" class="text-center py-4">
+		<div v-if="loading" class="text-center py-4">
 			<span class="spinner-border spinner-border-sm me-2 text-secondary" role="status" aria-hidden="true"></span>
 			<i tt='loading'></i>
 		</div>
@@ -359,10 +368,10 @@ export default Vue.extend({
 							:radio_name='mode=="by_ext_name"?null:"default_entry"'></entry-list-item>
 					</div>
 					<div class="card-footer py-1 d-flex flex-wrap align-items-center gap-1">
+						<button v-if="mode != 'by_ext_name' && hasSelectedRadioInGroup(num)" class="btn btn-outline-secondary mnm-action-btn"
+							@click.prevent="resetDefaultEntry" tt="reset_default_entry"></button>
 						<button class="btn btn-outline-secondary mnm-action-btn" @click.prevent="toggleCheckboxes"
 							tt="toggle_checkboxes"></button>
-						<button v-if="mode != 'by_ext_name'" class="btn btn-outline-secondary mnm-action-btn"
-							@click.prevent="resetDefaultEntry" tt="reset_default_entry"></button>
 						<template v-if="widar.is_logged_in && checkedInGroup(num) > 0">
 							<button v-if="typeof assign_q_input[num] === 'undefined'"
 								class="btn btn-outline-primary mnm-action-btn"
