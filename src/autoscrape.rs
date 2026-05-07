@@ -1,4 +1,5 @@
 use crate::app_state::AppContext;
+use futures::StreamExt;
 use crate::autoscrape_levels::AutoscrapeLevel;
 use crate::autoscrape_resolve::RE_SIMPLE_SPACE;
 use crate::autoscrape_scraper::AutoscrapeScraper;
@@ -34,6 +35,68 @@ const AUTOSCRAPER_USER_AGENT: &str =
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.12; rv:56.0) Gecko/20100101 Firefox/56.0";
 const AUTOSCRAPE_ENTRY_BATCH_SIZE: usize = 100;
 const AUTOSCRAPE_URL_LOAD_TIMEOUT_SEC: u64 = 60;
+const AUTOSCRAPE_MAX_RETRIES: u32 = 3;
+const AUTOSCRAPE_DEFAULT_RETRY_AFTER_SECS: u64 = 5;
+const AUTOSCRAPE_MAX_RETRY_AFTER_SECS: u64 = 300;
+const AUTOSCRAPE_INCREASE_AFTER_SUCCESSES: usize = 50;
+const AUTOSCRAPE_DEFAULT_MAX_CONCURRENCY: usize = 8;
+const AUTOSCRAPE_DEFAULT_MIN_CONCURRENCY: usize = 1;
+
+/// AIMD concurrency controller for the autoscrape page-fetch loop.
+///
+/// Starts at `max` concurrent requests. On rate-limiting (HTTP 429/503)
+/// halves the limit (floor: `min`). After every `AUTOSCRAPE_INCREASE_AFTER_SUCCESSES`
+/// consecutive successful fetches, increments by one (ceiling: `max`).
+#[derive(Debug)]
+struct ConcurrencyController {
+    current: usize,
+    min: usize,
+    max: usize,
+    successes_since_last_increase: usize,
+}
+
+impl ConcurrencyController {
+    fn new(max: usize, min: usize) -> Self {
+        let max = max.max(min).max(1);
+        let min = min.max(1);
+        Self { current: max, min, max, successes_since_last_increase: 0 }
+    }
+
+    fn current(&self) -> usize {
+        self.current
+    }
+
+    fn on_rate_limit(&mut self) {
+        self.current = (self.current / 2).max(self.min);
+        self.successes_since_last_increase = 0;
+    }
+
+    fn on_success(&mut self, count: usize) {
+        self.successes_since_last_increase += count;
+        while self.successes_since_last_increase >= AUTOSCRAPE_INCREASE_AFTER_SUCCESSES
+            && self.current < self.max
+        {
+            self.current += 1;
+            self.successes_since_last_increase -= AUTOSCRAPE_INCREASE_AFTER_SUCCESSES;
+        }
+        if self.current >= self.max {
+            self.successes_since_last_increase = 0;
+        }
+    }
+}
+
+/// Outcome of a single HTTP page fetch.
+#[derive(Debug)]
+enum FetchOutcome {
+    /// 2xx — body text ready for scraping.
+    Success { body: String },
+    /// 429 or 503 — server asked us to slow down.
+    RateLimit { retry_after_secs: u64 },
+    /// Transient failure (5xx, timeout, network error) — worth retrying.
+    TransientError,
+    /// Permanent client error (4xx other than 429) — do not retry.
+    PermanentError,
+}
 
 #[derive(Debug, Clone)]
 pub enum AutoscrapeError {
@@ -190,25 +253,7 @@ impl Autoscrape {
         self.levels.iter().map(|level| level.current()).collect()
     }
 
-    async fn load_url(&mut self, url: &str) -> Option<String> {
-        self.urls_loaded += 1;
-        let crosses_threshold = self.urls_loaded.is_multiple_of(1000);
-        if crosses_threshold {
-            let _ = self.remember_state().await;
-        }
-        // TODO POST
-        Self::reqwest_client_external()
-            .ok()?
-            .get(url)
-            .send()
-            .await
-            .ok()?
-            .text()
-            .await
-            .ok()
-    }
-
-    /// Verbose counterpart to `load_url`, used by the scraper-test UI.
+    /// Verbose counterpart to the internal page fetcher, used by the scraper-test UI.
     /// Preserves the HTTP status and content-type alongside the body, and
     /// surfaces the underlying reqwest error message on failure instead of
     /// collapsing everything to `None`. The runner itself still calls the
@@ -246,30 +291,6 @@ impl Autoscrape {
             .enumerate()
             .for_each(|(l0, s)| url = url.replace(&format!("${}", l0 + 1), s));
         url
-    }
-
-    async fn get_patched_html(&mut self, url: String) -> Option<String> {
-        let mut html = self.load_url(&url).await?;
-        if self.simple_space {
-            html = RE_SIMPLE_SPACE.replace_all(&html, " ").to_string();
-        }
-        if self.utf8_encode {
-            // TODO
-        }
-        Some(html)
-    }
-
-    async fn iterate_one(&mut self) {
-        // Run current permutation
-        let url = self.get_current_url().await;
-        if let Some(html) = self.get_patched_html(url).await {
-            let mut extended_entries = self.scraper.process_html_page(&html, self);
-            self.entry_batch.append(&mut extended_entries);
-            let entry_batch_len = self.entry_batch.len();
-            if entry_batch_len >= AUTOSCRAPE_ENTRY_BATCH_SIZE {
-                let _ = self.add_batch().await;
-            }
-        }
     }
 
     async fn add_batch(&mut self) -> Result<()> {
@@ -320,12 +341,72 @@ impl Autoscrape {
         Ok(())
     }
 
+    fn apply_text_transforms(&self, body: String) -> String {
+        if self.simple_space {
+            RE_SIMPLE_SPACE.replace_all(&body, " ").to_string()
+        } else {
+            body
+        }
+        // utf8_encode: TODO
+    }
+
     pub async fn run(&mut self) -> Result<()> {
         self.init().await;
         let _ = self.start().await;
+        let client = Self::reqwest_client_external()?;
+        let max_concurrent = *self
+            .app_ref()
+            .task_specific_usize()
+            .get("autoscrape_max_concurrency")
+            .unwrap_or(&AUTOSCRAPE_DEFAULT_MAX_CONCURRENCY);
+        let min_concurrent = *self
+            .app_ref()
+            .task_specific_usize()
+            .get("autoscrape_min_concurrency")
+            .unwrap_or(&AUTOSCRAPE_DEFAULT_MIN_CONCURRENCY);
+        let mut ctrl = ConcurrencyController::new(max_concurrent, min_concurrent);
+
         loop {
-            self.iterate_one().await;
-            if self.tick().await {
+            // Pre-generate a window of URLs from the state machine.
+            let window_size = ctrl.current();
+            let mut url_window: Vec<String> = Vec::with_capacity(window_size);
+            let mut exhausted = false;
+            for _ in 0..window_size {
+                url_window.push(self.get_current_url().await);
+                if self.tick().await {
+                    exhausted = true;
+                    break;
+                }
+            }
+
+            // Fetch the window concurrently; rate-limited URLs get one retry
+            // after the server's requested delay.
+            let (bodies, had_rate_limit) =
+                fetch_and_retry_window(&client, &url_window, ctrl.current()).await;
+
+            // Process successful responses.
+            let success_count = bodies.len();
+            for body in bodies {
+                let html = self.apply_text_transforms(body);
+                let mut entries = self.scraper.process_html_page(&html, self);
+                self.entry_batch.append(&mut entries);
+                if self.entry_batch.len() >= AUTOSCRAPE_ENTRY_BATCH_SIZE {
+                    let _ = self.add_batch().await;
+                }
+            }
+            self.urls_loaded += url_window.len();
+
+            // Adapt concurrency based on this window's outcomes.
+            if had_rate_limit {
+                ctrl.on_rate_limit();
+            } else {
+                ctrl.on_success(success_count);
+            }
+
+            // Checkpoint after every window so crash-resume skips already-done work.
+            let _ = self.remember_state().await;
+
+            if exhausted {
                 break;
             }
         }
@@ -622,6 +703,114 @@ impl Autoscrape {
     }
 }
 
+/// Performs one HTTP GET, classifying the response into a [`FetchOutcome`].
+async fn fetch_url_once(client: &reqwest::Client, url: &str) -> FetchOutcome {
+    let resp = match client.get(url).send().await {
+        Err(_) => return FetchOutcome::TransientError,
+        Ok(r) => r,
+    };
+    let status = resp.status().as_u16();
+    match status {
+        200..=299 => match resp.text().await {
+            Ok(body) => FetchOutcome::Success { body },
+            Err(_) => FetchOutcome::TransientError,
+        },
+        429 | 503 => {
+            let retry_after_secs = resp
+                .headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(AUTOSCRAPE_DEFAULT_RETRY_AFTER_SECS)
+                .min(AUTOSCRAPE_MAX_RETRY_AFTER_SECS);
+            FetchOutcome::RateLimit { retry_after_secs }
+        }
+        500..=599 => FetchOutcome::TransientError,
+        _ => FetchOutcome::PermanentError,
+    }
+}
+
+/// Fetches a URL, retrying [`FetchOutcome::TransientError`] up to
+/// [`AUTOSCRAPE_MAX_RETRIES`] times with exponential back-off.
+/// [`FetchOutcome::RateLimit`] is returned immediately so the window-level
+/// caller can decide to sleep and retry.
+async fn fetch_url_with_backoff(client: &reqwest::Client, url: &str) -> FetchOutcome {
+    let mut backoff_secs = 2u64;
+    for attempt in 0..AUTOSCRAPE_MAX_RETRIES {
+        let outcome = fetch_url_once(client, url).await;
+        if let FetchOutcome::TransientError = outcome {
+            if attempt + 1 < AUTOSCRAPE_MAX_RETRIES {
+                tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
+                backoff_secs *= 2;
+                continue;
+            }
+        }
+        return outcome;
+    }
+    FetchOutcome::TransientError
+}
+
+/// Fires `urls` concurrently (up to `concurrent` in-flight at once) using
+/// [`fetch_url_with_backoff`] for each URL.
+async fn fetch_window(
+    client: reqwest::Client,
+    urls: Vec<String>,
+    concurrent: usize,
+) -> Vec<(String, FetchOutcome)> {
+    futures::stream::iter(urls.into_iter().map(move |url| {
+        let c = client.clone();
+        async move {
+            let outcome = fetch_url_with_backoff(&c, &url).await;
+            (url, outcome)
+        }
+    }))
+    .buffer_unordered(concurrent)
+    .collect::<Vec<_>>()
+    .await
+}
+
+/// Fetches a window of URLs concurrently. Rate-limited URLs are collected,
+/// and after sleeping for the requested delay, retried sequentially (concurrency=1).
+/// Returns `(successful_bodies, had_any_rate_limit)`.
+async fn fetch_and_retry_window(
+    client: &reqwest::Client,
+    urls: &[String],
+    concurrent: usize,
+) -> (Vec<String>, bool) {
+    if urls.is_empty() {
+        return (vec![], false);
+    }
+    let first_pass = fetch_window(client.clone(), urls.to_vec(), concurrent).await;
+
+    let mut bodies: Vec<String> = Vec::with_capacity(urls.len());
+    let mut rate_limited_urls: Vec<String> = vec![];
+    let mut max_retry_after = AUTOSCRAPE_DEFAULT_RETRY_AFTER_SECS;
+
+    for (url, outcome) in first_pass {
+        match outcome {
+            FetchOutcome::Success { body } => bodies.push(body),
+            FetchOutcome::RateLimit { retry_after_secs } => {
+                rate_limited_urls.push(url);
+                max_retry_after = max_retry_after.max(retry_after_secs);
+            }
+            FetchOutcome::TransientError | FetchOutcome::PermanentError => {}
+        }
+    }
+
+    let had_rate_limit = !rate_limited_urls.is_empty();
+    if had_rate_limit {
+        tokio::time::sleep(std::time::Duration::from_secs(max_retry_after)).await;
+        let retry_pass = fetch_window(client.clone(), rate_limited_urls, 1).await;
+        for (_, outcome) in retry_pass {
+            if let FetchOutcome::Success { body } = outcome {
+                bodies.push(body);
+            }
+        }
+    }
+
+    (bodies, had_rate_limit)
+}
+
 /// Interpret a JSON value as an on/off flag. Accepts bool, number
 /// (non-zero = on), and string ("1"/"true"/"yes"/"on" case-insensitive).
 /// Missing / null / anything else = off.
@@ -643,6 +832,66 @@ fn json_flag(v: Option<&Value>) -> bool {
 mod tests {
     use super::*;
     use crate::autoscrape_levels::AutoscrapeRange;
+
+    // ── ConcurrencyController ─────────────────────────────────────────────
+
+    #[test]
+    fn concurrency_starts_at_max() {
+        let ctrl = ConcurrencyController::new(8, 1);
+        assert_eq!(ctrl.current(), 8);
+    }
+
+    #[test]
+    fn concurrency_rate_limit_halves() {
+        let mut ctrl = ConcurrencyController::new(8, 1);
+        ctrl.on_rate_limit();
+        assert_eq!(ctrl.current(), 4);
+    }
+
+    #[test]
+    fn concurrency_rate_limit_respects_min_floor() {
+        let mut ctrl = ConcurrencyController::new(8, 1);
+        ctrl.on_rate_limit(); // 4
+        ctrl.on_rate_limit(); // 2
+        ctrl.on_rate_limit(); // 1
+        ctrl.on_rate_limit(); // still 1
+        assert_eq!(ctrl.current(), 1);
+    }
+
+    #[test]
+    fn concurrency_on_success_increases_after_threshold() {
+        let mut ctrl = ConcurrencyController::new(8, 1);
+        ctrl.on_rate_limit(); // → 4
+        ctrl.on_success(49);
+        assert_eq!(ctrl.current(), 4, "not yet at threshold");
+        ctrl.on_success(1); // 50th
+        assert_eq!(ctrl.current(), 5);
+    }
+
+    #[test]
+    fn concurrency_on_success_does_not_exceed_max() {
+        let mut ctrl = ConcurrencyController::new(4, 1);
+        ctrl.on_success(200); // many successes
+        assert_eq!(ctrl.current(), 4, "must stay at max");
+    }
+
+    #[test]
+    fn concurrency_rate_limit_resets_success_counter() {
+        let mut ctrl = ConcurrencyController::new(8, 1);
+        ctrl.on_rate_limit(); // → 4
+        ctrl.on_success(45); // progress toward +1, but not there
+        ctrl.on_rate_limit(); // → 2, counter resets
+        ctrl.on_success(50); // starts fresh from 0 → +1 → 3
+        assert_eq!(ctrl.current(), 3);
+    }
+
+    #[test]
+    fn concurrency_bulk_success_can_add_multiple() {
+        let mut ctrl = ConcurrencyController::new(8, 1);
+        ctrl.on_rate_limit(); // → 4
+        ctrl.on_success(100); // 2 × 50 → +2 → 6
+        assert_eq!(ctrl.current(), 6);
+    }
 
     const _TEST_ENTRY_ID: usize = 143962196;
     const _TEST_ITEM_ID: usize = 13520818; // Q13520818
