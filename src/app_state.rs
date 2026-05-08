@@ -12,7 +12,7 @@ use anyhow::{Result, anyhow};
 use chrono::Local;
 use dashmap::DashMap;
 use lazy_static::lazy_static;
-use log::{error, info};
+use log::{error, info, warn};
 use regex::Regex;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -494,6 +494,18 @@ impl AppState {
         }
         self.storage().reset_running_jobs().await?;
         self.storage().reset_failed_jobs().await?;
+        // Ensure the global periodic issue-sweep job exists. On first deployment
+        // `initial_next_ts` is set to `now` so it runs soon; on subsequent restarts
+        // the ON DUPLICATE KEY no-op preserves whatever period operators have set.
+        const ISSUE_SWEEP_PERIOD_SECS: usize = 86400; // daily
+        let initial_next_ts = wikimisc::timestamp::TimeStamp::now();
+        if let Err(e) = self
+            .storage()
+            .ensure_periodic_global_job("update_issues", ISSUE_SWEEP_PERIOD_SECS, &initial_next_ts)
+            .await
+        {
+            warn!("forever_loop: could not ensure periodic update_issues job: {e}");
+        }
         info!("Old jobs reset, starting bot");
         self.seppuku();
         let current_time_str = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();

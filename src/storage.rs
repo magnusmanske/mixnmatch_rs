@@ -464,6 +464,15 @@ pub trait JobQueries: std::fmt::Debug + Send + Sync {
         timestamp: String,
         user_id: usize,
     ) -> Result<usize>;
+    /// Ensure a global (catalog=0) periodic job row exists.
+    /// Only inserts on the very first call — the `ON DUPLICATE KEY`
+    /// clause is a no-op so operator-adjusted periods are never clobbered.
+    async fn ensure_periodic_global_job(
+        &self,
+        action: &str,
+        repeat_after_sec: usize,
+        initial_next_ts: &str,
+    ) -> Result<()>;
     async fn jobs_reset_json(&self, job_id: usize, timestamp: String) -> Result<()>;
     async fn jobs_set_json(
         &self,

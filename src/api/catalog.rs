@@ -127,6 +127,8 @@ fn parse_optional_usize(v: Option<&serde_json::Value>) -> Option<usize> {
 const EDITABLE_KV_KEYS: &[&str] = &[
     "use_automatchers",
     "use_description_for_new",
+    "no_descriptions",
+    "no_dates_import",
     "automatch_sparql",
     "automatch_complex",
     "allow_location_operations",

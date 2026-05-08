@@ -95,6 +95,26 @@ impl crate::storage::JobQueries for StorageMySQL {
         Ok(last_id)
     }
 
+    async fn ensure_periodic_global_job(
+        &self,
+        action: &str,
+        repeat_after_sec: usize,
+        initial_next_ts: &str,
+    ) -> Result<()> {
+        // catalog=0 is the sentinel for "global, not tied to any catalog".
+        // ON DUPLICATE KEY UPDATE id=id is a true no-op: it leaves every
+        // existing column unchanged so operator-adjusted periods survive
+        // server restarts.
+        let now = wikimisc::timestamp::TimeStamp::now();
+        let sql = "INSERT INTO `jobs` (catalog,action,status,repeat_after_sec,last_ts,next_ts,user_id) \
+                   VALUES (0,:action,'Done',:repeat_after_sec,:now,:next_ts,0) \
+                   ON DUPLICATE KEY UPDATE id=id";
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop(sql, params! {action, repeat_after_sec, "now" => &now, "next_ts" => initial_next_ts})
+            .await?;
+        Ok(())
+    }
+
     async fn jobs_reset_json(&self, job_id: usize, timestamp: String) -> Result<()> {
         let sql = "UPDATE `jobs` SET `json`=NULL,last_ts=:timestamp WHERE `id`=:job_id";
         let mut conn = self.get_conn().await?;
@@ -226,5 +246,26 @@ impl crate::storage::JobQueries for StorageMySQL {
             .await
             .ok()?
             .pop()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::test_support;
+
+    #[tokio::test]
+    async fn ensure_periodic_global_job_is_idempotent() {
+        let app = test_support::test_app().await;
+
+        // Both calls must succeed without error; the second must not clobber
+        // the first (ON DUPLICATE KEY UPDATE id=id no-op invariant).
+        app.storage()
+            .ensure_periodic_global_job("update_issues", 86400, "20000101000000")
+            .await
+            .expect("first call should succeed");
+        app.storage()
+            .ensure_periodic_global_job("update_issues", 99999, "20991231235959")
+            .await
+            .expect("second call should also succeed (idempotent)");
     }
 }

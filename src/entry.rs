@@ -602,22 +602,30 @@ async fn build_item_from_entry(
     let catalog = Catalog::from_id(entry.catalog, ctx).await?;
     let references = catalog.references(ctx, entry).await;
     let language = catalog.search_wp().to_string();
+    let kv = catalog.get_key_value_pairs(ctx).await.unwrap_or_default();
     // `use_description_for_new` gates whether the catalog's ext_desc is
     // copied into a newly-created item's description. Default is on;
     // catalog admins can opt out via kv_catalog.
-    let use_desc = catalog
-        .get_key_value_pairs(ctx)
-        .await
-        .unwrap_or_default()
+    let use_desc = kv
         .get("use_description_for_new")
         .map(|v| v != "0")
         .unwrap_or(true);
+    // `no_descriptions` = "1" suppresses ALL descriptions (ext_desc +
+    // language-description table) for newly-created items.
+    let no_descriptions = kv.get("no_descriptions").map(|v| v == "1").unwrap_or(false);
+    // `no_dates_import` = "1" prevents P569/P570 from being added to
+    // newly-created items.
+    let no_dates_import = kv.get("no_dates_import").map(|v| v == "1").unwrap_or(false);
     add_own_id_to_item(entry, &catalog, &references, item);
     add_type_to_item(entry, &references, item);
     add_name_and_aliases_to_item(ctx, entry, &language, item).await?;
-    add_descriptions_to_item(ctx, entry, language, use_desc, item).await?;
+    if !no_descriptions {
+        add_descriptions_to_item(ctx, entry, language, use_desc, item).await?;
+    }
     add_coordinates_to_item(ctx, entry, &references, item).await?;
-    add_person_dates_to_item(ctx, entry, &references, item).await?;
+    if !no_dates_import {
+        add_person_dates_to_item(ctx, entry, &references, item).await?;
+    }
     add_auxiliary_to_item(ctx, entry, references, item).await?;
     Ok(())
 }
@@ -2005,5 +2013,124 @@ mod tests {
         assert_eq!(after.q, Some(500));
         let multimatch = EntryWriter::new(&app, &mut entry).get_multi_match().await.unwrap();
         assert_eq!(multimatch, vec!["Q500".to_string(), "Q1".to_string()]);
+    }
+
+    /// Regression: auxiliary-matcher matches (USER_AUX_MATCH) must not
+    /// overwrite a human-confirmed match. Before the fix, the SQL guard
+    /// was only applied for USER_AUTO; bots could clobber human matches.
+    #[tokio::test]
+    async fn aux_match_does_not_overwrite_human_match() {
+        use crate::app_state::USER_AUX_MATCH;
+        let app = test_support::test_app().await;
+        let (_, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
+        let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
+
+        // Human confirms Q10.
+        EntryWriter::new(&app, &mut entry)
+            .set_match("Q10", 7)
+            .await
+            .unwrap();
+
+        // Auxiliary matcher later derives a *different* Q. Must be blocked.
+        let mut entry2 = Entry::from_id(entry_id, &app).await.unwrap();
+        EntryWriter::new(&app, &mut entry2)
+            .set_match("Q99", USER_AUX_MATCH)
+            .await
+            .unwrap();
+
+        let after = Entry::from_id(entry_id, &app).await.unwrap();
+        assert_eq!(after.q, Some(10), "human match Q10 must not be overwritten by aux match");
+        assert_eq!(after.user, Some(7), "user attribution must stay with human matcher");
+    }
+
+    /// Auxiliary-matcher matches (USER_AUX_MATCH) can still upgrade a
+    /// plain auto-match (user=0) — that path must remain open.
+    #[tokio::test]
+    async fn aux_match_upgrades_auto_match() {
+        use crate::app_state::USER_AUX_MATCH;
+        let app = test_support::test_app().await;
+        let (_, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
+        let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
+
+        // Auto-matcher sets Q42 (user=0).
+        EntryWriter::new(&app, &mut entry)
+            .set_match("Q42", 0)
+            .await
+            .unwrap();
+
+        // Auxiliary matcher confirms with the same Q — upgrades user attribution.
+        let mut entry2 = Entry::from_id(entry_id, &app).await.unwrap();
+        EntryWriter::new(&app, &mut entry2)
+            .set_match("Q42", USER_AUX_MATCH)
+            .await
+            .unwrap();
+
+        let after = Entry::from_id(entry_id, &app).await.unwrap();
+        assert_eq!(after.q, Some(42), "Q must stay 42");
+        assert_eq!(after.user, Some(USER_AUX_MATCH), "user must be upgraded to USER_AUX_MATCH");
+    }
+
+    /// When `no_descriptions=1` is set in kv_catalog, `build_item_from_entry`
+    /// must not add any descriptions to the newly-built Wikidata item.
+    #[tokio::test]
+    async fn no_descriptions_flag_suppresses_all_descriptions() {
+        let app = test_support::test_app().await;
+        let (catalog_id, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
+
+        // Give the entry a language description.
+        app.storage()
+            .entry_set_language_description(entry_id, "en", "English description".to_string())
+            .await
+            .unwrap();
+
+        // Without the flag, descriptions are present.
+        {
+            let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
+            let mut item = wikimisc::wikibase::ItemEntity::new_empty();
+            EntryWriter::new(&app, &mut entry).add_to_item(&mut item).await.unwrap();
+            assert!(!item.descriptions().is_empty(), "descriptions expected without flag");
+        }
+
+        // Set the flag.
+        app.storage().set_catalog_kv(catalog_id, "no_descriptions", "1").await.unwrap();
+
+        let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
+        let mut item = wikimisc::wikibase::ItemEntity::new_empty();
+        EntryWriter::new(&app, &mut entry).add_to_item(&mut item).await.unwrap();
+        assert!(item.descriptions().is_empty(), "no_descriptions=1 must suppress all descriptions");
+    }
+
+    /// When `no_dates_import=1`, birth/death dates must not be added to the
+    /// newly-built Wikidata item.
+    #[tokio::test]
+    async fn no_dates_import_flag_suppresses_person_dates() {
+        let app = test_support::test_app().await;
+        let (catalog_id, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
+
+        test_support::seed_person_dates(entry_id, "1900", "1980").await.unwrap();
+
+        // Without the flag, dates are present in the item.
+        {
+            let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
+            let mut item = wikimisc::wikibase::ItemEntity::new_empty();
+            EntryWriter::new(&app, &mut entry).add_to_item(&mut item).await.unwrap();
+            let has_dates = item.claims().iter().any(|c| {
+                let p = c.main_snak().property();
+                p == "P569" || p == "P570"
+            });
+            assert!(has_dates, "dates expected without flag");
+        }
+
+        // Set the flag.
+        app.storage().set_catalog_kv(catalog_id, "no_dates_import", "1").await.unwrap();
+
+        let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
+        let mut item = wikimisc::wikibase::ItemEntity::new_empty();
+        EntryWriter::new(&app, &mut entry).add_to_item(&mut item).await.unwrap();
+        let has_dates = item.claims().iter().any(|c| {
+            let p = c.main_snak().property();
+            p == "P569" || p == "P570"
+        });
+        assert!(!has_dates, "no_dates_import=1 must suppress birth/death dates");
     }
 }

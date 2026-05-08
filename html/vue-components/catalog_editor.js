@@ -11,6 +11,10 @@ const REPEAT_SECONDS = {
 // absent/any-other-value means the default (on) applies.
 const BOOL_KEYS_DEFAULT_ON = ['use_automatchers', 'use_description_for_new'];
 
+// Default-off booleans: absent/non-"1" means the default (off) applies;
+// present with value "1" means opted in.
+const BOOL_KEYS_DEFAULT_OFF = ['no_descriptions', 'no_dates_import'];
+
 // Default-off location toggles. All live in kv_catalog and only apply when
 // the catalog also carries `has_locations=yes`.
 const LOCATION_BOOL_KEYS = [
@@ -25,6 +29,8 @@ const LOCATION_BOOL_KEYS = [
 const FIELD_HELP = {
 	use_automatchers:          "Run the generic automatch jobs on this catalog (on by default).",
 	use_description_for_new:   "Copy an entry's description into a newly-created Wikidata item (on by default).",
+	no_descriptions:           "Suppress all descriptions (including manually-set language descriptions) when creating new Wikidata items from this catalog.",
+	no_dates_import:           "Do not add birth/death dates (P569/P570) to newly-created Wikidata items.",
 	automatch_sparql:          "SPARQL query that yields ?q and ?label. The \u2018automatch_sparql\u2019 job matches entries by label against the result set.",
 	automatch_complex:         "Limits automatch to items reachable via (property, item) roots. Each row is one constraint, e.g. P31 \u2192 Q5 (\u201cinstance of human\u201d).",
 	allow_location_operations: "Enable coordinate-based tools (quick compare / map) for this catalog.",
@@ -54,6 +60,8 @@ export default Vue.extend({
 			kv: {
 				use_automatchers: true,
 				use_description_for_new: true,
+				no_descriptions: false,
+				no_dates_import: false,
 				automatch_sparql: '',
 				automatch_complex: [],
 				allow_location_operations: false,
@@ -167,6 +175,9 @@ export default Vue.extend({
 			BOOL_KEYS_DEFAULT_ON.forEach(function (k) {
 				me.kv[k] = !(typeof pairs[k] != 'undefined' && pairs[k] == '0');
 			});
+			BOOL_KEYS_DEFAULT_OFF.forEach(function (k) {
+				me.kv[k] = typeof pairs[k] != 'undefined' && pairs[k] == '1';
+			});
 			LOCATION_BOOL_KEYS.forEach(function (k) {
 				me.kv[k] = typeof pairs[k] != 'undefined' && pairs[k] == '1';
 			});
@@ -244,6 +255,8 @@ export default Vue.extend({
 			const out = {};
 			// Default-on: unchecked → "0" (opt out), checked → "" (delete row = default).
 			BOOL_KEYS_DEFAULT_ON.forEach(function (k) { out[k] = me.kv[k] ? '' : '0'; });
+			// Default-off: checked → "1", unchecked → "" (delete row = default off).
+			BOOL_KEYS_DEFAULT_OFF.forEach(function (k) { out[k] = me.kv[k] ? '1' : ''; });
 			// Default-off location toggles: checked → "1", unchecked → "" (delete).
 			LOCATION_BOOL_KEYS.forEach(function (k) { out[k] = me.kv[k] ? '1' : ''; });
 			out.automatch_sparql = (me.kv.automatch_sparql || '').trim();
@@ -388,6 +401,18 @@ export default Vue.extend({
 							<input class='form-check-input' type='checkbox' id='kv-use-desc' v-model='kv.use_description_for_new' />
 							<label class='form-check-label' for='kv-use-desc'>Use entry description when creating new Wikidata items</label>
 							<div class='form-text'>{{ fieldHelp('use_description_for_new') }}</div>
+						</div>
+
+						<div class='form-check mb-3'>
+							<input class='form-check-input' type='checkbox' id='kv-no-descriptions' v-model='kv.no_descriptions' />
+							<label class='form-check-label' for='kv-no-descriptions'>Suppress all descriptions when creating new Wikidata items</label>
+							<div class='form-text'>{{ fieldHelp('no_descriptions') }}</div>
+						</div>
+
+						<div class='form-check mb-3'>
+							<input class='form-check-input' type='checkbox' id='kv-no-dates-import' v-model='kv.no_dates_import' />
+							<label class='form-check-label' for='kv-no-dates-import'>Do not add birth/death dates to new Wikidata items</label>
+							<div class='form-text'>{{ fieldHelp('no_dates_import') }}</div>
 						</div>
 
 						<div class='mb-3'>

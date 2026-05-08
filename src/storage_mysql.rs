@@ -12,7 +12,7 @@ mod util;
 
 use crate::{
     ItemId,
-    app_state::USER_AUTO,
+    app_state::{USER_AUX_MATCH, USER_AUTO, USER_DATE_MATCH, USER_LOCATION_MATCH},
     auxiliary_data::AuxiliaryRow,
     auxiliary_matcher::AuxiliaryResults,
     catalog::Catalog,
@@ -2187,9 +2187,15 @@ impl Storage for StorageMySQL {
     ) -> Result<bool> {
         let entry_id = entry.get_valid_id()?;
         let mut sql = "UPDATE /* rust:storage:entry_set_match */ `entry` SET `q`=:q_numeric,`user`=:user_id,`timestamp`=:timestamp WHERE `id`=:entry_id AND (`q` IS NULL OR `q`!=:q_numeric OR `user`!=:user_id)".to_string();
-        if user_id == USER_AUTO {
-            if self.avoid_auto_match(entry_id, Some(q_numeric)).await? {
-                return Ok(false); // Nothing wrong but shouldn't be matched
+        // All automated matchers are restricted to unmatched or user=0 auto-matched entries
+        // so they cannot overwrite a human-confirmed match (or each other's matches).
+        // avoid_auto_match (log-table check) remains USER_AUTO only.
+        const BOT_USER_IDS: &[usize] = &[USER_AUTO, USER_DATE_MATCH, USER_AUX_MATCH, USER_LOCATION_MATCH];
+        if BOT_USER_IDS.contains(&user_id) {
+            if user_id == USER_AUTO {
+                if self.avoid_auto_match(entry_id, Some(q_numeric)).await? {
+                    return Ok(false); // Nothing wrong but shouldn't be matched
+                }
             }
             sql += &MatchState::not_fully_matched().get_sql();
         }

@@ -106,6 +106,7 @@ export default Vue.extend({
 <div style='display:inline-block'><search-box :query="query" :exclude="exclude" :include="include"></search-box></div>
 <div style='display:inline-block'><button class='btn btn-outline-secondary' @click.prevent='show_include=!show_include' tt='include_catalogs'></button></div>
 <div style='display:inline-block'><button class='btn btn-outline-secondary' @click.prevent='show_exclude=!show_exclude' tt='exclude_catalogs'></button></div>
+<div style='display:inline-block; margin-left:0.5em'><router-link to='/by_property_value' class='btn btn-outline-secondary'>Search by property value</router-link></div>
 
 <div v-if='show_exclude' class="card my-3">
 	<div class="card-body">

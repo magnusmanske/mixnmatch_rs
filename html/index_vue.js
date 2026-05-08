@@ -106,6 +106,7 @@ document.addEventListener('DOMContentLoaded', function () {
 			{ path: '/issues/:type', component: mnm.Issues, props: true },
 			{ path: '/issues/:type/:initial_catalogs', component: mnm.Issues, props: true },
 			{ path: '/common_names/:id', component: mnm.CommonNames, props: true },
+			{ path: '/by_property_value', component: mnm.ByPropertyValue, props: true },
 			{ path: '/by_property_value/:property/:value', component: mnm.ByPropertyValue, props: true },
 			{ path: '/people/', component: mnm.PeoplePage, props: true },
 			{ path: '/people/:gender', component: mnm.PeoplePage, props: true },
