@@ -354,7 +354,7 @@ export default Vue.extend({
 								<label class='form-label'>Wikidata property</label>
 								<div class='input-group'>
 									<span class='input-group-text'>P</span>
-									<input type='number' min='0' class='form-control' v-model.number='catalog.wd_prop' />
+									<input type='number' min='0' class='form-control' v-model='catalog.wd_prop' />
 								</div>
 								<div class='form-text'>Numeric only. Leave blank if the catalog isn't linked to a Wikidata property.</div>
 							</div>

@@ -455,6 +455,55 @@ mod edit_catalog_tests {
         assert_eq!(parse_optional_usize(Some(&json!("0"))), Some(0));
     }
 
+    #[test]
+    fn handles_real_production_payload() {
+        // Exact data string from a real production POST (curl from
+        // mix-n-match.toolforge.org).  wd_prop arrives as a JSON string,
+        // which the original `as_u64()`-only parser silently dropped to None.
+        let data_str = r#"{"name":"Sancho el Sabio Foundation (person)","desc":"identifier for authority names","url":"https://catalogo.sanchoelsabio.eus/","type":"biography","search_wp":"es","wd_prop":"13804","wd_qual":null,"active":true,"kv":{},"autoscraper_repeat":null}"#;
+        let data: serde_json::Value = serde_json::from_str(data_str).unwrap();
+        assert_eq!(parse_optional_usize(data.get("wd_prop")), Some(13804));
+        assert_eq!(parse_optional_usize(data.get("wd_qual")), None);
+    }
+
+    #[tokio::test]
+    async fn full_handler_path_with_string_wd_prop_persists() {
+        // End-to-end: parse the production-style JSON, build the same
+        // CatalogUpdate the handler would, and verify the DB ends up with
+        // wd_prop = 13804 (not NULL).  This is the regression test for
+        // the actual user-reported bug.
+        let app = test_support::test_app().await;
+        let (catalog_id, _) = test_support::seed_minimal_entry(&app).await.unwrap();
+        let name = format!("prod_payload_{catalog_id}");
+
+        let data_str = format!(
+            r#"{{"name":"{name}","desc":"d","url":"u","type":"biography","search_wp":"es","wd_prop":"13804","wd_qual":null,"active":true,"kv":{{}}}}"#
+        );
+        let data: serde_json::Value = serde_json::from_str(&data_str).unwrap();
+
+        // Replicate query_edit_catalog's CatalogUpdate construction exactly.
+        let update = CatalogUpdate {
+            name: data.get("name").and_then(|v| v.as_str()).unwrap().to_string(),
+            url: data.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            desc: data.get("desc").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            type_name: data.get("type").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            search_wp: data.get("search_wp").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            wd_prop: parse_optional_usize(data.get("wd_prop")),
+            wd_qual: parse_optional_usize(data.get("wd_qual")),
+            active: matches!(data.get("active"), Some(serde_json::Value::Bool(true))),
+        };
+        assert_eq!(update.wd_prop, Some(13804), "JSON-string wd_prop must parse");
+
+        app.storage().api_edit_catalog(catalog_id, update).await.unwrap();
+
+        let catalog = crate::catalog::Catalog::from_id(catalog_id, &app).await.unwrap();
+        assert_eq!(
+            catalog.wd_prop(),
+            Some(13804),
+            "wd_prop must be persisted in DB"
+        );
+    }
+
     // ── Storage round-trip (integration) ──────────────────────────────────
 
     #[tokio::test]
