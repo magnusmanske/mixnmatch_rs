@@ -105,6 +105,22 @@ pub async fn query_catalog(app: &AppState, params: &Params) -> Result<Response, 
     })))
 }
 
+/// Parse an optional numeric field from the catalog-editor payload.
+///
+/// Accepts a JSON number (`734`) **or** a JSON string (`"734"`).  Vue 2's
+/// `<input type="number">` returns its value as a string, and even with
+/// `v-model.number` the framework falls back to the original string when
+/// `parseFloat` returns NaN.  Treating both forms identically keeps the
+/// API robust against frontend variations rather than silently dropping
+/// the value when JS happens to send a string.
+fn parse_optional_usize(v: Option<&serde_json::Value>) -> Option<usize> {
+    match v? {
+        serde_json::Value::Number(n) => n.as_u64().map(|x| x as usize),
+        serde_json::Value::String(s) => s.trim().parse::<usize>().ok(),
+        _ => None,
+    }
+}
+
 /// Keys the catalog editor is allowed to write into `kv_catalog`. Anything
 /// outside this list is silently ignored — prevents a compromised frontend
 /// from injecting arbitrary config into the table.
@@ -151,8 +167,8 @@ pub async fn query_edit_catalog(
                 desc: data.get("desc").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                 type_name: data.get("type").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                 search_wp: data.get("search_wp").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                wd_prop: data.get("wd_prop").and_then(|v| v.as_u64()).map(|v| v as usize),
-                wd_qual: data.get("wd_qual").and_then(|v| v.as_u64()).map(|v| v as usize),
+                wd_prop: parse_optional_usize(data.get("wd_prop")),
+                wd_qual: parse_optional_usize(data.get("wd_qual")),
                 active,
             },
         )
@@ -380,37 +396,63 @@ pub async fn query_remove_empty_top_group(
 }
 
 #[cfg(test)]
-fn wd_prop_from_json(data: &serde_json::Value, key: &str) -> Option<usize> {
-    data.get(key).and_then(|v| v.as_u64()).map(|v| v as usize)
-}
-
-#[cfg(test)]
 mod edit_catalog_tests {
-    use super::wd_prop_from_json;
+    use super::parse_optional_usize;
     use crate::{storage::CatalogUpdate, test_support};
     use serde_json::json;
 
     // ── JSON parsing (unit) ────────────────────────────────────────────────
 
     #[test]
-    fn wd_prop_parsed_from_json_number() {
-        // The fixed frontend sends a JSON number via v-model.number.
+    fn parses_json_number() {
         let data = json!({ "wd_prop": 734_u64 });
-        assert_eq!(wd_prop_from_json(&data, "wd_prop"), Some(734));
+        assert_eq!(parse_optional_usize(data.get("wd_prop")), Some(734));
     }
 
     #[test]
-    fn wd_prop_zero_becomes_none() {
-        let data = json!({ "wd_prop": 0_u64 });
-        // as_u64 yields Some(0), but normalize_wd_prop later coerces to None.
-        // Here we only test the JSON layer — normalization is tested separately.
-        assert_eq!(wd_prop_from_json(&data, "wd_prop"), Some(0));
+    fn parses_json_string_as_number() {
+        // This is the actual bug: Vue 2's <input type="number"> returns a
+        // string ("734") via v-model. `as_u64()` alone silently drops it.
+        let data = json!({ "wd_prop": "734" });
+        assert_eq!(parse_optional_usize(data.get("wd_prop")), Some(734));
     }
 
     #[test]
-    fn wd_prop_absent_is_none() {
+    fn trims_whitespace_in_string() {
+        let data = json!({ "wd_prop": "  734  " });
+        assert_eq!(parse_optional_usize(data.get("wd_prop")), Some(734));
+    }
+
+    #[test]
+    fn empty_string_is_none() {
+        let data = json!({ "wd_prop": "" });
+        assert_eq!(parse_optional_usize(data.get("wd_prop")), None);
+    }
+
+    #[test]
+    fn non_numeric_string_is_none() {
+        let data = json!({ "wd_prop": "abc" });
+        assert_eq!(parse_optional_usize(data.get("wd_prop")), None);
+    }
+
+    #[test]
+    fn json_null_is_none() {
+        let data = json!({ "wd_prop": null });
+        assert_eq!(parse_optional_usize(data.get("wd_prop")), None);
+    }
+
+    #[test]
+    fn absent_key_is_none() {
         let data = json!({});
-        assert_eq!(wd_prop_from_json(&data, "wd_prop"), None);
+        assert_eq!(parse_optional_usize(data.get("wd_prop")), None);
+    }
+
+    #[test]
+    fn zero_passes_through() {
+        // 0 is rejected later by normalize_wd_prop (separate concern); the
+        // parser itself reports the literal value.
+        assert_eq!(parse_optional_usize(Some(&json!(0_u64))), Some(0));
+        assert_eq!(parse_optional_usize(Some(&json!("0"))), Some(0));
     }
 
     // ── Storage round-trip (integration) ──────────────────────────────────
