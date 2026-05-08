@@ -129,13 +129,10 @@ impl AuxiliaryMatcher {
                                     }
                                 }
                                 std::cmp::Ordering::Greater => {
-                                    let _ = Issue::new(
-                                        aux.entry_id,
-                                        IssueType::WdDuplicate,
-                                        json!(qs),
-                                    )
-                                    .insert(self.app.storage().as_ref().as_ref())
-                                    .await;
+                                    let _ =
+                                        Issue::new(aux.entry_id, IssueType::WdDuplicate, json!(qs))
+                                            .insert(self.app.storage().as_ref().as_ref())
+                                            .await;
                                 }
                                 std::cmp::Ordering::Less => {}
                             }
@@ -183,7 +180,7 @@ impl AuxiliaryMatcher {
                     binding["item"]["value"].as_str(),
                     binding["id"]["value"].as_str(),
                 ) {
-                    if let Some(q) = item_uri.split('/').last() {
+                    if let Some(q) = item_uri.split('/').next_back() {
                         if q.starts_with('Q') {
                             result_map
                                 .entry(id_value.to_string())
@@ -319,7 +316,7 @@ impl AuxiliaryMatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{test_support, app_state::USER_AUX_MATCH};
+    use crate::{app_state::USER_AUX_MATCH, test_support};
     use std::sync::Arc;
     use wiremock::matchers::{method, path, query_param_contains};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -496,9 +493,11 @@ mod tests {
             .await;
         Mock::given(method("POST"))
             .and(path("/sparql"))
-            .respond_with(ResponseTemplate::new(200).set_body_string(
-                r#"{"results":{"bindings":[]},"head":{"vars":["item","id"]}}"#,
-            ))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(
+                    r#"{"results":{"bindings":[]},"head":{"vars":["item","id"]}}"#,
+                ),
+            )
             .mount(&server)
             .await;
 
@@ -508,9 +507,7 @@ mod tests {
         let mw_api = am.app.wikidata().get_mw_api().await.unwrap();
 
         let aux = AuxiliaryResults::new(0, 0, 0, 1, r#"val"with"quotes"#.to_string());
-        let result = am
-            .sparql_lookup_property_values(1, &[&aux], &mw_api)
-            .await;
+        let result = am.sparql_lookup_property_values(1, &[&aux], &mw_api).await;
         assert!(result.is_ok());
         assert!(result.unwrap().is_empty());
     }

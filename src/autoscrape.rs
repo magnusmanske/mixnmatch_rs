@@ -1,5 +1,4 @@
 use crate::app_state::AppContext;
-use futures::StreamExt;
 use crate::autoscrape_levels::AutoscrapeLevel;
 use crate::autoscrape_resolve::RE_SIMPLE_SPACE;
 use crate::autoscrape_scraper::AutoscrapeScraper;
@@ -7,6 +6,7 @@ use crate::catalog::Catalog;
 use crate::extended_entry::ExtendedEntry;
 use crate::job::{Job, Jobbable};
 use anyhow::Result;
+use futures::StreamExt;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::error::Error;
@@ -59,7 +59,12 @@ impl ConcurrencyController {
     fn new(max: usize, min: usize) -> Self {
         let max = max.max(min).max(1);
         let min = min.max(1);
-        Self { current: max, min, max, successes_since_last_increase: 0 }
+        Self {
+            current: max,
+            min,
+            max,
+            successes_since_last_increase: 0,
+        }
     }
 
     fn current(&self) -> usize {
@@ -735,7 +740,7 @@ async fn fetch_url_once(client: &reqwest::Client, url: &str) -> FetchOutcome {
 /// [`FetchOutcome::RateLimit`] is returned immediately so the window-level
 /// caller can decide to sleep and retry.
 async fn fetch_url_with_backoff(client: &reqwest::Client, url: &str) -> FetchOutcome {
-    let mut backoff_secs = 2u64;
+    let mut backoff_secs = 2_u64;
     for attempt in 0..AUTOSCRAPE_MAX_RETRIES {
         let outcome = fetch_url_once(client, url).await;
         if let FetchOutcome::TransientError = outcome {
