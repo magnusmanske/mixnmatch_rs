@@ -8,7 +8,7 @@ const IMPORTING_ACTIONS = new Set(['update_from_tabbed_file']);
 export default Vue.extend({
 	props: ['id'],
 	data: function () { return { catalog: {}, meta: {}, loaded: false, not_found: false, ext_url_pattern: '',
-		running_scraping: false, running_importing: false, job_check_interval: null } },
+		running_scraping: false, running_importing: false } },
 	created: async function () {
 		await ensure_catalog(this.id);
 		this.catalog = get_specific_catalog(this.id);
@@ -19,13 +19,7 @@ export default Vue.extend({
 		}
 		if (typeof this.catalog != 'undefined' && this.catalog.unmatched < 0) this.updateStats();
 		else this.loadCatalog(this.id);
-		this.restartJobCheck();
-	},
-	beforeDestroy: function () {
-		if (this.job_check_interval) {
-			clearInterval(this.job_check_interval);
-			this.job_check_interval = null;
-		}
+		this.checkRunningJobs();
 	},
 	updated: function () { tt_update_interface() },
 	mounted: function () { tt_update_interface(); },
@@ -93,20 +87,11 @@ export default Vue.extend({
 				me.running_importing = importing;
 			} catch (e) { /* silently ignore — indicator is best-effort */ }
 		},
-		restartJobCheck: function () {
-			const me = this;
-			if (me.job_check_interval) {
-				clearInterval(me.job_check_interval);
-				me.job_check_interval = null;
-			}
-			me.checkRunningJobs();
-			me.job_check_interval = setInterval(function () { me.checkRunningJobs(); }, 30000);
-		},
 	},
 	watch: {
 		'$route'(to, from) {
 			this.loadCatalog(to.params.id);
-			this.restartJobCheck();
+			this.checkRunningJobs();
 		}
 	},
 	template: `
