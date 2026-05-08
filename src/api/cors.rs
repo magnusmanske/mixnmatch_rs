@@ -19,10 +19,18 @@ const ALLOWED_SUFFIXES: &[&str] = &[
 
 /// True if `origin` is `https://<host>` where `host` is, or is a subdomain of,
 /// one of the allowed Wikimedia / Toolforge project domains.
+/// Off-Toolforge (local dev) also allows `localhost` and `127.0.0.1` origins on
+/// any port, matching the OAuth dev-bypass in `auth::guard`.
 pub fn is_allowed_origin(origin: &str) -> bool {
     let Some(host) = origin.strip_prefix("https://") else {
         return false;
     };
+    if !crate::app_state::is_on_toolforge() {
+        let bare = host.split(':').next().unwrap_or(host);
+        if bare == "localhost" || bare == "127.0.0.1" || bare == "::1" {
+            return true;
+        }
+    }
     ALLOWED_SUFFIXES
         .iter()
         .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
@@ -47,5 +55,18 @@ mod tests {
         assert!(!is_allowed_origin("https://evil.com"));
         assert!(!is_allowed_origin("https://wikidata.org.evil.com"));
         assert!(!is_allowed_origin("https://evilwikidata.org")); // not a suffix match
+    }
+
+    #[test]
+    fn allows_localhost_when_not_on_toolforge() {
+        // This test only exercises the non-Toolforge path; on Toolforge CI it
+        // would need /etc/wmcs-project to exist, so we guard it.
+        if crate::app_state::is_on_toolforge() {
+            return;
+        }
+        assert!(is_allowed_origin("https://localhost:8080"));
+        assert!(is_allowed_origin("https://127.0.0.1:8080"));
+        assert!(is_allowed_origin("https://127.0.0.1"));
+        assert!(!is_allowed_origin("http://localhost:8080")); // http still rejected
     }
 }

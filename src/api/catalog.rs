@@ -158,12 +158,6 @@ pub async fn query_edit_catalog(
     // from the catalog row (0/1). Accept both rather than silently flipping
     // the row to inactive.
     let active = active_flag_from(data.get("active"));
-    let wd_prop = parse_optional_usize(data.get("wd_prop"));
-    let wd_qual = parse_optional_usize(data.get("wd_qual"));
-    log::info!(
-        "edit_catalog cat={cid}: parsed wd_prop={wd_prop:?} wd_qual={wd_qual:?} (raw wd_prop={:?})",
-        data.get("wd_prop")
-    );
     app.storage()
         .api_edit_catalog(
             cid,
@@ -173,8 +167,8 @@ pub async fn query_edit_catalog(
                 desc: data.get("desc").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                 type_name: data.get("type").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                 search_wp: data.get("search_wp").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                wd_prop,
-                wd_qual,
+                wd_prop: parse_optional_usize(data.get("wd_prop")),
+                wd_qual: parse_optional_usize(data.get("wd_qual")),
                 active,
             },
         )
