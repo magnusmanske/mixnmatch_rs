@@ -17,32 +17,45 @@ use itertools::Itertools;
 use rand::prelude::*;
 
 impl StorageMySQL {
+    /// Build the coordinate-matcher's `SELECT … FROM vw_location` query.
+    ///
+    /// Two shapes:
+    /// * `catalog_id = Some(N)` — pin to one catalog. `bad_catalogs` and
+    ///   `max_results` are ignored: the caller already chose the catalog,
+    ///   and the row count is bounded by the catalog's location count.
+    /// * `catalog_id = None` — random sample across all active catalogs.
+    ///   Adds `random>=R` for the random window, applies `bad_catalogs`
+    ///   exclusion, and appends `ORDER BY random LIMIT N`.
+    ///
+    /// The `bad_catalogs NOT IN` filter and the not-fully-matched guard
+    /// must both live *inside* the WHERE clause and ahead of the ORDER BY.
+    /// An earlier version inlined the random + LIMIT fragment as if it
+    /// were a WHERE-clause predicate, producing malformed SQL like
+    /// `… LIMIT 100 AND `catalog` NOT IN (…) AND ((q IS NULL)…)`.
     pub(super) fn coordinate_matcher_main_query_sql(
         catalog_id: &Option<usize>,
         bad_catalogs: &[usize],
         max_results: usize,
     ) -> String {
-        let conditions_catalog_id = match catalog_id {
-            Some(catalog_id) => format!("`catalog`={catalog_id}"),
-            None => Self::coordinate_matcher_main_query_sql_subquery(bad_catalogs, max_results),
-        };
-        let conditions_not_fully_matched = &MatchState::not_fully_matched().get_sql();
-        format!(
-            "SELECT `lat`,`lon`,`id`,`catalog`,`ext_name`,`type`,`q` FROM `vw_location` WHERE `ext_name`!='' AND {conditions_catalog_id} {conditions_not_fully_matched}"
-        )
-    }
-
-    pub(super) fn coordinate_matcher_main_query_sql_subquery(
-        bad_catalogs: &[usize],
-        max_results: usize,
-    ) -> String {
-        let r: f64 = rand::rng().random();
-        let mut sql = format!("`random`>={r} ORDER BY `random` LIMIT {max_results}");
-        if !bad_catalogs.is_empty() {
-            let s = bad_catalogs.iter().join(",");
-            sql += &format!("AND `catalog` NOT IN ({s})");
+        let conditions_not_fully_matched = MatchState::not_fully_matched().get_sql();
+        let select = "SELECT `lat`,`lon`,`id`,`catalog`,`ext_name`,`type`,`q` FROM `vw_location`";
+        match catalog_id {
+            Some(catalog_id) => format!(
+                "{select} WHERE `ext_name`!='' AND `catalog`={catalog_id}{conditions_not_fully_matched}"
+            ),
+            None => {
+                let r: f64 = rand::rng().random();
+                let mut sql = format!(
+                    "{select} WHERE `ext_name`!='' AND `random`>={r}{conditions_not_fully_matched}"
+                );
+                if !bad_catalogs.is_empty() {
+                    let s = bad_catalogs.iter().join(",");
+                    sql += &format!(" AND `catalog` NOT IN ({s})");
+                }
+                sql += &format!(" ORDER BY `random` LIMIT {max_results}");
+                sql
+            }
         }
-        sql
     }
 
     pub(super) fn jobs_get_next_job_construct_sql(

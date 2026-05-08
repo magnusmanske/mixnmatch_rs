@@ -78,6 +78,14 @@ async fn seed_conn() -> Result<(mysql_async::Pool, mysql_async::Conn)> {
     Ok((pool, conn))
 }
 
+/// Public counterpart of [`seed_conn`] for tests that need raw SQL access
+/// to verify side effects. Returns `(pool, conn)` — the caller must drop
+/// the conn first, then call `pool.disconnect().await.ok()` to keep the
+/// per-runtime pool from leaking.
+pub async fn raw_conn() -> Result<(mysql_async::Pool, mysql_async::Conn)> {
+    seed_conn().await
+}
+
 fn dummy_pool_config() -> serde_json::Value {
     json!({ "url": "mysql://x:x@127.0.0.1:65535/x", "min_connections": 0, "max_connections": 1, "keep_sec": 1 })
 }

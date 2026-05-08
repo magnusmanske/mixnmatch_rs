@@ -52,3 +52,81 @@ impl crate::storage::TaxonQueries for StorageMySQL {
         Ok((results.len(), ranked_names))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::taxon_matcher::TaxonNameField;
+    use crate::test_support;
+    use mysql_async::prelude::*;
+
+    async fn fetch_taxon_run(catalog_id: usize) -> u16 {
+        let (pool, mut conn) = test_support::raw_conn().await.unwrap();
+        let row: (u16,) = conn
+            .exec_first(
+                "SELECT `taxon_run` FROM `catalog` WHERE `id`=:id",
+                params! { "id" => catalog_id },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        drop(conn);
+        pool.disconnect().await.ok();
+        row.0
+    }
+
+    // ── set_catalog_taxon_run ───────────────────────────────────────────────
+    //
+    // The SQL is a CAS-style flip: it always *sets* `taxon_run=1` and the
+    // bool argument is the *expected current value*. Verify both branches.
+
+    /// Catalog seeded with `taxon_run=0` + bool argument `false`
+    /// (i.e. "I expect taxon_run to currently be 0"): WHERE matches, the
+    /// row is flipped to 1.
+    #[tokio::test]
+    async fn set_catalog_taxon_run_flips_zero_to_one_when_expected_zero() {
+        let app = test_support::test_app().await;
+        let (catalog_id, _) = test_support::seed_minimal_entry(&app).await.unwrap();
+        assert_eq!(fetch_taxon_run(catalog_id).await, 0, "fresh catalog must start at 0");
+
+        app.storage().set_catalog_taxon_run(catalog_id, false).await.unwrap();
+
+        assert_eq!(fetch_taxon_run(catalog_id).await, 1, "WHERE matched → row flipped to 1");
+    }
+
+    /// Catalog seeded with `taxon_run=0` + bool argument `true`
+    /// (expected current value 1): WHERE doesn't match, no-op.
+    #[tokio::test]
+    async fn set_catalog_taxon_run_no_op_when_expected_value_disagrees() {
+        let app = test_support::test_app().await;
+        let (catalog_id, _) = test_support::seed_minimal_entry(&app).await.unwrap();
+
+        app.storage().set_catalog_taxon_run(catalog_id, true).await.unwrap();
+
+        assert_eq!(fetch_taxon_run(catalog_id).await, 0, "WHERE didn't match → row unchanged");
+    }
+
+    // ── match_taxa_get_ranked_names_batch ───────────────────────────────────
+
+    /// With no entries seeded for the supplied catalog, the batch query
+    /// returns `(0, empty_map)` — exercises the SQL path and the empty
+    /// rank-mapping branch.
+    #[tokio::test]
+    async fn match_taxa_get_ranked_names_batch_empty_for_unseeded_catalog() {
+        let app = test_support::test_app().await;
+        let (catalog_id, _) = test_support::seed_minimal_entry(&app).await.unwrap();
+
+        let (count, ranked) = app
+            .storage()
+            .match_taxa_get_ranked_names_batch(
+                &["species"],
+                &TaxonNameField::Name,
+                catalog_id,
+                100,
+                0,
+            )
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+        assert!(ranked.is_empty());
+    }
+}

@@ -6652,24 +6652,45 @@ mod tests {
     }
 
     #[test]
-    fn coordinate_matcher_subquery_includes_limit() {
-        let sql = StorageMySQL::coordinate_matcher_main_query_sql_subquery(&[], 75);
-        assert!(sql.contains("75"), "limit must appear in subquery");
+    fn coordinate_matcher_includes_limit_in_random_branch() {
+        let sql = StorageMySQL::coordinate_matcher_main_query_sql(&None, &[], 75);
+        assert!(sql.contains("LIMIT 75"), "LIMIT must appear in random-sample SQL");
+        assert!(sql.contains("ORDER BY `random`"), "ORDER BY must appear in random-sample SQL");
     }
 
     #[test]
-    fn coordinate_matcher_subquery_excludes_bad_catalogs() {
-        let sql = StorageMySQL::coordinate_matcher_main_query_sql_subquery(&[7, 8, 9], 10);
+    fn coordinate_matcher_excludes_bad_catalogs() {
+        let sql = StorageMySQL::coordinate_matcher_main_query_sql(&None, &[7, 8, 9], 10);
         assert!(
-            sql.contains("NOT IN (7,8,9)"),
-            "bad catalogs must be excluded"
+            sql.contains("AND `catalog` NOT IN (7,8,9)"),
+            "bad catalogs must be excluded with leading AND + space; got: {sql}"
         );
     }
 
     #[test]
-    fn coordinate_matcher_subquery_no_exclusion_when_bad_list_empty() {
-        let sql = StorageMySQL::coordinate_matcher_main_query_sql_subquery(&[], 10);
+    fn coordinate_matcher_no_exclusion_when_bad_list_empty() {
+        let sql = StorageMySQL::coordinate_matcher_main_query_sql(&None, &[], 10);
         assert!(!sql.contains("NOT IN"), "must not emit empty NOT IN clause");
+    }
+
+    /// Regression test for the malformed-SQL bug: `bad_catalogs` + None
+    /// catalog used to produce `LIMIT 100AND `catalog` NOT IN (…)` (no
+    /// space, AND after LIMIT). The `NOT IN` clause must come BEFORE the
+    /// `ORDER BY` / `LIMIT` and have proper whitespace around it.
+    #[test]
+    fn coordinate_matcher_not_in_appears_before_order_by() {
+        let sql = StorageMySQL::coordinate_matcher_main_query_sql(&None, &[7], 10);
+        let not_in_idx = sql.find("NOT IN").expect("NOT IN clause must exist");
+        let order_by_idx = sql.find("ORDER BY").expect("ORDER BY must exist");
+        assert!(
+            not_in_idx < order_by_idx,
+            "NOT IN must precede ORDER BY (else SQL is malformed); got: {sql}"
+        );
+        // No `<digit>AND` token (the original bug had `100AND `catalog` NOT IN`).
+        for digit in '0'..='9' {
+            let bad = format!("{digit}AND");
+            assert!(!sql.contains(&bad), "malformed `{bad}` (no space) in: {sql}");
+        }
     }
 
     // ── build_api_search_entries_sql ─────────────────────────────────────

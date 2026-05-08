@@ -100,3 +100,260 @@ impl crate::storage::IssueQueries for StorageMySQL {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::issue::{Issue, IssueStatus, IssueType};
+    use crate::test_support;
+    use mysql_async::prelude::*;
+    use serde_json::json;
+
+    async fn fetch_status_for_entry_type(
+        entry_id: usize,
+        issue_type: &str,
+    ) -> Option<String> {
+        let (pool, mut conn) = test_support::raw_conn().await.unwrap();
+        let row: Option<(String,)> = conn
+            .exec_first(
+                "SELECT `status` FROM `issues` WHERE `entry_id`=:entry_id AND `type`=:itype",
+                params! { entry_id, "itype" => issue_type },
+            )
+            .await
+            .unwrap();
+        drop(conn);
+        pool.disconnect().await.ok();
+        row.map(|(s,)| s)
+    }
+
+    async fn fetch_issue_id_for_entry_type(
+        entry_id: usize,
+        issue_type: &str,
+    ) -> usize {
+        let (pool, mut conn) = test_support::raw_conn().await.unwrap();
+        let row: Option<(usize,)> = conn
+            .exec_first(
+                "SELECT `id` FROM `issues` WHERE `entry_id`=:entry_id AND `type`=:itype",
+                params! { entry_id, "itype" => issue_type },
+            )
+            .await
+            .unwrap();
+        drop(conn);
+        pool.disconnect().await.ok();
+        row.expect("issue row not found").0
+    }
+
+    /// Override an entry's q/user so `issues_delete_invalid_q_matches` will pick it up.
+    async fn force_entry_q_and_user(entry_id: usize, q: i64, user: i64) {
+        let (pool, mut conn) = test_support::raw_conn().await.unwrap();
+        conn.exec_drop(
+            "UPDATE `entry` SET `q`=:q, `user`=:user WHERE `id`=:id",
+            params! { "q" => q, "user" => user, "id" => entry_id },
+        )
+        .await
+        .unwrap();
+        drop(conn);
+        pool.disconnect().await.ok();
+    }
+
+    async fn count_issues_for_entry(entry_id: usize, issue_type: &str) -> usize {
+        let (pool, mut conn) = test_support::raw_conn().await.unwrap();
+        let row: (usize,) = conn
+            .exec_first(
+                "SELECT COUNT(*) FROM `issues` WHERE `entry_id`=:entry_id AND `type`=:itype",
+                params! { entry_id, "itype" => issue_type },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        drop(conn);
+        pool.disconnect().await.ok();
+        row.0
+    }
+
+    // ── issue_insert + set_issue_status round-trip ──────────────────────────
+
+    #[tokio::test]
+    async fn issue_insert_persists_and_set_status_round_trip() {
+        let app = test_support::test_app().await;
+        let (_, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
+
+        let issue = Issue::new(entry_id, IssueType::WdDuplicate, json!(["Q1", "Q2"]));
+        app.storage().issue_insert(&issue).await.unwrap();
+
+        assert_eq!(
+            fetch_status_for_entry_type(entry_id, "WD_DUPLICATE").await.as_deref(),
+            Some("OPEN"),
+            "fresh insert must be OPEN"
+        );
+
+        let issue_id = fetch_issue_id_for_entry_type(entry_id, "WD_DUPLICATE").await;
+        app.storage()
+            .set_issue_status(issue_id, IssueStatus::ResolvedOnWikidata)
+            .await
+            .unwrap();
+        assert_eq!(
+            fetch_status_for_entry_type(entry_id, "WD_DUPLICATE").await.as_deref(),
+            Some("RESOLVED_ON_WIKIDATA"),
+        );
+    }
+
+    /// `INSERT IGNORE` swallows the duplicate-key collision when the same
+    /// `(entry_id, type)` pair is inserted twice — second call must be a no-op,
+    /// not an error, and the row count must stay 1.
+    #[tokio::test]
+    async fn issue_insert_is_idempotent_on_unique_key() {
+        let app = test_support::test_app().await;
+        let (_, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
+        let issue = Issue::new(entry_id, IssueType::Mismatch, json!({"foo":"bar"}));
+        app.storage().issue_insert(&issue).await.unwrap();
+        app.storage().issue_insert(&issue).await.unwrap();
+        assert_eq!(count_issues_for_entry(entry_id, "MISMATCH").await, 1);
+    }
+
+    /// `issue_insert` joins onto `entry` and uses `entry.catalog` for the
+    /// issue's `catalog` column. With no entry row, the INSERT…SELECT returns
+    /// zero rows and silently inserts nothing.
+    #[tokio::test]
+    async fn issue_insert_with_missing_entry_inserts_nothing() {
+        let app = test_support::test_app().await;
+        let issue = Issue::new(99_999_999, IssueType::ItemDeleted, json!(null));
+        app.storage().issue_insert(&issue).await.unwrap();
+        assert_eq!(count_issues_for_entry(99_999_999, "ITEM_DELETED").await, 0);
+    }
+
+    // ── issues_close_for_inactive_catalogs ──────────────────────────────────
+
+    #[tokio::test]
+    async fn issues_close_for_inactive_catalogs_flips_status() {
+        let app = test_support::test_app().await;
+        let inactive_catalog_id = test_support::seed_inactive_catalog().await.unwrap();
+        let entry_id = test_support::seed_entry_in_catalog(inactive_catalog_id, "Inactive Cat Entry")
+            .await
+            .unwrap();
+        app.storage()
+            .issue_insert(&Issue::new(entry_id, IssueType::Mismatch, json!("inact")))
+            .await
+            .unwrap();
+
+        app.storage().issues_close_for_inactive_catalogs().await.unwrap();
+
+        assert_eq!(
+            fetch_status_for_entry_type(entry_id, "MISMATCH").await.as_deref(),
+            Some("INACTIVE_CATALOG")
+        );
+    }
+
+    /// Active-catalog issues must NOT be flipped.
+    #[tokio::test]
+    async fn issues_close_for_inactive_catalogs_leaves_active_alone() {
+        let app = test_support::test_app().await;
+        let (_, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
+        app.storage()
+            .issue_insert(&Issue::new(entry_id, IssueType::Mismatch, json!("active")))
+            .await
+            .unwrap();
+
+        app.storage().issues_close_for_inactive_catalogs().await.unwrap();
+
+        assert_eq!(
+            fetch_status_for_entry_type(entry_id, "MISMATCH").await.as_deref(),
+            Some("OPEN"),
+            "active catalog issue must stay OPEN"
+        );
+    }
+
+    // ── issues_close_jan01_mismatches ───────────────────────────────────────
+
+    #[tokio::test]
+    async fn issues_close_jan01_mismatches_matches_only_mnm_time_01_01() {
+        let app = test_support::test_app().await;
+        let (_, entry_id_jan01) = test_support::seed_minimal_entry(&app).await.unwrap();
+        let (_, entry_id_other) = test_support::seed_minimal_entry(&app).await.unwrap();
+
+        app.storage()
+            .issue_insert(&Issue::new(
+                entry_id_jan01,
+                IssueType::MismatchDates,
+                json!({ "mnm_time": "1900-01-01" }),
+            ))
+            .await
+            .unwrap();
+        app.storage()
+            .issue_insert(&Issue::new(
+                entry_id_other,
+                IssueType::MismatchDates,
+                json!({ "mnm_time": "1900-06-15" }),
+            ))
+            .await
+            .unwrap();
+
+        app.storage().issues_close_jan01_mismatches().await.unwrap();
+
+        assert_eq!(
+            fetch_status_for_entry_type(entry_id_jan01, "MISMATCH_DATES").await.as_deref(),
+            Some("JAN01"),
+        );
+        assert_eq!(
+            fetch_status_for_entry_type(entry_id_other, "MISMATCH_DATES").await.as_deref(),
+            Some("OPEN"),
+        );
+    }
+
+    // ── issues_delete_invalid_q_matches ─────────────────────────────────────
+
+    #[tokio::test]
+    async fn issues_delete_invalid_q_matches_removes_na_flagged_rows() {
+        let app = test_support::test_app().await;
+        let (_, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
+        force_entry_q_and_user(entry_id, 0, 7).await;
+        app.storage()
+            .issue_insert(&Issue::new(entry_id, IssueType::WdDuplicate, json!(["Q1"])))
+            .await
+            .unwrap();
+
+        app.storage().issues_delete_invalid_q_matches().await.unwrap();
+
+        assert!(
+            fetch_status_for_entry_type(entry_id, "WD_DUPLICATE").await.is_none(),
+            "issue row for N/A entry must be deleted outright"
+        );
+    }
+
+    /// q>0 entries are real matches — issues against them must NOT be deleted.
+    #[tokio::test]
+    async fn issues_delete_invalid_q_matches_keeps_real_matches() {
+        let app = test_support::test_app().await;
+        let (_, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
+        force_entry_q_and_user(entry_id, 42, 7).await;
+        app.storage()
+            .issue_insert(&Issue::new(entry_id, IssueType::Mismatch, json!("real")))
+            .await
+            .unwrap();
+
+        app.storage().issues_delete_invalid_q_matches().await.unwrap();
+
+        assert_eq!(
+            fetch_status_for_entry_type(entry_id, "MISMATCH").await.as_deref(),
+            Some("OPEN"),
+            "issue against q>0 entry must survive"
+        );
+    }
+
+    // ── get_open_wd_duplicates ──────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn get_open_wd_duplicates_returns_inserted_open_issue() {
+        let app = test_support::test_app().await;
+        let (_, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
+        let payload = json!(["Q11", "Q22"]);
+        app.storage()
+            .issue_insert(&Issue::new(entry_id, IssueType::WdDuplicate, payload.clone()))
+            .await
+            .unwrap();
+
+        let issues = app.storage().get_open_wd_duplicates().await.unwrap();
+        let mine = issues.iter().find(|i| i.entry_id == entry_id);
+        assert!(mine.is_some(), "freshly-inserted WD_DUPLICATE must appear in get_open_wd_duplicates");
+        assert_eq!(mine.unwrap().json, payload, "JSON payload must round-trip");
+    }
+}
