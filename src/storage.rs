@@ -652,6 +652,9 @@ pub trait Storage:
     ) -> Result<Vec<Entry>>;
     async fn get_all_external_ids(&self, catalog_id: usize) -> Result<HashMap<String, usize>>;
     async fn delete_catalog(&self, catalog_id: usize) -> Result<()>;
+    /// Delete all entries (and their associated rows) from a catalog, but leave
+    /// the `catalog` and `autoscrape` rows intact.
+    async fn empty_catalog(&self, catalog_id: usize) -> Result<()>;
 
     // Microsync
 

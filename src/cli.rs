@@ -83,6 +83,21 @@ enum Commands {
         really: bool,
     },
 
+    /// Empty catalog (delete all entries and associated data, but keep the
+    /// catalog row and autoscrape configuration)
+    EmptyCatalog {
+        #[arg(short, long, value_name = "FILE")]
+        config: Option<PathBuf>,
+
+        /// Catalog ID
+        #[arg(short, long)]
+        id: usize,
+
+        /// Confirmation flag — must be supplied to prevent accidental runs
+        #[arg(short, long, required = true)]
+        really: bool,
+    },
+
     /// wikibase.cloud
     WB {
         #[arg(short, long, value_name = "FILE")]
@@ -436,6 +451,13 @@ impl ShellCommands {
                 let app = Self::path2app(config)?;
                 let mut catalog = crate::catalog::Catalog::from_id(*id, &app).await?;
                 catalog.delete(&app).await?;
+            }
+            Some(Commands::EmptyCatalog { config, id, really }) => {
+                let _ = really; // confirmation flag; presence is the guard
+                let app = Self::path2app(config)?;
+                let catalog = crate::catalog::Catalog::from_id(*id, &app).await?;
+                catalog.empty(&app).await?;
+                println!("Catalog {id} emptied (catalog and autoscrape rows preserved).");
             }
             Some(Commands::CreateUnmatched {
                 config,

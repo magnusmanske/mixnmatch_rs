@@ -161,6 +161,14 @@ impl Catalog {
         Ok(())
     }
 
+    /// Delete all entries (and their associated rows) from the catalog, but
+    /// leave the `catalog` and `autoscrape` rows intact.
+    pub async fn empty(&self, app: &dyn ExternalServicesContext) -> Result<()> {
+        app.storage()
+            .empty_catalog(self.get_valid_id()?)
+            .await
+    }
+
     /// Returns a `HashMap` of key-value pairs for the catalog.
     pub async fn get_key_value_pairs(&self, app: &dyn ExternalServicesContext) -> Result<HashMap<String, String>> {
         app.storage()
@@ -345,5 +353,23 @@ mod tests {
             .unwrap();
         let catalog = Catalog::from_id(catalog_id, &app).await.unwrap();
         assert_eq!(catalog.url().map(|s| s.as_str()), Some(long_url.as_str()));
+    }
+
+    #[tokio::test]
+    async fn test_empty_catalog_removes_entries_keeps_catalog_row() {
+        let app = test_support::test_app().await;
+        let (catalog_id, _entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
+
+        let catalog = Catalog::from_id(catalog_id, &app).await.unwrap();
+        assert!(catalog.number_of_entries(&app).await.unwrap() > 0);
+
+        catalog.empty(&app).await.unwrap();
+
+        // Entries are gone.
+        assert_eq!(catalog.number_of_entries(&app).await.unwrap(), 0);
+
+        // Catalog row is still there.
+        let still_there = Catalog::from_id(catalog_id, &app).await;
+        assert!(still_there.is_ok(), "catalog row should survive empty()");
     }
 }

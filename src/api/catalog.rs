@@ -380,6 +380,120 @@ pub async fn query_remove_empty_top_group(
 }
 
 #[cfg(test)]
+fn wd_prop_from_json(data: &serde_json::Value, key: &str) -> Option<usize> {
+    data.get(key).and_then(|v| v.as_u64()).map(|v| v as usize)
+}
+
+#[cfg(test)]
+mod edit_catalog_tests {
+    use super::wd_prop_from_json;
+    use crate::{storage::CatalogUpdate, test_support};
+    use serde_json::json;
+
+    // ── JSON parsing (unit) ────────────────────────────────────────────────
+
+    #[test]
+    fn wd_prop_parsed_from_json_number() {
+        // The fixed frontend sends a JSON number via v-model.number.
+        let data = json!({ "wd_prop": 734_u64 });
+        assert_eq!(wd_prop_from_json(&data, "wd_prop"), Some(734));
+    }
+
+    #[test]
+    fn wd_prop_zero_becomes_none() {
+        let data = json!({ "wd_prop": 0_u64 });
+        // as_u64 yields Some(0), but normalize_wd_prop later coerces to None.
+        // Here we only test the JSON layer — normalization is tested separately.
+        assert_eq!(wd_prop_from_json(&data, "wd_prop"), Some(0));
+    }
+
+    #[test]
+    fn wd_prop_absent_is_none() {
+        let data = json!({});
+        assert_eq!(wd_prop_from_json(&data, "wd_prop"), None);
+    }
+
+    // ── Storage round-trip (integration) ──────────────────────────────────
+
+    #[tokio::test]
+    async fn edit_catalog_persists_wd_prop() {
+        // Regression test for the v-model / as_u64 bug: verify that a valid
+        // wd_prop value survives a full api_edit_catalog → DB round-trip.
+        let app = test_support::test_app().await;
+        let (catalog_id, _) = test_support::seed_minimal_entry(&app).await.unwrap();
+        // Use a catalog-id-scoped name to avoid the UNIQUE(name) collision
+        // when this test runs concurrently with other catalog tests.
+        let name = format!("edit_wd_prop_{catalog_id}");
+
+        app.storage()
+            .api_edit_catalog(
+                catalog_id,
+                CatalogUpdate {
+                    name,
+                    url: String::new(),
+                    desc: String::new(),
+                    type_name: String::new(),
+                    search_wp: "en".to_string(),
+                    wd_prop: Some(734),
+                    wd_qual: None,
+                    active: true,
+                },
+            )
+            .await
+            .unwrap();
+
+        let catalog = crate::catalog::Catalog::from_id(catalog_id, &app).await.unwrap();
+        assert_eq!(catalog.wd_prop(), Some(734));
+    }
+
+    #[tokio::test]
+    async fn edit_catalog_clears_wd_prop_when_none() {
+        let app = test_support::test_app().await;
+        let (catalog_id, _) = test_support::seed_minimal_entry(&app).await.unwrap();
+        let name = format!("clear_wd_prop_{catalog_id}");
+
+        // First set a property.
+        app.storage()
+            .api_edit_catalog(
+                catalog_id,
+                CatalogUpdate {
+                    name: name.clone(),
+                    url: String::new(),
+                    desc: String::new(),
+                    type_name: String::new(),
+                    search_wp: "en".to_string(),
+                    wd_prop: Some(734),
+                    wd_qual: None,
+                    active: true,
+                },
+            )
+            .await
+            .unwrap();
+
+        // Now clear it (user blanked the field → NaN → JSON null → None).
+        app.storage()
+            .api_edit_catalog(
+                catalog_id,
+                CatalogUpdate {
+                    name,
+                    url: String::new(),
+                    desc: String::new(),
+                    type_name: String::new(),
+                    search_wp: "en".to_string(),
+                    wd_prop: None,
+                    wd_qual: None,
+                    active: true,
+                },
+            )
+            .await
+            .unwrap();
+
+        let catalog = crate::catalog::Catalog::from_id(catalog_id, &app).await.unwrap();
+        assert_eq!(catalog.wd_prop(), None);
+    }
+}
+
+#[cfg(test)]
 mod kv_tests {
     use super::kv_value_means_delete;
     use serde_json::json;

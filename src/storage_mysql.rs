@@ -101,6 +101,63 @@ impl StorageMySQL {
         Ok(true)
     }
 
+    /// Tables keyed by `catalog` that hold catalog data but are NOT the catalog
+    /// definition itself.  `autoscrape` and `catalog` are excluded so that
+    /// `empty_catalog` can preserve them.
+    const TABLES_CATALOG_DATA: &'static [&'static str] = &[
+        "code_fragments",
+        "jobs",
+        "overview",
+        "wd_matches",
+        "update_info",
+        "catalog_default_statement",
+    ];
+
+    const TABLES_ENTRY_ID: &'static [&'static str] = &[
+        "aliases",
+        "descriptions",
+        "auxiliary",
+        "issues",
+        "kv_entry",
+        "mnm_relation",
+        "multi_match",
+        "person_dates",
+        "location",
+        "log",
+        "entry_creation",
+        "entry2given_name",
+        "statement_text",
+    ];
+
+    /// Delete every entry (and all entry-linked rows) that belongs to `catalog_id`.
+    /// Does not touch catalog-level rows or the `catalog` / `autoscrape` rows.
+    async fn delete_catalog_entry_data(&self, catalog_id: usize) -> Result<()> {
+        const BATCH_SIZE: usize = 10000;
+        loop {
+            let eq = EntryQuery::default()
+                .with_catalog_id(catalog_id)
+                .with_limit(BATCH_SIZE);
+            let entry_ids = self
+                .entry_query(&eq)
+                .await?
+                .iter()
+                .filter_map(|entry| entry.id)
+                .collect::<Vec<usize>>();
+            if entry_ids.is_empty() {
+                break;
+            }
+            let entry_ids_csv = Itertools::join(&mut entry_ids.iter(), ",");
+            for table in Self::TABLES_ENTRY_ID {
+                let sql =
+                    format!("DELETE FROM `{table}` WHERE `entry_id` IN ({entry_ids_csv})");
+                self.get_conn().await?.exec_drop(sql, ()).await?;
+            }
+            let sql = format!("DELETE FROM `entry` WHERE `id` IN ({entry_ids_csv})");
+            self.get_conn().await?.exec_drop(sql, ()).await?;
+        }
+        Ok(())
+    }
+
     pub(super) async fn match_taxa_get_ranked_names_batch_get_results(
         &self,
         ranks: &[&str],
@@ -411,65 +468,32 @@ impl Storage for StorageMySQL {
     /// This deletes a catalog and all its associated entries.
     /// USE WITH GREAT CARE!
     async fn delete_catalog(&self, catalog_id: usize) -> Result<()> {
-        const TABLES_CATALOG_ID: &[&str] = &[
-            "code_fragments",
-            "autoscrape",
-            "jobs",
-            "overview",
-            "wd_matches",
-            "update_info",
-            "catalog_default_statement",
-            "entry",
-        ];
-        const TABLES_ENTRY_ID: &[&str] = &[
-            "aliases",
-            "descriptions",
-            "auxiliary",
-            "issues",
-            "kv_entry",
-            "mnm_relation",
-            "multi_match",
-            "person_dates",
-            "location",
-            "log",
-            "entry_creation",
-            "entry2given_name",
-            "statement_text",
-        ];
-        const BATCH_SIZE: usize = 10000;
+        self.delete_catalog_entry_data(catalog_id).await?;
 
-        // Delete entry-associated data
-        loop {
-            let eq = EntryQuery::default()
-                .with_catalog_id(catalog_id)
-                .with_limit(BATCH_SIZE);
-            let entry_ids = self
-                .entry_query(&eq)
-                .await?
-                .iter()
-                .filter_map(|entry| entry.id)
-                .collect::<Vec<usize>>();
-            if entry_ids.is_empty() {
-                break;
-            }
-            let entry_ids = Itertools::join(&mut entry_ids.iter(), ",");
-            for table in TABLES_ENTRY_ID {
-                let sql = format!("DELETE FROM `{table}` WHERE `entry_id` IN ({entry_ids})");
-                self.get_conn().await?.exec_drop(sql, ()).await?;
-            }
-            let sql = format!("DELETE FROM `entry` WHERE `id` IN ({entry_ids})");
-            self.get_conn().await?.exec_drop(sql, ()).await?;
-        }
-
-        // Delete catalog-associated data
-        for table in TABLES_CATALOG_ID {
+        for table in Self::TABLES_CATALOG_DATA {
             let sql = format!("DELETE FROM `{table}` WHERE `catalog`={catalog_id}");
             self.get_conn().await?.exec_drop(sql, ()).await?;
         }
+        // autoscrape is not in TABLES_CATALOG_DATA so delete it explicitly here
+        let sql = format!("DELETE FROM `autoscrape` WHERE `catalog`={catalog_id}");
+        self.get_conn().await?.exec_drop(sql, ()).await?;
 
-        // Delete catalog
         let sql = format!("DELETE FROM `catalog` WHERE `id`={catalog_id}");
         self.get_conn().await?.exec_drop(sql, ()).await?;
+
+        Ok(())
+    }
+
+    /// Delete all entries (and their associated rows) from a catalog, but leave
+    /// the `catalog` and `autoscrape` rows intact.
+    /// USE WITH GREAT CARE!
+    async fn empty_catalog(&self, catalog_id: usize) -> Result<()> {
+        self.delete_catalog_entry_data(catalog_id).await?;
+
+        for table in Self::TABLES_CATALOG_DATA {
+            let sql = format!("DELETE FROM `{table}` WHERE `catalog`={catalog_id}");
+            self.get_conn().await?.exec_drop(sql, ()).await?;
+        }
 
         Ok(())
     }
