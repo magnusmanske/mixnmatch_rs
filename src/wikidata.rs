@@ -353,9 +353,9 @@ impl Wikidata {
         Ok(new_id)
     }
 
-    /// Re-fetch `q` and collapse any duplicate claims that share property
-    /// + main value + qualifiers into a single statement, merging their
-    /// references and dropping self-referential ref snaks. Intended to
+    /// Re-fetch `q` and collapse any duplicate claims that share the same
+    /// property, main value, and qualifiers into a single statement, merging
+    /// their references and dropping self-referential ref snaks. Intended to
     /// run right after `perform_ac2wd`, which lets duplicates slip in
     /// because `wbeditentity` does not deduplicate when merging
     /// caller-supplied claim arrays into existing items.

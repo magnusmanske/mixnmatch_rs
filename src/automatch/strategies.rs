@@ -20,6 +20,9 @@ use futures::StreamExt;
 use mediawiki::api::Api;
 use std::collections::HashMap;
 
+/// Map from `(label_text, type_q)` to the list of entry IDs that share that key.
+type TextTypeMap = HashMap<(String, String), Vec<usize>>;
+
 impl AutoMatch {
     /// Sort by numeric Q-id and deduplicate. Used by callers whose item
     /// list has no inherent relevance order (e.g. raw term-store SQL
@@ -419,12 +422,9 @@ impl AutoMatch {
     /// which eliminates duplicate Wikidata API calls.
     pub(super) fn group_searches_by_text(
         result_batch: &[AutomatchSearchRow],
-    ) -> (
-        HashMap<(String, String), Vec<usize>>,
-        HashMap<(String, String), Vec<usize>>,
-    ) {
-        let mut label_map: HashMap<(String, String), Vec<usize>> = HashMap::new();
-        let mut alias_map: HashMap<(String, String), Vec<usize>> = HashMap::new();
+    ) -> (TextTypeMap, TextTypeMap) {
+        let mut label_map: TextTypeMap = HashMap::new();
+        let mut alias_map: TextTypeMap = HashMap::new();
         for row in result_batch {
             label_map
                 .entry((row.ext_name.clone(), row.type_name.clone()))

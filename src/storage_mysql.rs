@@ -475,11 +475,11 @@ impl Storage for StorageMySQL {
             self.get_conn().await?.exec_drop(sql, ()).await?;
         }
         // autoscrape is not in TABLES_CATALOG_DATA so delete it explicitly here
-        let sql = format!("DELETE FROM `autoscrape` WHERE `catalog`={catalog_id}");
-        self.get_conn().await?.exec_drop(sql, ()).await?;
+        let autoscrape_sql = format!("DELETE FROM `autoscrape` WHERE `catalog`={catalog_id}");
+        self.get_conn().await?.exec_drop(autoscrape_sql, ()).await?;
 
-        let sql = format!("DELETE FROM `catalog` WHERE `id`={catalog_id}");
-        self.get_conn().await?.exec_drop(sql, ()).await?;
+        let catalog_sql = format!("DELETE FROM `catalog` WHERE `id`={catalog_id}");
+        self.get_conn().await?.exec_drop(catalog_sql, ()).await?;
 
         Ok(())
     }
