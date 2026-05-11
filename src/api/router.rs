@@ -25,24 +25,58 @@ pub fn router(app: AppState) -> Router {
     // 512 MB: big enough for realistic catalog uploads, still bounded.
     const UPLOAD_MAX_BYTES: usize = 512 * 1024 * 1024;
 
+    // Per-IP rate limit on /api.php. `SmartIpKeyExtractor` reads
+    // `X-Forwarded-For` / `X-Real-IP` / `Forwarded` (Toolforge sits
+    // behind a reverse proxy, so PeerIp alone would be the proxy's
+    // address and the limiter would be effectively global), falling
+    // back to the raw socket IP attached as `ConnectInfo<SocketAddr>`
+    // by `into_make_service_with_connect_info::<SocketAddr>()` in
+    // `cli.rs::run_webserver`. If that wiring is ever broken, the
+    // extractor returns 500 "Unable To Extract Key!" on every
+    // request — the integration test
+    // `router_responds_through_real_listener` pins this end-to-end.
+    //
+    // Burst (60) is intentionally generous: opening a single SPA
+    // page can fire dozens of API calls (entries, catalogs, person
+    // dates, …) within the first second, and we don't want to
+    // throttle a real user before their page renders. Steady-state
+    // replenishes at 30 req/s. Exceeding the limit returns 429 with
+    // a Retry-After header.
+    let governor_config = std::sync::Arc::new(
+        tower_governor::governor::GovernorConfigBuilder::default()
+            .per_second(30)
+            .burst_size(60)
+            .key_extractor(tower_governor::key_extractor::SmartIpKeyExtractor)
+            .finish()
+            .expect("static rate-limit config is valid"),
+    );
+    // Background sweep so the in-memory rate-limit map doesn't grow
+    // unbounded as transient clients come and go. Guarded on a
+    // running tokio runtime so synchronous test helpers that build
+    // the router without a reactor (e.g. `test_router_builds`) don't
+    // panic.
+    if tokio::runtime::Handle::try_current().is_ok() {
+        let limiter = governor_config.limiter().clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+            loop {
+                interval.tick().await;
+                limiter.retain_recent();
+            }
+        });
+    }
+
     // /api.php is the user-supplied query path: it needs the origin
     // check (cross-origin browsers can still send simple GETs even
-    // when CORS would block the response) and panic recovery (a single
-    // MySQL-row-decode panic shouldn't kill the connection).
-    //
-    // NOTE: a per-IP rate limit (tower_governor) used to be wired in
-    // here, but it relied on the default PeerIp key extractor which
-    // needs ConnectInfo<SocketAddr> attached to every request. Our
-    // `axum::serve(listener, router)` / `axum_server::serve(...)`
-    // calls use `into_make_service()` (no connect-info), so every
-    // request returned 500 with "Unable To Extract Key!". Removed
-    // pending a proper extractor — Toolforge sits behind a reverse
-    // proxy so PeerIp would be the proxy IP anyway; needs an
-    // X-Forwarded-For-aware extractor + into_make_service_with_connect_info.
+    // when CORS would block the response), panic recovery (a single
+    // MySQL-row-decode panic shouldn't kill the connection), and the
+    // per-IP rate limit. Other routes don't take user-supplied query
+    // strings, so they don't get the same treatment.
     let api_php_routes = Router::new()
         .route("/api.php", get(api_dispatcher).post(api_dispatcher_form))
         .route_layer(axum::middleware::from_fn(panic_recovery_middleware))
-        .route_layer(axum::middleware::from_fn(origin_check_middleware));
+        .route_layer(axum::middleware::from_fn(origin_check_middleware))
+        .route_layer(tower_governor::GovernorLayer::new(governor_config));
 
     Router::new()
         .merge(api_php_routes)
@@ -523,6 +557,69 @@ mod tests {
                 "ROUTES missing required endpoint: {required}"
             );
         }
+    }
+
+    /// Pin the rate-limit + ConnectInfo wiring end-to-end. Issues a
+    /// real HTTP request to a real TCP listener serving the production
+    /// router via `into_make_service_with_connect_info::<SocketAddr>()`.
+    ///
+    /// Regression guard for the 2026-05-11 outage where every /api.php
+    /// request returned 500 "Unable To Extract Key!" because the rate
+    /// limit's key extractor needs ConnectInfo and the serve call used
+    /// the connect-info-less `into_make_service()`. The bug slipped
+    /// through every `tower::ServiceExt::oneshot` test because those
+    /// bypass the make-service path entirely.
+    ///
+    /// Picks `query=unknown` so the dispatch path goes through every
+    /// layer (rate limit → origin → panic recovery → dispatch) but
+    /// doesn't need a live DB; the handler just returns an "Unknown
+    /// query" ApiError. We only assert the response is NOT 5xx — the
+    /// exact body doesn't matter, the point is the middleware stack
+    /// produced a normal response rather than the
+    /// 500-from-broken-extractor.
+    #[tokio::test]
+    #[ignore = "requires database / external services — run with cargo test -- --ignored"]
+    async fn router_responds_through_real_listener() {
+        let app = crate::test_support::test_app().await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        // Mirror the production layer stack from cli.rs::run_webserver
+        // closely enough that real-listener concerns (connect-info,
+        // session extraction, …) work end-to-end. The dispatcher
+        // unconditionally extracts a Session, so without the layer
+        // every request 500s with "Can't extract session" — masking
+        // the connect-info bug the test is actually guarding against.
+        let session_layer = tower_sessions::SessionManagerLayer::new(
+            tower_sessions::MemoryStore::default(),
+        );
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                router(app)
+                    .layer(session_layer)
+                    .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            .unwrap();
+        });
+
+        let client = reqwest::Client::new();
+        let resp = client
+            .get(format!("http://{addr}/api.php?query=unknown"))
+            .send()
+            .await
+            .expect("request through real listener must complete");
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+
+        server.abort();
+
+        assert!(
+            !status.is_server_error(),
+            "request through real listener returned {status} (body: {body:?}); \
+             likely the ConnectInfo wiring or the rate-limit key extractor \
+             is broken — see commit `592669d` for the prior incident",
+        );
     }
 
     /// The four handlers below previously accepted form-supplied
