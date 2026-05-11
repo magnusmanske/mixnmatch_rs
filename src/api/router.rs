@@ -132,8 +132,11 @@ async fn panic_recovery_middleware(
                 .cloned()
                 .or_else(|| panic.downcast_ref::<&str>().map(|s| (*s).to_string()))
                 .unwrap_or_else(|| "unknown panic".to_string());
+            // Log the panic detail server-side; the response body deliberately
+            // omits it so that DB row content, file paths, or other internal
+            // strings embedded in a panic payload don't leak to the client.
             log::error!("{path} panicked: {msg}");
-            ApiError(format!("internal error: {msg}")).into_response()
+            ApiError("internal error".to_string()).into_response()
         }
     }
 }

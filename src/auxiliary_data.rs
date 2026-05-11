@@ -81,30 +81,44 @@ impl AuxiliaryRow {
             Entity::Property(prop) => prop,
             _ => return None, // Ignore
         };
-        let snak = match prop.datatype().to_owned()? {
-            SnakDataType::Time => todo!(),
+        let datatype = prop.datatype().to_owned()?;
+        // Only the snak datatypes we know how to project from a plain
+        // string `self.value` are emitted; anything else returns None so
+        // the caller skips the row rather than crashing the worker.
+        // (Earlier `todo!()` placeholders would panic on real auxiliary
+        // rows pointing at e.g. Time / Quantity / GlobeCoordinate / Url
+        // properties.)
+        let snak = match datatype {
             SnakDataType::WikibaseItem => Snak::new_item(prop.id(), &self.value),
-            SnakDataType::WikibaseProperty => todo!(),
-            SnakDataType::WikibaseLexeme => todo!(),
-            SnakDataType::WikibaseSense => todo!(),
-            SnakDataType::WikibaseForm => todo!(),
             SnakDataType::String => Snak::new_string(prop.id(), &self.value),
             SnakDataType::ExternalId => {
                 Snak::new_external_id(prop.id(), &Self::fix_external_id(prop.id(), &self.value))
             }
-            SnakDataType::GlobeCoordinate => todo!(),
-            SnakDataType::MonolingualText => todo!(),
-            SnakDataType::Quantity => todo!(),
-            SnakDataType::Url => todo!(),
             SnakDataType::CommonsMedia => Snak::new_string(prop.id(), &self.value),
-            SnakDataType::Math => todo!(),
-            SnakDataType::TabularData => todo!(),
-            SnakDataType::MusicalNotation => todo!(),
-            SnakDataType::GeoShape => todo!(),
-            SnakDataType::NotSet => todo!(),
-            SnakDataType::NoValue => todo!(),
-            SnakDataType::SomeValue => todo!(),
-            SnakDataType::EntitySchema => todo!(),
+            SnakDataType::Time
+            | SnakDataType::WikibaseProperty
+            | SnakDataType::WikibaseLexeme
+            | SnakDataType::WikibaseSense
+            | SnakDataType::WikibaseForm
+            | SnakDataType::GlobeCoordinate
+            | SnakDataType::MonolingualText
+            | SnakDataType::Quantity
+            | SnakDataType::Url
+            | SnakDataType::Math
+            | SnakDataType::TabularData
+            | SnakDataType::MusicalNotation
+            | SnakDataType::GeoShape
+            | SnakDataType::EntitySchema
+            | SnakDataType::NotSet
+            | SnakDataType::NoValue
+            | SnakDataType::SomeValue => {
+                log::warn!(
+                    "auxiliary_data: skipping property {} — datatype {:?} not supported from plain string value",
+                    prop.id(),
+                    datatype
+                );
+                return None;
+            }
         };
         Some(Statement::new_normal(snak, vec![], references.to_owned()))
     }
@@ -136,6 +150,46 @@ mod tests {
         let claim = aux.get_claim_for_aux(prop, &[]);
         let expected = Snak::new_item("P12345", "Q5678");
         assert_eq!(*claim.unwrap().main_snak(), expected);
+    }
+
+    /// Previously every variant that wasn't WikibaseItem / String /
+    /// ExternalId / CommonsMedia panicked via `todo!()` — and the
+    /// codebase serves these via job workers, so a single auxiliary
+    /// row pointing at a `Time` / `Quantity` / `GlobeCoordinate` etc.
+    /// property would kill the worker. Pin the safe-skip behaviour so
+    /// that doesn't silently regress.
+    #[test]
+    fn test_get_claim_for_aux_unsupported_datatype_returns_none() {
+        let aux = AuxiliaryRow {
+            row_id: Some(1),
+            prop_numeric: 569,
+            value: "1452-04-15".to_string(),
+            in_wikidata: false,
+            entry_is_matched: true,
+        };
+        for unsupported in [
+            SnakDataType::Time,
+            SnakDataType::Quantity,
+            SnakDataType::GlobeCoordinate,
+            SnakDataType::Url,
+            SnakDataType::MonolingualText,
+            SnakDataType::Math,
+        ] {
+            let property = wikimisc::wikibase::PropertyEntity::new(
+                "P569".to_string(),
+                vec![],
+                vec![],
+                vec![],
+                vec![],
+                Some(unsupported),
+                false,
+            );
+            assert!(
+                aux.get_claim_for_aux(Entity::Property(property), &[])
+                    .is_none(),
+                "unsupported datatype {unsupported:?} must skip, not panic"
+            );
+        }
     }
 
     #[test]
