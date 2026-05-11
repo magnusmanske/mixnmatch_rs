@@ -11,9 +11,32 @@ use crate::api::common::{self, ApiError, Params, ok};
 use crate::app_state::AppState;
 use crate::wdqs;
 use axum::response::Response;
+use futures::stream::{self, StreamExt};
 use serde_json::{Value, json};
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
+use tokio::sync::Mutex;
+
+/// In-memory TTL cache for `fetch_wd_ext2q` keyed by `wd_prop`.
+///
+/// SPARQL fetches for large properties (~290k rows for P396) routinely
+/// take 30–90 s on the WDQS side. The result set is not minute-fresh —
+/// Wikidata edits aren't visible in WDQS for some seconds anyway — so
+/// memoising for a short window is a clean win for repeat visits to
+/// the sync page. The TTL is deliberately short so that a user who
+/// just fixed something on Wikidata and refreshes the sync page sees
+/// fresh data after a few minutes rather than getting stale results
+/// for an hour.
+const WD_EXT2Q_CACHE_TTL: Duration = Duration::from_secs(300);
+
+type CachedMap = Arc<HashMap<String, String>>;
+type WdExt2qCache = Mutex<HashMap<usize, (Instant, CachedMap)>>;
+
+fn wd_ext2q_cache() -> &'static WdExt2qCache {
+    static CACHE: OnceLock<WdExt2qCache> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
 /// Axum-shape entry point for `?query=get_sync&catalog=…`.
 pub async fn query_get_sync(app: &AppState, params: &Params) -> Result<Response, ApiError> {
@@ -51,17 +74,34 @@ pub async fn get(app: &AppState, catalog_id: usize) -> Result<Value, ApiError> {
     // concurrently.
     let s = app.storage();
     let (wd_ext2q_res, mnm_entries_res, mm_double_res) = tokio::join!(
-        fetch_wd_ext2q(wd_prop),
+        fetch_wd_ext2q_cached(wd_prop),
         s.get_mnm_matched_entries_for_sync(catalog_id),
         s.get_mnm_double_matches(catalog_id),
     );
-    let wd_ext2q = wd_ext2q_res?;
     let mnm_entries =
         mnm_entries_res.map_err(|e| ApiError(format!("database error: {e}")))?;
     let mm_double = mm_double_res.map_err(|e| ApiError(format!("database error: {e}")))?;
 
+    // Treat WDQS failure as a soft error: the MnM-side data is still
+    // useful (most importantly `mm_double`, which doesn't depend on
+    // Wikidata at all). The frontend renders a warning banner when
+    // `wd_unavailable` is non-null.
+    let (wd_ext2q, wd_unavailable) = match wd_ext2q_res {
+        Ok(map) => (map, Value::Null),
+        Err(e) => (Arc::new(HashMap::new()), Value::String(e.0)),
+    };
+
     let (mnm_ext2q, mm_dupes) = build_mnm_maps(&mnm_entries);
-    let (different, wd_no_mm, mm_no_wd) = compare_maps(&wd_ext2q, &mnm_ext2q);
+
+    // When WDQS is unavailable, `wd_ext2q` is empty — naively running
+    // compare_maps would emit every matched MnM entry as `mm_no_wd`,
+    // which is actively misleading. Suppress all three comparison
+    // outputs in that case; the frontend hides those sections.
+    let (different, wd_no_mm, mm_no_wd) = if wd_unavailable.is_null() {
+        compare_maps(&wd_ext2q, &mnm_ext2q)
+    } else {
+        (Vec::new(), Vec::new(), Vec::new())
+    };
 
     let mm_double_json: HashMap<String, Value> = mm_double
         .into_iter()
@@ -74,7 +114,30 @@ pub async fn get(app: &AppState, catalog_id: usize) -> Result<Value, ApiError> {
         "wd_no_mm": wd_no_mm,
         "mm_no_wd": mm_no_wd,
         "mm_double": mm_double_json,
+        "wd_unavailable": wd_unavailable,
     }))
+}
+
+/// Cache-fronted wrapper around `fetch_wd_ext2q`. Returns an `Arc` so
+/// callers don't pay a clone on hit.
+async fn fetch_wd_ext2q_cached(wd_prop: usize) -> Result<CachedMap, ApiError> {
+    {
+        let cache = wd_ext2q_cache().lock().await;
+        if let Some((stored_at, map)) = cache.get(&wd_prop)
+            && stored_at.elapsed() < WD_EXT2Q_CACHE_TTL
+        {
+            return Ok(Arc::clone(map));
+        }
+    }
+    let fresh = Arc::new(fetch_wd_ext2q(wd_prop).await?);
+    let mut cache = wd_ext2q_cache().lock().await;
+    // Trim any stale entries while we hold the lock — `get_sync` isn't
+    // a hot path, so this O(n) sweep is acceptable and keeps the cache
+    // bounded even if many properties are queried over time.
+    let cutoff = Instant::now() - WD_EXT2Q_CACHE_TTL;
+    cache.retain(|_, (stored_at, _)| *stored_at > cutoff);
+    cache.insert(wd_prop, (Instant::now(), Arc::clone(&fresh)));
+    Ok(fresh)
 }
 
 /// Fetch Wikidata's view of P{wd_prop} as an `ext_id → Qid` map.
@@ -100,14 +163,30 @@ async fn fetch_wd_ext2q(wd_prop: usize) -> Result<HashMap<String, String>, ApiEr
         return Ok(rows_to_ext2q(rows));
     }
 
+    // Run the nine chunked queries with bounded concurrency. Three in
+    // flight at a time keeps the wall-clock time at roughly 3× the
+    // per-query latency (down from 9× when run serially) while
+    // staying well below WDQS's per-IP concurrency limits.
+    const CHUNK_CONCURRENCY: usize = 3;
+    let chunk_results: Vec<(usize, Result<Vec<Vec<String>>, _>)> = stream::iter(1..=9_usize)
+        .map(|digit| {
+            let client = client.clone();
+            async move {
+                let chunk = format!(
+                    "SELECT ?q ?prop {{ ?q wdt:P{wd_prop} ?prop . \
+                     FILTER(STRSTARTS(STR(?q), \"http://www.wikidata.org/entity/Q{digit}\")) }}"
+                );
+                (digit, wdqs::run_tsv_query(&client, &chunk).await)
+            }
+        })
+        .buffer_unordered(CHUNK_CONCURRENCY)
+        .collect()
+        .await;
+
     let mut out: HashMap<String, String> = HashMap::new();
     let mut last_err: Option<String> = None;
-    for digit in 1..=9 {
-        let chunk = format!(
-            "SELECT ?q ?prop {{ ?q wdt:P{wd_prop} ?prop . \
-             FILTER(STRSTARTS(STR(?q), \"http://www.wikidata.org/entity/Q{digit}\")) }}"
-        );
-        match wdqs::run_tsv_query(&client, &chunk).await {
+    for (digit, res) in chunk_results {
+        match res {
             Ok(rows) => {
                 for (ext_id, q) in rows_to_ext2q(rows) {
                     out.insert(ext_id, q);
@@ -258,6 +337,47 @@ mod tests {
         assert!(different.is_empty());
         assert_eq!(wd_no_mm, vec![json!([10_u64, "wd-only"])]);
         assert_eq!(mm_no_wd, vec![json!([20_u64, "mm-only"])]);
+    }
+
+    #[test]
+    fn test_compare_maps_with_empty_wd_floods_mm_no_wd() {
+        // Pins the trap that `get()`'s `wd_unavailable` guard prevents.
+        // If WDQS is unreachable, `wd_ext2q` ends up empty — and naively
+        // running `compare_maps` would then report every matched MnM
+        // entry as "missing from Wikidata" (mm_no_wd), which is just
+        // false. `get()` must short-circuit and return empty vecs in
+        // that case; this test documents what would otherwise happen.
+        let wd: HashMap<String, String> = HashMap::new();
+        let mut mnm: HashMap<String, String> = HashMap::new();
+        mnm.insert("ext-1".into(), "Q1".into());
+        mnm.insert("ext-2".into(), "Q2".into());
+        let (different, wd_no_mm, mm_no_wd) = compare_maps(&wd, &mnm);
+        assert!(different.is_empty());
+        assert!(wd_no_mm.is_empty());
+        assert_eq!(mm_no_wd.len(), 2, "with empty WD, every MnM entry looks missing — must not be surfaced when WDQS unavailable");
+    }
+
+    #[tokio::test]
+    async fn test_wd_ext2q_cache_returns_same_arc_within_ttl() {
+        // The cache is keyed by wd_prop; this test pre-populates an
+        // entry directly and verifies a subsequent call hits the cached
+        // value rather than going to WDQS. Using a `usize::MAX - N`
+        // key avoids collision with any property the test suite might
+        // genuinely query (and with sibling tests if run in parallel).
+        let key = usize::MAX - 7777;
+        let mut expected = HashMap::new();
+        expected.insert("ext-cached".to_string(), "Q123".to_string());
+        let arc = Arc::new(expected);
+        {
+            let mut cache = wd_ext2q_cache().lock().await;
+            cache.insert(key, (Instant::now(), Arc::clone(&arc)));
+        }
+        let got = fetch_wd_ext2q_cached(key).await.expect("cached read");
+        assert!(Arc::ptr_eq(&arc, &got), "cache hit must return the same Arc");
+        // Cleanup so we don't leak this synthetic key across the
+        // process for other tests that might inspect the cache.
+        let mut cache = wd_ext2q_cache().lock().await;
+        cache.remove(&key);
     }
 
     #[test]

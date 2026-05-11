@@ -3,7 +3,7 @@ import { mnm_api, mnm_fetch_json, mnm_loading, mnm_notify, ensure_catalog, get_s
 export default Vue.extend({
 	props: ["id"],
 	data: function () {
-		return { catalog: {}, data: {}, entries: {}, loaded: false, load_error: '', mnm2wd: '', wd_duplicates: [], wd_duplicates_error: '', update_mnm_status: '', update_mnm_result: {} };
+		return { catalog: {}, data: {}, entries: {}, loaded: false, load_error: '', mnm2wd: '', mnm2wd_skipped: 0, wd_duplicates: [], wd_duplicates_error: '', wd_unavailable: '', update_mnm_status: '', update_mnm_result: {} };
 	},
 	created: function () { this.loadData(); },
 	updated: function () { tt_update_interface(); },
@@ -85,13 +85,27 @@ export default Vue.extend({
 				]);
 
 				me.data = syncResult.data;
+				me.wd_unavailable = me.data.wd_unavailable || '';
+				if (me.wd_unavailable) {
+					mnm_notify('Wikidata side could not be checked (' + me.wd_unavailable + '). Showing what is available; comparison sections are skipped.', 'warning', 8000);
+				}
 
 				var mnm2wd = [];
+				var skipped = 0;
 				(me.data.mm_no_wd || []).some(function (v) {
-					mnm2wd.push('Q' + v[0] + "\tP" + me.catalog.wd_prop + "\t" + '"' + decodeURIComponent(escape(v[1])) + '"');
+					try {
+						// v[1] arrives as a proper UTF-8 string from JSON.parse —
+						// no further decoding needed. (Older code called
+						// decodeURIComponent(escape(v[1])), a Latin-1→UTF-8 byte
+						// hack that throws on real non-ASCII names.)
+						mnm2wd.push('Q' + v[0] + "\tP" + me.catalog.wd_prop + "\t" + '"' + v[1] + '"');
+					} catch (e) {
+						skipped++;
+					}
 					return mnm2wd.length > 20000;
 				});
 				if (mnm2wd.length > 0) me.mnm2wd = mnm2wd.join("\n");
+				me.mnm2wd_skipped = skipped;
 
 				var ids = [];
 				Object.values(me.data.mm_double || {}).forEach(function (v) {
@@ -150,7 +164,13 @@ export default Vue.extend({
 		<div v-if='load_error' class='alert alert-danger mt-3'>{{load_error}}</div>
 		<div v-if='loaded && !load_error'>
 
-			<div v-if='!wd_duplicates_error && data.wd_no_mm.length==0 && mnm2wd.length==0 && wd_duplicates.length==0 && Object.keys(data.mm_double||{}).length==0' class='alert alert-success mt-3'>
+			<div v-if='wd_unavailable' class='alert alert-warning mt-3'>
+				<strong>Partial result:</strong> The Wikidata side could not be checked ({{wd_unavailable}}).
+				Sections comparing Mix'n'match against Wikidata are not shown.
+				Mix'n'match-only sections (such as &ldquo;multiple entries for one Wikidata item&rdquo;) are still available below.
+			</div>
+
+			<div v-if='!wd_unavailable && !wd_duplicates_error && data.wd_no_mm.length==0 && mnm2wd.length==0 && wd_duplicates.length==0 && Object.keys(data.mm_double||{}).length==0' class='alert alert-success mt-3'>
 				This catalog is fully in sync with Wikidata. No differences found.
 			</div>
 
@@ -204,6 +224,9 @@ export default Vue.extend({
 								<input type="hidden" id="mm_no_wd_list" name="data" :value='mnm2wd' />
 								<button class='btn btn-outline-primary' tt='update_wikidata' name='yup'></button>
 							</form>
+							<div v-if='mnm2wd_skipped>0' class='text-warning mt-2' style='font-size:0.9em'>
+								{{mnm2wd_skipped}} row(s) could not be formatted and were skipped.
+							</div>
 						</div>
 					</div>
 				</div>
