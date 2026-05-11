@@ -77,6 +77,7 @@ pub mod scraper_7696;
 pub mod scraper_7697;
 pub mod scraper_7700;
 pub mod scraper_7894;
+pub mod scraper_7895;
 pub mod scraper_85;
 
 pub use scraper_53::BespokeScraper53;
@@ -126,6 +127,7 @@ pub use scraper_7696::BespokeScraper7696;
 pub use scraper_7697::BespokeScraper7697;
 pub use scraper_7700::BespokeScraper7700;
 pub use scraper_7894::BespokeScraper7894;
+pub use scraper_7895::BespokeScraper7895;
 
 /// Erased async-fn signature: `(catalog_id, factory)`.
 ///
@@ -198,6 +200,7 @@ const SCRAPER_REGISTRY: &[(usize, ScraperRunFn)] = &[
     scraper_entry!(7697, BespokeScraper7697),
     scraper_entry!(7700, BespokeScraper7700),
     scraper_entry!(7894, BespokeScraper7894),
+    scraper_entry!(7895, BespokeScraper7895),
 ];
 
 pub async fn run_bespoke_scraper(catalog_id: usize, app: Arc<dyn AppContext>) -> Result<()> {
@@ -363,7 +366,7 @@ mod tests {
             53_usize, 85, 121, 122, 722, 1178, 1223, 1379, 1619, 2670, 2849, 2964, 3386, 3387,
             3862, 4097, 4098, 4361, 4589, 4600, 4679, 4681, 4825, 4966, 5100, 5103, 5311, 5347,
             5522, 6479, 6545, 6600, 6601, 6717, 6794, 6975, 6976, 7043, 7433, 7696, 7697, 7700,
-            7894,
+            7894, 7895,
         ] {
             assert!(
                 ids.contains(expected),
