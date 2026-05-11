@@ -25,58 +25,27 @@ pub fn router(app: AppState) -> Router {
     // 512 MB: big enough for realistic catalog uploads, still bounded.
     const UPLOAD_MAX_BYTES: usize = 512 * 1024 * 1024;
 
-    // Per-IP rate limit on /api.php. `SmartIpKeyExtractor` reads
-    // `X-Forwarded-For` / `X-Real-IP` / `Forwarded` (Toolforge sits
-    // behind a reverse proxy, so PeerIp alone would be the proxy's
-    // address and the limiter would be effectively global), falling
-    // back to the raw socket IP attached as `ConnectInfo<SocketAddr>`
-    // by `into_make_service_with_connect_info::<SocketAddr>()` in
-    // `cli.rs::run_webserver`. If that wiring is ever broken, the
-    // extractor returns 500 "Unable To Extract Key!" on every
-    // request — the integration test
-    // `router_responds_through_real_listener` pins this end-to-end.
-    //
-    // Burst (60) is intentionally generous: opening a single SPA
-    // page can fire dozens of API calls (entries, catalogs, person
-    // dates, …) within the first second, and we don't want to
-    // throttle a real user before their page renders. Steady-state
-    // replenishes at 30 req/s. Exceeding the limit returns 429 with
-    // a Retry-After header.
-    let governor_config = std::sync::Arc::new(
-        tower_governor::governor::GovernorConfigBuilder::default()
-            .per_second(30)
-            .burst_size(60)
-            .key_extractor(tower_governor::key_extractor::SmartIpKeyExtractor)
-            .finish()
-            .expect("static rate-limit config is valid"),
-    );
-    // Background sweep so the in-memory rate-limit map doesn't grow
-    // unbounded as transient clients come and go. Guarded on a
-    // running tokio runtime so synchronous test helpers that build
-    // the router without a reactor (e.g. `test_router_builds`) don't
-    // panic.
-    if tokio::runtime::Handle::try_current().is_ok() {
-        let limiter = governor_config.limiter().clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
-            loop {
-                interval.tick().await;
-                limiter.retain_recent();
-            }
-        });
-    }
+    // Per-IP rate limit on /api.php is currently DISABLED. The previous
+    // config (30 req/s steady, 60 burst, `SmartIpKeyExtractor` reading
+    // `X-Forwarded-For` / `X-Real-IP` / `Forwarded` with `ConnectInfo`
+    // fallback) was tripping real users on the code page because a
+    // single SPA load can fan out enough `/api.php` calls to chew
+    // through the burst before the user clicks anything. To re-enable,
+    // restore the `tower_governor` config + the
+    // `route_layer(GovernorLayer::new(...))` line below and the
+    // background `retain_recent` sweep. `tower_governor` is kept in
+    // `Cargo.toml` for that reason.
 
     // /api.php is the user-supplied query path: it needs the origin
     // check (cross-origin browsers can still send simple GETs even
-    // when CORS would block the response), panic recovery (a single
-    // MySQL-row-decode panic shouldn't kill the connection), and the
-    // per-IP rate limit. Other routes don't take user-supplied query
-    // strings, so they don't get the same treatment.
+    // when CORS would block the response) and panic recovery (a single
+    // MySQL-row-decode panic shouldn't kill the connection). Other
+    // routes don't take user-supplied query strings, so they don't get
+    // the same treatment.
     let api_php_routes = Router::new()
         .route("/api.php", get(api_dispatcher).post(api_dispatcher_form))
         .route_layer(axum::middleware::from_fn(panic_recovery_middleware))
-        .route_layer(axum::middleware::from_fn(origin_check_middleware))
-        .route_layer(tower_governor::GovernorLayer::new(governor_config));
+        .route_layer(axum::middleware::from_fn(origin_check_middleware));
 
     Router::new()
         .merge(api_php_routes)
@@ -559,24 +528,25 @@ mod tests {
         }
     }
 
-    /// Pin the rate-limit + ConnectInfo wiring end-to-end. Issues a
-    /// real HTTP request to a real TCP listener serving the production
-    /// router via `into_make_service_with_connect_info::<SocketAddr>()`.
+    /// Pin the production serve path end-to-end. Issues a real HTTP
+    /// request to a real TCP listener serving the production router via
+    /// `into_make_service_with_connect_info::<SocketAddr>()`.
     ///
-    /// Regression guard for the 2026-05-11 outage where every /api.php
-    /// request returned 500 "Unable To Extract Key!" because the rate
-    /// limit's key extractor needs ConnectInfo and the serve call used
-    /// the connect-info-less `into_make_service()`. The bug slipped
-    /// through every `tower::ServiceExt::oneshot` test because those
-    /// bypass the make-service path entirely.
+    /// Originally added as a regression guard for the 2026-05-11 outage
+    /// where every /api.php request returned 500 "Unable To Extract
+    /// Key!" because the rate-limit layer's key extractor needs
+    /// ConnectInfo and the serve call used the connect-info-less
+    /// `into_make_service()`. The rate-limit layer is currently
+    /// disabled, but the test stays as a smoke test that the live
+    /// serve path doesn't 5xx — if/when the limiter is re-enabled this
+    /// test once again pins the ConnectInfo wiring.
     ///
     /// Picks `query=unknown` so the dispatch path goes through every
-    /// layer (rate limit → origin → panic recovery → dispatch) but
-    /// doesn't need a live DB; the handler just returns an "Unknown
-    /// query" ApiError. We only assert the response is NOT 5xx — the
-    /// exact body doesn't matter, the point is the middleware stack
-    /// produced a normal response rather than the
-    /// 500-from-broken-extractor.
+    /// layer (origin → panic recovery → dispatch) without needing a
+    /// live DB; the handler just returns an "Unknown query" ApiError.
+    /// We only assert the response is NOT 5xx — the exact body doesn't
+    /// matter, the point is the middleware stack produced a normal
+    /// response.
     #[tokio::test]
     #[ignore = "requires database / external services — run with cargo test -- --ignored"]
     async fn router_responds_through_real_listener() {

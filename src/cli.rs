@@ -413,13 +413,15 @@ impl ShellCommands {
 
         // `into_make_service_with_connect_info::<SocketAddr>()` attaches
         // each connection's peer address to the request as
-        // `axum::extract::ConnectInfo<SocketAddr>`. The rate-limit layer's
-        // key extractor (and any future middleware that needs the client
-        // IP) reads it from there; without this every request would
-        // 500 with "Unable To Extract Key!" — the production breakage we
-        // saw on Toolforge before the hotfix. An integration test in
-        // `api::router::tests::router_responds_through_real_listener`
-        // pins this end-to-end.
+        // `axum::extract::ConnectInfo<SocketAddr>`. Kept in place even
+        // though the per-IP rate-limit layer that originally needed it
+        // is currently disabled — any future middleware that reads the
+        // client IP relies on this, and re-enabling the limiter is then
+        // a one-line change. The previous outage where every request
+        // returned 500 "Unable To Extract Key!" came from serving via
+        // the connect-info-less `into_make_service()`. An integration
+        // test in `api::router::tests::router_responds_through_real_listener`
+        // pins the live serve path.
         if tls {
             let tls_config = Self::build_self_signed_tls().await?;
             axum_server::bind_rustls(addr, tls_config)
