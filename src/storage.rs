@@ -717,6 +717,25 @@ pub trait Storage:
     async fn reference_fixer_pending(&self, limit: usize) -> Result<Vec<usize>>;
     /// Mark a row `done=1` once the reference-fix pass has run on it.
     async fn reference_fixer_mark_done(&self, q: usize) -> Result<()>;
+    /// Find a Mix'n'match entry that justifies a `reference_fixer`
+    /// rewrite: entry must be matched to `q_numeric` on Wikidata, carry
+    /// the supplied `ext_id`, and live in a catalog whose `wd_prop`
+    /// equals `wd_prop` (with no `wd_qual` — pure external-id catalogs
+    /// only). At most one entry is returned even if several satisfy the
+    /// predicate; the caller only needs *an* entry to cite.
+    async fn find_entry_for_reference(
+        &self,
+        q_numeric: isize,
+        wd_prop: usize,
+        ext_id: &str,
+    ) -> Result<Option<usize>>;
+    /// Fallback for `find_entry_for_reference` when no specific entry
+    /// matches: return the unique active catalog that uses `wd_prop` as
+    /// its primary external-id property (and has no `wd_qual`). Returns
+    /// `None` when zero or more than one catalog matches — ambiguity is
+    /// treated the same as a miss so callers don't attribute the edit
+    /// to a wrong source.
+    async fn find_unique_catalog_for_wd_prop(&self, wd_prop: usize) -> Result<Option<usize>>;
     async fn avoid_auto_match(&self, entry_id: usize, q_numeric: Option<isize>) -> Result<bool>;
     async fn get_random_active_catalog_id_with_property(&self) -> Option<usize>;
     /// Random active catalog, with no other constraints. Used as a fallback

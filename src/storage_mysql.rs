@@ -805,6 +805,57 @@ impl Storage for StorageMySQL {
         Ok(())
     }
 
+    async fn find_entry_for_reference(
+        &self,
+        q_numeric: isize,
+        wd_prop: usize,
+        ext_id: &str,
+    ) -> Result<Option<usize>> {
+        // Strongest signal that *this* catalog's data is what's being
+        // canonicalised on Wikidata: the entry is matched to the same Q,
+        // carries the same ext_id, and its catalog uses the property
+        // the reference is being rewritten to. `wd_qual IS NULL` keeps
+        // us to pure external-id catalogs — qualifier-bearing catalogs
+        // need a qualifier value the reference doesn't carry, so they
+        // can't have produced this rewrite.
+        let sql = "SELECT /* rust:storage:find_entry_for_reference */ `entry`.`id` \
+                   FROM `entry` \
+                   INNER JOIN `catalog` ON `catalog`.`id` = `entry`.`catalog` \
+                   WHERE `entry`.`q` = :q_numeric \
+                     AND `entry`.`ext_id` = :ext_id \
+                     AND `catalog`.`wd_prop` = :wd_prop \
+                     AND `catalog`.`wd_qual` IS NULL \
+                     AND `catalog`.`active` = 1 \
+                   LIMIT 1";
+        let row: Option<usize> = self
+            .get_conn_ro()
+            .await?
+            .exec_first(sql, params! {q_numeric, wd_prop, ext_id})
+            .await?;
+        Ok(row)
+    }
+
+    async fn find_unique_catalog_for_wd_prop(&self, wd_prop: usize) -> Result<Option<usize>> {
+        // `LIMIT 2` so we can distinguish "exactly one" from "many" —
+        // many means we can't safely attribute the edit to any single
+        // catalog, so the caller treats both ambiguous and missing the
+        // same way.
+        let sql = "SELECT /* rust:storage:find_unique_catalog_for_wd_prop */ `id` \
+                   FROM `catalog` \
+                   WHERE `wd_prop` = :wd_prop \
+                     AND `wd_qual` IS NULL \
+                     AND `active` = 1 \
+                   LIMIT 2";
+        let rows: Vec<usize> = self
+            .get_conn_ro()
+            .await?
+            .exec_iter(sql, params! {wd_prop})
+            .await?
+            .map_and_drop(from_row::<usize>)
+            .await?;
+        Ok(if rows.len() == 1 { Some(rows[0]) } else { None })
+    }
+
     /// Checks if the log already has a removed match for this entry.
     /// If a q_numeric item is given, and a specific one is in the log entry, it will only trigger on this combination.
     async fn avoid_auto_match(&self, entry_id: usize, q_numeric: Option<isize>) -> Result<bool> {
@@ -6875,6 +6926,243 @@ mod tests {
         assert!(cols.contains(&"lat".to_string()));
         assert!(cols.contains(&"lon".to_string()));
         assert!(cols.contains(&"name".to_string()));
+    }
+
+    // ── find_entry_for_reference / find_unique_catalog_for_wd_prop ───────
+    //
+    // The test container is shared across the whole test binary, so any
+    // two tests using *identical* `(wd_prop, ext_id, q)` tuples would
+    // collide: a negative-case test could "find" the positive test's
+    // entry. Each test below uses a globally-unique scope id (derived
+    // from `unique_test_scope()`) and folds it into both the entry's
+    // `ext_id` and `q` so the three-way match is provably distinct.
+
+    fn unique_test_scope() -> usize {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Build a `(wd_prop, ext_id, q)` triple guaranteed not to collide
+    /// with any other test in the same run. `wd_prop` shifts into a
+    /// dedicated high range so production-style P-numbers (P648, P214)
+    /// can't accidentally match. We space `wd_prop` by 100 so tests that
+    /// derive a *related* prop (e.g. `wd_prop + 1` for the mismatch case)
+    /// can't collide with another test's neighbouring scope.
+    fn unique_lookup_keys() -> (usize, String, isize) {
+        let scope = unique_test_scope();
+        let wd_prop = 7_000_000 + scope * 100;
+        let ext_id = format!("EXT-{scope}");
+        let q = 9_000_000 + scope as isize;
+        (wd_prop, ext_id, q)
+    }
+
+    /// Seed a catalog with a given `wd_prop` (and optional `wd_qual`).
+    /// Returns the catalog id.
+    async fn seed_catalog_with_props(
+        wd_prop: Option<usize>,
+        wd_qual: Option<usize>,
+        active: bool,
+    ) -> usize {
+        let (pool, mut conn) = test_support::raw_conn().await.unwrap();
+        let catalog_id = test_support::unique_catalog_id();
+        conn.exec_drop(
+            "INSERT INTO catalog \
+             (id, name, url, `desc`, type, search_wp, active, owner, note, has_person_date, taxon_run, wd_prop, wd_qual) \
+             VALUES (:id, :name, '', '', 'person', 'en', :active, 0, '', '', 0, :wd_prop, :wd_qual)",
+            params! {
+                "id" => catalog_id,
+                "name" => format!("ref_fix_cat_{catalog_id}"),
+                "active" => if active { 1_u8 } else { 0_u8 },
+                "wd_prop" => wd_prop,
+                "wd_qual" => wd_qual,
+            },
+        )
+        .await
+        .unwrap();
+        drop(conn);
+        pool.disconnect().await.ok();
+        catalog_id
+    }
+
+    /// Insert an entry with given `ext_id` and matched `q` in the given catalog.
+    async fn seed_entry_for_ref_test(
+        catalog_id: usize,
+        ext_id: &str,
+        q: Option<isize>,
+    ) -> usize {
+        let (pool, mut conn) = test_support::raw_conn().await.unwrap();
+        conn.exec_drop(
+            "INSERT INTO entry (catalog, ext_id, ext_url, ext_name, ext_desc, type, random, q, user, timestamp) \
+             VALUES (:catalog, :ext_id, '', 'Test', '', 'Q5', 0.5, :q, :user, :ts)",
+            params! {
+                "catalog" => catalog_id,
+                "ext_id"  => ext_id,
+                "q"       => q,
+                // user/timestamp present only when there's a match; matches
+                // production state for a `q`-bearing entry.
+                "user"    => q.map(|_| 7_usize),
+                "ts"      => q.map(|_| "20260101000000".to_string()),
+            },
+        )
+        .await
+        .unwrap();
+        let entry_id: u64 = "SELECT LAST_INSERT_ID()".first(&mut conn).await.unwrap().unwrap();
+        drop(conn);
+        pool.disconnect().await.ok();
+        entry_id as usize
+    }
+
+    #[tokio::test]
+    async fn find_entry_for_reference_returns_entry_on_three_way_match() {
+        let app = test_support::test_app().await;
+        let (wd_prop, ext_id, q) = unique_lookup_keys();
+        let catalog_id = seed_catalog_with_props(Some(wd_prop), None, true).await;
+        let entry_id = seed_entry_for_ref_test(catalog_id, &ext_id, Some(q)).await;
+
+        let got = app
+            .storage()
+            .find_entry_for_reference(q, wd_prop, &ext_id)
+            .await
+            .unwrap();
+        assert_eq!(got, Some(entry_id), "3-way match must return the entry");
+    }
+
+    #[tokio::test]
+    async fn find_entry_for_reference_returns_none_when_q_mismatches() {
+        let app = test_support::test_app().await;
+        let (wd_prop, ext_id, q) = unique_lookup_keys();
+        let catalog_id = seed_catalog_with_props(Some(wd_prop), None, true).await;
+        // Seed at q+1, query at q — guaranteed miss.
+        let _ = seed_entry_for_ref_test(catalog_id, &ext_id, Some(q + 1)).await;
+
+        let got = app
+            .storage()
+            .find_entry_for_reference(q, wd_prop, &ext_id)
+            .await
+            .unwrap();
+        assert_eq!(got, None, "different q must not match");
+    }
+
+    #[tokio::test]
+    async fn find_entry_for_reference_returns_none_when_ext_id_mismatches() {
+        let app = test_support::test_app().await;
+        let (wd_prop, ext_id, q) = unique_lookup_keys();
+        let catalog_id = seed_catalog_with_props(Some(wd_prop), None, true).await;
+        // Seed with a deliberately-different ext_id (suffix `-OTHER`).
+        let _ = seed_entry_for_ref_test(catalog_id, &format!("{ext_id}-OTHER"), Some(q)).await;
+
+        let got = app
+            .storage()
+            .find_entry_for_reference(q, wd_prop, &ext_id)
+            .await
+            .unwrap();
+        assert_eq!(got, None, "different ext_id must not match");
+    }
+
+    #[tokio::test]
+    async fn find_entry_for_reference_returns_none_when_wd_prop_mismatches() {
+        let app = test_support::test_app().await;
+        let (wd_prop, ext_id, q) = unique_lookup_keys();
+        // Seed the catalog with a wd_prop different from the one we'll query.
+        let catalog_id = seed_catalog_with_props(Some(wd_prop + 1), None, true).await;
+        let _ = seed_entry_for_ref_test(catalog_id, &ext_id, Some(q)).await;
+
+        let got = app
+            .storage()
+            .find_entry_for_reference(q, wd_prop, &ext_id)
+            .await
+            .unwrap();
+        assert_eq!(got, None, "catalog with different wd_prop must not match");
+    }
+
+    /// `wd_qual`-bearing catalogs are qualifier-style and can't have
+    /// produced a simple external-id reference rewrite.
+    #[tokio::test]
+    async fn find_entry_for_reference_excludes_wd_qual_catalogs() {
+        let app = test_support::test_app().await;
+        let (wd_prop, ext_id, q) = unique_lookup_keys();
+        let catalog_id = seed_catalog_with_props(Some(wd_prop), Some(123), true).await;
+        let _ = seed_entry_for_ref_test(catalog_id, &ext_id, Some(q)).await;
+
+        let got = app
+            .storage()
+            .find_entry_for_reference(q, wd_prop, &ext_id)
+            .await
+            .unwrap();
+        assert_eq!(got, None, "wd_qual-bearing catalogs must be excluded");
+    }
+
+    #[tokio::test]
+    async fn find_entry_for_reference_excludes_inactive_catalogs() {
+        let app = test_support::test_app().await;
+        let (wd_prop, ext_id, q) = unique_lookup_keys();
+        let catalog_id = seed_catalog_with_props(Some(wd_prop), None, false).await;
+        let _ = seed_entry_for_ref_test(catalog_id, &ext_id, Some(q)).await;
+
+        let got = app
+            .storage()
+            .find_entry_for_reference(q, wd_prop, &ext_id)
+            .await
+            .unwrap();
+        assert_eq!(got, None, "inactive catalogs must be excluded");
+    }
+
+    #[tokio::test]
+    async fn find_unique_catalog_for_wd_prop_returns_lone_active_catalog() {
+        let app = test_support::test_app().await;
+        let (wd_prop, _, _) = unique_lookup_keys();
+        let catalog_id = seed_catalog_with_props(Some(wd_prop), None, true).await;
+
+        let got = app
+            .storage()
+            .find_unique_catalog_for_wd_prop(wd_prop)
+            .await
+            .unwrap();
+        assert_eq!(got, Some(catalog_id));
+    }
+
+    #[tokio::test]
+    async fn find_unique_catalog_for_wd_prop_returns_none_when_ambiguous() {
+        let app = test_support::test_app().await;
+        let (wd_prop, _, _) = unique_lookup_keys();
+        let _ = seed_catalog_with_props(Some(wd_prop), None, true).await;
+        let _ = seed_catalog_with_props(Some(wd_prop), None, true).await;
+
+        let got = app
+            .storage()
+            .find_unique_catalog_for_wd_prop(wd_prop)
+            .await
+            .unwrap();
+        assert_eq!(got, None, "two catalogs sharing wd_prop must be treated as ambiguous");
+    }
+
+    #[tokio::test]
+    async fn find_unique_catalog_for_wd_prop_returns_none_when_missing() {
+        let app = test_support::test_app().await;
+        // A high-range prop that no real catalog uses.
+        let got = app
+            .storage()
+            .find_unique_catalog_for_wd_prop(8_999_999)
+            .await
+            .unwrap();
+        assert_eq!(got, None);
+    }
+
+    /// Inactive catalogs must NOT make a `wd_prop` "unique" — we want the
+    /// active catalog if there is one.
+    #[tokio::test]
+    async fn find_unique_catalog_for_wd_prop_ignores_inactive() {
+        let app = test_support::test_app().await;
+        let (wd_prop, _, _) = unique_lookup_keys();
+        let active_id = seed_catalog_with_props(Some(wd_prop), None, true).await;
+        let _inactive = seed_catalog_with_props(Some(wd_prop), None, false).await;
+
+        let got = app
+            .storage()
+            .find_unique_catalog_for_wd_prop(wd_prop)
+            .await
+            .unwrap();
+        assert_eq!(got, Some(active_id), "inactive sibling must be ignored");
     }
 }
 

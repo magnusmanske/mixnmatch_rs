@@ -25,7 +25,9 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::time::Duration;
 
-/// Summary string sent with every edit.
+/// Static summary string used when we can't pinpoint the source entry
+/// or catalog. Per-edit summaries (built by `build_edit_summary`) prefix
+/// this exact text so the audit trail stays uniform.
 const EDIT_SUMMARY: &str = "Fixing references as part of Mix'n'match cleanup";
 
 
@@ -294,19 +296,19 @@ impl ReferenceFixer {
             Some(v) if v.get("missing").is_none() => v.clone(),
             _ => return Ok(()),
         };
-        self.check_item_json(&item).await
+        self.check_item_json(q, &item).await
     }
 
     /// Process the entity JSON body (split out for testability — the
     /// decision logic is all offline once we have the JSON in hand).
-    async fn check_item_json(&mut self, item: &Value) -> Result<()> {
+    async fn check_item_json(&mut self, q: usize, item: &Value) -> Result<()> {
         let Some(claims) = item.get("claims").and_then(|v| v.as_object()).cloned() else {
             return Ok(());
         };
         for (_property, statements) in claims {
             let Some(statements) = statements.as_array().cloned() else { continue };
             for statement in statements {
-                if let Err(e) = self.check_statement(&statement).await {
+                if let Err(e) = self.check_statement(q, &statement).await {
                     warn!("reference_fixer: statement skipped: {e}");
                 }
             }
@@ -314,49 +316,94 @@ impl ReferenceFixer {
         Ok(())
     }
 
-    async fn check_statement(&mut self, statement: &Value) -> Result<()> {
+    async fn check_statement(&mut self, q: usize, statement: &Value) -> Result<()> {
         let Some(references) = statement.get("references").and_then(|v| v.as_array()).cloned() else {
             return Ok(());
         };
         let Some(statement_id) = statement.get("id").and_then(|v| v.as_str()).map(str::to_string) else {
             return Ok(());
         };
-        let mut remove_hashes: Vec<String> = Vec::new();
+        // Self-reference removes are batched separately: they share no
+        // specific source, so they take the static summary. Per-rewrite
+        // removes are paired with their `wbsetreference` and share the
+        // entry/catalog-aware summary.
+        let mut self_ref_hashes: Vec<String> = Vec::new();
         for reference_group in references {
             if Self::is_self_reference(statement, &reference_group) {
                 if let Some(h) = reference_group.get("hash").and_then(|v| v.as_str()) {
-                    remove_hashes.push(h.to_string());
+                    self_ref_hashes.push(h.to_string());
                 }
                 continue;
             }
-            let new_groups = match self.check_reference_group(&reference_group) {
+            let (new_groups, property, value) = match self.check_reference_group(&reference_group) {
                 Some(g) => g,
                 None => continue,
             };
+            // One DB roundtrip per rewrite (not per API call), reused for
+            // both add and paired remove.
+            let summary = self.build_edit_summary(q, &property, &value).await;
             for rg in &new_groups {
                 // Don't loop an external-id onto itself as its own reference.
                 if Self::is_self_reference(statement, rg) {
                     continue;
                 }
-                if !self.add_reference_group(&statement_id, rg).await? {
+                if !self.add_reference_group(&statement_id, rg, &summary).await? {
                     // Stop this statement; don't remove the original if we
                     // couldn't successfully add replacement(s).
                     return Ok(());
                 }
             }
             if let Some(h) = reference_group.get("hash").and_then(|v| v.as_str()) {
-                remove_hashes.push(h.to_string());
+                self.remove_reference_group(&statement_id, &[h.to_string()], &summary)
+                    .await?;
             }
         }
-        if !remove_hashes.is_empty() {
-            self.remove_reference_group(&statement_id, &remove_hashes)
+        if !self_ref_hashes.is_empty() {
+            self.remove_reference_group(&statement_id, &self_ref_hashes, EDIT_SUMMARY)
                 .await?;
         }
         Ok(())
     }
 
+    /// Build the Wikidata edit summary for a single reference rewrite.
+    ///
+    /// Looks up the originating Mix'n'match entry (3-way match: same Q,
+    /// same `ext_id`, same `wd_prop`) and falls back to the unique catalog
+    /// using `wd_prop` if no entry matches. Any DB error degrades silently
+    /// to the static `EDIT_SUMMARY` — a missing audit link must never
+    /// prevent an edit from happening.
+    async fn build_edit_summary(&self, q: usize, property: &str, value: &str) -> String {
+        let Some(wd_prop) = property
+            .strip_prefix('P')
+            .and_then(|s| s.parse::<usize>().ok())
+        else {
+            return EDIT_SUMMARY.to_string();
+        };
+        let storage = self.app.storage();
+        // q is a wikibase numeric id (≤ i64 max in practice); the storage
+        // call expects `isize`. Cast lossily — any q that wouldn't fit
+        // wasn't going to find an entry anyway.
+        if let Ok(Some(entry_id)) = storage
+            .find_entry_for_reference(q as isize, wd_prop, value)
+            .await
+        {
+            return format!(
+                "{EDIT_SUMMARY} ([[:toollabs:mix-n-match/#/entry/{entry_id}|entry #{entry_id}]])"
+            );
+        }
+        if let Ok(Some(catalog_id)) = storage.find_unique_catalog_for_wd_prop(wd_prop).await {
+            return format!(
+                "{EDIT_SUMMARY} ([[:toollabs:mix-n-match/#/catalog/{catalog_id}|catalog #{catalog_id}]])"
+            );
+        }
+        EDIT_SUMMARY.to_string()
+    }
+
     /// Given a reference group, decide whether it should be rewritten.
-    /// Returns new group(s) to insert; None means "leave as-is".
+    /// Returns `(new groups, matched_property, matched_value)` to insert
+    /// — `None` means "leave as-is". The property + value are surfaced
+    /// so the caller can build an audit-friendly edit summary linking
+    /// back to the Mix'n'match entry/catalog that justifies the rewrite.
     ///
     /// We only rewrite the simplest, unambiguous case: a reference group
     /// whose only property is P854 (reference URL) and whose P854 has a
@@ -368,7 +415,7 @@ impl ReferenceFixer {
     /// PHP author flagged by disabling the script. We refuse to rewrite
     /// in that shape at all; the row still gets marked done so we don't
     /// spin on it forever.
-    fn check_reference_group(&self, group: &Value) -> Option<Vec<Value>> {
+    fn check_reference_group(&self, group: &Value) -> Option<(Vec<Value>, String, String)> {
         let snaks = group.get("snaks").and_then(|v| v.as_object())?;
         let url_snaks = snaks.get(wp::P_REFERENCE_URL)?.as_array()?;
         if snaks.len() > 1 {
@@ -381,12 +428,14 @@ impl ReferenceFixer {
             // URLs → see docstring. Either way, skip.
             return None;
         }
-        let improved = self.improved_reference_snak(&url_snaks[0])?;
-        Some(vec![new_reference_group(&improved)])
+        let (improved, property, value) = self.improved_reference_snak(&url_snaks[0])?;
+        Some((vec![new_reference_group(&improved)], property, value))
     }
 
     /// Try to turn a P854 URL snak into [(P248 stated-in,) Pxxx external-id].
-    fn improved_reference_snak(&self, snak: &Value) -> Option<Vec<Value>> {
+    /// Returns the snaks alongside the matched `(property, value)` so callers
+    /// can use them in edit summaries.
+    fn improved_reference_snak(&self, snak: &Value) -> Option<(Vec<Value>, String, String)> {
         let parsed = StringUrlSnak::from_json(snak)?;
         let (property, value) = unique_property_match(parsed.url, &self.url_patterns)?;
         let mut out = Vec::new();
@@ -396,7 +445,7 @@ impl ReferenceFixer {
             }
         }
         out.push(build_external_id_snak(&property, &value));
-        Some(out)
+        Some((out, property, value))
     }
 
     /// Is this reference group nothing but "the statement's main property
@@ -426,7 +475,12 @@ impl ReferenceFixer {
         matches_main
     }
 
-    async fn add_reference_group(&mut self, statement_id: &str, rg: &Value) -> Result<bool> {
+    async fn add_reference_group(
+        &mut self,
+        statement_id: &str,
+        rg: &Value,
+        summary: &str,
+    ) -> Result<bool> {
         let snaks = rg.get("snaks").ok_or_else(|| anyhow!("rg missing snaks"))?;
         let order = rg
             .get("snaks-order")
@@ -436,28 +490,36 @@ impl ReferenceFixer {
         params.insert("statement".to_string(), statement_id.to_string());
         params.insert("snaks".to_string(), snaks.to_string());
         params.insert("snaks-order".to_string(), order.to_string());
-        self.api_action(params).await
+        self.api_action(params, summary).await
     }
 
     async fn remove_reference_group(
         &mut self,
         statement_id: &str,
         hashes: &[String],
+        summary: &str,
     ) -> Result<bool> {
         let mut params = HashMap::new();
         params.insert("action".to_string(), "wbremovereferences".to_string());
         params.insert("statement".to_string(), statement_id.to_string());
         params.insert("references".to_string(), hashes.join("|"));
-        self.api_action(params).await
+        self.api_action(params, summary).await
     }
 
     /// Execute a bot API call. Reuses the cached logged-in session if
-    /// available (one login per job run, not per edit).
-    async fn api_action(&mut self, mut params: HashMap<String, String>) -> Result<bool> {
+    /// available (one login per job run, not per edit). `summary` is the
+    /// edit-history string; callers should pass the entry/catalog-aware
+    /// one when available.
+    async fn api_action(
+        &mut self,
+        mut params: HashMap<String, String>,
+        summary: &str,
+    ) -> Result<bool> {
         if self.simulating {
             info!(
-                "reference_fixer (simulated) {}: {:?}",
+                "reference_fixer (simulated) {}: summary={:?} {:?}",
                 params.get("action").map(String::as_str).unwrap_or(""),
+                summary,
                 params
             );
             return Ok(true);
@@ -469,7 +531,7 @@ impl ReferenceFixer {
             .ok_or_else(|| anyhow!("bot API not available after login"))?;
         params.insert("format".into(), "json".into());
         params.insert("bot".into(), "1".into());
-        params.insert("summary".into(), EDIT_SUMMARY.into());
+        params.insert("summary".into(), summary.to_string());
         let token = api
             .get_edit_token()
             .await
@@ -924,8 +986,13 @@ mod tests {
                 }],
             },
         });
-        let new_groups = rf.check_reference_group(&group).expect("should rewrite");
+        let (new_groups, property, value) =
+            rf.check_reference_group(&group).expect("should rewrite");
         assert_eq!(new_groups.len(), 1);
+        // Matched property + value are surfaced so the caller can build an
+        // audit-friendly edit summary.
+        assert_eq!(property, "P648");
+        assert_eq!(value, "OL23919A");
         let g = &new_groups[0];
         // P248 first in snaks-order, followed by the external-id property.
         let order: Vec<&str> = g["snaks-order"]
@@ -962,5 +1029,157 @@ mod tests {
             simulating: true,
             mw_api: None,
         }
+    }
+
+    // ── build_edit_summary: DB-backed integration tests ──────────────────
+    //
+    // Each test seeds its own (wd_prop, ext_id, q) tuple so they don't
+    // collide via the shared mariadb testcontainer.
+
+    fn unique_summary_scope() -> usize {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    }
+
+    async fn fixer_for_test() -> ReferenceFixer {
+        let app = crate::test_support::test_app().await;
+        ReferenceFixer {
+            app: Arc::new(app),
+            http: reqwest::Client::new(),
+            url_patterns: vec![],
+            stated_in: HashMap::new(),
+            simulating: true,
+            mw_api: None,
+        }
+    }
+
+    /// Seed a catalog (active, no wd_qual) and a matched entry, then
+    /// confirm `build_edit_summary` produces an entry-link summary.
+    #[tokio::test]
+    async fn build_edit_summary_links_to_entry_when_three_way_match_exists() {
+        let scope = unique_summary_scope();
+        let wd_prop = 7_500_000 + scope;
+        let ext_id = format!("EXT-{scope}");
+        let q = 9_500_000 + scope as isize;
+
+        // Seed catalog + matched entry directly via the test container.
+        let (pool, mut conn) = crate::test_support::raw_conn().await.unwrap();
+        let catalog_id = crate::test_support::unique_catalog_id();
+        use mysql_async::prelude::*;
+        conn.exec_drop(
+            "INSERT INTO catalog \
+             (id, name, url, `desc`, type, search_wp, active, owner, note, has_person_date, taxon_run, wd_prop) \
+             VALUES (:id, :name, '', '', 'person', 'en', 1, 0, '', '', 0, :wd_prop)",
+            mysql_async::params! {
+                "id" => catalog_id,
+                "name" => format!("refsum_cat_{catalog_id}"),
+                "wd_prop" => wd_prop,
+            },
+        )
+        .await
+        .unwrap();
+        conn.exec_drop(
+            "INSERT INTO entry (catalog, ext_id, ext_url, ext_name, ext_desc, type, random, q, user, timestamp) \
+             VALUES (:catalog, :ext_id, '', 'T', '', 'Q5', 0.5, :q, 7, '20260101000000')",
+            mysql_async::params! {
+                "catalog" => catalog_id,
+                "ext_id"  => &ext_id,
+                "q"       => q,
+            },
+        )
+        .await
+        .unwrap();
+        let entry_id: u64 = "SELECT LAST_INSERT_ID()"
+            .first(&mut conn)
+            .await
+            .unwrap()
+            .unwrap();
+        drop(conn);
+        pool.disconnect().await.ok();
+
+        let rf = fixer_for_test().await;
+        let property = format!("P{wd_prop}");
+        let summary = rf.build_edit_summary(q as usize, &property, &ext_id).await;
+
+        assert!(
+            summary.starts_with(EDIT_SUMMARY),
+            "summary must prefix with the canonical EDIT_SUMMARY for audit consistency; got: {summary}"
+        );
+        let expected_link = format!("[[:toollabs:mix-n-match/#/entry/{entry_id}|entry #{entry_id}]]");
+        assert!(
+            summary.contains(&expected_link),
+            "summary must contain the entry interwiki link; got: {summary}"
+        );
+        // Negative: catalog link must NOT appear when entry was findable.
+        assert!(
+            !summary.contains("/catalog/"),
+            "entry-found path must not fall through to catalog link; got: {summary}"
+        );
+    }
+
+    /// No entry matches but exactly one catalog uses the property —
+    /// expect catalog link in the summary.
+    #[tokio::test]
+    async fn build_edit_summary_falls_back_to_catalog_when_no_entry_match() {
+        let scope = unique_summary_scope();
+        let wd_prop = 7_600_000 + scope;
+        let ext_id = format!("EXT-{scope}");
+        let q = 9_600_000 + scope as isize;
+
+        let (pool, mut conn) = crate::test_support::raw_conn().await.unwrap();
+        let catalog_id = crate::test_support::unique_catalog_id();
+        use mysql_async::prelude::*;
+        conn.exec_drop(
+            "INSERT INTO catalog \
+             (id, name, url, `desc`, type, search_wp, active, owner, note, has_person_date, taxon_run, wd_prop) \
+             VALUES (:id, :name, '', '', 'person', 'en', 1, 0, '', '', 0, :wd_prop)",
+            mysql_async::params! {
+                "id" => catalog_id,
+                "name" => format!("refsum_cat_only_{catalog_id}"),
+                "wd_prop" => wd_prop,
+            },
+        )
+        .await
+        .unwrap();
+        // Crucially: NO matching entry seeded.
+        drop(conn);
+        pool.disconnect().await.ok();
+
+        let rf = fixer_for_test().await;
+        let property = format!("P{wd_prop}");
+        let summary = rf.build_edit_summary(q as usize, &property, &ext_id).await;
+
+        let expected_link =
+            format!("[[:toollabs:mix-n-match/#/catalog/{catalog_id}|catalog #{catalog_id}]]");
+        assert!(
+            summary.contains(&expected_link),
+            "summary must fall back to catalog link when no entry matches; got: {summary}"
+        );
+        assert!(!summary.contains("/entry/"), "must not link to an entry: {summary}");
+    }
+
+    /// No catalog and no entry — fall back to the static summary.
+    #[tokio::test]
+    async fn build_edit_summary_falls_back_to_static_when_nothing_matches() {
+        let rf = fixer_for_test().await;
+        // Use a wd_prop number no catalog in this run uses.
+        let summary = rf.build_edit_summary(9_999_999, "P9999991", "no-such-value").await;
+        assert_eq!(
+            summary, EDIT_SUMMARY,
+            "no entry + no catalog → unchanged static summary"
+        );
+    }
+
+    /// Malformed property strings (no `P` prefix, non-numeric) degrade
+    /// to the static summary rather than panicking.
+    #[tokio::test]
+    async fn build_edit_summary_degrades_gracefully_on_malformed_property() {
+        let rf = fixer_for_test().await;
+        let s1 = rf.build_edit_summary(42, "not-a-property", "v").await;
+        let s2 = rf.build_edit_summary(42, "P", "v").await;
+        let s3 = rf.build_edit_summary(42, "Pabc", "v").await;
+        assert_eq!(s1, EDIT_SUMMARY);
+        assert_eq!(s2, EDIT_SUMMARY);
+        assert_eq!(s3, EDIT_SUMMARY);
     }
 }
