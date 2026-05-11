@@ -21,8 +21,6 @@ use chrono::Local;
 use futures::future::BoxFuture;
 use log::info;
 use serde_json::json;
-use std::error::Error;
-use std::fmt;
 use wikimisc::timestamp::TimeStamp;
 
 /// A trait that allows to manage temporary job data (eg offset)
@@ -79,21 +77,12 @@ pub trait Jobbable {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum JobError {
+    #[error("JobError::S: {0}")]
     S(String),
+    #[error("JobError::TimeError")]
     TimeError,
-}
-
-impl Error for JobError {}
-
-impl fmt::Display for JobError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            JobError::S(s) => write!(f, "JobError::S: {s}"),
-            JobError::TimeError => write!(f, "JobError::TimeError"),
-        }
-    }
 }
 
 #[derive(Debug, Clone)]

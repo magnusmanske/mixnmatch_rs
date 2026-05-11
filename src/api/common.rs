@@ -87,21 +87,26 @@ pub async fn require_user_id(
 // envelope so the frontend's existing error-text reader keeps working —
 // only the HTTP status code changes from a uniform 200 to a proper class.
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum ApiError {
     /// 400 — caller-supplied parameters are malformed, missing, or
     /// otherwise fail validation.
+    #[error("{0}")]
     BadRequest(String),
     /// 401 — no authenticated session; caller must log in.
+    #[error("{0}")]
     Unauthorized(String),
     /// 403 — authenticated but the user lacks the required role
     /// (e.g. catalog admin, owner, hard-coded allowlist).
+    #[error("{0}")]
     Forbidden(String),
     /// 404 — requested resource does not exist.
+    #[error("{0}")]
     NotFound(String),
     /// 500 — anything that wasn't classified above. Database errors,
     /// SPARQL failures, panics caught by the recovery middleware, and
     /// `anyhow::Error` propagated via `?` all land here.
+    #[error("{0}")]
     Internal(String),
 }
 
@@ -163,12 +168,6 @@ impl From<String> for ApiError {
 impl From<&str> for ApiError {
     fn from(msg: &str) -> Self {
         Self::Internal(msg.to_string())
-    }
-}
-
-impl std::fmt::Display for ApiError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.message())
     }
 }
 
