@@ -71,3 +71,54 @@ pub async fn query_dg_log_action(
     }
     Ok(json_resp(serde_json::json!([])))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    /// Regression pin for the OAuth-bypass fix. Pre-fix the handler read
+    /// `?user=` as the literal attribution and silently created a user
+    /// row for whatever string the caller supplied. Post-fix it routes
+    /// through `auth::guard::require_user`, which in dev/test mode
+    /// returns uid 2 (Magnus) regardless of the claim. The test asserts
+    /// the post-fix property — if anyone reverts the handler to using
+    /// `get_or_create_user_id(&user)`, the attribution would track the
+    /// claim again and this test fails.
+    #[tokio::test]
+    #[ignore = "requires database / external services — run with cargo test -- --ignored"]
+    async fn dg_log_action_attribution_uses_session_user_not_query_user() {
+        let app = test_support::test_app().await;
+        let (_catalog_id, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
+
+        let store = Arc::new(tower_sessions::MemoryStore::default());
+        let session = tower_sessions::Session::new(None, store, None);
+
+        let mut params: HashMap<String, String> = HashMap::new();
+        params.insert("tile".into(), entry_id.to_string());
+        params.insert("decision".into(), "n_a".into());
+        params.insert("user".into(), "AttackerSuppliedName".into());
+
+        let resp = query_dg_log_action(&app, &session, &params).await;
+        assert!(
+            resp.is_ok(),
+            "handler must succeed under dev bypass: {:?}",
+            resp.err()
+        );
+
+        let entry = crate::entry::Entry::from_id(entry_id, &app).await.unwrap();
+        assert_eq!(
+            entry.q,
+            Some(-1),
+            "decision=n_a writes the Q-1 sentinel match"
+        );
+        assert_eq!(
+            entry.user,
+            Some(2),
+            "attribution must come from the session (dev bypass uid 2), \
+             never from the ?user= query parameter"
+        );
+    }
+}

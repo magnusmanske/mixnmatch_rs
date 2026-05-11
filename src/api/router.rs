@@ -485,4 +485,25 @@ mod tests {
             );
         }
     }
+
+    /// The four handlers below previously accepted form-supplied
+    /// usernames with no session check. If any disappears from the
+    /// route table the OAuth gate is effectively gone: clients route
+    /// around to whatever surfaces remain. Keep this assertion close
+    /// to the security boundary so the regression is loud.
+    #[test]
+    fn previously_open_mutation_endpoints_still_routed() {
+        let names: HashSet<&'static str> = ROUTES.iter().map(|(n, _)| *n).collect();
+        for required in [
+            "dg_log_action",
+            "save_scraper",
+            "import_source",
+            "upload_import_file",
+        ] {
+            assert!(
+                names.contains(required),
+                "ROUTES missing security-sensitive endpoint: {required}"
+            );
+        }
+    }
 }
