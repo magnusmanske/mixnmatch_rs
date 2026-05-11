@@ -1,9 +1,9 @@
-import { mnm_api, mnm_fetch_json, mnm_loading, ensure_catalog, get_specific_catalog, tt_update_interface, wd, widar } from './store.js';
+import { mnm_api, mnm_fetch_json, mnm_loading, mnm_notify, ensure_catalog, get_specific_catalog, tt_update_interface, wd, widar } from './store.js';
 
 export default Vue.extend({
 	props: ["id"],
 	data: function () {
-		return { catalog: {}, data: {}, entries: {}, loaded: false, load_error: '', mnm2wd: '', wd_duplicates: [], update_mnm_status: '', update_mnm_result: {} };
+		return { catalog: {}, data: {}, entries: {}, loaded: false, load_error: '', mnm2wd: '', wd_duplicates: [], wd_duplicates_error: '', update_mnm_status: '', update_mnm_result: {} };
 	},
 	created: function () { this.loadData(); },
 	updated: function () { tt_update_interface(); },
@@ -29,10 +29,18 @@ export default Vue.extend({
 		checkDoubleWD: async function () {
 			const me = this;
 			me.wd_duplicates = [];
+			me.wd_duplicates_error = '';
 			if (me.catalog.wd_prop == null) return;
 			if (me.catalog.wd_qual != null) return;
 			var sparql = 'SELECT ?entry (count(?q) AS ?cnt) (group_concat(?q) AS ?qs ) { ?q wdt:P' + me.catalog.wd_prop + ' ?entry } GROUP BY ?entry HAVING (?cnt>1)';
-			var d = await mnm_fetch_json('https://query.wikidata.org/sparql', { format: 'json', query: sparql });
+			var d;
+			try {
+				d = await mnm_fetch_json('https://query.wikidata.org/sparql', { format: 'json', query: sparql });
+			} catch (e) {
+				me.wd_duplicates_error = (e && e.message) ? e.message : 'Unknown error';
+				mnm_notify('Wikidata SPARQL query failed (' + me.wd_duplicates_error + '). The "items with multiple relevant entries" section could not be loaded; other sync data is shown.', 'danger', 8000);
+				return;
+			}
 			var dupes = [];
 			var ids = [];
 			d.results.bindings.forEach(function (v) {
@@ -73,7 +81,7 @@ export default Vue.extend({
 
 				var [syncResult] = await Promise.all([
 					mnm_api('get_sync', { catalog: me.id }),
-					me.checkDoubleWD().catch(function () { })
+					me.checkDoubleWD().catch(function (e) { console.error('checkDoubleWD failed:', e); })
 				]);
 
 				me.data = syncResult.data;
@@ -142,7 +150,7 @@ export default Vue.extend({
 		<div v-if='load_error' class='alert alert-danger mt-3'>{{load_error}}</div>
 		<div v-if='loaded && !load_error'>
 
-			<div v-if='data.wd_no_mm.length==0 && mnm2wd.length==0 && wd_duplicates.length==0 && Object.keys(data.mm_double||{}).length==0' class='alert alert-success mt-3'>
+			<div v-if='!wd_duplicates_error && data.wd_no_mm.length==0 && mnm2wd.length==0 && wd_duplicates.length==0 && Object.keys(data.mm_double||{}).length==0' class='alert alert-success mt-3'>
 				This catalog is fully in sync with Wikidata. No differences found.
 			</div>
 
@@ -196,6 +204,18 @@ export default Vue.extend({
 								<input type="hidden" id="mm_no_wd_list" name="data" :value='mnm2wd' />
 								<button class='btn btn-outline-primary' tt='update_wikidata' name='yup'></button>
 							</form>
+						</div>
+					</div>
+				</div>
+			</div>
+
+			<div v-if='wd_duplicates_error'>
+				<div class="card border-warning" style="margin-bottom:1em">
+					<div class="card-body">
+						<h4 class="card-title" tt='double_on_wd'></h4>
+						<div class="card-text text-warning">
+							Could not retrieve this section: the Wikidata SPARQL query failed ({{wd_duplicates_error}}).
+							Items with multiple relevant entries on Wikidata may exist but are not shown here.
 						</div>
 					</div>
 				</div>
