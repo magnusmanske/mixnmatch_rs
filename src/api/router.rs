@@ -415,12 +415,12 @@ const ROUTES: &[(&str, ApiHandler)] = &[
     // Distributed-game endpoints (also dispatched via action=… → query=dg_…)
     route!("dg_desc",                      dg::query_dg_desc, params_only),
     route!("dg_tiles",                     dg::query_dg_tiles, app_params),
-    route!("dg_log_action",                dg::query_dg_log_action, app_params),
+    route!("dg_log_action",                dg::query_dg_log_action),
 
     route!("prep_new_item",                data::query_prep_new_item, app_params),
     route!("prep_match_claim",             data::query_prep_match_claim, app_params),
     route!("autoscrape_test",              import::query_autoscrape_test, params_only),
-    route!("save_scraper",                 import::query_save_scraper, app_params),
+    route!("save_scraper",                 import::query_save_scraper),
     route!("get_scraper",                  import::query_get_scraper, app_params),
     ("upload_import_file", upload_import_file_get),
     route!("import_source",                import::query_import_source),

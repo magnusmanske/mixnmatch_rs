@@ -2,8 +2,10 @@
 
 use crate::api::common::{self, ApiError, Params, json_resp};
 use crate::app_state::AppState;
+use crate::auth;
 use crate::entry::EntryWriter;
 use axum::response::Response;
+use tower_sessions::Session;
 
 pub async fn query_dg_desc(params: &Params) -> Result<Response, ApiError> {
     let mode = common::get_param(params, "mode", "");
@@ -31,8 +33,18 @@ pub async fn query_dg_tiles(app: &AppState, params: &Params) -> Result<Response,
     Ok(json_resp(serde_json::json!(tiles)))
 }
 
-pub async fn query_dg_log_action(app: &AppState, params: &Params) -> Result<Response, ApiError> {
-    let user = common::get_param(params, "user", "");
+pub async fn query_dg_log_action(
+    app: &AppState,
+    session: &Session,
+    params: &Params,
+) -> Result<Response, ApiError> {
+    // OAuth required: writes that attribute matches to a user must
+    // come from a logged-in session. Treat the legacy `?user=` field
+    // as a claim that's verified against the session identity, same
+    // shape as `claimed_username_from`.
+    let claimed_user = params.get("user").map(String::as_str);
+    let authed = auth::guard::require_user(app, session, claimed_user).await?;
+
     let entry_id = common::get_param_int(params, "tile", -1);
     if entry_id < 0 {
         return Err(ApiError("bad tile".into()));
@@ -40,15 +52,8 @@ pub async fn query_dg_log_action(app: &AppState, params: &Params) -> Result<Resp
     let entry_id = entry_id as usize;
     let decision = common::get_param(params, "decision", "");
 
-    // The user-id resolution and entry-load are independent — fire both in
-    // parallel. They tend to be the two slowest steps in this handler.
-    let (uid_res, entry_res) = tokio::join!(
-        app.storage().get_or_create_user_id(&user),
-        crate::entry::Entry::from_id(entry_id, app),
-    );
-    let uid = uid_res?;
-    let mut entry = entry_res?;
-
+    let mut entry = crate::entry::Entry::from_id(entry_id, app).await?;
+    let uid = authed.mnm_user_id;
     let mut ew = EntryWriter::new(app, &mut entry);
     match decision.as_str() {
         "yes" => {

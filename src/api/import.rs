@@ -3,6 +3,7 @@
 
 use crate::api::common::{self, ApiError, Params, json_resp, ok};
 use crate::app_state::{AppContext, ExternalServicesContext};
+use crate::auth;
 use axum::response::Response;
 use tower_sessions::Session;
 
@@ -63,22 +64,21 @@ pub async fn query_test_import_source(
 
 pub async fn query_import_source(
     app: &dyn AppContext,
-    _session: &Session,
+    session: &Session,
     params: &Params,
 ) -> Result<Response, ApiError> {
+    // OAuth required — this handler creates catalogs and queues import jobs.
+    // The legacy frontend submits `username` as a form field; the guard
+    // verifies it matches the session user (normalising space/underscore).
+    let authed = auth::guard::require_user_from_params(app, session, params).await?;
+    let user_id = authed.mnm_user_id;
+
     let update_info = parse_update_info(params)?;
     let meta_raw = common::get_param(params, "meta", "{}");
     let meta: serde_json::Value =
         serde_json::from_str(&meta_raw).unwrap_or(serde_json::Value::Null);
     let catalog_id = common::get_param_int(params, "catalog", 0) as usize;
     let _seconds = common::get_param_int(params, "seconds", 0) as u64;
-    let username = common::get_param(params, "username", "").replace('_', " ");
-
-    // Resolve the user id — required for anything that writes to the DB.
-    let user_id = match app.storage().get_user_by_name(&username).await? {
-        Some((id, _, _)) => id,
-        None => return Err(ApiError(format!("unknown user '{username}'"))),
-    };
 
     // Two modes:
     //  (a) file_uuid pointing at a json/jsonl upload → reuse import_catalog
@@ -226,18 +226,24 @@ pub async fn query_autoscrape_test(params: &Params) -> Result<Response, ApiError
     })))
 }
 
-pub async fn query_save_scraper(app: &dyn ExternalServicesContext, params: &Params) -> Result<Response, ApiError> {
+pub async fn query_save_scraper(
+    app: &dyn ExternalServicesContext,
+    session: &Session,
+    params: &Params,
+) -> Result<Response, ApiError> {
+    // OAuth required — creates an autoscrape row and writes catalog
+    // metadata. The frontend submits `tusc_user`; the guard verifies
+    // it matches the session identity.
+    let authed = auth::guard::require_user_from_params(app, session, params).await?;
+    let user_id = authed.mnm_user_id;
+
     let scraper_str = common::get_param(params, "scraper", "");
     let options_str = common::get_param(params, "options", "{}");
     let levels_str = common::get_param(params, "levels", "[]");
     let meta_str = common::get_param(params, "meta", "{}");
-    let username = common::get_param(params, "tusc_user", "").replace('_', " ");
 
     if scraper_str.is_empty() {
         return Err(ApiError("missing 'scraper' parameter".into()));
-    }
-    if username.is_empty() {
-        return Err(ApiError("missing 'tusc_user' parameter".into()));
     }
 
     let scraper: serde_json::Value = serde_json::from_str(&scraper_str)
@@ -248,13 +254,6 @@ pub async fn query_save_scraper(app: &dyn ExternalServicesContext, params: &Para
         .map_err(|e| ApiError(format!("invalid 'levels' JSON: {e}")))?;
     let meta: serde_json::Value = serde_json::from_str(&meta_str)
         .map_err(|e| ApiError(format!("invalid 'meta' JSON: {e}")))?;
-
-    // Resolve user — fail loudly if the Widar-supplied username is unknown,
-    // so the scraper doesn't get attributed to owner 0.
-    let user_id = match app.storage().get_user_by_name(&username).await? {
-        Some((id, _, _)) => id,
-        None => return Err(ApiError(format!("unknown user '{username}'"))),
-    };
 
     // Resolve target catalog_id. If the wizard left `meta.catalog_id` blank,
     // we create the catalog first so the autoscrape row has something to FK to.

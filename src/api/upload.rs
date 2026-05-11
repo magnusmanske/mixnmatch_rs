@@ -3,6 +3,7 @@
 use crate::api::common::{ApiError, ok};
 use crate::api::router::SharedState;
 use crate::app_state::AppState;
+use crate::auth;
 use crate::import_catalog::ImportMode;
 use axum::extract::State;
 use axum::response::{IntoResponse, Response};
@@ -14,7 +15,7 @@ use tower_sessions::Session;
 /// table so later endpoints can resolve the UUID.
 pub async fn handle_multipart_upload(
     app: &AppState,
-    _session: &Session,
+    session: &Session,
     req: axum::extract::Request,
 ) -> Response {
     use axum::extract::FromRequest;
@@ -47,14 +48,16 @@ pub async fn handle_multipart_upload(
         _ => return ApiError("missing or empty 'import_file' field".into()).into_response(),
     };
 
-    let user_id = match app
-        .storage()
-        .get_user_by_name(&form.username.replace('_', " "))
-        .await
-    {
-        Ok(Some((id, _, _))) => id,
-        Ok(None) => return ApiError(format!("unknown user '{}'", form.username)).into_response(),
-        Err(e) => return ApiError(e.to_string()).into_response(),
+    // OAuth required — bind the upload's recorded user to the session
+    // identity, verifying the form's `username` claim along the way.
+    // Roll back the on-disk file on auth failure so we don't leak it.
+    let user_id = match auth::guard::require_user(app, session, Some(&form.username)).await {
+        Ok(authed) => authed.mnm_user_id,
+        Err(e) => {
+            let _ =
+                tokio::fs::remove_file(format!("{}/{}", app.import_file_path(), &uuid)).await;
+            return e.into_response();
+        }
     };
 
     if let Err(e) = app
