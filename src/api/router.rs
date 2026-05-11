@@ -25,16 +25,46 @@ pub fn router(app: AppState) -> Router {
     // 512 MB: big enough for realistic catalog uploads, still bounded.
     const UPLOAD_MAX_BYTES: usize = 512 * 1024 * 1024;
 
+    // Per-client-IP rate limit on /api.php. Burst is intentionally
+    // generous: opening a single SPA page can fire dozens of API
+    // calls (entries, catalogs, person dates, …) within the first
+    // second, and we don't want to throttle a legitimate user before
+    // their page even renders. Steady-state replenishes at 30 req/s.
+    // tower_governor responds with 429 + Retry-After when exceeded.
+    let governor_config = std::sync::Arc::new(
+        tower_governor::governor::GovernorConfigBuilder::default()
+            .per_second(30)
+            .burst_size(60)
+            .finish()
+            .expect("static rate-limit config is valid"),
+    );
+    // Background sweep so the in-memory rate-limit map doesn't grow
+    // without bound as transient clients come and go. Guarded on a
+    // running tokio runtime so synchronous test helpers that build
+    // the router without a reactor (e.g. `test_router_builds`) don't
+    // panic.
+    if tokio::runtime::Handle::try_current().is_ok() {
+        let limiter = governor_config.limiter().clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+            loop {
+                interval.tick().await;
+                limiter.retain_recent();
+            }
+        });
+    }
+
     // /api.php is the user-supplied query path: it needs the origin
     // check (cross-origin browsers can still send simple GETs even
-    // when CORS would block the response) and panic recovery (a
-    // single MySQL-row-decode panic shouldn't kill the connection).
-    // Other routes don't take user-supplied query strings, so they
-    // get neither.
+    // when CORS would block the response), panic recovery (a single
+    // MySQL-row-decode panic shouldn't kill the connection), and the
+    // per-IP rate limit. Other routes don't take user-supplied query
+    // strings, so they don't get the same treatment.
     let api_php_routes = Router::new()
         .route("/api.php", get(api_dispatcher).post(api_dispatcher_form))
         .route_layer(axum::middleware::from_fn(panic_recovery_middleware))
-        .route_layer(axum::middleware::from_fn(origin_check_middleware));
+        .route_layer(axum::middleware::from_fn(origin_check_middleware))
+        .route_layer(tower_governor::GovernorLayer::new(governor_config));
 
     Router::new()
         .merge(api_php_routes)
