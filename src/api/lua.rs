@@ -71,9 +71,9 @@ pub async fn run_from_params(app: &AppState, params: &Params) -> Result<Value, A
         .get("entry_id")
         .filter(|s| !s.is_empty())
         .ok_or_else(|| ApiError::BadRequest("missing required parameter: entry_id".into()))?;
-    let entry_id: usize = entry_id_str
-        .parse()
-        .map_err(|_| ApiError::BadRequest("parameter 'entry_id' must be a positive integer".into()))?;
+    let entry_id: usize = entry_id_str.parse().map_err(|_| {
+        ApiError::BadRequest("parameter 'entry_id' must be a positive integer".into())
+    })?;
     let html = params.get("html").cloned().unwrap_or_default();
     run(app, &function, entry_id, &html).await
 }
@@ -94,11 +94,7 @@ pub fn run_aux_from_desc(lua_code: &str, entry: &LuaEntry) -> Result<Value, ApiE
     Ok(json!({ "commands": commands }))
 }
 
-pub fn run_desc_from_html(
-    lua_code: &str,
-    entry: &LuaEntry,
-    html: &str,
-) -> Result<Value, ApiError> {
+pub fn run_desc_from_html(lua_code: &str, entry: &LuaEntry, html: &str) -> Result<Value, ApiError> {
     let result = code_fragment::run_desc_from_html(lua_code, entry, html)
         .map_err(|e| ApiError::Internal(format!("Lua execution error: {e}")))?;
     let commands: Vec<Value> = result.commands.iter().map(|c| c.to_json()).collect();
@@ -116,9 +112,9 @@ pub fn run_desc_from_html(
 }
 
 /// `?query=test_code_fragment` — gated behind OAuth + the same allow-list
-/// `code_fragments` uses. Pulls the function name out of a JSON `fragment`
-/// param (rather than a top-level `function`) to match the existing PHP
-/// frontend contract; otherwise just delegates to `run`.
+/// `code_fragments` uses. Pulls the function name **and Lua code** out of
+/// the JSON `fragment` param so the user can test code *before* saving it
+/// to the database.
 pub async fn query_test_code_fragment(
     app: &AppState,
     session: &Session,
@@ -133,17 +129,58 @@ pub async fn query_test_code_fragment(
         return Err(ApiError::BadRequest("No entry_id".into()));
     }
     let fragment_str = common::get_param(params, "fragment", "{}");
-    let fragment: Value =
-        serde_json::from_str(&fragment_str).map_err(|_| ApiError::BadRequest("Bad fragment".into()))?;
+    let fragment: Value = serde_json::from_str(&fragment_str)
+        .map_err(|_| ApiError::BadRequest("Bad fragment".into()))?;
     let function = fragment
         .get("function")
         .and_then(|v| v.as_str())
         .unwrap_or("");
     if function.is_empty() {
-        return Err(ApiError::BadRequest(format!("Bad fragment function '{function}'")));
+        return Err(ApiError::BadRequest(format!(
+            "Bad fragment function '{function}'"
+        )));
     }
+    if !VALID_FUNCTIONS.contains(&function) {
+        return Err(ApiError::BadRequest(format!(
+            "unsupported function: {function}. Must be one of: {}",
+            VALID_FUNCTIONS.join(", ")
+        )));
+    }
+
+    let entry = crate::entry::Entry::from_id(entry_id, app)
+        .await
+        .map_err(|e| ApiError::NotFound(format!("entry {entry_id} not found: {e}")))?;
+    let lua_entry = entry_to_lua_entry(&entry);
+
+    // Use the Lua code sent in the fragment (the editor contents), so the
+    // user can test *before* saving. Fall back to the DB only if absent.
+    let lua_code = match fragment
+        .get("lua")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        Some(code) => code.to_string(),
+        None => app
+            .storage()
+            .get_code_fragment_lua(function, entry.catalog)
+            .await
+            .map_err(|e| ApiError::Internal(format!("database error: {e}")))?
+            .ok_or_else(|| {
+                ApiError::Internal(format!(
+                    "no Lua code fragment for function={function} catalog={}",
+                    entry.catalog
+                ))
+            })?,
+    };
     let html = params.get("html").cloned().unwrap_or_default();
-    let data = run(app, function, entry_id, &html).await?;
+
+    let data = match function {
+        "PERSON_DATE" => run_person_date(&lua_code, &lua_entry),
+        "AUX_FROM_DESC" => run_aux_from_desc(&lua_code, &lua_entry),
+        "DESC_FROM_HTML" => run_desc_from_html(&lua_code, &lua_entry, &html),
+        _ => unreachable!("guarded above"),
+    }?;
+
     Ok(json_resp(json!({
         "status": "OK",
         "data": data,
@@ -199,7 +236,8 @@ if m then setAux(o.id, 214, m) end
 local m = string.match(html, "<h1>(.-)</h1>")
 if m then d[#d+1] = m end
 "#;
-        let v = run_desc_from_html(lua, &dummy_entry(), "<html><h1>Great person</h1></html>").unwrap();
+        let v =
+            run_desc_from_html(lua, &dummy_entry(), "<html><h1>Great person</h1></html>").unwrap();
         assert_eq!(v["descriptions"][0], "Great person");
     }
 
