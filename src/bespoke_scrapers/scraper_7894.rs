@@ -1,8 +1,8 @@
-use std::sync::Arc;
 use crate::{app_state::AppContext, entry::Entry, extended_entry::ExtendedEntry};
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use rand::RngExt;
+use std::sync::Arc;
 
 use super::BespokeScraper;
 
@@ -20,7 +20,7 @@ use super::BespokeScraper;
 // (e.g. "m x" = mid-10th century). The summary `details` field carries
 // the floruit plus a one-line role, which we use as ext_desc.
 
-const BASE: &str = "https://pase.ac.uk/pase";
+const BASE: &str = "http://pase.ac.uk/pase";
 
 #[derive(Debug)]
 pub struct BespokeScraper7894 {
@@ -62,7 +62,10 @@ impl BespokeScraper for BespokeScraper7894 {
 }
 
 impl BespokeScraper7894 {
-    pub(crate) fn parse_entry(catalog_id: usize, item: &serde_json::Value) -> Option<ExtendedEntry> {
+    pub(crate) fn parse_entry(
+        catalog_id: usize,
+        item: &serde_json::Value,
+    ) -> Option<ExtendedEntry> {
         let id = item.get("id").and_then(|v| v.as_u64())?;
         let name = item
             .get("name")
@@ -86,7 +89,10 @@ impl BespokeScraper7894 {
             type_name: Some("Q5".to_string()),
             ..Default::default()
         };
-        Some(ExtendedEntry { entry, ..Default::default() })
+        Some(ExtendedEntry {
+            entry,
+            ..Default::default()
+        })
     }
 }
 
