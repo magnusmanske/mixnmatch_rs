@@ -39,7 +39,7 @@ axum = { version = "*", features = ["multipart"] }
 wikibase = "*"
 mlua = { version = "0.10", features = ["lua54", "vendored", "serialize"] }
 tower = "*"
-tower-http = { version = "*", features = ["fs", "trace", "cors"] }
+tower-http = { version = "*", features = ["fs", "trace", "cors", "compression-br", "compression-gzip", "compression-deflate", "compression-zstd"] }
 tower-sessions = "0.15"
 axum-server = { version = "0.8", features = ["tls-rustls"] }
 rcgen = "0.14"

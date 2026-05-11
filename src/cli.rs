@@ -389,9 +389,16 @@ impl ShellCommands {
             async move { cache.serve(&uri).await }
         });
 
+        // CompressionLayer reads the request's Accept-Encoding header and
+        // picks the best supported encoding (br > zstd > gzip > deflate),
+        // skipping payloads whose Content-Type is already compressed
+        // (images, video). Wrapped outermost so it sees the final response
+        // — including JSON from /api.php, the /metrics text dump, and
+        // every static .js/.css/.html served from the in-memory cache.
         let router: Router = api_router
             .fallback(static_handler)
-            .layer(axum::middleware::from_fn(collapse_slashes_in_path));
+            .layer(axum::middleware::from_fn(collapse_slashes_in_path))
+            .layer(tower_http::compression::CompressionLayer::new());
 
         let scheme = if tls { "https" } else { "http" };
         let addr: std::net::SocketAddr = format!("0.0.0.0:{port}").parse()?;
