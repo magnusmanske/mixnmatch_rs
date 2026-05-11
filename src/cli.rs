@@ -371,7 +371,14 @@ impl ShellCommands {
         // (cookie parsing, response cookie refresh, CORS header injection)
         // that compounds across the dozens of ES-module fetches the SPA
         // makes on first load.
-        let api_router = crate::api::router(app).layer(session_layer).layer(cors);
+        //
+        // `TraceLayer` sits closest to the handler so its span captures
+        // session/cors processing too; it emits one INFO line per request
+        // with method/path/status/latency once tracing is initialised.
+        let api_router = crate::api::router(app)
+            .layer(tower_http::trace::TraceLayer::new_for_http())
+            .layer(session_layer)
+            .layer(cors);
 
         // Serve the in-memory snapshot as the fallback handler. Every miss
         // returns 404 — we don't fall back to disk, because anything a
@@ -438,6 +445,7 @@ impl ShellCommands {
         clippy::cognitive_complexity
     )]
     pub async fn run(&self) -> Result<()> {
+        init_tracing();
         let cli = Cli::parse();
         match &cli.command {
             Some(Commands::Server { config }) => {
@@ -606,6 +614,25 @@ impl ShellCommands {
             _other => return Err(anyhow!("Unrecognized command")),
         }
         Ok(())
+    }
+}
+
+/// Install the global tracing subscriber and bridge legacy `log::*!` calls
+/// into it. Without this, every `log::info!`/`warn!`/`error!` in the codebase
+/// is silently dropped — including the panic-recovery middleware logger and
+/// the per-job lifecycle lines.
+///
+/// Default level: `info`. Override per-module via `RUST_LOG`, e.g.
+/// `RUST_LOG=info,mixnmatch::automatch=debug`.
+fn init_tracing() {
+    use tracing_subscriber::EnvFilter;
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let subscriber = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_target(true)
+        .finish();
+    if tracing::subscriber::set_global_default(subscriber).is_ok() {
+        let _ = tracing_log::LogTracer::init();
     }
 }
 

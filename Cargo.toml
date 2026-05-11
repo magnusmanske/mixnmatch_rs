@@ -29,6 +29,9 @@ dashmap = "5"
 anyhow = "*"
 sysinfo = "*"
 log = "*"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-log = "0.2"
 axum = { version = "*", features = ["multipart"] }
 wikibase = "*"
 mlua = { version = "0.10", features = ["lua54", "vendored", "serialize"] }
