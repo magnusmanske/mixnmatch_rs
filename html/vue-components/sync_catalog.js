@@ -67,7 +67,14 @@ export default Vue.extend({
 			me.loaded = false;
 			me.load_error = '';
 			mnm_loading(true);
+			// Updated before each await / synchronous-block boundary so that
+			// when something throws we can identify the step in the error
+			// message and the console log — without this, "Sync failed:
+			// malformed URI sequence" is unactionable because the URIError
+			// can come from any of half a dozen call sites.
+			var current_step = 'init';
 			try {
+				current_step = 'load_catalog';
 				await ensure_catalog(me.id);
 				me.catalog = get_specific_catalog(me.id);
 				if (!me.catalog || !me.catalog.wd_prop) {
@@ -79,11 +86,13 @@ export default Vue.extend({
 				me.entries = {};
 				me.mnm2wd = '';
 
+				current_step = 'get_sync + double-wd SPARQL';
 				var [syncResult] = await Promise.all([
 					mnm_api('get_sync', { catalog: me.id }),
 					me.checkDoubleWD().catch(function (e) { console.error('checkDoubleWD failed:', e); })
 				]);
 
+				current_step = 'process_sync_data (mm_no_wd / wd_no_mm tables)';
 				me.data = syncResult.data;
 				me.wd_unavailable = me.data.wd_unavailable || '';
 				if (me.wd_unavailable) {
@@ -112,6 +121,7 @@ export default Vue.extend({
 					v.forEach(function (v1) { ids.push(v1) });
 				});
 				if (ids.length > 0) {
+					current_step = 'get_entry (mm_double entries)';
 					var d2 = await mnm_api('get_entry', { entry: ids.join(',') }, { method: 'POST' });
 					Object.entries(d2.data.entries).forEach(function ([k, v]) {
 						me.entries[k] = v;
@@ -125,7 +135,11 @@ export default Vue.extend({
 				// <wd-link>/<wd-desc> inside a long wd_duplicates or
 				// mm_double list fires its own request. Catalogs with
 				// "Multiple uses of external IDs on Wikidata" can have
-				// hundreds of them.
+				// hundreds of them. This is purely an optimisation: each
+				// child component falls back to its own fetch if the
+				// batch is missing, so we catch errors locally and keep
+				// rendering rather than aborting the whole page.
+				current_step = 'prefetch_wd (wbgetentities batch)';
 				var wd_qs = {};
 				(me.wd_duplicates || []).forEach(function (x) {
 					(x.qs || []).forEach(function (q) {
@@ -139,12 +153,17 @@ export default Vue.extend({
 					.filter(function (num) { return num.length > 0; })
 					.map(function (num) { return 'Q' + num; });
 				if (qs_to_load.length > 0 && typeof wd !== 'undefined' && wd && wd.getItemBatch) {
-					await wd.getItemBatch(qs_to_load);
+					try {
+						await wd.getItemBatch(qs_to_load);
+					} catch (e) {
+						console.warn('sync prefetch_wd failed (non-fatal — per-item fetches will fill in):', e, e && e.stack);
+					}
 				}
 
 				me.loaded = true;
 			} catch (e) {
-				me.load_error = 'Sync failed: ' + e.message;
+				console.error('sync loadData failed at step "' + current_step + '":', e, e && e.stack);
+				me.load_error = 'Sync failed at "' + current_step + '": ' + (e && e.message ? e.message : e);
 				me.loaded = true;
 			}
 			mnm_loading(false);
