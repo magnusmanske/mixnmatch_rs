@@ -46,8 +46,22 @@ pub fn router(app: AppState) -> Router {
             "/resources/{*path}",
             get(proxy::proxy_magnustools_resources),
         )
+        // Prometheus scrape endpoint. Plain-text body, no auth — the
+        // exporter only emits the counters/histograms we explicitly
+        // register (see `crate::metrics`), so there's nothing sensitive.
+        .route("/metrics", get(metrics_endpoint))
         .layer(axum::extract::DefaultBodyLimit::max(UPLOAD_MAX_BYTES))
         .with_state(state)
+}
+
+async fn metrics_endpoint() -> impl IntoResponse {
+    (
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
+        crate::metrics::render(),
+    )
 }
 
 async fn api_dispatcher(
@@ -172,10 +186,27 @@ async fn dispatcher_common(app: &AppState, session: &Session, params: Params) ->
     // tower middleware layered onto /api.php (see `router()`); a
     // panic inside `dispatch` propagates up to the catch_unwind
     // there. Per-handler errors are still mapped to ApiError here.
+    let started = std::time::Instant::now();
     let resp = match dispatch(&query, app, session, &params).await {
         Ok(r) => r,
         Err(e) => e.into_response(),
     };
+    // Record one data point per `/api.php?query=…` dispatch — the
+    // query name is bounded by the ROUTES table so cardinality is
+    // safe. Unknown queries are bucketed under "_unknown" so a
+    // bot probing random names can't blow up the time-series store.
+    let metric_query = if ROUTES.iter().any(|(n, _)| *n == query) {
+        query.as_str()
+    } else if query.is_empty() {
+        "_empty"
+    } else {
+        "_unknown"
+    };
+    crate::metrics::record_api_request(
+        metric_query,
+        resp.status().as_u16(),
+        started.elapsed().as_secs_f64(),
+    );
     if autoclose {
         return wrap_autoclose(resp).await;
     }

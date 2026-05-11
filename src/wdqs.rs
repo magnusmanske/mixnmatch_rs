@@ -75,10 +75,34 @@ pub async fn run_tsv_query(client: &reqwest::Client, sparql: &str) -> Result<Vec
             }
         }
     }
+    let reason = classify_sparql_failure(last_err.as_deref());
+    crate::metrics::record_sparql_failure(reason);
     Err(anyhow!(
         "WDQS request failed after {SPARQL_MAX_ATTEMPTS} attempts: {}",
         last_err.unwrap_or_else(|| "unknown error".into())
     ))
+}
+
+/// Bucket the per-attempt error string into a small set of label values
+/// so the failure counter stays low-cardinality. Anything we can't
+/// classify lands in `other`.
+fn classify_sparql_failure(msg: Option<&str>) -> &'static str {
+    let Some(msg) = msg else {
+        return "unknown";
+    };
+    if msg.contains("timed out") || msg.contains("timeout") || msg.contains("operation timed out") {
+        "timeout"
+    } else if msg.contains("HTTP 5") {
+        "http_5xx"
+    } else if msg.contains("HTTP 4") {
+        "http_4xx"
+    } else if msg.contains("decode") || msg.contains("body") {
+        "decode"
+    } else if msg.contains("connect") || msg.contains("dns") {
+        "connect"
+    } else {
+        "other"
+    }
 }
 
 async fn send_once(client: &reqwest::Client, sparql: &str) -> Result<Vec<Vec<String>>, String> {
@@ -229,6 +253,38 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].len(), 3);
         assert_eq!(rows[0][2], "human");
+    }
+
+    #[test]
+    fn classify_sparql_failure_buckets_known_shapes() {
+        // The classifier feeds the `mnm_sparql_failures_total` counter's
+        // `reason` label — keep this low-cardinality and stable so
+        // dashboards don't churn.
+        assert_eq!(classify_sparql_failure(None), "unknown");
+        assert_eq!(
+            classify_sparql_failure(Some("send: error sending request: operation timed out")),
+            "timeout"
+        );
+        assert_eq!(
+            classify_sparql_failure(Some("HTTP 504 Gateway Timeout")),
+            "http_5xx"
+        );
+        assert_eq!(
+            classify_sparql_failure(Some("HTTP 429 Too Many Requests")),
+            "http_4xx"
+        );
+        assert_eq!(
+            classify_sparql_failure(Some("read body: error decoding response")),
+            "decode"
+        );
+        assert_eq!(
+            classify_sparql_failure(Some("error trying to connect: dns lookup failed")),
+            "connect"
+        );
+        assert_eq!(
+            classify_sparql_failure(Some("something totally weird")),
+            "other"
+        );
     }
 
     #[test]

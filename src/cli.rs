@@ -617,13 +617,15 @@ impl ShellCommands {
     }
 }
 
-/// Install the global tracing subscriber and bridge legacy `log::*!` calls
-/// into it. Without this, every `log::info!`/`warn!`/`error!` in the codebase
-/// is silently dropped — including the panic-recovery middleware logger and
-/// the per-job lifecycle lines.
+/// Install the global tracing subscriber + bridge legacy `log::*!` calls
+/// into it, and install the Prometheus metrics recorder. Without these,
+/// every `log::info!`/`warn!`/`error!` in the codebase is silently
+/// dropped (including the panic-recovery middleware logger and per-job
+/// lifecycle lines), and `metrics::counter!`/`histogram!` macros are
+/// no-ops.
 ///
-/// Default level: `info`. Override per-module via `RUST_LOG`, e.g.
-/// `RUST_LOG=info,mixnmatch::automatch=debug`.
+/// Default tracing level: `info`. Override per-module via `RUST_LOG`,
+/// e.g. `RUST_LOG=info,mixnmatch::automatch=debug`.
 fn init_tracing() {
     use tracing_subscriber::EnvFilter;
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
@@ -634,6 +636,7 @@ fn init_tracing() {
     if tracing::subscriber::set_global_default(subscriber).is_ok() {
         let _ = tracing_log::LogTracer::init();
     }
+    crate::metrics::init();
 }
 
 /// Collapse runs of `/` in the request path to a single `/`. Fixes URLs like

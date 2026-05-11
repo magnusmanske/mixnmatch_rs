@@ -32,6 +32,8 @@ log = "*"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-log = "0.2"
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.16", default-features = false }
 axum = { version = "*", features = ["multipart"] }
 wikibase = "*"
 mlua = { version = "0.10", features = ["lua54", "vendored", "serialize"] }

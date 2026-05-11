@@ -76,6 +76,7 @@ pub mod large_catalogs;
 pub mod maintenance;
 pub mod match_state;
 pub mod meta_entry;
+pub mod metrics;
 pub mod microsync;
 pub mod mnm_link;
 pub mod mysql_misc;
