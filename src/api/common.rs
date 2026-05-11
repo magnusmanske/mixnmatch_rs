@@ -173,9 +173,23 @@ impl From<&str> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> axum::response::Response {
-        let status = self.status_code();
+        // Wire contract: always HTTP 200 with a `{"status": "<msg>"}`
+        // body. The variant (BadRequest/Unauthorized/.../Internal) is
+        // retained for in-code classification and future use, but is
+        // intentionally NOT surfaced over the wire.
+        //
+        // We initially returned real 4xx/5xx codes here, but the bulk
+        // migration of ~178 sites defaulted everything to `Internal`,
+        // and many of those paths are user-level errors (missing
+        // params, unknown query names, bad tile id) rather than real
+        // server faults. Returning 500 for those made tower-http's
+        // TraceLayer log every legitimate user mistake as a failure
+        // and broke frontend callers that assumed the all-200
+        // contract. Future code can use `status_code()` deliberately
+        // (e.g. a dedicated `Accept: application/json+typed-errors`
+        // path) without changing the default response shape.
         let body = json!({ "status": self.message() });
-        (status, Json(body)).into_response()
+        (axum::http::StatusCode::OK, Json(body)).into_response()
     }
 }
 
@@ -483,22 +497,32 @@ mod tests {
     }
 
     #[test]
-    fn test_api_error_into_response_returns_real_status() {
-        // Previously every error returned 200 OK with a `status` payload —
-        // a network monitor or a `response.ok` check on the client could
-        // never tell success from failure. The new contract is 400/401/
-        // 403/404/500 per variant; the body shape stays `{"status":"<msg>"}`
-        // so the legacy frontend's error-text reader keeps working.
-        let err = ApiError::bad_request("invalid catalog id");
-        let response = err.into_response();
-        assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
+    fn test_api_error_into_response_always_returns_200() {
+        // Wire contract: every error variant produces HTTP 200 with the
+        // message in the JSON `status` field. The variant is captured
+        // in code (status_code() / message() / matches) but not on the
+        // wire — keeping the legacy contract that the frontend, JSONP
+        // wrapper, autoclose path, and external integrations all
+        // depend on.
+        for err in [
+            ApiError::bad_request("x"),
+            ApiError::unauthorized("x"),
+            ApiError::forbidden("x"),
+            ApiError::not_found("x"),
+            ApiError::internal("x"),
+        ] {
+            let response = err.into_response();
+            assert_eq!(response.status(), axum::http::StatusCode::OK);
+        }
     }
 
     #[test]
-    fn test_get_catalog_returns_bad_request_status() {
-        // Sample one migrated validation site — `get_catalog` now produces
-        // a 400, not a 500, so an alerting layer can tell user error apart
-        // from system error.
+    fn test_get_catalog_classifies_as_bad_request_internally() {
+        // The wire response is 200 (see above), but `get_catalog` does
+        // classify its error as BadRequest in code, so future logic
+        // (alerting, conditional retry, typed-errors endpoint) can
+        // distinguish user errors from system errors without changing
+        // the response.
         let p = Params::new();
         let err = get_catalog(&p).unwrap_err();
         assert_eq!(err.status_code(), axum::http::StatusCode::BAD_REQUEST);
