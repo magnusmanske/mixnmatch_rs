@@ -12,23 +12,27 @@ export default {
 			let q = 'Q' + self.entry.q;
 			wd.getItemBatch([q]).then(function () {
 				let item = wd.getItem(q);
-				if (typeof item != 'undefined') {
-					let locations = item.getClaimsForProperty('P625');
-					if (locations.length > 0) {
-						let location = locations[0];
-						let coords = item.getSnakObject(location.mainsnak);
-						let lat1 = coords.latitude * 1;
-						let lon1 = coords.longitude * 1;
-						let lat2 = self.entry.lat * 1;
-						let lon2 = self.entry.lon * 1;
-						let distance = self.getDistance(lat1, lon1, lat2, lon2);
-						if (distance < 1000) distance = Math.round(distance) + 'm';
-						else if (distance < 10000) distance = Math.round(distance / 100) / 10 + 'km';
-						else distance = Math.round(distance / 1000) + 'km';
-						self.distance = distance;
-					}
-				}
-			});
+				if (typeof item == 'undefined') return;
+				let locations = item.getClaimsForProperty('P625');
+				if (!locations || locations.length == 0) return;
+				let location = locations[0];
+				if (!location || !location.mainsnak) return;
+				let coords = item.getSnakObject(location.mainsnak);
+				// `coords` is undefined when the P625 snak is novalue
+				// / somevalue (it has no datavalue); skip rather than
+				// throw on `.latitude` of undefined.
+				if (!coords || typeof coords.latitude == 'undefined') return;
+				let lat1 = coords.latitude * 1;
+				let lon1 = coords.longitude * 1;
+				let lat2 = self.entry.lat * 1;
+				let lon2 = self.entry.lon * 1;
+				if (!isFinite(lat1) || !isFinite(lon1) || !isFinite(lat2) || !isFinite(lon2)) return;
+				let distance = self.getDistance(lat1, lon1, lat2, lon2);
+				if (distance < 1000) distance = Math.round(distance) + 'm';
+				else if (distance < 10000) distance = Math.round(distance / 100) / 10 + 'km';
+				else distance = Math.round(distance / 1000) + 'km';
+				self.distance = distance;
+			}).catch(function (e) { console.warn('coord distance lookup failed:', e); });
 		}
 		tt_update_interface();
 	},

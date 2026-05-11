@@ -39,9 +39,16 @@ export default Vue.extend({
 				return;
 			}
 			me.doLoadCatalog(id);
+			// `autoscrape_json` is freeform text written by the scraper
+			// editor; tolerate malformed or empty JSON rather than blowing
+			// up the whole page render.
 			if (typeof me.catalog.autoscrape_json != 'undefined') {
-				let j = JSON.parse(me.catalog.autoscrape_json);
-				me.ext_url_pattern = (((j.scraper || {}).resolve || {}).url || {}).use || '';
+				try {
+					let j = JSON.parse(me.catalog.autoscrape_json) || {};
+					me.ext_url_pattern = (((j.scraper || {}).resolve || {}).url || {}).use || '';
+				} catch (e) {
+					me.ext_url_pattern = '';
+				}
 			}
 		},
 		doLoadCatalog: async function (id, _retries) {

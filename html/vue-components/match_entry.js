@@ -8,6 +8,12 @@ export default {
     data: function () {
         return {
             catalog: {}, mnm_entries: [], wp_entries: [], wd_entries: [],
+            // Map of normalised WP title -> Q-number string for the
+            // "WD" column of the Wikipedia results table. Populated
+            // by the wbgetentities batch in loadDataWikipedia(); the
+            // template renders directly from this rather than the
+            // older pattern of querySelector+innerHTML.
+            wp_q_by_title: {},
             loaded_wp: false, loaded_mnm: false, loaded_wd: false,
             wp_failed: false,
             loaded_sparql: false, sparql_entries: [], last_id: ''
@@ -22,6 +28,7 @@ export default {
             me.loaded_wp = false;
             me.wp_failed = false;
             me.wp_entries = [];
+            me.wp_q_by_title = {};
             try {
                 var d = await mnm_fetch_json('https://' + me.catalog.search_wp + '.wikipedia.org/w/api.php', {
                     action: 'query',
@@ -30,48 +37,46 @@ export default {
                     origin: '*',
                     srsearch: me.filteredName()
                 });
-                me.wp_entries = d.query.search;
+                me.wp_entries = (d && d.query && d.query.search) ? d.query.search : [];
 
-                var titles = [];
-                me.wp_entries.forEach(function (v) {
-                    titles.push(v.title);
-                });
-
+                var titles = me.wp_entries.map(function (v) { return v.title; });
                 if (titles.length == 0) return;
 
-                // Get matching Wikidata items
+                // Resolve each Wikipedia title to its Wikidata item in one
+                // wbgetentities call, then drive the template's "WD" column
+                // off `wp_q_by_title`. The previous implementation did this
+                // via querySelector + innerHTML + manual event wiring — a
+                // pattern that breaks on shape changes and is a real XSS
+                // surface (raw HTML concatenation of remote-API values).
                 var site = me.catalog.search_wp + 'wiki';
-                try {
-                    var d2 = await mnm_fetch_json('https://www.wikidata.org/w/api.php', {
-                        action: 'wbgetentities',
-                        props: 'sitelinks',
-                        titles: titles.join('|'),
-                        sites: site,
-                        format: 'json',
-                        origin: '*'
-                    });
-                    Object.entries(d2.entities).forEach(function ([q, v]) {
-                        if (q * 1 < 0) return;
-                        if (typeof v.sitelinks == 'undefined' || typeof v.sitelinks[site] == 'undefined') return;
-                        var title = v.sitelinks[site].title;
-                        var a = "<a target='_blank' class='wikidata' href='https://www.wikidata.org/wiki/" + q + "'>" + q + "</a>";
-                        a += " [<a href='#' q='" + q + "' class='set_q' tt_title='manually_set_q'>&uarr;</a>]";
-                        var td = document.querySelector('td.wd_loading[wp_title="' + me.normaliseTitle(title) + '"]');
-                        if (td) { td.classList.remove('wd_loading'); td.innerHTML = a; }
-                        var link = document.querySelector('a.set_q[q="' + q + '"]');
-                        if (link) link.addEventListener('click', function (e) {
-                            document.getElementById('q_input').value = q;
-                            me.setUserQ(e);
-                            e.preventDefault();
-                        });
-                    });
-                } finally {
-                    document.querySelectorAll('td.wd_loading').forEach(function (el) { el.classList.remove('wd_loading'); el.innerHTML = '&mdash;'; });
-                    tt_update_interface();
-                }
+                var d2 = await mnm_fetch_json('https://www.wikidata.org/w/api.php', {
+                    action: 'wbgetentities',
+                    props: 'sitelinks',
+                    titles: titles.join('|'),
+                    sites: site,
+                    format: 'json',
+                    origin: '*'
+                });
+                var entities = (d2 && d2.entities) ? d2.entities : {};
+                Object.entries(entities).forEach(function ([q, v]) {
+                    if (q * 1 < 0) return;
+                    if (!v || !v.sitelinks || !v.sitelinks[site]) return;
+                    var title = v.sitelinks[site].title;
+                    Vue.set(me.wp_q_by_title, me.normaliseTitle(title), q);
+                });
             } finally {
                 me.loaded_wp = true;
+                tt_update_interface();
             }
+        },
+
+        /// Click handler for the WD-column "↑" button: assigns the row's
+        /// Wikidata item to the current entry. Replaces the previous
+        /// document.getElementById/click-on-handler chain.
+        setQFromWP: function (q) {
+            if (!q || !q.match(/^Q\d+$/)) return;
+            this.setEntryQ(this.entry, q.replace(/^Q/, ''));
+            this.qWasSet();
         },
         checkSPARQL: async function () {
             // TODO search would be faster?
@@ -350,8 +355,15 @@ export default {
 												</td>
 												<td class='wp_search_result_summary'>
 													{{e.snippet|decodeEntities|removeTags|miscFixes}}</td>
-												<td nowrap class="wd_loading" :wp_title="normaliseTitle(e.title)"><i
-														tt='loading'></i></td>
+												<td nowrap>
+													<span v-if="!loaded_wp"><i tt='loading'></i></span>
+													<span v-else-if="wp_q_by_title[normaliseTitle(e.title)]">
+														<a target='_blank' class='wikidata'
+															:href="'https://www.wikidata.org/wiki/' + wp_q_by_title[normaliseTitle(e.title)]">{{wp_q_by_title[normaliseTitle(e.title)]}}</a>
+														[<a href='#' @click.prevent="setQFromWP(wp_q_by_title[normaliseTitle(e.title)])" tt_title='manually_set_q'>&uarr;</a>]
+													</span>
+													<span v-else>&mdash;</span>
+												</td>
 											</tr>
 										</tbody>
 									</table>
