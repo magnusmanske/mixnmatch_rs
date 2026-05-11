@@ -51,20 +51,20 @@ fn re_q() -> &'static regex::Regex {
 
 pub async fn get(app: &AppState, catalog_id: usize) -> Result<Value, ApiError> {
     if catalog_id == 0 {
-        return Err(ApiError("missing required parameter: catalog".into()));
+        return Err(ApiError::Internal("missing required parameter: catalog".into()));
     }
 
     let (wd_prop, wd_qual) = app
         .storage()
         .get_catalog_wd_prop(catalog_id)
         .await
-        .map_err(|e| ApiError(format!("database error: {e}")))?;
+        .map_err(|e| ApiError::Internal(format!("database error: {e}")))?;
 
     let wd_prop = wd_prop
-        .ok_or_else(|| ApiError(format!("catalog {catalog_id} has no wd_prop set")))?;
+        .ok_or_else(|| ApiError::Internal(format!("catalog {catalog_id} has no wd_prop set")))?;
 
     if wd_qual.is_some() {
-        return Err(ApiError(format!(
+        return Err(ApiError::Internal(format!(
             "catalog {catalog_id} uses wd_qual (qualifier-based sync not supported)"
         )));
     }
@@ -79,8 +79,8 @@ pub async fn get(app: &AppState, catalog_id: usize) -> Result<Value, ApiError> {
         s.get_mnm_double_matches(catalog_id),
     );
     let mnm_entries =
-        mnm_entries_res.map_err(|e| ApiError(format!("database error: {e}")))?;
-    let mm_double = mm_double_res.map_err(|e| ApiError(format!("database error: {e}")))?;
+        mnm_entries_res.map_err(|e| ApiError::Internal(format!("database error: {e}")))?;
+    let mm_double = mm_double_res.map_err(|e| ApiError::Internal(format!("database error: {e}")))?;
 
     // Treat WDQS failure as a soft error: the MnM-side data is still
     // useful (most importantly `mm_double`, which doesn't depend on
@@ -88,7 +88,10 @@ pub async fn get(app: &AppState, catalog_id: usize) -> Result<Value, ApiError> {
     // `wd_unavailable` is non-null.
     let (wd_ext2q, wd_unavailable) = match wd_ext2q_res {
         Ok(map) => (map, Value::Null),
-        Err(e) => (Arc::new(HashMap::new()), Value::String(e.0)),
+        Err(e) => (
+            Arc::new(HashMap::new()),
+            Value::String(e.message().to_string()),
+        ),
     };
 
     let (mnm_ext2q, mm_dupes) = build_mnm_maps(&mnm_entries);
@@ -157,7 +160,7 @@ async fn fetch_wd_ext2q_cached(wd_prop: usize) -> Result<CachedMap, ApiError> {
 ///    chunk gets its own retry budget; partial results are merged. This
 ///    is the resilient path for genuinely large properties.
 async fn fetch_wd_ext2q(wd_prop: usize) -> Result<HashMap<String, String>, ApiError> {
-    let client = wdqs::build_client().map_err(|e| ApiError(e.to_string()))?;
+    let client = wdqs::build_client().map_err(|e| ApiError::Internal(e.to_string()))?;
     let single = format!("SELECT ?q ?prop {{ ?q wdt:P{wd_prop} ?prop }}");
     if let Ok(rows) = wdqs::run_tsv_query(&client, &single).await {
         return Ok(rows_to_ext2q(rows));
@@ -199,7 +202,7 @@ async fn fetch_wd_ext2q(wd_prop: usize) -> Result<HashMap<String, String>, ApiEr
     // If every chunk failed, surface the last error rather than a
     // suspiciously-empty success.
     if out.is_empty() {
-        return Err(ApiError(format!(
+        return Err(ApiError::Internal(format!(
             "SPARQL query failed: {}",
             last_err.unwrap_or_else(|| "unknown error".into())
         )));

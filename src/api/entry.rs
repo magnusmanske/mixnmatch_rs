@@ -22,7 +22,7 @@ pub async fn query_get_entry(app: &dyn ExternalServicesContext, params: &Params)
     let ext_ids_str = common::get_param(params, "ext_ids", "");
     let entries = if !ext_ids_str.is_empty() {
         if catalog == 0 {
-            return Err(ApiError("catalog is required when using ext_ids".into()));
+            return Err(ApiError::Internal("catalog is required when using ext_ids".into()));
         }
         let ext_ids: Vec<String> = serde_json::from_str(&ext_ids_str).unwrap_or_default();
         // The original implementation did `for eid in ext_ids` and awaited
@@ -42,7 +42,7 @@ pub async fn query_get_entry(app: &dyn ExternalServicesContext, params: &Params)
             .filter_map(|s| s.trim().parse().ok())
             .collect();
         if ids.is_empty() {
-            return Err(ApiError("entry is required".into()));
+            return Err(ApiError::Internal("entry is required".into()));
         }
         crate::entry::Entry::multiple_from_ids(&ids, app)
             .await?
@@ -191,7 +191,7 @@ pub async fn query_entries_via_property_value(
         .unwrap_or(0);
     let value = common::get_param(params, "value", "").trim().to_string();
     if property == 0 || value.is_empty() {
-        return Err(ApiError("property and value required".into()));
+        return Err(ApiError::Internal("property and value required".into()));
     }
     let ids = app.storage().get_entry_ids_by_aux(property, &value).await?;
     let entries: Vec<_> = if ids.is_empty() {

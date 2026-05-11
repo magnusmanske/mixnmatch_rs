@@ -64,7 +64,7 @@ pub async fn query_get_issues(app: &AppState, params: &Params) -> Result<Respons
 pub async fn query_all_issues(app: &AppState, params: &Params) -> Result<Response, ApiError> {
     let mode = common::get_param(params, "mode", "");
     if !["duplicate_items", "mismatched_items", "time_mismatch"].contains(&mode.as_str()) {
-        return Err(ApiError("Unsupported mode".into()));
+        return Err(ApiError::Internal("Unsupported mode".into()));
     }
     Ok(ok(serde_json::json!(
         app.storage().api_get_all_issues(&mode).await?
@@ -78,7 +78,7 @@ pub async fn query_resolve_issue(
 ) -> Result<Response, ApiError> {
     let iid = common::get_param_int(params, "issue_id", 0) as usize;
     if iid == 0 {
-        return Err(ApiError("Bad issue ID".into()));
+        return Err(ApiError::Internal("Bad issue ID".into()));
     }
     auth::guard::require_user_from_params(app, session, params).await?;
     app.storage()

@@ -31,22 +31,22 @@ pub fn parse_sparql_label2q(
 ) -> Result<HashMap<String, String>, ApiError> {
     let head_vars = sparql_result["head"]["vars"]
         .as_array()
-        .ok_or_else(|| ApiError("SPARQL result missing head.vars".into()))?;
+        .ok_or_else(|| ApiError::Internal("SPARQL result missing head.vars".into()))?;
     if head_vars.len() < 2 {
-        return Err(ApiError(
+        return Err(ApiError::Internal(
             "SPARQL result must have at least 2 variables".into(),
         ));
     }
     let label_var = head_vars[0]
         .as_str()
-        .ok_or_else(|| ApiError("variable name is not a string".into()))?;
+        .ok_or_else(|| ApiError::Internal("variable name is not a string".into()))?;
     let qnum_var = head_vars[1]
         .as_str()
-        .ok_or_else(|| ApiError("variable name is not a string".into()))?;
+        .ok_or_else(|| ApiError::Internal("variable name is not a string".into()))?;
 
     let bindings = sparql_result["results"]["bindings"]
         .as_array()
-        .ok_or_else(|| ApiError("SPARQL result missing results.bindings".into()))?;
+        .ok_or_else(|| ApiError::Internal("SPARQL result missing results.bindings".into()))?;
 
     let re = re_sparql_q();
     let mut label2q: HashMap<String, String> = HashMap::new();
@@ -77,18 +77,18 @@ pub fn parse_sparql_label2q(
 /// {entries, users} payload (no envelope).
 pub async fn list(app: &AppState, sparql: &str) -> Result<Value, ApiError> {
     if sparql.is_empty() {
-        return Err(ApiError("missing required parameter: sparql".into()));
+        return Err(ApiError::Internal("missing required parameter: sparql".into()));
     }
 
     let mw_api = app
         .wikidata()
         .get_mw_api()
         .await
-        .map_err(|e| ApiError(format!("failed to get Wikidata API: {e}")))?;
+        .map_err(|e| ApiError::Internal(format!("failed to get Wikidata API: {e}")))?;
     let sparql_result = mw_api
         .sparql_query(sparql)
         .await
-        .map_err(|e| ApiError(format!("SPARQL query failed: {e}")))?;
+        .map_err(|e| ApiError::Internal(format!("SPARQL query failed: {e}")))?;
 
     let label2q = parse_sparql_label2q(&sparql_result)?;
 
@@ -104,8 +104,8 @@ pub async fn list(app: &AppState, sparql: &str) -> Result<Value, ApiError> {
         s.get_entries_by_ext_names_unmatched(&labels),
         s.get_users_by_ids(&[0]),
     );
-    let entries = entries_res.map_err(|e| ApiError(format!("database error: {e}")))?;
-    let users = users_res.map_err(|e| ApiError(format!("database error: {e}")))?;
+    let entries = entries_res.map_err(|e| ApiError::Internal(format!("database error: {e}")))?;
+    let users = users_res.map_err(|e| ApiError::Internal(format!("database error: {e}")))?;
 
     let mut entry_map: HashMap<String, Value> = HashMap::new();
     for entry in &entries {
@@ -148,7 +148,7 @@ pub async fn list_from_params(app: &AppState, params: &Params) -> Result<Value, 
     let sparql = params
         .get("sparql")
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| ApiError("missing required parameter: sparql".into()))?;
+        .ok_or_else(|| ApiError::Internal("missing required parameter: sparql".into()))?;
     list(app, sparql).await
 }
 

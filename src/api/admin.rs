@@ -51,7 +51,7 @@ pub async fn query_update_ext_urls(
     let url = common::get_param(params, "url", "");
     let parts: Vec<&str> = url.split("$1").collect();
     if parts.len() != 2 {
-        return Err(ApiError(format!("Bad $1 replacement for '{url}'")));
+        return Err(ApiError::Internal(format!("Bad $1 replacement for '{url}'")));
     }
     app.storage()
         .api_update_catalog_ext_urls(cid, parts[0], parts[1])
@@ -72,7 +72,7 @@ pub async fn query_add_aliases(
     let text = common::get_param(params, "text", "").trim().to_string();
     let cid = common::get_param_int(params, "catalog", 0) as usize;
     if cid == 0 || text.is_empty() {
-        return Err(ApiError("Catalog ID or text missing".into()));
+        return Err(ApiError::Internal("Catalog ID or text missing".into()));
     }
     let cat = crate::catalog::Catalog::from_id(cid, app).await?;
     let default_lang = {
@@ -116,11 +116,11 @@ pub async fn query_set_missing_properties_status(
     let uid = common::require_user_id(app, session, params).await?;
     let row_id = common::get_param_int(params, "row_id", 0) as usize;
     if row_id == 0 {
-        return Err(ApiError("Bad/missing row ID".into()));
+        return Err(ApiError::Internal("Bad/missing row ID".into()));
     }
     let status = common::get_param(params, "status", "");
     if status.is_empty() {
-        return Err(ApiError("Invalid status".into()));
+        return Err(ApiError::Internal("Invalid status".into()));
     }
     let note = common::get_param(params, "note", "");
     app.storage()

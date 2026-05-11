@@ -45,7 +45,7 @@ pub async fn query_download(app: &dyn ExternalServicesContext, params: &Params) 
         out
     })
     .await
-    .map_err(|e| ApiError(format!("download formatting panic: {e}")))?;
+    .map_err(|e| ApiError::Internal(format!("download formatting panic: {e}")))?;
 
     Ok((
         [
@@ -147,7 +147,7 @@ pub async fn query_download2(app: &dyn ExternalServicesContext, params: &Params)
         }
     })
     .await
-    .map_err(|e| ApiError(format!("download2 formatting panic: {e}")))?;
+    .map_err(|e| ApiError::Internal(format!("download2 formatting panic: {e}")))?;
 
     Ok(([(axum::http::header::CONTENT_TYPE, ct)], out).into_response())
 }

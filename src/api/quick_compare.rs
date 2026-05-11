@@ -139,7 +139,7 @@ pub async fn run(app: &AppState, params: &Params) -> Result<Value, ApiError> {
             .storage()
             .qc_get_entries(catalog_id, entry_id, filter, random_threshold, MAX_RESULTS)
             .await
-            .map_err(|e| ApiError(format!("query failed: {e}")))?;
+            .map_err(|e| ApiError::Internal(format!("query failed: {e}")))?;
 
         if rows.is_empty() {
             continue;
@@ -149,7 +149,7 @@ pub async fn run(app: &AppState, params: &Params) -> Result<Value, ApiError> {
             .iter()
             .filter_map(|r| r["q"].as_i64().filter(|&q| q > 0).map(|q| format!("Q{q}")))
             .collect();
-        let mw_api = app.wikidata().get_mw_api().await.map_err(|e| ApiError(format!("Wikidata API error: {e}")))?;
+        let mw_api = app.wikidata().get_mw_api().await.map_err(|e| ApiError::Internal(format!("Wikidata API error: {e}")))?;
         let ec = wikimisc::wikibase::entity_container::EntityContainer::new();
         let _ = ec.load_entities(&mw_api, &q_values).await;
 
@@ -174,9 +174,9 @@ fn parse_catalog(params: &Params) -> Result<usize, ApiError> {
     let raw = params
         .get("catalog")
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| ApiError("missing required parameter: catalog".into()))?;
+        .ok_or_else(|| ApiError::Internal("missing required parameter: catalog".into()))?;
     raw.parse::<usize>()
-        .map_err(|_| ApiError("parameter 'catalog' must be a positive integer".into()))
+        .map_err(|_| ApiError::Internal("parameter 'catalog' must be a positive integer".into()))
 }
 
 fn opt_str<'a>(params: &'a Params, key: &str) -> Option<&'a str> {

@@ -34,10 +34,10 @@ pub async fn query_proxy_entry_url(app: &dyn ExternalServicesContext, params: &P
         .get(&entry.ext_url)
         .send()
         .await
-        .map_err(|e| ApiError(e.to_string()))?
+        .map_err(|e| ApiError::Internal(e.to_string()))?
         .text()
         .await
-        .map_err(|e| ApiError(e.to_string()))?;
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
     Ok((
         [(axum::http::header::CONTENT_TYPE, "text/html; charset=UTF-8")],
         body,
@@ -59,7 +59,7 @@ pub async fn query_cersei_forward(
             )
                 .into_response())
         }
-        None => Err(ApiError(format!(
+        None => Err(ApiError::Internal(format!(
             "No catalog associated with CERSEI scraper {sid}"
         ))),
     }

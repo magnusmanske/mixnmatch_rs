@@ -75,7 +75,18 @@ export async function mnm_api(query, params, options) {
 		var resp = await fetch(url, fetchOpts);
 	}
 
-	if (!resp.ok) throw new Error('HTTP ' + resp.status + ' ' + resp.statusText);
+	// Backend returns real HTTP status codes (400/401/403/404/500) with a
+	// `{"status":"<message>"}` JSON body. Surface the body's message to
+	// callers so the thrown Error includes the human-readable reason and
+	// not just the bare HTTP code.
+	if (!resp.ok) {
+		var detail = '';
+		try {
+			var body = await resp.json();
+			if (body && body.status) detail = ': ' + body.status;
+		} catch (_) { /* body wasn't JSON; ignore */ }
+		throw new Error('HTTP ' + resp.status + ' ' + resp.statusText + detail);
+	}
 	var json = await resp.json();
 	if (json.status && json.status !== 'OK') throw new Error(json.status);
 	return json;

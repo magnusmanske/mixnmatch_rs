@@ -14,7 +14,7 @@ pub async fn query_get_user_info(app: &AppState, params: &Params) -> Result<Resp
             "name": n,
             "is_catalog_admin": if admin {1} else {0},
         }))),
-        None => Err(ApiError(format!("No user '{name}' found"))),
+        None => Err(ApiError::Internal(format!("No user '{name}' found"))),
     }
 }
 
@@ -73,13 +73,13 @@ pub async fn query_set_statement_text_q(
     let q = common::get_param_int(params, "q", 0);
     let user_id = common::require_user_id(app, session, params).await?;
     if text.is_empty() {
-        return Err(ApiError("Missing text parameter".into()));
+        return Err(ApiError::Internal("Missing text parameter".into()));
     }
     if property <= 0 {
-        return Err(ApiError("Missing or invalid property parameter".into()));
+        return Err(ApiError::Internal("Missing or invalid property parameter".into()));
     }
     if q <= 0 {
-        return Err(ApiError("Missing or invalid q parameter".into()));
+        return Err(ApiError::Internal("Missing or invalid q parameter".into()));
     }
     let (rows_updated, aux_rows_added) = app
         .storage()
@@ -95,7 +95,7 @@ pub async fn query_missingpages(app: &AppState, params: &Params) -> Result<Respo
     let catalog = common::get_catalog(params)?;
     let site = common::get_param(params, "site", "");
     if site.is_empty() {
-        return Err(ApiError("site parameter required".into()));
+        return Err(ApiError::Internal("site parameter required".into()));
     }
     let (entries, users) = app.storage().api_missingpages(catalog, &site).await?;
     Ok(ok(serde_json::json!({"entries": entries, "users": users})))

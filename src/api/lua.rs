@@ -27,7 +27,7 @@ pub async fn run(
     html: &str,
 ) -> Result<Value, ApiError> {
     if !VALID_FUNCTIONS.contains(&function) {
-        return Err(ApiError(format!(
+        return Err(ApiError::Internal(format!(
             "unsupported function: {function}. Must be one of: {}",
             VALID_FUNCTIONS.join(", ")
         )));
@@ -35,15 +35,15 @@ pub async fn run(
 
     let entry = crate::entry::Entry::from_id(entry_id, app)
         .await
-        .map_err(|e| ApiError(format!("entry {entry_id} not found: {e}")))?;
+        .map_err(|e| ApiError::Internal(format!("entry {entry_id} not found: {e}")))?;
 
     let lua_code = app
         .storage()
         .get_code_fragment_lua(function, entry.catalog)
         .await
-        .map_err(|e| ApiError(format!("database error: {e}")))?
+        .map_err(|e| ApiError::Internal(format!("database error: {e}")))?
         .ok_or_else(|| {
-            ApiError(format!(
+            ApiError::Internal(format!(
                 "no Lua code fragment for function={function} catalog={}",
                 entry.catalog
             ))
@@ -65,22 +65,22 @@ pub async fn run_from_params(app: &AppState, params: &Params) -> Result<Value, A
     let function = params
         .get("function")
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| ApiError("missing required parameter: function".into()))?
+        .ok_or_else(|| ApiError::Internal("missing required parameter: function".into()))?
         .to_string();
     let entry_id_str = params
         .get("entry_id")
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| ApiError("missing required parameter: entry_id".into()))?;
+        .ok_or_else(|| ApiError::Internal("missing required parameter: entry_id".into()))?;
     let entry_id: usize = entry_id_str
         .parse()
-        .map_err(|_| ApiError("parameter 'entry_id' must be a positive integer".into()))?;
+        .map_err(|_| ApiError::Internal("parameter 'entry_id' must be a positive integer".into()))?;
     let html = params.get("html").cloned().unwrap_or_default();
     run(app, &function, entry_id, &html).await
 }
 
 pub fn run_person_date(lua_code: &str, entry: &LuaEntry) -> Result<Value, ApiError> {
     let result = code_fragment::run_person_date(lua_code, entry)
-        .map_err(|e| ApiError(format!("Lua execution error: {e}")))?;
+        .map_err(|e| ApiError::Internal(format!("Lua execution error: {e}")))?;
     Ok(json!({
         "born": result.born,
         "died": result.died,
@@ -89,7 +89,7 @@ pub fn run_person_date(lua_code: &str, entry: &LuaEntry) -> Result<Value, ApiErr
 
 pub fn run_aux_from_desc(lua_code: &str, entry: &LuaEntry) -> Result<Value, ApiError> {
     let result = code_fragment::run_aux_from_desc(lua_code, entry)
-        .map_err(|e| ApiError(format!("Lua execution error: {e}")))?;
+        .map_err(|e| ApiError::Internal(format!("Lua execution error: {e}")))?;
     let commands: Vec<Value> = result.commands.iter().map(|c| c.to_json()).collect();
     Ok(json!({ "commands": commands }))
 }
@@ -100,7 +100,7 @@ pub fn run_desc_from_html(
     html: &str,
 ) -> Result<Value, ApiError> {
     let result = code_fragment::run_desc_from_html(lua_code, entry, html)
-        .map_err(|e| ApiError(format!("Lua execution error: {e}")))?;
+        .map_err(|e| ApiError::Internal(format!("Lua execution error: {e}")))?;
     let commands: Vec<Value> = result.commands.iter().map(|c| c.to_json()).collect();
     Ok(json!({
         "descriptions": result.descriptions,
@@ -126,21 +126,21 @@ pub async fn query_test_code_fragment(
 ) -> Result<Response, ApiError> {
     let uid = common::require_user_id(app, session, params).await?;
     if !code_fragments::user_is_allowed(uid) {
-        return Err(ApiError("Not allowed, ask Magnus".into()));
+        return Err(ApiError::Internal("Not allowed, ask Magnus".into()));
     }
     let entry_id = common::get_param_int(params, "entry_id", 0) as usize;
     if entry_id == 0 {
-        return Err(ApiError("No entry_id".into()));
+        return Err(ApiError::Internal("No entry_id".into()));
     }
     let fragment_str = common::get_param(params, "fragment", "{}");
     let fragment: Value =
-        serde_json::from_str(&fragment_str).map_err(|_| ApiError("Bad fragment".into()))?;
+        serde_json::from_str(&fragment_str).map_err(|_| ApiError::Internal("Bad fragment".into()))?;
     let function = fragment
         .get("function")
         .and_then(|v| v.as_str())
         .unwrap_or("");
     if function.is_empty() {
-        return Err(ApiError(format!("Bad fragment function '{function}'")));
+        return Err(ApiError::Internal(format!("Bad fragment function '{function}'")));
     }
     let html = params.get("html").cloned().unwrap_or_default();
     let data = run(app, function, entry_id, &html).await?;

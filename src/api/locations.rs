@@ -11,7 +11,7 @@ pub async fn query_locations(app: &AppState, params: &Params) -> Result<Response
         .collect();
     let parts: Vec<f64> = bbox.split(',').filter_map(|s| s.parse().ok()).collect();
     if parts.len() != 4 {
-        return Err(ApiError(
+        return Err(ApiError::Internal(
             "Required parameter bbox does not have 4 comma-separated numbers".into(),
         ));
     }

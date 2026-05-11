@@ -72,7 +72,7 @@ pub async fn query_get_code_examples(
     if !function_filter.is_empty()
         && !function_filter.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
     {
-        return Err(ApiError("invalid function name".into()));
+        return Err(ApiError::Internal("invalid function name".into()));
     }
 
     // Limit search length to avoid pathologically slow LIKE scans.
@@ -86,7 +86,7 @@ pub async fn query_get_code_examples(
         .storage()
         .get_code_examples(&function_filter, &search, start, max)
         .await
-        .map_err(|e| ApiError(format!("database error: {e}")))?;
+        .map_err(|e| ApiError::Internal(format!("database error: {e}")))?;
 
     let all_functions = app
         .storage()
@@ -110,7 +110,7 @@ pub async fn query_save_code_fragment(
 ) -> Result<Response, ApiError> {
     let uid = common::require_user_id(app, session, params).await?;
     if !user_is_allowed(uid) {
-        return Err(ApiError("Not allowed, ask Magnus".into()));
+        return Err(ApiError::Internal("Not allowed, ask Magnus".into()));
     }
     Ok(ok(save_from_params(app, params).await?))
 }
@@ -118,7 +118,7 @@ pub async fn query_save_code_fragment(
 /// Returns `{ fragments: [...], all_functions: [...] }` for a catalog.
 pub async fn get_for_catalog(app: &AppState, catalog_id: usize) -> Result<Value, ApiError> {
     if catalog_id == 0 {
-        return Err(ApiError("missing required parameter: catalog".into()));
+        return Err(ApiError::Internal("missing required parameter: catalog".into()));
     }
 
     // Both fetches are independent — fan out instead of awaiting serially.
@@ -127,9 +127,9 @@ pub async fn get_for_catalog(app: &AppState, catalog_id: usize) -> Result<Value,
         s.get_code_fragments_for_catalog(catalog_id),
         s.get_all_code_fragment_functions(),
     );
-    let fragments = fragments_res.map_err(|e| ApiError(format!("database error: {e}")))?;
+    let fragments = fragments_res.map_err(|e| ApiError::Internal(format!("database error: {e}")))?;
     let all_functions =
-        all_functions_res.map_err(|e| ApiError(format!("database error: {e}")))?;
+        all_functions_res.map_err(|e| ApiError::Internal(format!("database error: {e}")))?;
 
     Ok(json!({
         "fragments": fragments,
@@ -141,14 +141,14 @@ pub async fn get_for_catalog(app: &AppState, catalog_id: usize) -> Result<Value,
 /// triggers `update_person_dates` followed by `match_person_dates`).
 pub async fn save(app: &AppState, fragment_json: &str) -> Result<Value, ApiError> {
     if fragment_json.is_empty() {
-        return Err(ApiError("missing required parameter: fragment".into()));
+        return Err(ApiError::Internal("missing required parameter: fragment".into()));
     }
     let fragment: Value = serde_json::from_str(fragment_json)
-        .map_err(|e| ApiError(format!("invalid fragment JSON: {e}")))?;
+        .map_err(|e| ApiError::Internal(format!("invalid fragment JSON: {e}")))?;
 
     let catalog = fragment["catalog"].as_u64().unwrap_or(0) as usize;
     if catalog == 0 {
-        return Err(ApiError("fragment must have a positive catalog ID".into()));
+        return Err(ApiError::Internal("fragment must have a positive catalog ID".into()));
     }
 
     let function = fragment["function"]
@@ -156,14 +156,14 @@ pub async fn save(app: &AppState, fragment_json: &str) -> Result<Value, ApiError
         .unwrap_or("")
         .to_string();
     if function.is_empty() {
-        return Err(ApiError("fragment must have a function".into()));
+        return Err(ApiError::Internal("fragment must have a function".into()));
     }
 
     let cfid = app
         .storage()
         .save_code_fragment(&fragment)
         .await
-        .map_err(|e| ApiError(format!("save failed: {e}")))?;
+        .map_err(|e| ApiError::Internal(format!("save failed: {e}")))?;
 
     let queued_jobs = queue_jobs_for_function(app, catalog, &function).await;
 

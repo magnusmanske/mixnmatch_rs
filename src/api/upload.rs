@@ -22,7 +22,7 @@ pub async fn handle_multipart_upload(
     let mut multipart =
         match axum::extract::Multipart::from_request(req, &(app.clone())).await {
             Ok(m) => m,
-            Err(e) => return ApiError(format!("multipart parse error: {e}")).into_response(),
+            Err(e) => return ApiError::Internal(format!("multipart parse error: {e}")).into_response(),
         };
 
     let form = match collect_upload_fields(&mut multipart, app).await {
@@ -31,21 +31,21 @@ pub async fn handle_multipart_upload(
     };
 
     if form.query != "upload_import_file" {
-        return ApiError(format!(
+        return ApiError::Internal(format!(
             "multipart POST only supported for query=upload_import_file (got '{}')",
             form.query
         ))
         .into_response();
     }
     if form.username.is_empty() {
-        return ApiError("missing 'username' field".into()).into_response();
+        return ApiError::Internal("missing 'username' field".into()).into_response();
     }
     if form.data_format.is_empty() {
-        return ApiError("missing 'data_format' field".into()).into_response();
+        return ApiError::Internal("missing 'data_format' field".into()).into_response();
     }
     let uuid = match form.uuid {
         Some(u) if form.file_bytes_written > 0 => u,
-        _ => return ApiError("missing or empty 'import_file' field".into()).into_response(),
+        _ => return ApiError::Internal("missing or empty 'import_file' field".into()).into_response(),
     };
 
     // OAuth required — bind the upload's recorded user to the session
@@ -67,7 +67,7 @@ pub async fn handle_multipart_upload(
     {
         // Roll back the file on DB failure so we don't orphan on-disk bytes.
         let _ = tokio::fs::remove_file(format!("{}/{}", app.import_file_path(), &uuid)).await;
-        return ApiError(format!("cannot record upload: {e}")).into_response();
+        return ApiError::Internal(format!("cannot record upload: {e}")).into_response();
     }
 
     ok(serde_json::json!({
@@ -102,7 +102,7 @@ async fn collect_upload_fields(
         let field = match multipart.next_field().await {
             Ok(Some(f)) => f,
             Ok(None) => break,
-            Err(e) => return Err(ApiError(format!("multipart field error: {e}")).into_response()),
+            Err(e) => return Err(ApiError::Internal(format!("multipart field error: {e}")).into_response()),
         };
         let name = field.name().unwrap_or("").to_string();
         match name.as_str() {
@@ -137,7 +137,7 @@ async fn stream_import_file(
     let path = format!("{}/{}", app.import_file_path(), &new_uuid);
     let file = tokio::fs::File::create(&path)
         .await
-        .map_err(|e| ApiError(format!("cannot create upload file: {e}")).into_response())?;
+        .map_err(|e| ApiError::Internal(format!("cannot create upload file: {e}")).into_response())?;
     let mut writer = tokio::io::BufWriter::new(file);
     let mut bytes_written: u64 = 0;
     loop {
@@ -146,19 +146,19 @@ async fn stream_import_file(
                 bytes_written += chunk.len() as u64;
                 if let Err(e) = writer.write_all(&chunk).await {
                     let _ = tokio::fs::remove_file(&path).await;
-                    return Err(ApiError(format!("write failed: {e}")).into_response());
+                    return Err(ApiError::Internal(format!("write failed: {e}")).into_response());
                 }
             }
             Ok(None) => break,
             Err(e) => {
                 let _ = tokio::fs::remove_file(&path).await;
-                return Err(ApiError(format!("upload chunk error: {e}")).into_response());
+                return Err(ApiError::Internal(format!("upload chunk error: {e}")).into_response());
             }
         }
     }
     if let Err(e) = writer.flush().await {
         let _ = tokio::fs::remove_file(&path).await;
-        return Err(ApiError(format!("flush failed: {e}")).into_response());
+        return Err(ApiError::Internal(format!("flush failed: {e}")).into_response());
     }
     Ok((new_uuid, bytes_written))
 }
@@ -214,6 +214,6 @@ pub async fn api_import_catalog(
             });
             ok(data)
         }
-        Err(e) => ApiError(e.to_string()).into_response(),
+        Err(e) => ApiError::Internal(e.to_string()).into_response(),
     }
 }

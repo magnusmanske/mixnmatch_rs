@@ -22,7 +22,7 @@ pub async fn query_top_missing(app: &AppState, params: &Params) -> Result<Respon
         .filter(|c| c.is_ascii_digit() || *c == ',')
         .collect();
     if catalogs.is_empty() {
-        return Err(ApiError("No catalogs given".into()));
+        return Err(ApiError::Internal("No catalogs given".into()));
     }
     let data = app.storage().api_get_top_missing(&catalogs).await?;
     Ok(ok(serde_json::json!(data)))
@@ -123,16 +123,16 @@ pub async fn query_prep_new_item(
 ) -> Result<Response, ApiError> {
     let entry_ids = parse_entry_ids(common::get_param(params, "entry_ids", ""));
     if entry_ids.is_empty() {
-        return Err(ApiError("missing or empty 'entry_ids' parameter".into()));
+        return Err(ApiError::Internal("missing or empty 'entry_ids' parameter".into()));
     }
     let mut ic = crate::item_creator::ItemCreator::new(Arc::new(app.clone()));
     ic.add_entries_by_id(&entry_ids)
         .await
-        .map_err(|e| ApiError(format!("failed to load entries: {e}")))?;
+        .map_err(|e| ApiError::Internal(format!("failed to load entries: {e}")))?;
     let item = ic
         .generate_item()
         .await
-        .map_err(|e| ApiError(format!("failed to build item: {e}")))?;
+        .map_err(|e| ApiError::Internal(format!("failed to build item: {e}")))?;
     use wikimisc::wikibase::EntityTrait;
     Ok(ok(item.to_json()))
 }
@@ -159,12 +159,12 @@ pub async fn query_prep_match_claim(
     use wikimisc::wikibase::EntityTrait;
     let entry_id = common::get_param_int(params, "entry", 0);
     if entry_id <= 0 {
-        return Err(ApiError("missing or invalid 'entry' parameter".into()));
+        return Err(ApiError::Internal("missing or invalid 'entry' parameter".into()));
     }
     let target_q = parse_q_param(&common::get_param(params, "q", ""));
     let item = build_match_claim_item(app, entry_id as usize, target_q.as_deref())
         .await
-        .map_err(|e| ApiError(format!("failed to build claim: {e}")))?;
+        .map_err(|e| ApiError::Internal(format!("failed to build claim: {e}")))?;
     Ok(ok(item.to_json()))
 }
 

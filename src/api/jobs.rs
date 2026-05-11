@@ -37,11 +37,11 @@ pub async fn query_start_new_job(
         .to_lowercase();
     let user = auth::guard::require_user_from_params(app, session, params).await?;
     if !re_action_name().is_match(&action) {
-        return Err(ApiError(format!("Bad action: '{action}'")));
+        return Err(ApiError::Internal(format!("Bad action: '{action}'")));
     }
     let valid = app.storage().api_get_existing_job_actions().await?;
     if !valid.contains(&action) {
-        return Err(ApiError(format!("Unknown action: '{action}'")));
+        return Err(ApiError::Internal(format!("Unknown action: '{action}'")));
     }
     crate::job::Job::queue_simple_job_for_user(app, cid, &action, None, user.mnm_user_id).await?;
     Ok(ok(serde_json::json!({})))
@@ -60,10 +60,10 @@ pub async fn query_manage_job(
         .storage()
         .jobs_row_from_id(job_id)
         .await
-        .map_err(|_| ApiError(format!("No job with id {job_id}")))?;
+        .map_err(|_| ApiError::Internal(format!("No job with id {job_id}")))?;
 
     if !is_job_manager(app, &user, &job).await? {
-        return Err(ApiError(
+        return Err(ApiError::Internal(
             "Not authorized to manage this job".into(),
         ));
     }
@@ -72,7 +72,7 @@ pub async fn query_manage_job(
         "stop" => crate::job_status::JobStatus::Deactivated,
         "pause" => crate::job_status::JobStatus::Paused,
         "resume" => crate::job_status::JobStatus::Todo,
-        _ => return Err(ApiError(format!("Unknown action: '{action}'"))),
+        _ => return Err(ApiError::Internal(format!("Unknown action: '{action}'"))),
     };
 
     app.storage()
@@ -97,7 +97,7 @@ async fn is_job_manager(
         .storage()
         .get_user_by_name(&user.wikidata_username)
         .await
-        .map_err(|e| ApiError(format!("Admin check failed: {e}")))?;
+        .map_err(|e| ApiError::Internal(format!("Admin check failed: {e}")))?;
     if matches!(user_info, Some((_, _, true))) {
         return Ok(true);
     }

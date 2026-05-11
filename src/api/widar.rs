@@ -17,7 +17,7 @@ pub async fn query_widar(
 ) -> Result<Response, ApiError> {
     let cfg = app
         .oauth_config()
-        .ok_or_else(|| ApiError("OAuth is not configured on this server".into()))?
+        .ok_or_else(|| ApiError::Internal("OAuth is not configured on this server".into()))?
         .clone();
     // Match the PHP Widar convention: the sub-action is the `action` parameter.
     // `widar_action` is accepted as a legacy alias so older callers keep working.
@@ -47,7 +47,7 @@ pub async fn query_widar(
             }
             let token = auth::flow::initiate_request_token(&cfg)
                 .await
-                .map_err(|e| ApiError(format!("OAuth initiate failed: {e}")))?;
+                .map_err(|e| ApiError::Internal(format!("OAuth initiate failed: {e}")))?;
             let new_state = auth::session::SessionData {
                 state: auth::session::SessionState::PendingVerifier {
                     request_token_key: token.key.clone(),
@@ -155,7 +155,7 @@ async fn handle_set_string(
 
     let cfg = app
         .oauth_config()
-        .ok_or_else(|| ApiError("OAuth is not configured on this server".into()))?
+        .ok_or_else(|| ApiError::Internal("OAuth is not configured on this server".into()))?
         .clone();
 
     let (entity_id, property_id, value, summary) = match read_set_string_params(params) {
@@ -229,7 +229,7 @@ async fn handle_generic(
     }
     let cfg = app
         .oauth_config()
-        .ok_or_else(|| ApiError("OAuth is not configured on this server".into()))?
+        .ok_or_else(|| ApiError::Internal("OAuth is not configured on this server".into()))?
         .clone();
 
     let (api_params, summary) = match read_generic_params(params) {
@@ -408,7 +408,7 @@ fn claims_contain_string_value(
 pub async fn handle_oauth_callback(app: &AppState, session: &Session, params: &Params) -> Response {
     let cfg = match app.oauth_config() {
         Some(c) => c.clone(),
-        None => return ApiError("OAuth is not configured on this server".into()).into_response(),
+        None => return ApiError::Internal("OAuth is not configured on this server".into()).into_response(),
     };
     let verifier = params.get("oauth_verifier").cloned().unwrap_or_default();
     let incoming_token = params.get("oauth_token").cloned().unwrap_or_default();
@@ -420,13 +420,13 @@ pub async fn handle_oauth_callback(app: &AppState, session: &Session, params: &P
             request_token_secret,
         } => (request_token_key, request_token_secret),
         _ => {
-            return ApiError("No pending OAuth login — start over from the authorize link".into())
+            return ApiError::Internal("No pending OAuth login — start over from the authorize link".into())
                 .into_response();
         }
     };
     // Session fixation guard: the verifier must match the token we stashed.
     if incoming_token != rk {
-        return ApiError("OAuth token mismatch".into()).into_response();
+        return ApiError::Internal("OAuth token mismatch".into()).into_response();
     }
     let pair = auth::flow::TokenPair {
         key: rk,
@@ -434,11 +434,11 @@ pub async fn handle_oauth_callback(app: &AppState, session: &Session, params: &P
     };
     let access = match auth::flow::exchange_verifier(&cfg, &pair, &verifier).await {
         Ok(a) => a,
-        Err(e) => return ApiError(format!("OAuth exchange failed: {e}")).into_response(),
+        Err(e) => return ApiError::Internal(format!("OAuth exchange failed: {e}")).into_response(),
     };
     let user = match auth::flow::fetch_userinfo(&cfg, &access).await {
         Ok(u) => u,
-        Err(e) => return ApiError(format!("OAuth userinfo failed: {e}")).into_response(),
+        Err(e) => return ApiError::Internal(format!("OAuth userinfo failed: {e}")).into_response(),
     };
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

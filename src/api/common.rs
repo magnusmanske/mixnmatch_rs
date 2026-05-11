@@ -33,7 +33,7 @@ pub fn get_param_int(params: &Params, key: &str, default: i64) -> i64 {
 pub fn get_catalog(params: &Params) -> Result<usize, ApiError> {
     let id = get_param_int(params, "catalog", 0);
     if id <= 0 {
-        return Err(ApiError("Invalid catalog ID".into()));
+        return Err(ApiError::BadRequest("Invalid catalog ID".into()));
     }
     Ok(id as usize)
 }
@@ -43,7 +43,9 @@ pub fn get_catalog(params: &Params) -> Result<usize, ApiError> {
 pub fn get_param_usize(params: &Params, key: &str) -> Result<usize, ApiError> {
     let v = get_param_int(params, key, -1);
     if v < 0 {
-        return Err(ApiError(format!("Invalid or missing parameter: {key}")));
+        return Err(ApiError::BadRequest(format!(
+            "Invalid or missing parameter: {key}"
+        )));
     }
     Ok(v as usize)
 }
@@ -75,38 +77,106 @@ pub async fn require_user_id(
 // ---------------------------------------------------------------------------
 // ApiError
 // ---------------------------------------------------------------------------
+//
+// Variants map onto real HTTP status codes (400/401/403/404/500). Existing
+// `ApiError::Internal(...)` is the default for unexpected failures and is
+// what `anyhow::Error` / `String` conversions land on; handlers that mean
+// something more specific should use the named constructors below.
+//
+// The response body remains the historical `{"status": "<message>"}`
+// envelope so the frontend's existing error-text reader keeps working —
+// only the HTTP status code changes from a uniform 200 to a proper class.
 
 #[derive(Debug, Clone)]
-pub struct ApiError(pub String);
+pub enum ApiError {
+    /// 400 — caller-supplied parameters are malformed, missing, or
+    /// otherwise fail validation.
+    BadRequest(String),
+    /// 401 — no authenticated session; caller must log in.
+    Unauthorized(String),
+    /// 403 — authenticated but the user lacks the required role
+    /// (e.g. catalog admin, owner, hard-coded allowlist).
+    Forbidden(String),
+    /// 404 — requested resource does not exist.
+    NotFound(String),
+    /// 500 — anything that wasn't classified above. Database errors,
+    /// SPARQL failures, panics caught by the recovery middleware, and
+    /// `anyhow::Error` propagated via `?` all land here.
+    Internal(String),
+}
 
+impl ApiError {
+    pub fn bad_request(message: impl Into<String>) -> Self {
+        Self::BadRequest(message.into())
+    }
+    pub fn unauthorized(message: impl Into<String>) -> Self {
+        Self::Unauthorized(message.into())
+    }
+    pub fn forbidden(message: impl Into<String>) -> Self {
+        Self::Forbidden(message.into())
+    }
+    pub fn not_found(message: impl Into<String>) -> Self {
+        Self::NotFound(message.into())
+    }
+    pub fn internal(message: impl Into<String>) -> Self {
+        Self::Internal(message.into())
+    }
+
+    pub fn message(&self) -> &str {
+        match self {
+            Self::BadRequest(m)
+            | Self::Unauthorized(m)
+            | Self::Forbidden(m)
+            | Self::NotFound(m)
+            | Self::Internal(m) => m,
+        }
+    }
+
+    pub fn status_code(&self) -> axum::http::StatusCode {
+        use axum::http::StatusCode;
+        match self {
+            Self::BadRequest(_) => StatusCode::BAD_REQUEST,
+            Self::Unauthorized(_) => StatusCode::UNAUTHORIZED,
+            Self::Forbidden(_) => StatusCode::FORBIDDEN,
+            Self::NotFound(_) => StatusCode::NOT_FOUND,
+            Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+}
+
+// Bare strings and anyhow chains both lose their type information at
+// the API boundary — without further context, the right classification
+// is "internal error". Handlers that want a specific status code use
+// the constructors above.
 impl From<anyhow::Error> for ApiError {
     fn from(err: anyhow::Error) -> Self {
-        Self(err.to_string())
+        Self::Internal(err.to_string())
     }
 }
 
 impl From<String> for ApiError {
     fn from(msg: String) -> Self {
-        Self(msg)
+        Self::Internal(msg)
     }
 }
 
 impl From<&str> for ApiError {
     fn from(msg: &str) -> Self {
-        Self(msg.to_string())
+        Self::Internal(msg.to_string())
     }
 }
 
 impl std::fmt::Display for ApiError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
+        write!(f, "{}", self.message())
     }
 }
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> axum::response::Response {
-        let body = json!({ "status": self.0 });
-        (axum::http::StatusCode::OK, Json(body)).into_response()
+        let status = self.status_code();
+        let body = json!({ "status": self.message() });
+        (status, Json(body)).into_response()
     }
 }
 
@@ -366,22 +436,73 @@ mod tests {
     }
 
     #[test]
-    fn test_api_error_from_string() {
+    fn test_api_error_from_string_defaults_to_internal() {
         let err = ApiError::from("something broke".to_string());
-        assert_eq!(err.0, "something broke");
+        assert_eq!(err.message(), "something broke");
+        assert_eq!(
+            err.status_code(),
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR
+        );
     }
 
     #[test]
-    fn test_api_error_from_anyhow() {
+    fn test_api_error_from_anyhow_defaults_to_internal() {
         let err = ApiError::from(anyhow::anyhow!("anyhow problem"));
-        assert_eq!(err.0, "anyhow problem");
+        assert_eq!(err.message(), "anyhow problem");
+        assert_eq!(
+            err.status_code(),
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+
+    /// Pin the contract that each variant maps to the right HTTP status.
+    /// Future monitoring / alerting and the frontend's response.ok check
+    /// both depend on this — a regression here would silently break those.
+    #[test]
+    fn test_api_error_variants_map_to_correct_status_codes() {
+        use axum::http::StatusCode;
+        assert_eq!(
+            ApiError::bad_request("x").status_code(),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            ApiError::unauthorized("x").status_code(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            ApiError::forbidden("x").status_code(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            ApiError::not_found("x").status_code(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            ApiError::internal("x").status_code(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
     }
 
     #[test]
-    fn test_api_error_into_response() {
-        let err = ApiError("bad request".into());
+    fn test_api_error_into_response_returns_real_status() {
+        // Previously every error returned 200 OK with a `status` payload —
+        // a network monitor or a `response.ok` check on the client could
+        // never tell success from failure. The new contract is 400/401/
+        // 403/404/500 per variant; the body shape stays `{"status":"<msg>"}`
+        // so the legacy frontend's error-text reader keeps working.
+        let err = ApiError::bad_request("invalid catalog id");
         let response = err.into_response();
-        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn test_get_catalog_returns_bad_request_status() {
+        // Sample one migrated validation site — `get_catalog` now produces
+        // a 400, not a 500, so an alerting layer can tell user error apart
+        // from system error.
+        let p = Params::new();
+        let err = get_catalog(&p).unwrap_err();
+        assert_eq!(err.status_code(), axum::http::StatusCode::BAD_REQUEST);
     }
 
     #[test]

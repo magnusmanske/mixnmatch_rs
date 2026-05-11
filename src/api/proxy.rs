@@ -68,7 +68,7 @@ fn build_resource_response(entry: &CachedResource) -> Response {
     builder
         .body(axum::body::Body::from(entry.body.clone()))
         .unwrap_or_else(|_| {
-            ApiError("resources proxy: cannot build response".into()).into_response()
+            ApiError::Internal("resources proxy: cannot build response".into()).into_response()
         })
 }
 
@@ -101,7 +101,7 @@ pub async fn proxy_magnustools_resources(
     let resp = match http_client().get(&upstream_url).send().await {
         Ok(r) => r,
         Err(e) => {
-            return ApiError(format!("resources proxy fetch failed: {e}")).into_response();
+            return ApiError::Internal(format!("resources proxy fetch failed: {e}")).into_response();
         }
     };
     let status = resp.status();
@@ -125,7 +125,7 @@ pub async fn proxy_magnustools_resources(
     let bytes = match resp.bytes().await {
         Ok(b) => b,
         Err(e) => {
-            return ApiError(format!("resources proxy read failed: {e}")).into_response();
+            return ApiError::Internal(format!("resources proxy read failed: {e}")).into_response();
         }
     };
 

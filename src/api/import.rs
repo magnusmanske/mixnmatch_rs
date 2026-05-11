@@ -10,10 +10,10 @@ use tower_sessions::Session;
 fn parse_update_info(params: &Params) -> Result<serde_json::Value, ApiError> {
     let raw = common::get_param(params, "update_info", "");
     if raw.is_empty() {
-        return Err(ApiError("missing 'update_info' parameter".into()));
+        return Err(ApiError::Internal("missing 'update_info' parameter".into()));
     }
     serde_json::from_str(&raw)
-        .map_err(|e| ApiError(format!("invalid update_info JSON: {e}")))
+        .map_err(|e| ApiError::Internal(format!("invalid update_info JSON: {e}")))
 }
 
 pub async fn query_get_source_headers(
@@ -24,7 +24,7 @@ pub async fn query_get_source_headers(
     let (headers, _preview) =
         crate::datasource::DataSource::read_headers_and_preview(app, &update_info, 0)
             .await
-            .map_err(|e| ApiError(e.to_string()))?;
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
     Ok(ok(serde_json::json!(headers)))
 }
 
@@ -45,8 +45,8 @@ pub async fn query_test_import_source(
         crate::datasource::DataSource::read_headers_and_preview(app, &update_info, 10),
         crate::datasource::DataSource::count_rows(app, &update_info, max_rows),
     );
-    let (headers, preview) = preview_res.map_err(|e| ApiError(e.to_string()))?;
-    let (total, with_id, row_errors) = counts_res.map_err(|e| ApiError(e.to_string()))?;
+    let (headers, preview) = preview_res.map_err(|e| ApiError::Internal(e.to_string()))?;
+    let (total, with_id, row_errors) = counts_res.map_err(|e| ApiError::Internal(e.to_string()))?;
 
     // Frontend reads counters from `data` (summary cards) and preview rows
     // from the top-level `rows` array (used by `load_preview_rows`).
@@ -106,7 +106,7 @@ pub async fn query_import_source(
                     .unwrap_or(0) as usize
             };
             if cid == 0 {
-                return Err(ApiError(
+                return Err(ApiError::Internal(
                     "catalog_id required for JSON/JSONL import".into(),
                 ));
             }
@@ -117,7 +117,7 @@ pub async fn query_import_source(
                 crate::import_catalog::ImportMode::AddReplace,
             )
             .await
-            .map_err(|e| ApiError(e.to_string()))?;
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
             return Ok(ok(serde_json::json!({
                 "catalog_id": cid,
                 "created": result.created,
@@ -141,15 +141,15 @@ pub async fn query_import_source(
     };
 
     let update_info_json = serde_json::to_string(&update_info)
-        .map_err(|e| ApiError(format!("serialize update_info: {e}")))?;
+        .map_err(|e| ApiError::Internal(format!("serialize update_info: {e}")))?;
     app.storage()
         .update_catalog_set_update_info(catalog_id, &update_info_json, user_id)
         .await
-        .map_err(|e| ApiError(format!("persist update_info: {e}")))?;
+        .map_err(|e| ApiError::Internal(format!("persist update_info: {e}")))?;
 
     crate::job::Job::queue_simple_job(app, catalog_id, "update_from_tabbed_file", None)
         .await
-        .map_err(|e| ApiError(format!("queue import job: {e}")))?;
+        .map_err(|e| ApiError::Internal(format!("queue import job: {e}")))?;
 
     Ok(ok(serde_json::json!({
         "catalog_id": catalog_id,
@@ -184,7 +184,7 @@ async fn resolve_or_create_catalog(
         .unwrap_or("")
         .trim();
     if name.is_empty() {
-        return Err(ApiError(
+        return Err(ApiError::Internal(
             "meta.name is required when creating a new catalog".into(),
         ));
     }
@@ -199,19 +199,19 @@ async fn resolve_or_create_catalog(
     app.storage()
         .create_catalog_from_meta(name, desc, url, type_name, wd_prop, user_id)
         .await
-        .map_err(|e| ApiError(format!("create catalog: {e}")))
+        .map_err(|e| ApiError::Internal(format!("create catalog: {e}")))
 }
 
 pub async fn query_autoscrape_test(params: &Params) -> Result<Response, ApiError> {
     let json_str = common::get_param(params, "json", "");
     if json_str.is_empty() {
-        return Err(ApiError("missing 'json' parameter".into()));
+        return Err(ApiError::Internal("missing 'json' parameter".into()));
     }
     let json: serde_json::Value = serde_json::from_str(&json_str)
-        .map_err(|e| ApiError(format!("invalid scraper JSON: {e}")))?;
+        .map_err(|e| ApiError::Internal(format!("invalid scraper JSON: {e}")))?;
     let res = crate::autoscrape::Autoscrape::test_fetch(&json)
         .await
-        .map_err(|e| ApiError(e.to_string()))?;
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
     // `data.html` feeds the client-side regex preview, `data.url` is the
     // "URL fetched" link, `data.results` drives the entries table (and the
     // Save button gate), and `data.diagnostics` backs the scraper-test
@@ -243,17 +243,17 @@ pub async fn query_save_scraper(
     let meta_str = common::get_param(params, "meta", "{}");
 
     if scraper_str.is_empty() {
-        return Err(ApiError("missing 'scraper' parameter".into()));
+        return Err(ApiError::Internal("missing 'scraper' parameter".into()));
     }
 
     let scraper: serde_json::Value = serde_json::from_str(&scraper_str)
-        .map_err(|e| ApiError(format!("invalid 'scraper' JSON: {e}")))?;
+        .map_err(|e| ApiError::Internal(format!("invalid 'scraper' JSON: {e}")))?;
     let options: serde_json::Value = serde_json::from_str(&options_str)
-        .map_err(|e| ApiError(format!("invalid 'options' JSON: {e}")))?;
+        .map_err(|e| ApiError::Internal(format!("invalid 'options' JSON: {e}")))?;
     let levels: serde_json::Value = serde_json::from_str(&levels_str)
-        .map_err(|e| ApiError(format!("invalid 'levels' JSON: {e}")))?;
+        .map_err(|e| ApiError::Internal(format!("invalid 'levels' JSON: {e}")))?;
     let meta: serde_json::Value = serde_json::from_str(&meta_str)
-        .map_err(|e| ApiError(format!("invalid 'meta' JSON: {e}")))?;
+        .map_err(|e| ApiError::Internal(format!("invalid 'meta' JSON: {e}")))?;
 
     // Resolve target catalog_id. If the wizard left `meta.catalog_id` blank,
     // we create the catalog first so the autoscrape row has something to FK to.
@@ -283,12 +283,12 @@ pub async fn query_save_scraper(
             .map(|s| s.trim_start_matches(['P', 'p']))
             .and_then(|s| s.parse::<usize>().ok());
         if name.is_empty() {
-            return Err(ApiError("meta.name is required when creating a new catalog".into()));
+            return Err(ApiError::Internal("meta.name is required when creating a new catalog".into()));
         }
         app.storage()
             .create_catalog_from_meta(name, desc, url, type_name, wd_prop, user_id)
             .await
-            .map_err(|e| ApiError(format!("create catalog: {e}")))?
+            .map_err(|e| ApiError::Internal(format!("create catalog: {e}")))?
     };
 
     // Bundle scraper + options + levels into the single JSON column that
@@ -299,11 +299,11 @@ pub async fn query_save_scraper(
         "levels": levels,
     });
     let combined_str = serde_json::to_string(&combined)
-        .map_err(|e| ApiError(format!("serialize scraper JSON: {e}")))?;
+        .map_err(|e| ApiError::Internal(format!("serialize scraper JSON: {e}")))?;
     app.storage()
         .save_scraper(catalog_id, &combined_str, user_id)
         .await
-        .map_err(|e| ApiError(format!("save scraper: {e}")))?;
+        .map_err(|e| ApiError::Internal(format!("save scraper: {e}")))?;
 
     // Queue the matching autoscrape job so the runner picks the scraper
     // up. `jobs_queue_simple_job` upserts on (catalog, action), so
@@ -329,7 +329,7 @@ pub async fn query_save_scraper(
 pub async fn query_get_scraper(app: &dyn ExternalServicesContext, params: &Params) -> Result<Response, ApiError> {
     let catalog_id = common::get_param_int(params, "catalog", 0);
     if catalog_id <= 0 {
-        return Err(ApiError("missing or invalid 'catalog' parameter".into()));
+        return Err(ApiError::Internal("missing or invalid 'catalog' parameter".into()));
     }
     let catalog_id = catalog_id as usize;
 
@@ -340,7 +340,7 @@ pub async fn query_get_scraper(app: &dyn ExternalServicesContext, params: &Param
         .storage()
         .autoscrape_get_for_catalog(catalog_id)
         .await
-        .map_err(|e| ApiError(format!("autoscrape lookup: {e}")))?;
+        .map_err(|e| ApiError::Internal(format!("autoscrape lookup: {e}")))?;
     let (_autoscrape_id, raw) = match rows.into_iter().next() {
         Some(r) => r,
         None => {
@@ -356,7 +356,7 @@ pub async fn query_get_scraper(app: &dyn ExternalServicesContext, params: &Param
         .await
         .unwrap_or(None);
     let stored: serde_json::Value = serde_json::from_str(&raw)
-        .map_err(|e| ApiError(format!("stored autoscrape JSON is malformed: {e}")))?;
+        .map_err(|e| ApiError::Internal(format!("stored autoscrape JSON is malformed: {e}")))?;
 
     // Rebuild the `meta` block from the catalog row so the wizard form
     // fills every field it displays. `meta` is intentionally NOT part of
@@ -365,7 +365,7 @@ pub async fn query_get_scraper(app: &dyn ExternalServicesContext, params: &Param
     // editor in the meantime shows up.
     let catalog = crate::catalog::Catalog::from_id(catalog_id, app)
         .await
-        .map_err(|e| ApiError(format!("catalog lookup: {e}")))?;
+        .map_err(|e| ApiError::Internal(format!("catalog lookup: {e}")))?;
     let meta = serde_json::json!({
         "catalog_id": catalog_id,
         "name": catalog.name().cloned().unwrap_or_default(),
@@ -386,7 +386,7 @@ pub async fn query_get_scraper(app: &dyn ExternalServicesContext, params: &Param
     let scraper = stored
         .get("scraper")
         .cloned()
-        .ok_or_else(|| ApiError("stored autoscrape row has no `scraper` block".into()))?;
+        .ok_or_else(|| ApiError::Internal("stored autoscrape row has no `scraper` block".into()))?;
     let options = stored
         .get("options")
         .cloned()

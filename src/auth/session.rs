@@ -48,19 +48,19 @@ pub async fn store(session: &Session, data: &SessionData) -> Result<(), ApiError
     session
         .insert(SESSION_KEY, data)
         .await
-        .map_err(|e| ApiError(format!("session store failed: {e}")))
+        .map_err(|e| ApiError::Internal(format!("session store failed: {e}")))
 }
 
 pub async fn clear(session: &Session) -> Result<(), ApiError> {
     session
         .remove::<SessionData>(SESSION_KEY)
         .await
-        .map_err(|e| ApiError(format!("session clear failed: {e}")))?;
+        .map_err(|e| ApiError::Internal(format!("session clear failed: {e}")))?;
     // Also cycle the session id so the cookie is effectively invalidated.
     session
         .cycle_id()
         .await
-        .map_err(|e| ApiError(format!("session cycle failed: {e}")))?;
+        .map_err(|e| ApiError::Internal(format!("session cycle failed: {e}")))?;
     Ok(())
 }
 

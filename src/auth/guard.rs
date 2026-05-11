@@ -72,12 +72,12 @@ pub async fn require_user(
             access_token_key.clone(),
             access_token_secret.clone(),
         ),
-        _ => return Err(ApiError("OAuth login required".into())),
+        _ => return Err(ApiError::Unauthorized("OAuth login required".into())),
     };
 
     if let Some(claim) = claimed_username.map(str::trim).filter(|s| !s.is_empty()) {
         if normalize_username(claim) != normalize_username(&username) {
-            return Err(ApiError("OAuth user name problem".into()));
+            return Err(ApiError::Unauthorized("OAuth user name problem".into()));
         }
     }
 
@@ -85,9 +85,11 @@ pub async fn require_user(
         .storage()
         .get_or_create_user_id(&username)
         .await
-        .map_err(|e| ApiError(format!("User lookup failed: {e}")))?;
+        .map_err(|e| ApiError::Internal(format!("User lookup failed: {e}")))?;
     if user_id == 0 {
-        return Err(ApiError("OAuth login failure, please log in again".into()));
+        return Err(ApiError::Unauthorized(
+            "OAuth login failure, please log in again".into(),
+        ));
     }
     Ok(AuthedUser {
         wikidata_username: username,
@@ -129,14 +131,14 @@ pub async fn require_catalog_admin(
         .storage()
         .get_user_by_name(&user.wikidata_username)
         .await
-        .map_err(|e| ApiError(format!("Admin lookup failed: {e}")))?;
+        .map_err(|e| ApiError::Internal(format!("Admin lookup failed: {e}")))?;
     match info {
         Some((_id, _name, true)) => Ok(user),
-        Some(_) => Err(ApiError(format!(
+        Some(_) => Err(ApiError::Forbidden(format!(
             "'{}' is not a catalog admin",
             user.wikidata_username
         ))),
-        None => Err(ApiError(format!(
+        None => Err(ApiError::Forbidden(format!(
             "No such user '{}'",
             user.wikidata_username
         ))),
@@ -164,18 +166,18 @@ pub async fn require_catalog_admin_or_owner_from_params(
         .storage()
         .get_user_by_name(&user.wikidata_username)
         .await
-        .map_err(|e| ApiError(format!("Admin lookup failed: {e}")))?;
+        .map_err(|e| ApiError::Internal(format!("Admin lookup failed: {e}")))?;
     if matches!(admin_info, Some((_, _, true))) {
         return Ok(user);
     }
     // Otherwise, must be the catalog's owner.
     let catalog = crate::catalog::Catalog::from_id(catalog_id, app)
         .await
-        .map_err(|e| ApiError(format!("Catalog lookup failed: {e}")))?;
+        .map_err(|e| ApiError::Internal(format!("Catalog lookup failed: {e}")))?;
     if catalog.owner() == user.mnm_user_id {
         return Ok(user);
     }
-    Err(ApiError(format!(
+    Err(ApiError::Forbidden(format!(
         "'{}' is not a catalog admin and does not own catalog #{catalog_id}",
         user.wikidata_username
     )))

@@ -48,7 +48,7 @@ async fn try_attempt(
         cc_mode_sql(&opts.mode, table, opts.min, &opts.prop, &opts.require_catalogs)?
     };
 
-    let picks = app.storage().cc_random_pick(&pick_sql).await.map_err(|e| ApiError(format!("pick query failed: {e}")))?;
+    let picks = app.storage().cc_random_pick(&pick_sql).await.map_err(|e| ApiError::Internal(format!("pick query failed: {e}")))?;
     if picks.is_empty() {
         return Ok(None);
     }
@@ -95,7 +95,7 @@ pub async fn run(app: &AppState, params: &Params) -> Result<Value, ApiError> {
         m => {
             let t = format!("common_names_{m}");
             if !is_safe_table_name(&t) {
-                return Err(ApiError(format!("invalid mode: {m}")));
+                return Err(ApiError::Internal(format!("invalid mode: {m}")));
             }
             t
         }
@@ -117,7 +117,7 @@ pub async fn run(app: &AppState, params: &Params) -> Result<Value, ApiError> {
     };
 
     if !completed {
-        return Err(ApiError(format!("No results after {MAX_TRIES} attempts, giving up")));
+        return Err(ApiError::Internal(format!("No results after {MAX_TRIES} attempts, giving up")));
     }
 
     if let Some(name) = &result_name {
@@ -206,7 +206,7 @@ async fn load_entries_for_pick(
             .storage()
             .cc_get_entries_by_ids_active(entry_ids)
             .await
-            .map_err(|e| ApiError(format!("entries query failed: {e}")))?;
+            .map_err(|e| ApiError::Internal(format!("entries query failed: {e}")))?;
         Ok(Some(res))
     } else {
         let mut names = vec![ext_name.to_string()];
@@ -227,7 +227,7 @@ async fn load_entries_for_pick(
                 opts.death_year.as_deref(),
             )
             .await
-            .map_err(|e| ApiError(format!("entries query failed: {e}")))?;
+            .map_err(|e| ApiError::Internal(format!("entries query failed: {e}")))?;
         Ok(Some(res))
     }
 }
@@ -309,7 +309,7 @@ pub fn cc_mode_sql(
         "" => {
             if !require_catalogs.is_empty() {
                 if !require_catalogs.chars().all(|c| c.is_ascii_digit() || c == ',') {
-                    return Err(ApiError("invalid require_catalogs".into()));
+                    return Err(ApiError::Internal("invalid require_catalogs".into()));
                 }
                 return Ok(format!(
                     "SELECT ext_name, count(DISTINCT catalog) AS cnt FROM entry WHERE catalog IN ({require_catalogs}) AND (q IS NULL OR user=0) GROUP BY ext_name HAVING cnt>=3 ORDER BY rand() LIMIT 1"
@@ -324,7 +324,7 @@ pub fn cc_mode_sql(
                 "SELECT name AS ext_name, cnt FROM {table} WHERE{extra} cnt<15 ORDER BY rand() LIMIT 1"
             ))
         }
-        other => Err(ApiError(format!("unknown mode: {other}"))),
+        other => Err(ApiError::Internal(format!("unknown mode: {other}"))),
     }
 }
 

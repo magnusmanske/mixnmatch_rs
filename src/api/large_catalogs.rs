@@ -17,7 +17,7 @@ pub async fn lc_catalogs_data(app: &AppState) -> Result<Value, ApiError> {
     let s = app.large_catalogs();
     let (catalogs_res, open_issues_res) =
         tokio::join!(s.get_catalogs(), s.get_open_issue_counts());
-    let catalogs = catalogs_res.map_err(|e| ApiError(format!("large catalogs DB error: {e}")))?;
+    let catalogs = catalogs_res.map_err(|e| ApiError::Internal(format!("large catalogs DB error: {e}")))?;
     let open_issues = open_issues_res.unwrap_or_default();
     Ok(json!({
         "catalogs": catalogs,
@@ -43,7 +43,7 @@ pub async fn lc_locations_data(app: &AppState, params: &Params) -> Result<Value,
         .large_catalogs()
         .get_catalogs()
         .await
-        .map_err(|e| ApiError(format!("large catalogs DB error: {e}")))?;
+        .map_err(|e| ApiError::Internal(format!("large catalogs DB error: {e}")))?;
 
     let mut data: Vec<Value> = vec![];
     let mut used_catalogs: HashMap<usize, Value> = HashMap::new();
@@ -110,8 +110,8 @@ pub async fn lc_report_data(app: &AppState, params: &Params) -> Result<Value, Ap
         s.get_report_matrix(catalog_id),
     );
     let catalogs =
-        catalogs_res.map_err(|e| ApiError(format!("large catalogs DB error: {e}")))?;
-    let matrix = matrix_res.map_err(|e| ApiError(format!("large catalogs DB error: {e}")))?;
+        catalogs_res.map_err(|e| ApiError::Internal(format!("large catalogs DB error: {e}")))?;
+    let matrix = matrix_res.map_err(|e| ApiError::Internal(format!("large catalogs DB error: {e}")))?;
     let catalog = catalogs.get(&catalog_id).cloned();
     Ok(json!({
         "catalog": catalog,
@@ -138,8 +138,8 @@ pub async fn lc_report_list_data(app: &AppState, params: &Params) -> Result<Valu
         s.get_report_list(catalog_id, &status, &report_type, &user, &prop, limit, offset),
     );
     let catalogs =
-        catalogs_res.map_err(|e| ApiError(format!("large catalogs DB error: {e}")))?;
-    let rows = rows_res.map_err(|e| ApiError(format!("large catalogs DB error: {e}")))?;
+        catalogs_res.map_err(|e| ApiError::Internal(format!("large catalogs DB error: {e}")))?;
+    let rows = rows_res.map_err(|e| ApiError::Internal(format!("large catalogs DB error: {e}")))?;
 
     Ok(json!({
         "catalog": catalogs.get(&catalog_id).cloned(),
@@ -161,7 +161,7 @@ pub async fn lc_rc_data(app: &AppState, params: &Params) -> Result<Value, ApiErr
         .large_catalogs()
         .get_recent_changes(limit, offset, users_only)
         .await
-        .map_err(|e| ApiError(format!("large catalogs DB error: {e}")))?;
+        .map_err(|e| ApiError::Internal(format!("large catalogs DB error: {e}")))?;
     Ok(json!({"rows": rows}))
 }
 
@@ -174,17 +174,17 @@ pub async fn query_lc_rc(app: &AppState, params: &Params) -> Result<Response, Ap
 pub async fn lc_set_status_data(app: &AppState, params: &Params) -> Result<Value, ApiError> {
     let status = common::get_param(params, "status", "");
     if status.trim().is_empty() {
-        return Err(ApiError("empty status".into()));
+        return Err(ApiError::Internal("empty status".into()));
     }
     let id = required_usize(params, "id")?;
     let user = common::get_param(params, "user", "");
     if user.trim().is_empty() {
-        return Err(ApiError("not logged in".into()));
+        return Err(ApiError::Internal("not logged in".into()));
     }
     app.large_catalogs()
         .set_report_status(id, &status, &user)
         .await
-        .map_err(|e| ApiError(format!("update failed: {e}")))?;
+        .map_err(|e| ApiError::Internal(format!("update failed: {e}")))?;
     Ok(json!({}))
 }
 
@@ -215,9 +215,9 @@ fn required_usize(params: &Params, key: &str) -> Result<usize, ApiError> {
     let raw = params
         .get(key)
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| ApiError(format!("missing required parameter: {key}")))?;
+        .ok_or_else(|| ApiError::Internal(format!("missing required parameter: {key}")))?;
     raw.parse::<usize>()
-        .map_err(|_| ApiError(format!("parameter '{key}' must be a positive integer")))
+        .map_err(|_| ApiError::Internal(format!("parameter '{key}' must be a positive integer")))
 }
 
 /// Parse a strict `bbox=lat1,lon1,lat2,lon2` param. Errors if absent or malformed.
@@ -225,13 +225,13 @@ fn parse_bbox_required(params: &Params) -> Result<[f64; 4], ApiError> {
     let raw = params
         .get("bbox")
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| ApiError("missing required parameter: bbox".into()))?;
+        .ok_or_else(|| ApiError::Internal("missing required parameter: bbox".into()))?;
     let parts: Vec<f64> = raw
         .split(',')
         .filter_map(|s| s.trim().parse::<f64>().ok())
         .collect();
     if parts.len() != 4 {
-        return Err(ApiError("bbox must have 4 comma-separated numbers".into()));
+        return Err(ApiError::Internal("bbox must have 4 comma-separated numbers".into()));
     }
     Ok([parts[0], parts[1], parts[2], parts[3]])
 }

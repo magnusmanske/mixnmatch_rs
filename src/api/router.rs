@@ -79,7 +79,7 @@ async fn api_dispatcher_form(
 
     match axum::extract::Form::<Params>::from_request(req, &app).await {
         Ok(axum::extract::Form(params)) => dispatcher_common(&app, &session, params).await,
-        Err(e) => ApiError(format!("invalid form body: {e}")).into_response(),
+        Err(e) => ApiError::Internal(format!("invalid form body: {e}")).into_response(),
     }
 }
 
@@ -136,7 +136,7 @@ async fn panic_recovery_middleware(
             // omits it so that DB row content, file paths, or other internal
             // strings embedded in a panic payload don't leak to the client.
             log::error!("{path} panicked: {msg}");
-            ApiError("internal error".to_string()).into_response()
+            ApiError::Internal("internal error".to_string()).into_response()
         }
     }
 }
@@ -285,7 +285,7 @@ fn upload_import_file_get<'a>(
     _: &'a Params,
 ) -> BoxFuture<'a, Result<Response, ApiError>> {
     Box::pin(async {
-        Err(ApiError(
+        Err(ApiError::Internal(
             "upload_import_file must be POSTed as multipart/form-data".into(),
         ))
     })
@@ -439,7 +439,7 @@ async fn dispatch(
         .iter()
         .find(|(name, _)| *name == query)
         .map(|(_, h)| *h)
-        .ok_or_else(|| ApiError(format!("Unknown query '{query}'")))?;
+        .ok_or_else(|| ApiError::Internal(format!("Unknown query '{query}'")))?;
     handler(app, session, params).await
 }
 
