@@ -37,11 +37,11 @@ pub async fn query_start_new_job(
         .to_lowercase();
     let user = auth::guard::require_user_from_params(app, session, params).await?;
     if !re_action_name().is_match(&action) {
-        return Err(ApiError::Internal(format!("Bad action: '{action}'")));
+        return Err(ApiError::BadRequest(format!("Bad action: '{action}'")));
     }
     let valid = app.storage().api_get_existing_job_actions().await?;
     if !valid.contains(&action) {
-        return Err(ApiError::Internal(format!("Unknown action: '{action}'")));
+        return Err(ApiError::BadRequest(format!("Unknown action: '{action}'")));
     }
     crate::job::Job::queue_simple_job_for_user(app, cid, &action, None, user.mnm_user_id).await?;
     Ok(ok(serde_json::json!({})))
@@ -60,7 +60,7 @@ pub async fn query_manage_job(
         .storage()
         .jobs_row_from_id(job_id)
         .await
-        .map_err(|_| ApiError::Internal(format!("No job with id {job_id}")))?;
+        .map_err(|_| ApiError::NotFound(format!("No job with id {job_id}")))?;
 
     if !is_job_manager(app, &user, &job).await? {
         return Err(ApiError::Internal(
@@ -72,7 +72,7 @@ pub async fn query_manage_job(
         "stop" => crate::job_status::JobStatus::Deactivated,
         "pause" => crate::job_status::JobStatus::Paused,
         "resume" => crate::job_status::JobStatus::Todo,
-        _ => return Err(ApiError::Internal(format!("Unknown action: '{action}'"))),
+        _ => return Err(ApiError::BadRequest(format!("Unknown action: '{action}'"))),
     };
 
     app.storage()

@@ -147,7 +147,7 @@ pub async fn query_edit_catalog(
     let cid = common::get_catalog(params)?;
     let data_str = common::get_param(params, "data", "");
     let data: serde_json::Value =
-        serde_json::from_str(&data_str).map_err(|_| ApiError::Internal("Bad data".into()))?;
+        serde_json::from_str(&data_str).map_err(|_| ApiError::BadRequest("Bad data".into()))?;
     // Catalog creators (catalog.owner) can now edit their own catalog, not
     // only site-wide admins — mirrors who can realistically maintain the
     // catalog once it's imported.
@@ -155,7 +155,7 @@ pub async fn query_edit_catalog(
     let name = data
         .get("name")
         .and_then(|v| v.as_str())
-        .ok_or(ApiError::Internal("Bad data".into()))?;
+        .ok_or(ApiError::BadRequest("Bad data".into()))?;
     // `active` comes back from the frontend as either a bool or the raw u8
     // from the catalog row (0/1). Accept both rather than silently flipping
     // the row to inactive.

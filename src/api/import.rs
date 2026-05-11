@@ -10,10 +10,10 @@ use tower_sessions::Session;
 fn parse_update_info(params: &Params) -> Result<serde_json::Value, ApiError> {
     let raw = common::get_param(params, "update_info", "");
     if raw.is_empty() {
-        return Err(ApiError::Internal("missing 'update_info' parameter".into()));
+        return Err(ApiError::BadRequest("missing 'update_info' parameter".into()));
     }
     serde_json::from_str(&raw)
-        .map_err(|e| ApiError::Internal(format!("invalid update_info JSON: {e}")))
+        .map_err(|e| ApiError::BadRequest(format!("invalid update_info JSON: {e}")))
 }
 
 pub async fn query_get_source_headers(
@@ -106,7 +106,7 @@ pub async fn query_import_source(
                     .unwrap_or(0) as usize
             };
             if cid == 0 {
-                return Err(ApiError::Internal(
+                return Err(ApiError::BadRequest(
                     "catalog_id required for JSON/JSONL import".into(),
                 ));
             }
@@ -184,7 +184,7 @@ async fn resolve_or_create_catalog(
         .unwrap_or("")
         .trim();
     if name.is_empty() {
-        return Err(ApiError::Internal(
+        return Err(ApiError::BadRequest(
             "meta.name is required when creating a new catalog".into(),
         ));
     }
@@ -205,10 +205,10 @@ async fn resolve_or_create_catalog(
 pub async fn query_autoscrape_test(params: &Params) -> Result<Response, ApiError> {
     let json_str = common::get_param(params, "json", "");
     if json_str.is_empty() {
-        return Err(ApiError::Internal("missing 'json' parameter".into()));
+        return Err(ApiError::BadRequest("missing 'json' parameter".into()));
     }
     let json: serde_json::Value = serde_json::from_str(&json_str)
-        .map_err(|e| ApiError::Internal(format!("invalid scraper JSON: {e}")))?;
+        .map_err(|e| ApiError::BadRequest(format!("invalid scraper JSON: {e}")))?;
     let res = crate::autoscrape::Autoscrape::test_fetch(&json)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
@@ -243,17 +243,17 @@ pub async fn query_save_scraper(
     let meta_str = common::get_param(params, "meta", "{}");
 
     if scraper_str.is_empty() {
-        return Err(ApiError::Internal("missing 'scraper' parameter".into()));
+        return Err(ApiError::BadRequest("missing 'scraper' parameter".into()));
     }
 
     let scraper: serde_json::Value = serde_json::from_str(&scraper_str)
-        .map_err(|e| ApiError::Internal(format!("invalid 'scraper' JSON: {e}")))?;
+        .map_err(|e| ApiError::BadRequest(format!("invalid 'scraper' JSON: {e}")))?;
     let options: serde_json::Value = serde_json::from_str(&options_str)
-        .map_err(|e| ApiError::Internal(format!("invalid 'options' JSON: {e}")))?;
+        .map_err(|e| ApiError::BadRequest(format!("invalid 'options' JSON: {e}")))?;
     let levels: serde_json::Value = serde_json::from_str(&levels_str)
-        .map_err(|e| ApiError::Internal(format!("invalid 'levels' JSON: {e}")))?;
+        .map_err(|e| ApiError::BadRequest(format!("invalid 'levels' JSON: {e}")))?;
     let meta: serde_json::Value = serde_json::from_str(&meta_str)
-        .map_err(|e| ApiError::Internal(format!("invalid 'meta' JSON: {e}")))?;
+        .map_err(|e| ApiError::BadRequest(format!("invalid 'meta' JSON: {e}")))?;
 
     // Resolve target catalog_id. If the wizard left `meta.catalog_id` blank,
     // we create the catalog first so the autoscrape row has something to FK to.
@@ -283,7 +283,7 @@ pub async fn query_save_scraper(
             .map(|s| s.trim_start_matches(['P', 'p']))
             .and_then(|s| s.parse::<usize>().ok());
         if name.is_empty() {
-            return Err(ApiError::Internal("meta.name is required when creating a new catalog".into()));
+            return Err(ApiError::BadRequest("meta.name is required when creating a new catalog".into()));
         }
         app.storage()
             .create_catalog_from_meta(name, desc, url, type_name, wd_prop, user_id)
@@ -329,7 +329,7 @@ pub async fn query_save_scraper(
 pub async fn query_get_scraper(app: &dyn ExternalServicesContext, params: &Params) -> Result<Response, ApiError> {
     let catalog_id = common::get_param_int(params, "catalog", 0);
     if catalog_id <= 0 {
-        return Err(ApiError::Internal("missing or invalid 'catalog' parameter".into()));
+        return Err(ApiError::BadRequest("missing or invalid 'catalog' parameter".into()));
     }
     let catalog_id = catalog_id as usize;
 

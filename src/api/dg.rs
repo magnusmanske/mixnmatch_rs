@@ -47,7 +47,7 @@ pub async fn query_dg_log_action(
 
     let entry_id = common::get_param_int(params, "tile", -1);
     if entry_id < 0 {
-        return Err(ApiError::Internal("bad tile".into()));
+        return Err(ApiError::BadRequest("bad tile".into()));
     }
     let entry_id = entry_id as usize;
     let decision = common::get_param(params, "decision", "");

@@ -95,7 +95,7 @@ pub async fn run(app: &AppState, params: &Params) -> Result<Value, ApiError> {
         m => {
             let t = format!("common_names_{m}");
             if !is_safe_table_name(&t) {
-                return Err(ApiError::Internal(format!("invalid mode: {m}")));
+                return Err(ApiError::BadRequest(format!("invalid mode: {m}")));
             }
             t
         }
@@ -309,7 +309,7 @@ pub fn cc_mode_sql(
         "" => {
             if !require_catalogs.is_empty() {
                 if !require_catalogs.chars().all(|c| c.is_ascii_digit() || c == ',') {
-                    return Err(ApiError::Internal("invalid require_catalogs".into()));
+                    return Err(ApiError::BadRequest("invalid require_catalogs".into()));
                 }
                 return Ok(format!(
                     "SELECT ext_name, count(DISTINCT catalog) AS cnt FROM entry WHERE catalog IN ({require_catalogs}) AND (q IS NULL OR user=0) GROUP BY ext_name HAVING cnt>=3 ORDER BY rand() LIMIT 1"
@@ -324,7 +324,7 @@ pub fn cc_mode_sql(
                 "SELECT name AS ext_name, cnt FROM {table} WHERE{extra} cnt<15 ORDER BY rand() LIMIT 1"
             ))
         }
-        other => Err(ApiError::Internal(format!("unknown mode: {other}"))),
+        other => Err(ApiError::BadRequest(format!("unknown mode: {other}"))),
     }
 }
 

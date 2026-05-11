@@ -174,12 +174,12 @@ pub async fn query_lc_rc(app: &AppState, params: &Params) -> Result<Response, Ap
 pub async fn lc_set_status_data(app: &AppState, params: &Params) -> Result<Value, ApiError> {
     let status = common::get_param(params, "status", "");
     if status.trim().is_empty() {
-        return Err(ApiError::Internal("empty status".into()));
+        return Err(ApiError::BadRequest("empty status".into()));
     }
     let id = required_usize(params, "id")?;
     let user = common::get_param(params, "user", "");
     if user.trim().is_empty() {
-        return Err(ApiError::Internal("not logged in".into()));
+        return Err(ApiError::Unauthorized("not logged in".into()));
     }
     app.large_catalogs()
         .set_report_status(id, &status, &user)
@@ -215,9 +215,9 @@ fn required_usize(params: &Params, key: &str) -> Result<usize, ApiError> {
     let raw = params
         .get(key)
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| ApiError::Internal(format!("missing required parameter: {key}")))?;
+        .ok_or_else(|| ApiError::BadRequest(format!("missing required parameter: {key}")))?;
     raw.parse::<usize>()
-        .map_err(|_| ApiError::Internal(format!("parameter '{key}' must be a positive integer")))
+        .map_err(|_| ApiError::BadRequest(format!("parameter '{key}' must be a positive integer")))
 }
 
 /// Parse a strict `bbox=lat1,lon1,lat2,lon2` param. Errors if absent or malformed.
@@ -225,13 +225,13 @@ fn parse_bbox_required(params: &Params) -> Result<[f64; 4], ApiError> {
     let raw = params
         .get("bbox")
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| ApiError::Internal("missing required parameter: bbox".into()))?;
+        .ok_or_else(|| ApiError::BadRequest("missing required parameter: bbox".into()))?;
     let parts: Vec<f64> = raw
         .split(',')
         .filter_map(|s| s.trim().parse::<f64>().ok())
         .collect();
     if parts.len() != 4 {
-        return Err(ApiError::Internal("bbox must have 4 comma-separated numbers".into()));
+        return Err(ApiError::BadRequest("bbox must have 4 comma-separated numbers".into()));
     }
     Ok([parts[0], parts[1], parts[2], parts[3]])
 }

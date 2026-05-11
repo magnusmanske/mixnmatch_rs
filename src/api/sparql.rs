@@ -39,10 +39,10 @@ pub fn parse_sparql_label2q(
     }
     let label_var = head_vars[0]
         .as_str()
-        .ok_or_else(|| ApiError::Internal("variable name is not a string".into()))?;
+        .ok_or_else(|| ApiError::BadRequest("variable name is not a string".into()))?;
     let qnum_var = head_vars[1]
         .as_str()
-        .ok_or_else(|| ApiError::Internal("variable name is not a string".into()))?;
+        .ok_or_else(|| ApiError::BadRequest("variable name is not a string".into()))?;
 
     let bindings = sparql_result["results"]["bindings"]
         .as_array()
@@ -77,7 +77,7 @@ pub fn parse_sparql_label2q(
 /// {entries, users} payload (no envelope).
 pub async fn list(app: &AppState, sparql: &str) -> Result<Value, ApiError> {
     if sparql.is_empty() {
-        return Err(ApiError::Internal("missing required parameter: sparql".into()));
+        return Err(ApiError::BadRequest("missing required parameter: sparql".into()));
     }
 
     let mw_api = app
@@ -148,7 +148,7 @@ pub async fn list_from_params(app: &AppState, params: &Params) -> Result<Value, 
     let sparql = params
         .get("sparql")
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| ApiError::Internal("missing required parameter: sparql".into()))?;
+        .ok_or_else(|| ApiError::BadRequest("missing required parameter: sparql".into()))?;
     list(app, sparql).await
 }
 

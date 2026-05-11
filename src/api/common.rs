@@ -173,23 +173,29 @@ impl From<&str> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> axum::response::Response {
-        // Wire contract: always HTTP 200 with a `{"status": "<msg>"}`
-        // body. The variant (BadRequest/Unauthorized/.../Internal) is
-        // retained for in-code classification and future use, but is
-        // intentionally NOT surfaced over the wire.
+        // Wire format: real HTTP status code per variant (400/401/
+        // 403/404/500) + the historical `{"status": "<msg>"}` JSON
+        // body. The body shape is unchanged from the legacy contract
+        // so every existing caller (frontend `mnm_api`, JSONP
+        // wrapper, autoclose path, third-party integrations) keeps
+        // working — only the HTTP status differs.
         //
-        // We initially returned real 4xx/5xx codes here, but the bulk
-        // migration of ~178 sites defaulted everything to `Internal`,
-        // and many of those paths are user-level errors (missing
-        // params, unknown query names, bad tile id) rather than real
-        // server faults. Returning 500 for those made tower-http's
-        // TraceLayer log every legitimate user mistake as a failure
-        // and broke frontend callers that assumed the all-200
-        // contract. Future code can use `status_code()` deliberately
-        // (e.g. a dedicated `Accept: application/json+typed-errors`
-        // path) without changing the default response shape.
+        // The previous failed rollout of this change (commit reverted
+        // in `bdddb52`) bulk-defaulted ~178 sites to `Internal` and
+        // therefore returned 500 for what were really user errors
+        // (missing params, bad tile id, unknown query). That made
+        // tower-http's TraceLayer log every user mistake as a server
+        // failure. This time the reclassification pass in the
+        // adjacent commit (`reclassify ApiError sites by error class`)
+        // promotes ~79 of the previously-Internal sites to
+        // BadRequest/Unauthorized/Forbidden/NotFound, so the
+        // remaining Internal sites really are server-side failures
+        // worth alerting on. `TraceLayer::new_for_http()` only
+        // classifies >=500 as failures by default, so 4xx no longer
+        // pollutes the log.
+        let status = self.status_code();
         let body = json!({ "status": self.message() });
-        (axum::http::StatusCode::OK, Json(body)).into_response()
+        (status, Json(body)).into_response()
     }
 }
 
@@ -497,22 +503,20 @@ mod tests {
     }
 
     #[test]
-    fn test_api_error_into_response_always_returns_200() {
-        // Wire contract: every error variant produces HTTP 200 with the
-        // message in the JSON `status` field. The variant is captured
-        // in code (status_code() / message() / matches) but not on the
-        // wire — keeping the legacy contract that the frontend, JSONP
-        // wrapper, autoclose path, and external integrations all
-        // depend on.
-        for err in [
-            ApiError::bad_request("x"),
-            ApiError::unauthorized("x"),
-            ApiError::forbidden("x"),
-            ApiError::not_found("x"),
-            ApiError::internal("x"),
+    fn test_api_error_into_response_maps_each_variant_to_status_code() {
+        use axum::http::StatusCode;
+        // Each variant produces the right HTTP status; body shape
+        // (`{"status": "<msg>"}`) stays unchanged across variants so
+        // legacy frontend / JSONP / autoclose callers keep parsing the
+        // body the same way.
+        for (err, expected) in [
+            (ApiError::bad_request("x"), StatusCode::BAD_REQUEST),
+            (ApiError::unauthorized("x"), StatusCode::UNAUTHORIZED),
+            (ApiError::forbidden("x"), StatusCode::FORBIDDEN),
+            (ApiError::not_found("x"), StatusCode::NOT_FOUND),
+            (ApiError::internal("x"), StatusCode::INTERNAL_SERVER_ERROR),
         ] {
-            let response = err.into_response();
-            assert_eq!(response.status(), axum::http::StatusCode::OK);
+            assert_eq!(err.clone().into_response().status(), expected);
         }
     }
 

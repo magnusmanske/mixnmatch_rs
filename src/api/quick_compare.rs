@@ -174,9 +174,9 @@ fn parse_catalog(params: &Params) -> Result<usize, ApiError> {
     let raw = params
         .get("catalog")
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| ApiError::Internal("missing required parameter: catalog".into()))?;
+        .ok_or_else(|| ApiError::BadRequest("missing required parameter: catalog".into()))?;
     raw.parse::<usize>()
-        .map_err(|_| ApiError::Internal("parameter 'catalog' must be a positive integer".into()))
+        .map_err(|_| ApiError::BadRequest("parameter 'catalog' must be a positive integer".into()))
 }
 
 fn opt_str<'a>(params: &'a Params, key: &str) -> Option<&'a str> {

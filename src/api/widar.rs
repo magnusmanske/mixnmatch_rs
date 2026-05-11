@@ -420,13 +420,13 @@ pub async fn handle_oauth_callback(app: &AppState, session: &Session, params: &P
             request_token_secret,
         } => (request_token_key, request_token_secret),
         _ => {
-            return ApiError::Internal("No pending OAuth login — start over from the authorize link".into())
+            return ApiError::Unauthorized("No pending OAuth login — start over from the authorize link".into())
                 .into_response();
         }
     };
     // Session fixation guard: the verifier must match the token we stashed.
     if incoming_token != rk {
-        return ApiError::Internal("OAuth token mismatch".into()).into_response();
+        return ApiError::Unauthorized("OAuth token mismatch".into()).into_response();
     }
     let pair = auth::flow::TokenPair {
         key: rk,

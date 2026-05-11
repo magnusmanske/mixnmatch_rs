@@ -135,7 +135,7 @@ async fn api_dispatcher_form(
 
     match axum::extract::Form::<Params>::from_request(req, &app).await {
         Ok(axum::extract::Form(params)) => dispatcher_common(&app, &session, params).await,
-        Err(e) => ApiError::Internal(format!("invalid form body: {e}")).into_response(),
+        Err(e) => ApiError::BadRequest(format!("invalid form body: {e}")).into_response(),
     }
 }
 
@@ -512,7 +512,7 @@ async fn dispatch(
         .iter()
         .find(|(name, _)| *name == query)
         .map(|(_, h)| *h)
-        .ok_or_else(|| ApiError::Internal(format!("Unknown query '{query}'")))?;
+        .ok_or_else(|| ApiError::BadRequest(format!("Unknown query '{query}'")))?;
     handler(app, session, params).await
 }
 

@@ -51,7 +51,7 @@ fn re_q() -> &'static regex::Regex {
 
 pub async fn get(app: &AppState, catalog_id: usize) -> Result<Value, ApiError> {
     if catalog_id == 0 {
-        return Err(ApiError::Internal("missing required parameter: catalog".into()));
+        return Err(ApiError::BadRequest("missing required parameter: catalog".into()));
     }
 
     let (wd_prop, wd_qual) = app
@@ -61,7 +61,7 @@ pub async fn get(app: &AppState, catalog_id: usize) -> Result<Value, ApiError> {
         .map_err(|e| ApiError::Internal(format!("database error: {e}")))?;
 
     let wd_prop = wd_prop
-        .ok_or_else(|| ApiError::Internal(format!("catalog {catalog_id} has no wd_prop set")))?;
+        .ok_or_else(|| ApiError::BadRequest(format!("catalog {catalog_id} has no wd_prop set")))?;
 
     if wd_qual.is_some() {
         return Err(ApiError::Internal(format!(

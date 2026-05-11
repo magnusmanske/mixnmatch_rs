@@ -22,7 +22,7 @@ pub async fn handle_multipart_upload(
     let mut multipart =
         match axum::extract::Multipart::from_request(req, &(app.clone())).await {
             Ok(m) => m,
-            Err(e) => return ApiError::Internal(format!("multipart parse error: {e}")).into_response(),
+            Err(e) => return ApiError::BadRequest(format!("multipart parse error: {e}")).into_response(),
         };
 
     let form = match collect_upload_fields(&mut multipart, app).await {
@@ -38,14 +38,14 @@ pub async fn handle_multipart_upload(
         .into_response();
     }
     if form.username.is_empty() {
-        return ApiError::Internal("missing 'username' field".into()).into_response();
+        return ApiError::BadRequest("missing 'username' field".into()).into_response();
     }
     if form.data_format.is_empty() {
-        return ApiError::Internal("missing 'data_format' field".into()).into_response();
+        return ApiError::BadRequest("missing 'data_format' field".into()).into_response();
     }
     let uuid = match form.uuid {
         Some(u) if form.file_bytes_written > 0 => u,
-        _ => return ApiError::Internal("missing or empty 'import_file' field".into()).into_response(),
+        _ => return ApiError::BadRequest("missing or empty 'import_file' field".into()).into_response(),
     };
 
     // OAuth required — bind the upload's recorded user to the session
@@ -102,7 +102,7 @@ async fn collect_upload_fields(
         let field = match multipart.next_field().await {
             Ok(Some(f)) => f,
             Ok(None) => break,
-            Err(e) => return Err(ApiError::Internal(format!("multipart field error: {e}")).into_response()),
+            Err(e) => return Err(ApiError::BadRequest(format!("multipart field error: {e}")).into_response()),
         };
         let name = field.name().unwrap_or("").to_string();
         match name.as_str() {
@@ -152,7 +152,7 @@ async fn stream_import_file(
             Ok(None) => break,
             Err(e) => {
                 let _ = tokio::fs::remove_file(&path).await;
-                return Err(ApiError::Internal(format!("upload chunk error: {e}")).into_response());
+                return Err(ApiError::BadRequest(format!("upload chunk error: {e}")).into_response());
             }
         }
     }
