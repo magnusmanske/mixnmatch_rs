@@ -1,14 +1,10 @@
 use crate::{DbId, ItemId};
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-lazy_static! {
-    static ref RE_POINT: Regex =
-        Regex::new(r"^\s*POINT\s*\(\s*(\S+?)[, ]\s*(\S+?)\s*\)\s*$").expect("Regexp construction");
-    static ref RE_LAT_LON: Regex =
-        Regex::new(r"^\@?([0-9.\-]+)[,/]([0-9.\-]+)$").expect("Regexp construction");
-}
+static RE_POINT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*POINT\s*\(\s*(\S+?)[, ]\s*(\S+?)\s*\)\s*$").expect("Regexp construction"));
+static RE_LAT_LON: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\@?([0-9.\-]+)[,/]([0-9.\-]+)$").expect("Regexp construction"));
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct CoordinateLocation {

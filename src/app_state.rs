@@ -11,7 +11,7 @@ use crate::wikidata::Wikidata;
 use anyhow::{Result, anyhow};
 use chrono::Local;
 use dashmap::DashMap;
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 use log::{error, info, warn};
 use regex::Regex;
 use serde_json::Value;
@@ -73,11 +73,11 @@ pub const USER_DATE_MATCH: usize = 3;
 pub const USER_AUX_MATCH: usize = 4;
 pub const USER_LOCATION_MATCH: usize = 5;
 
-lazy_static! {
-    pub static ref TESTING: Mutex<bool> = Mutex::new(false); // To lock the test entry in the database
-    pub static ref TEST_MUTEX: Mutex<bool> = Mutex::new(true); // To lock the test entry in the database
-    static ref RE_ITEM2NUMERIC: Regex = Regex::new(r"(-{0,1}\d+)").expect("Regex failure");
-}
+pub static TESTING: LazyLock<Mutex<bool>> = LazyLock::new(|| Mutex::new(false));
+// To lock the test entry in the database
+pub static TEST_MUTEX: LazyLock<Mutex<bool>> = LazyLock::new(|| Mutex::new(true));
+// To lock the test entry in the database
+static RE_ITEM2NUMERIC: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(-{0,1}\d+)").expect("Regex failure"));
 
 #[derive(Debug, Clone)]
 pub struct AppState {

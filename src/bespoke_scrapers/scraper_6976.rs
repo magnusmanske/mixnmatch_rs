@@ -3,7 +3,7 @@ use crate::{app_state::AppContext, entry::{Entry, EntryWriter}};
 use anyhow::Result;
 use async_trait::async_trait;
 use futures::StreamExt;
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 use regex::Regex;
 
 use super::BespokeScraper;
@@ -52,11 +52,8 @@ impl BespokeScraper6976 {
             ("<h3>Partner:</h3>", 26),
             ("<h3>Verwandte:</h3>", 1038),
         ];
-        lazy_static! {
-            static ref RE_DD: Regex = Regex::new(r#"<dd>(.+?)</dd>"#).unwrap();
-            static ref RE_SUBJECT: Regex =
-                Regex::new(r#"<a href="/[a-z]+/subjects/idrec/sn/bio/id/(\d+)""#).unwrap();
-        }
+        static RE_DD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"<dd>(.+?)</dd>"#).unwrap());
+        static RE_SUBJECT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"<a href="/[a-z]+/subjects/idrec/sn/bio/id/(\d+)""#).unwrap());
         let mut entry = Entry::from_id(entry_id, self.app()).await?;
         let existing_aux = EntryWriter::new(self.app(), &mut entry).get_aux().await?;
         let url = entry.ext_url.clone();
@@ -125,9 +122,7 @@ impl BespokeScraper6976 {
     }
 
     pub(crate) fn get_main_gnd_from_text(text: &str) -> Option<String> {
-        lazy_static! {
-            static ref RE_GND: Regex = Regex::new(r#"<h2>GND-Nummer</h2>\s*<p>(.+?)</p>"#).unwrap();
-        }
+        static RE_GND: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"<h2>GND-Nummer</h2>\s*<p>(.+?)</p>"#).unwrap());
         let captures = RE_GND.captures(text)?;
         Some(captures[1].to_string())
     }

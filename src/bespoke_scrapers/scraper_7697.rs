@@ -7,7 +7,7 @@ use crate::{
 };
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 use rand::RngExt;
 use regex::Regex;
 use wikimisc::timestamp::TimeStamp;
@@ -132,9 +132,7 @@ impl BespokeScraper7697 {
 
     #[allow(dead_code)]
     pub(crate) fn parse_common_name(html: &str) -> Option<String> {
-        lazy_static! {
-            static ref RE_COMMON: Regex = Regex::new(r"<h1[^>]*>\s*([A-Z][^<]+?)\s*<").unwrap();
-        }
+        static RE_COMMON: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<h1[^>]*>\s*([A-Z][^<]+?)\s*<").unwrap());
         let name = RE_COMMON
             .captures(html)?
             .get(1)?
@@ -146,9 +144,7 @@ impl BespokeScraper7697 {
 
     #[allow(dead_code)]
     pub(crate) fn parse_family_from_html(html: &str) -> Option<String> {
-        lazy_static! {
-            static ref RE_FAMILY: Regex = Regex::new(r"species\s+of\s+[^>]*>(\w+)<").unwrap();
-        }
+        static RE_FAMILY: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"species\s+of\s+[^>]*>(\w+)<").unwrap());
         Some(RE_FAMILY.captures(html)?.get(1)?.as_str().to_string())
     }
 }

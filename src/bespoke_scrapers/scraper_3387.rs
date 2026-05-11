@@ -2,7 +2,7 @@ use std::sync::Arc;
 use crate::{app_state::AppContext, entry::{Entry, EntryWriter}, extended_entry::ExtendedEntry};
 use anyhow::Result;
 use async_trait::async_trait;
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 use rand::RngExt;
 use regex::Regex;
 use std::collections::HashMap;
@@ -152,10 +152,7 @@ impl BespokeScraper3387 {
 
     /// Pull `(id, name)` out of `<a href="/werk/ID">NAME</a>`.
     pub(crate) fn extract_id_and_name(html: &str) -> Option<(String, String)> {
-        lazy_static! {
-            static ref RE_ANCHOR: Regex =
-                Regex::new(r#"<a href="/werk/(\d+)">(.+?)</a>"#).expect("regex");
-        }
+        static RE_ANCHOR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"<a href="/werk/(\d+)">(.+?)</a>"#).expect("regex"));
         let caps = RE_ANCHOR.captures(html)?;
         Some((
             caps.get(1)?.as_str().to_string(),
@@ -165,10 +162,7 @@ impl BespokeScraper3387 {
 
     /// Extract the autor id from `<a href="/autor/ID">…</a>`.
     pub(crate) fn extract_author_id(html: &str) -> Option<String> {
-        lazy_static! {
-            static ref RE_AUTHOR: Regex =
-                Regex::new(r#"<a href="/autor/(\d+)">.+?</a>"#).expect("regex");
-        }
+        static RE_AUTHOR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"<a href="/autor/(\d+)">.+?</a>"#).expect("regex"));
         RE_AUTHOR
             .captures(html)?
             .get(1)

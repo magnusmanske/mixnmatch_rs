@@ -2,7 +2,7 @@ use std::sync::Arc;
 use crate::{app_state::AppContext, entry::Entry, extended_entry::ExtendedEntry, person_date::PersonDate};
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 use rand::RngExt;
 use regex::{Captures, Regex};
 
@@ -50,13 +50,11 @@ impl BespokeScraper6975 {
         let born = record[3].as_str().unwrap_or_default();
         let id = record[4].as_str().unwrap_or_default();
 
-        lazy_static! {
-            static ref re_ext_id: Regex = Regex::new(r"^.*?open_person\('(\d+)'\).*$").unwrap();
-        }
-        if !re_ext_id.is_match(id) {
+        static RE_EXT_ID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^.*?open_person\('(\d+)'\).*$").unwrap());
+        if !RE_EXT_ID.is_match(id) {
             return None;
         }
-        let ext_id = re_ext_id.replace(id, |caps: &Captures| caps[1].to_string());
+        let ext_id = RE_EXT_ID.replace(id, |caps: &Captures| caps[1].to_string());
 
         let ext_name = format!("{first_name} {last_name}");
         let ext_url =
@@ -80,20 +78,18 @@ impl BespokeScraper6975 {
     }
 
     pub(crate) fn fix_date(s: &str) -> Option<PersonDate> {
-        lazy_static! {
-            static ref re_zero: Regex = Regex::new(r"^(\d{3,4})\.00\.00$").unwrap();
-            static ref re_dmy: Regex = Regex::new(r"^(\d{1,2})\.(\d{1,2})\.(\d{3,4})$").unwrap();
-            static ref re_ymd: Regex = Regex::new(r"^(\d{3,4})\.(\d{1,2})\.(\d{1,2})$").unwrap();
-            static ref re_iso: Regex = Regex::new(r"^\d{3,4}(-\d{2}){0,2}$").unwrap();
-        }
-        let d = re_zero.replace(s, |caps: &Captures| format!("{:0>4}", &caps[1]));
-        let d = re_dmy.replace(&d, |caps: &Captures| {
+        static RE_ZERO: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(\d{3,4})\.00\.00$").unwrap());
+        static RE_DMY: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(\d{1,2})\.(\d{1,2})\.(\d{3,4})$").unwrap());
+        static RE_YMD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(\d{3,4})\.(\d{1,2})\.(\d{1,2})$").unwrap());
+        static RE_ISO: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\d{3,4}(-\d{2}){0,2}$").unwrap());
+        let d = RE_ZERO.replace(s, |caps: &Captures| format!("{:0>4}", &caps[1]));
+        let d = RE_DMY.replace(&d, |caps: &Captures| {
             format!("{:0>4}-{:0>2}-{:0>2}", &caps[3], &caps[2], &caps[1])
         });
-        let d = re_ymd.replace(&d, |caps: &Captures| {
+        let d = RE_YMD.replace(&d, |caps: &Captures| {
             format!("{:0>4}-{:0>2}-{:0>2}", &caps[1], &caps[2], &caps[3])
         });
-        if re_iso.is_match(&d) {
+        if RE_ISO.is_match(&d) {
             PersonDate::from_db_string(&d)
         } else {
             None
@@ -132,7 +128,7 @@ mod tests {
         );
         // Year.00.00 collapses to year only (dot-separated zeros)
         assert_eq!(BespokeScraper6975::fix_date("1900.00.00"), Some(PersonDate::year_only(1900)));
-        // ISO with dashes and zeroes is kept as-is (re_zero only matches dot format)
+        // ISO with dashes and zeroes is kept as-is (RE_ZERO only matches dot format)
         // "1900-00-00" has invalid month 0, so PersonDate rejects it
         assert!(BespokeScraper6975::fix_date("1900-00-00").is_none());
         // Year-month-day dot format
@@ -155,7 +151,7 @@ mod tests {
     fn test_6975_fix_date_three_digit_year() {
         // 3-digit years are accepted by the regexes
         assert_eq!(BespokeScraper6975::fix_date("800"), Some(PersonDate::year_only(800)));
-        // re_zero uses {:0>4} which zero-pads to 4 digits
+        // RE_ZERO uses {:0>4} which zero-pads to 4 digits
         assert_eq!(BespokeScraper6975::fix_date("800.00.00"), Some(PersonDate::year_only(800)));
     }
 

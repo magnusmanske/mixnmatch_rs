@@ -38,13 +38,11 @@ pub use crate::storage::{
 use crate::app_state::AppContext;
 use crate::job::Job;
 use crate::job::Jobbable;
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 use regex::Regex;
 use std::sync::Arc;
 
-lazy_static! {
-    pub(super) static ref RE_YEAR: Regex = Regex::new(r"(\d{3,4})").expect("Regexp error");
-}
+pub(super) static RE_YEAR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(\d{3,4})").expect("Regexp error"));
 
 /// Page size used when the unbatched `automatch_with_sparql` query fails
 /// (timeout, dropped connection, etc.) and we fall back to LIMIT/OFFSET

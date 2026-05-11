@@ -5,7 +5,7 @@ use crate::coordinates::LocationRow;
 use crate::entry::{Entry, EntryWriter};
 use crate::job::{Job, Jobbable};
 use anyhow::{Result, anyhow};
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 use log::error;
 use mediawiki::api::Api;
 use regex::{Regex, RegexBuilder};
@@ -16,14 +16,12 @@ const MAX_AUTOMATCH_DISTANCE: f64 = 0.1; // km
 const MAX_RESULTS_FOR_RANDOM_CATALOG: usize = 5000;
 const BAD_MATCHES: &[&str] = &["Q811683", "Q19860854", "Q811979"];
 
-lazy_static! {
-    static ref RE_METERS: Regex = RegexBuilder::new(r"^([0-9.]+)m$")
+static RE_METERS: LazyLock<Regex> = LazyLock::new(|| RegexBuilder::new(r"^([0-9.]+)m$")
         .build()
-        .expect("Regex error");
-    static ref RE_KILOMETERS: Regex = RegexBuilder::new(r"^([0-9.]+)km$")
+        .expect("Regex error"));
+static RE_KILOMETERS: LazyLock<Regex> = LazyLock::new(|| RegexBuilder::new(r"^([0-9.]+)km$")
         .build()
-        .expect("Regex error");
-}
+        .expect("Regex error"));
 
 #[derive(Debug, Clone)]
 pub struct CoordinateMatcher {

@@ -2,7 +2,7 @@ use std::sync::Arc;
 use crate::{app_state::AppContext, entry::{Entry, EntryWriter}, person_date::PersonDate};
 use anyhow::Result;
 use async_trait::async_trait;
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 use regex::Regex;
 
 use super::BespokeScraper;
@@ -141,9 +141,7 @@ impl BespokeScraper4098 {
     /// percent sometimes appears in API output as a placeholder for
     /// characters the source database couldn't render.
     pub(crate) fn strip_backslash_percent(s: &str) -> String {
-        lazy_static! {
-            static ref RE: Regex = Regex::new(r"[\\%]").expect("regex");
-        }
+        static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[\\%]").expect("regex"));
         RE.replace_all(s, "").to_string()
     }
 }

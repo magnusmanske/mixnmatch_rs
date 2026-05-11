@@ -4,7 +4,7 @@ use crate::{
 };
 use anyhow::Result;
 use async_trait::async_trait;
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 use rand::RngExt;
 use regex::Regex;
 use std::collections::HashSet;
@@ -118,10 +118,7 @@ impl BespokeScraper4097 {
     /// Returns `(name, desc)` after that first pass; the comma-flip is
     /// applied separately.
     pub(crate) fn split_name_and_dates(raw: &str) -> (String, String) {
-        lazy_static! {
-            static ref RE_TRAILING_DATES: Regex =
-                Regex::new(r"^(.+?), (\d{3}.+)$").expect("regex");
-        }
+        static RE_TRAILING_DATES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(.+?), (\d{3}.+)$").expect("regex"));
         match RE_TRAILING_DATES.captures(raw) {
             Some(caps) => (
                 caps[1].trim().to_string(),

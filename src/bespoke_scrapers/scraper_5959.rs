@@ -2,7 +2,7 @@ use std::sync::Arc;
 use crate::{app_state::AppContext, entry::Entry, extended_entry::ExtendedEntry};
 use anyhow::Result;
 use async_trait::async_trait;
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 use rand::RngExt;
 use regex::Regex;
 
@@ -56,13 +56,9 @@ impl BespokeScraper5959 {
         text: &str,
         existing: &std::collections::HashMap<String, usize>,
     ) -> Vec<ExtendedEntry> {
-        lazy_static! {
-            static ref RE_ABOUT: Regex = Regex::new(r#"rdf:about="concept/(\d+)""#).unwrap();
-            static ref RE_LABEL: Regex =
-                Regex::new(r#"<skos:prefLabel>(.+?)</skos:prefLabel>"#).unwrap();
-            static ref RE_DEF: Regex =
-                Regex::new(r#"<skos:definition>(.+?)</skos:definition>"#).unwrap();
-        }
+        static RE_ABOUT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"rdf:about="concept/(\d+)""#).unwrap());
+        static RE_LABEL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"<skos:prefLabel>(.+?)</skos:prefLabel>"#).unwrap());
+        static RE_DEF: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"<skos:definition>(.+?)</skos:definition>"#).unwrap());
 
         let mut entries = vec![];
         let mut id = String::new();

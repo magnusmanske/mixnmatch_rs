@@ -2,7 +2,7 @@ use crate::app_state::{AppContext, ExternalServicesContext, RuntimeConfig};
 use crate::autoscrape::Autoscrape;
 use crate::update_catalog::UpdateCatalogError;
 use anyhow::Result;
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 use regex::Regex;
 use serde_json::json;
 use std::collections::HashMap;
@@ -14,10 +14,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 use uuid::Uuid;
 
-lazy_static! {
-    static ref RE_PATTERN_WRAP_REMOVAL: Regex =
-        Regex::new(r"^\|(.+)\|$").expect("Regexp construction");
-}
+static RE_PATTERN_WRAP_REMOVAL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\|(.+)\|$").expect("Regexp construction"));
 
 #[derive(Debug, PartialEq, Eq, Clone, Default, Copy)]
 pub struct LineCounter {

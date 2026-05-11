@@ -7,7 +7,7 @@ use crate::{
 };
 use anyhow::Result;
 use async_trait::async_trait;
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 use rand::RngExt;
 use regex::Regex;
 
@@ -53,11 +53,9 @@ impl BespokeScraper2670 {
     /// 4. Excessive whitespace
     /// 5. Trailing commas before `}` or `]`
     pub(crate) fn clean_json(raw: &str) -> String {
-        lazy_static! {
-            static ref RE_WHITESPACE: Regex = Regex::new(r"\s+").unwrap();
-            static ref RE_TRAILING_COMMA_BRACE: Regex = Regex::new(r",\s*\}").unwrap();
-            static ref RE_TRAILING_COMMA_BRACKET: Regex = Regex::new(r",\s*\]").unwrap();
-        }
+        static RE_WHITESPACE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+").unwrap());
+        static RE_TRAILING_COMMA_BRACE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r",\s*\}").unwrap());
+        static RE_TRAILING_COMMA_BRACKET: LazyLock<Regex> = LazyLock::new(|| Regex::new(r",\s*\]").unwrap());
 
         // Step 1: Remove stray HTML fragment
         let s = raw.replace("\", </em></p>\",", "\"");
@@ -98,12 +96,8 @@ impl BespokeScraper2670 {
         catalog_id: usize,
         json: &serde_json::Value,
     ) -> Vec<ExtendedEntry> {
-        lazy_static! {
-            static ref RE_ID: Regex =
-                Regex::new(r"<a href='/(\d+/\d+)'>Full record</a>").unwrap();
-            static ref RE_LATLON: Regex =
-                Regex::new(r"Lat:\s*([0-9.\-]+),\s*Lng:\s*([0-9.\-]+)").unwrap();
-        }
+        static RE_ID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<a href='/(\d+/\d+)'>Full record</a>").unwrap());
+        static RE_LATLON: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"Lat:\s*([0-9.\-]+),\s*Lng:\s*([0-9.\-]+)").unwrap());
 
         let features = match json["features"].as_array() {
             Some(f) => f,

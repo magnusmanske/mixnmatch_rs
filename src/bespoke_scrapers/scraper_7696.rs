@@ -2,7 +2,7 @@ use std::sync::Arc;
 use crate::{app_state::AppContext, entry::Entry, extended_entry::ExtendedEntry};
 use anyhow::Result;
 use async_trait::async_trait;
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 use rand::RngExt;
 use regex::Regex;
 
@@ -78,12 +78,10 @@ impl BespokeScraper7696 {
     ];
 
     pub(crate) fn extract_species_urls(sitemap_text: &str) -> Vec<String> {
-        lazy_static! {
-            static ref RE_SPECIES_URL: Regex = Regex::new(
+        static RE_SPECIES_URL: LazyLock<Regex> = LazyLock::new(|| Regex::new(
                 r"https://www\.latvijasdaba\.lv/([a-z-]+)/([a-z0-9][a-z0-9-]*[a-z0-9])/"
             )
-            .unwrap();
-        }
+            .unwrap());
         let valid_sections: Vec<&str> = Self::SECTIONS.iter().map(|(s, _)| *s).collect();
         RE_SPECIES_URL
             .captures_iter(sitemap_text)
@@ -102,12 +100,10 @@ impl BespokeScraper7696 {
     }
 
     pub(crate) fn parse_species_url(url: &str) -> Option<(String, String)> {
-        lazy_static! {
-            static ref RE_PARSE_URL: Regex = Regex::new(
+        static RE_PARSE_URL: LazyLock<Regex> = LazyLock::new(|| Regex::new(
                 r"https://www\.latvijasdaba\.lv/([a-z-]+)/([a-z0-9][a-z0-9-]*[a-z0-9])/"
             )
-            .unwrap();
-        }
+            .unwrap());
         let caps = RE_PARSE_URL.captures(url)?;
         Some((
             caps.get(1)?.as_str().to_string(),

@@ -6,20 +6,17 @@ use crate::entry::{Entry, EntryWriter};
 use crate::person_date::PersonDate;
 use crate::update_catalog::UpdateCatalogError;
 use anyhow::{Result, anyhow};
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use wikimisc::timestamp::TimeStamp;
 use wikimisc::wikibase::LocaleString;
 
-lazy_static! {
-    static ref RE_TYPE: Regex = Regex::new(r"^(Q\d+)$").expect("Regexp construction");
-    static ref RE_DATE: Regex =
-        Regex::new(r"^(\d{3,}|\d{3,4}-\d{2}|\d{3,4}-\d{2}-\d{2})$").expect("Regexp construction");
-    static ref RE_PROPERTY: Regex = Regex::new(r"^P(\d+)$").expect("Regexp construction");
-    static ref RE_ALIAS: Regex = Regex::new(r"^A([a-z]+)$").expect("Regexp construction");
-    static ref RE_DESCRIPTION: Regex = Regex::new(r"^D([a-z]+)$").expect("Regexp construction");
-}
+static RE_TYPE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(Q\d+)$").expect("Regexp construction"));
+static RE_DATE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(\d{3,}|\d{3,4}-\d{2}|\d{3,4}-\d{2}-\d{2})$").expect("Regexp construction"));
+static RE_PROPERTY: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^P(\d+)$").expect("Regexp construction"));
+static RE_ALIAS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^A([a-z]+)$").expect("Regexp construction"));
+static RE_DESCRIPTION: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^D([a-z]+)$").expect("Regexp construction"));
 
 #[derive(Debug, Clone, Default)]
 pub struct ExtendedEntry {

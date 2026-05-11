@@ -2,7 +2,7 @@ use std::sync::Arc;
 use crate::{app_state::AppContext, entry::Entry, extended_entry::ExtendedEntry};
 use anyhow::Result;
 use async_trait::async_trait;
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 use rand::RngExt;
 use regex::Regex;
 
@@ -94,9 +94,7 @@ impl BespokeScraper6717 {
     /// match the 10-character pattern (mirroring the PHP `false`
     /// sentinel used as a skip signal).
     pub(crate) fn format_isbn10(isbn: &str) -> Option<String> {
-        lazy_static! {
-            static ref RE_ISBN10: Regex = Regex::new(r"^\d{9}[0-9X]$").expect("regex");
-        }
+        static RE_ISBN10: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\d{9}[0-9X]$").expect("regex"));
         if !RE_ISBN10.is_match(isbn) {
             return None;
         }

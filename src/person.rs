@@ -1,26 +1,22 @@
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 use regex::Regex;
 
-lazy_static! {
-    static ref SANITIZE_NAME_RES: Vec<Regex> = vec![
+static SANITIZE_NAME_RES: LazyLock<Vec<Regex>> = LazyLock::new(|| vec![
         Regex::new(r"^(Sir|Mme|Dr|Mother|Father)\.{0,1} ").expect("Regex failure"),
         Regex::new(r"\b[A-Z]\. /").expect("Regex failure"),
         Regex::new(r" (\&) ").expect("Regex failure"),
         Regex::new(r"\(.+?\)").expect("Regex failure"),
         Regex::new(r"\s+").expect("Regex failure"),
-    ];
-    static ref SIMPLIFY_NAME_RES: Vec<Regex> = vec![
+    ]);
+static SIMPLIFY_NAME_RES: LazyLock<Vec<Regex>> = LazyLock::new(|| vec![
         Regex::new(r"\s*\(.*?\)\s*").expect("Regex failure"),
         Regex::new(r"[, ]+(Jr\.{0,1}|Sr\.{0,1}|PhD\.{0,1}|MD|M\.D\.)$").expect("Regex failure"),
         Regex::new(r"\s*(Ritter|Freiherr)\s+").expect("Regex failure"),
         Regex::new(r"\s+").expect("Regex failure"),
-    ];
-    static ref SIMPLIFY_NAME_TITLE_RE: Regex =
-        Regex::new(r"^(Sir|Baron|Baronesse{0,1}|Graf|Gräfin|Prince|Princess|Dr\.|Prof\.|Rev\.)\s+")
-            .expect("Regex failure");
-    static ref SIMPLIFY_NAME_TWO_RE: Regex =
-        Regex::new(r"^(\S+) .*?(\S+)$").expect("Regex failure");
-}
+    ]);
+static SIMPLIFY_NAME_TITLE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(Sir|Baron|Baronesse{0,1}|Graf|Gräfin|Prince|Princess|Dr\.|Prof\.|Rev\.)\s+")
+            .expect("Regex failure"));
+static SIMPLIFY_NAME_TWO_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(\S+) .*?(\S+)$").expect("Regex failure"));
 
 #[derive(Debug, Clone, Copy)]
 pub struct Person;

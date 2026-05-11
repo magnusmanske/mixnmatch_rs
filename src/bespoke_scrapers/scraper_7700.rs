@@ -2,7 +2,7 @@ use std::sync::Arc;
 use crate::{app_state::AppContext, entry::Entry, extended_entry::ExtendedEntry};
 use anyhow::Result;
 use async_trait::async_trait;
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 use rand::RngExt;
 use regex::Regex;
 
@@ -50,12 +50,10 @@ impl BespokeScraper7700 {
 
     /// Parse all band entries from an alphabetical listing page.
     pub(crate) fn parse_entries(catalog_id: usize, html: &str) -> Vec<ExtendedEntry> {
-        lazy_static! {
-            static ref RE_ROW: Regex = Regex::new(
+        static RE_ROW: LazyLock<Regex> = LazyLock::new(|| Regex::new(
                 r#"href="bio\.php\?band_id=(\d+)">([^<]+)</a></td>\s*<td>([^<]*)</td>\s*<td>([^<]*)</td>\s*<td>(\d*)</td>"#
             )
-            .unwrap();
-        }
+            .unwrap());
         RE_ROW
             .captures_iter(html)
             .filter_map(|caps| {

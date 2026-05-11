@@ -2,7 +2,7 @@ use std::sync::Arc;
 use crate::{app_state::AppContext, entry::Entry, extended_entry::ExtendedEntry};
 use anyhow::Result;
 use async_trait::async_trait;
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 use rand::RngExt;
 use regex::Regex;
 
@@ -57,17 +57,13 @@ impl BespokeScraper for BespokeScraper1379 {
 impl BespokeScraper1379 {
     /// Collapse all runs of whitespace (including newlines) to a single space.
     pub(crate) fn collapse_whitespace(html: &str) -> String {
-        lazy_static! {
-            static ref RE_WS: Regex = Regex::new(r"\s+").unwrap();
-        }
+        static RE_WS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+").unwrap());
         RE_WS.replace_all(html, " ").to_string()
     }
 
     /// Clean &nbsp; (with or without trailing comma/semicolon) and replace with a space.
     pub(crate) fn clean_nbsp(s: &str) -> String {
-        lazy_static! {
-            static ref RE_NBSP: Regex = Regex::new(r"&nbsp;?,?").unwrap();
-        }
+        static RE_NBSP: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"&nbsp;?,?").unwrap());
         RE_NBSP.replace_all(s, " ").trim().to_string()
     }
 
@@ -100,12 +96,10 @@ impl BespokeScraper1379 {
     /// Parse all entries from a page of results.
     /// Matches: `<a href="./\?refbiogr=(\d+)"> <b>(NAME)</b> </a>\s*(DESC)\s*</td>`
     pub(crate) fn parse_entries(catalog_id: usize, html: &str) -> Vec<ExtendedEntry> {
-        lazy_static! {
-            static ref RE_ENTRY: Regex = Regex::new(
+        static RE_ENTRY: LazyLock<Regex> = LazyLock::new(|| Regex::new(
                 r#"<a href="\./\?refbiogr=(\d+)">\s*<b>([^<]+)</b>\s*</a>\s*([^<]*?)\s*</td>"#
             )
-            .unwrap();
-        }
+            .unwrap());
         RE_ENTRY
             .captures_iter(html)
             .filter_map(|caps| {

@@ -1,19 +1,17 @@
 use crate::autoscrape::{AutoscrapeError, AutoscrapeRegex, JsonStuff};
 use crate::auxiliary_data::AuxiliaryRow;
 use anyhow::Result;
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 use regex::{Regex, RegexBuilder};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
-lazy_static! {
-    pub static ref RE_SIMPLE_SPACE: Regex = RegexBuilder::new(r"\s+")
+pub static RE_SIMPLE_SPACE: LazyLock<Regex> = LazyLock::new(|| RegexBuilder::new(r"\s+")
         .multi_line(true)
         .ignore_whitespace(true)
         .build()
-        .expect("Regex error");
-    static ref RE_HTML: Regex = Regex::new(r"(<.*?>)").expect("Regex error");
-}
+        .expect("Regex error"));
+static RE_HTML: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(<.*?>)").expect("Regex error"));
 
 #[derive(Debug, Clone, Default)]
 pub struct AutoscrapeResolve {

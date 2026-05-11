@@ -5,7 +5,7 @@ use crate::{
 };
 use anyhow::Result;
 use async_trait::async_trait;
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 use rand::RngExt;
 use regex::Regex;
 
@@ -90,9 +90,7 @@ impl BespokeScraper for BespokeScraper1619 {
 impl BespokeScraper1619 {
     /// Parse GND IDs from a beacon text file. Each line that matches `^\d+X?$` is a GND ID.
     pub(crate) fn parse_beacon_ids(text: &str) -> Vec<String> {
-        lazy_static! {
-            static ref RE_GND: Regex = Regex::new(r"(?m)^(\d+X?)$").unwrap();
-        }
+        static RE_GND: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^(\d+X?)$").unwrap());
         RE_GND
             .captures_iter(text)
             .filter_map(|caps| Some(caps.get(1)?.as_str().to_string()))
@@ -101,9 +99,7 @@ impl BespokeScraper1619 {
 
     /// Extract name from `<h1...>NAME</h1>` and reformat "Lastname, Firstname" to "Firstname Lastname".
     pub(crate) fn parse_name(html: &str) -> Option<String> {
-        lazy_static! {
-            static ref RE_NAME: Regex = Regex::new(r"<h1[^>]*>([^<]+)</h1>").unwrap();
-        }
+        static RE_NAME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<h1[^>]*>([^<]+)</h1>").unwrap());
         let raw = RE_NAME.captures(html)?.get(1)?.as_str().trim().to_string();
         if raw.is_empty() {
             return None;
@@ -131,15 +127,10 @@ impl BespokeScraper1619 {
     /// Finds content between "Lebensdaten</dt>" and "</dl>", strips HTML tags,
     /// and removes "Normdaten" and "Namensvarianten" trailing text.
     pub(crate) fn parse_description(html: &str) -> Option<String> {
-        lazy_static! {
-            static ref RE_DESC_BLOCK: Regex =
-                Regex::new(r"(?i)Lebensdaten</dt>(.*?)</dl>").unwrap();
-            static ref RE_HTML_TAGS: Regex = Regex::new(r"<[^>]*>").unwrap();
-            static ref RE_NORMDATEN: Regex =
-                Regex::new(r"(?i)Normdaten.*$").unwrap();
-            static ref RE_NAMENSVARIANTEN: Regex =
-                Regex::new(r"(?i)Namensvarianten.*$").unwrap();
-        }
+        static RE_DESC_BLOCK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)Lebensdaten</dt>(.*?)</dl>").unwrap());
+        static RE_HTML_TAGS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<[^>]*>").unwrap());
+        static RE_NORMDATEN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)Normdaten.*$").unwrap());
+        static RE_NAMENSVARIANTEN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)Namensvarianten.*$").unwrap());
         let block = RE_DESC_BLOCK.captures(html)?.get(1)?.as_str();
         let text = RE_HTML_TAGS.replace_all(block, "");
         let text = RE_NORMDATEN.replace(&text, "");

@@ -8,15 +8,13 @@ pub use jobs::{
 use crate::entry::Entry;
 use crate::person_date::PersonDate;
 use anyhow::{Result, anyhow};
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 use mlua::{Lua, LuaOptions, StdLib, Value, VmState};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-lazy_static! {
-    pub(super) static ref RE_WHITESPACE: regex::Regex = regex::Regex::new(r"\s+").unwrap();
-    static ref RE_HTML_TAGS: regex::Regex = regex::Regex::new(r"<.+?>").unwrap();
-}
+pub(super) static RE_WHITESPACE: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"\s+").unwrap());
+static RE_HTML_TAGS: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"<.+?>").unwrap());
 
 /// Memory limit for Lua VM (1 MB)
 const LUA_MEMORY_LIMIT: usize = 1_048_576;

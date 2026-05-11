@@ -2,7 +2,7 @@ use std::sync::Arc;
 use crate::{app_state::AppContext, entry::Entry, extended_entry::ExtendedEntry};
 use anyhow::Result;
 use async_trait::async_trait;
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 use rand::RngExt;
 use regex::Regex;
 
@@ -59,17 +59,15 @@ impl BespokeScraper for BespokeScraper53 {
 impl BespokeScraper53 {
     /// Parse a single page of Genealogics search results into entries.
     pub(crate) fn parse_page(catalog_id: usize, html: &str) -> Vec<ExtendedEntry> {
-        lazy_static! {
-            static ref RE_WHITESPACE: Regex = Regex::new(r"\s+").unwrap();
-            static ref RE_BLOCK: Regex = Regex::new(
+        static RE_WHITESPACE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+").unwrap());
+        static RE_BLOCK: LazyLock<Regex> = LazyLock::new(|| Regex::new(
                 r#"<div class="titlebox"> <span class="subhead"><strong>Lived In</strong>(.*)"#
             )
-            .unwrap();
-            static ref RE_PERSON: Regex = Regex::new(
+            .unwrap());
+        static RE_PERSON: LazyLock<Regex> = LazyLock::new(|| Regex::new(
                 r#"<a href="getperson\.php\?personID=(I\d+).*?">([^ <]+ [^<]*?)</a>"#
             )
-            .unwrap();
-        }
+            .unwrap());
 
         // Collapse whitespace to single spaces
         let html = RE_WHITESPACE.replace_all(html, " ").to_string();
@@ -119,18 +117,16 @@ impl BespokeScraper53 {
     /// commas, trailing numbers, duplicate surname endings, and "King of..."
     /// suffixes.
     pub(crate) fn clean_name(name: &str) -> String {
-        lazy_static! {
-            static ref RE_TITLES: Regex = Regex::new(
+        static RE_TITLES: LazyLock<Regex> = LazyLock::new(|| Regex::new(
                 r"\b(?:\d\.)?(?:Baron|Baronnes?|Baroness|Bt\.|Chevalier|Comte|Comtesse|Count|Countess|Dame|Duchess|Duke|Earl|Emir|Emperor|Empress|Graf|Gr[aä]fin|Grand Duke|Grand Duchess|Grossgraf|Herzog|Herzogin|Infanta|Infante|King|Knight|Kronprinz|Kronprinzessin|Lady|Lord|Marchioness|Margrave|Margravine|Marquess|Marquis|Marquise|Markgraf|Markgr[aä]fin|Prince|Princess|Prinz|Prinzessin|Queen|Ritter|Sir|Sultan|Tsarevna|Tsaritsa|Tsar|Vicomte|Vicomtesse|Viscount|Viscountess|[Vv]on|zu|de|di|del|della|dos|das|van|ten|ter|het) "
             )
-            .unwrap();
-            static ref RE_PIPE: Regex = Regex::new(r"\|\S+").unwrap();
-            static ref RE_TRAILING_NUMBERS: Regex = Regex::new(r" [0-9-]+").unwrap();
-            // Note: Rust regex doesn't support backreferences. We handle
-            // duplicate-surname stripping in code instead.
-            static ref RE_COMMA: Regex = Regex::new(r",").unwrap();
-            static ref RE_KING_OF: Regex = Regex::new(r"King of.*").unwrap();
-        }
+            .unwrap());
+        static RE_PIPE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\|\S+").unwrap());
+        static RE_TRAILING_NUMBERS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r" [0-9-]+").unwrap());
+        // Note: Rust regex doesn't support backreferences. We handle
+        // duplicate-surname stripping in code instead. Commas are also
+        // stripped below via `s.replace(',', "")`, no regex needed.
+        static RE_KING_OF: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"King of.*").unwrap());
 
         let mut s = name.to_string();
         s = RE_TITLES.replace_all(&s, "").to_string();

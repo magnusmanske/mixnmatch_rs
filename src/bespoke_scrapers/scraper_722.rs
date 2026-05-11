@@ -2,7 +2,7 @@ use std::sync::Arc;
 use crate::{app_state::AppContext, entry::Entry, extended_entry::ExtendedEntry};
 use anyhow::Result;
 use async_trait::async_trait;
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 use rand::RngExt;
 use regex::Regex;
 
@@ -50,21 +50,17 @@ impl BespokeScraper for BespokeScraper722 {
 impl BespokeScraper722 {
     /// Collapse all runs of whitespace (including newlines) to a single space.
     pub(crate) fn collapse_whitespace(html: &str) -> String {
-        lazy_static! {
-            static ref RE_WS: Regex = Regex::new(r"\s+").unwrap();
-        }
+        static RE_WS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+").unwrap());
         RE_WS.replace_all(html, " ").to_string()
     }
 
     /// Find the "next 200" link for pagination.
     /// Matches `<a href="(URL)" title="Category:People">next 200</a>` and replaces `&amp;` with `&`.
     pub(crate) fn find_next_page_url(html: &str) -> Option<String> {
-        lazy_static! {
-            static ref RE_NEXT: Regex = Regex::new(
+        static RE_NEXT: LazyLock<Regex> = LazyLock::new(|| Regex::new(
                 r#"<a href="([^"]+)" title="Category:People">next 200</a>"#
             )
-            .unwrap();
-        }
+            .unwrap());
         let raw_url = RE_NEXT.captures(html)?.get(1)?.as_str();
         let url = raw_url.replace("&amp;", "&");
         // If the URL is relative, make it absolute
@@ -93,12 +89,10 @@ impl BespokeScraper722 {
 
     /// Extract the block between the "Pages in category" heading and catlinks div.
     pub(crate) fn extract_people_block(html: &str) -> Option<String> {
-        lazy_static! {
-            static ref RE_BLOCK: Regex = Regex::new(
+        static RE_BLOCK: LazyLock<Regex> = LazyLock::new(|| Regex::new(
                 r#"(?s)<h2>Pages in category "People"</h2>(.*?)<div id="catlinks""#
             )
-            .unwrap();
-        }
+            .unwrap());
         Some(RE_BLOCK.captures(html)?.get(1)?.as_str().to_string())
     }
 
@@ -107,12 +101,10 @@ impl BespokeScraper722 {
         catalog_id: usize,
         block: &str,
     ) -> Vec<ExtendedEntry> {
-        lazy_static! {
-            static ref RE_ENTRY: Regex = Regex::new(
+        static RE_ENTRY: LazyLock<Regex> = LazyLock::new(|| Regex::new(
                 r#"<li><a href="/tfs/index\.php/([^"]+)" title="([^"]+)">"#
             )
-            .unwrap();
-        }
+            .unwrap());
         RE_ENTRY
             .captures_iter(block)
             .filter_map(|caps| {

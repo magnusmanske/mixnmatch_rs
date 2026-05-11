@@ -2,7 +2,7 @@ use std::sync::Arc;
 use crate::app_state::AppContext;
 use anyhow::Result;
 use async_trait::async_trait;
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 use regex::Regex;
 
 use super::BespokeScraper;
@@ -23,8 +23,7 @@ impl BespokeScraper for BespokeScraper7043 {
     async fn run(&self) -> Result<()> {
         // TODO add new?
 
-        lazy_static! {
-            static ref PROP_RE: Vec<(usize, Regex)> = {
+        static PROP_RE: LazyLock<Vec<(usize, Regex)>> = LazyLock::new(|| {
                 vec![
                     (
                         214,
@@ -32,8 +31,7 @@ impl BespokeScraper for BespokeScraper7043 {
                     ),
                     (227, Regex::new(r#"\?gnd=(\d+X?)"#).unwrap()),
                 ]
-            };
-        }
+            });
 
         // Run all existing entries for metadata
         let ext_ids = self
@@ -139,8 +137,7 @@ mod tests {
 
     #[test]
     fn test_7043_prop_re_has_two_entries() {
-        lazy_static! {
-            static ref PROP_RE: Vec<(usize, Regex)> = {
+        static PROP_RE: LazyLock<Vec<(usize, Regex)>> = LazyLock::new(|| {
                 vec![
                     (
                         214,
@@ -148,8 +145,7 @@ mod tests {
                     ),
                     (227, Regex::new(r#"\?gnd=(\d+X?)"#).unwrap()),
                 ]
-            };
-        }
+            });
         assert_eq!(PROP_RE.len(), 2);
         assert_eq!(PROP_RE[0].0, 214);
         assert_eq!(PROP_RE[1].0, 227);

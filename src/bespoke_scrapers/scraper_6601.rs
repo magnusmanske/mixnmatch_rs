@@ -2,7 +2,7 @@ use std::sync::Arc;
 use crate::{app_state::AppContext, entry::{Entry, EntryWriter}, extended_entry::ExtendedEntry};
 use anyhow::Result;
 use async_trait::async_trait;
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 use rand::RngExt;
 use regex::Regex;
 use std::collections::HashMap;
@@ -157,9 +157,7 @@ impl BespokeScraper6601 {
 
 /// Extract the artwork slug from a Pinakothek `…/artwork/SLUG/…` URL.
 pub(crate) fn artwork_id_from_url(url: &str) -> Option<String> {
-    lazy_static! {
-        static ref RE: Regex = Regex::new(r"/artwork/(.+?)/").expect("regex");
-    }
+    static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"/artwork/(.+?)/").expect("regex"));
     RE.captures(url)?.get(1).map(|m| m.as_str().to_string())
 }
 

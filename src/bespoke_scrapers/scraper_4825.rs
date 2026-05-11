@@ -2,7 +2,7 @@ use std::sync::Arc;
 use crate::{app_state::AppContext, entry::Entry, extended_entry::ExtendedEntry};
 use anyhow::Result;
 use async_trait::async_trait;
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 use rand::RngExt;
 use regex::Regex;
 
@@ -63,12 +63,10 @@ impl BespokeScraper4825 {
         url: &str,
         html: &str,
     ) -> Option<ExtendedEntry> {
-        lazy_static! {
-            static ref RE_PERSON: Regex = Regex::new(
+        static RE_PERSON: LazyLock<Regex> = LazyLock::new(|| Regex::new(
                 r#"(?s)<h1>(.*?)</h1>\s*</div>\s*</div>\s*<p class="sottotitolo">\s*(.*?)\s*</p>"#
             )
-            .unwrap();
-        }
+            .unwrap());
 
         let caps = RE_PERSON.captures(html)?;
         let name = caps.get(1)?.as_str().trim().to_string();

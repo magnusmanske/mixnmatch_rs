@@ -3,7 +3,7 @@ use crate::app_state::AppContext;
 use anyhow::Result;
 use async_trait::async_trait;
 use futures::StreamExt;
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 use regex::Regex;
 
 use super::BespokeScraper;
@@ -22,14 +22,12 @@ impl BespokeScraper for BespokeScraper6794 {
     scraper_boilerplate!(6794);
 
     async fn run(&self) -> Result<()> {
-        lazy_static! {
-            static ref PROP_RE: Vec<(usize, Regex)> = {
+        static PROP_RE: LazyLock<Vec<(usize, Regex)>> = LazyLock::new(|| {
                 vec![(
                     227,
                     Regex::new(r#"<a href="http://d-nb.info/gnd/(.+?)""#).unwrap(),
                 )]
-            };
-        }
+            });
 
         // Run all existing entries for metadata
         let ext_id2entry_id = self

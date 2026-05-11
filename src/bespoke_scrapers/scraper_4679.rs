@@ -4,7 +4,7 @@ use crate::{
 };
 use anyhow::Result;
 use async_trait::async_trait;
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 use rand::RngExt;
 use regex::Regex;
 use std::collections::HashSet;
@@ -129,9 +129,7 @@ impl BespokeScraper4679 {
     /// HTML perfectly, but matches the (likewise crude) PHP behaviour
     /// for the common cases in this catalog.
     pub(crate) fn strip_tags(s: &str) -> String {
-        lazy_static! {
-            static ref RE_TAGS: Regex = Regex::new(r"<[^>]*>").expect("regex");
-        }
+        static RE_TAGS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<[^>]*>").expect("regex"));
         RE_TAGS.replace_all(s, "").trim().to_string()
     }
 }

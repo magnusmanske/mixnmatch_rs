@@ -5,14 +5,13 @@ use crate::entry::{Entry, EntryWriter};
 use crate::job::Job;
 use crate::job::Jobbable;
 use anyhow::Result;
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 use regex::{Regex, RegexBuilder};
 use std::collections::HashMap;
 
 pub type RankedNames = HashMap<String, Vec<(usize, String)>>;
 
-lazy_static! {
-    pub static ref TAXON_RANKS: HashMap<&'static str, &'static str> = {
+pub static TAXON_RANKS: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| {
         let mut m = HashMap::new();
         m.insert("variety", "Q767728");
         m.insert("subspecies", "Q68947");
@@ -25,13 +24,12 @@ lazy_static! {
         m.insert("family", "Q35409");
         m.insert("order", "Q36602");
         m
-    };
-    static ref USE_DESCRIPTIONS_FOR_TAXON_NAME_CATALOGS: Vec<usize> = vec!(169, 827);
-    static ref RE_CATALOG_169: Regex = RegexBuilder::new(r"^.*\[([a-z ]+).*$")
+    });
+static USE_DESCRIPTIONS_FOR_TAXON_NAME_CATALOGS: LazyLock<Vec<usize>> = LazyLock::new(|| vec!(169, 827));
+static RE_CATALOG_169: LazyLock<Regex> = LazyLock::new(|| RegexBuilder::new(r"^.*\[([a-z ]+).*$")
         .case_insensitive(true)
         .build()
-        .expect("Regex error");
-}
+        .expect("Regex error"));
 
 #[derive(Clone, Copy, Debug)]
 pub enum TaxonNameField {

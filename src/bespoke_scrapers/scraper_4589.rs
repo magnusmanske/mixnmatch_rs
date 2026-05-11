@@ -4,7 +4,7 @@ use crate::{
 };
 use anyhow::Result;
 use async_trait::async_trait;
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 use rand::RngExt;
 use regex::Regex;
 use std::collections::HashSet;
@@ -106,9 +106,7 @@ impl BespokeScraper4589 {
     /// PHP `|^(.+?), (.+)$|` flips on the FIRST comma (lazy on group 1).
     /// Names without a comma are returned unchanged.
     pub(crate) fn flip_lastname_first(name: &str) -> String {
-        lazy_static! {
-            static ref RE: Regex = Regex::new(r"^(.+?), (.+)$").expect("regex");
-        }
+        static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(.+?), (.+)$").expect("regex"));
         match RE.captures(name) {
             Some(caps) => format!("{} {}", &caps[2], &caps[1]),
             None => name.to_string(),

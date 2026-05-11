@@ -8,7 +8,7 @@ use crate::{
 };
 use anyhow::Result;
 use async_trait::async_trait;
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 use rand::RngExt;
 use regex::Regex;
 use std::collections::HashMap;
@@ -16,22 +16,20 @@ use wikimisc::timestamp::TimeStamp;
 
 use super::BespokeScraper;
 
-lazy_static! {
-    static ref RE_URI: Regex = Regex::new(r"^https://ikmk.smb.museum/ndp/(.+?)$").unwrap();
-    static ref RE_LOC_NAME: Regex = Regex::new(r"^(.+?) * \| *(.+)$").unwrap();
-    static ref RE_WD: Regex = Regex::new(r"^https?://www.wikidata.org/(wiki|entity)/Q(\d+)").unwrap();
-    static ref RE_WP: Regex = Regex::new(r"^https?://([a-z]+).wikipedia.org/wiki/(.+)$").unwrap();
-    static ref RE_GND: Regex = Regex::new(r"^https?://d-nb.info/gnd/([^#]+)").unwrap();
-    static ref RE_VIAF: Regex = Regex::new(r"^https?://viaf.org/viaf/(.+)$").unwrap();
-    static ref RE_NOMISMA: Regex = Regex::new(r"^https?://nomisma.org/id/(.+)$").unwrap();
-    static ref RE_BM: Regex = Regex::new(r"^https?://www.britishmuseum.org/collection/term/BIOG(.+)$").unwrap();
-    static ref RE_ZDB: Regex = Regex::new(r"^https?://ld.zdb-services.de/resource/(.+)$").unwrap();
-    static ref RE_MD: Regex = Regex::new(r"^https?://term.museum-digital.de/md-de/persinst/(\d+)$").unwrap();
-    static ref RE_GEONAMES: Regex = Regex::new(r"^https?://www.geonames.org/(\d+)$").unwrap();
-    static ref RE_MMLO: Regex = Regex::new(r"^https?://(www.)?mmlo.de/(\d+)$").unwrap();
-    static ref RE_RPC: Regex = Regex::new(r"^https?://rpc.ashmus.ox.ac.uk/(.+)$").unwrap();
-    static ref RE_LGPN: Regex = Regex::new(r"^https?://www.lgpn.ox.ac.uk/id/(.+?)$").unwrap();
-}
+static RE_URI: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^https://ikmk.smb.museum/ndp/(.+?)$").unwrap());
+static RE_LOC_NAME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(.+?) * \| *(.+)$").unwrap());
+static RE_WD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^https?://www.wikidata.org/(wiki|entity)/Q(\d+)").unwrap());
+static RE_WP: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^https?://([a-z]+).wikipedia.org/wiki/(.+)$").unwrap());
+static RE_GND: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^https?://d-nb.info/gnd/([^#]+)").unwrap());
+static RE_VIAF: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^https?://viaf.org/viaf/(.+)$").unwrap());
+static RE_NOMISMA: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^https?://nomisma.org/id/(.+)$").unwrap());
+static RE_BM: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^https?://www.britishmuseum.org/collection/term/BIOG(.+)$").unwrap());
+static RE_ZDB: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^https?://ld.zdb-services.de/resource/(.+)$").unwrap());
+static RE_MD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^https?://term.museum-digital.de/md-de/persinst/(\d+)$").unwrap());
+static RE_GEONAMES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^https?://www.geonames.org/(\d+)$").unwrap());
+static RE_MMLO: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^https?://(www.)?mmlo.de/(\d+)$").unwrap());
+static RE_RPC: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^https?://rpc.ashmus.ox.ac.uk/(.+)$").unwrap());
+static RE_LGPN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^https?://www.lgpn.ox.ac.uk/id/(.+?)$").unwrap());
 
 // ______________________________________________________
 // Münzkabinett

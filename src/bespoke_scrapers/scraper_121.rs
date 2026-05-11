@@ -7,7 +7,7 @@ use crate::{
 };
 use anyhow::Result;
 use async_trait::async_trait;
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 use rand::RngExt;
 use regex::{Captures, Regex};
 use std::collections::HashMap;
@@ -102,14 +102,12 @@ impl BespokeScraper121 {
     }
 
     pub(crate) fn parse_date(d: &str) -> Option<PersonDate> {
-        lazy_static! {
-            static ref re_dmy: Regex = Regex::new(r"^(\d{1,2})\.(\d{1,2})\.(\d{3,})").unwrap();
-            static ref re_dm: Regex = Regex::new(r"^(\d{1,2})\.(\d{1,2})").unwrap();
-        }
-        let d = re_dmy.replace(d, |caps: &Captures| {
+        static RE_DMY: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(\d{1,2})\.(\d{1,2})\.(\d{3,})").unwrap());
+        static RE_DM: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(\d{1,2})\.(\d{1,2})").unwrap());
+        let d = RE_DMY.replace(d, |caps: &Captures| {
             format!("{:0>4}-{:0>2}-{:0>2}", &caps[3], &caps[2], &caps[1])
         });
-        let d = re_dm.replace(&d, |caps: &Captures| {
+        let d = RE_DM.replace(&d, |caps: &Captures| {
             format!("{:0>4}-{:0>2}", &caps[2], &caps[1])
         });
         ExtendedEntry::parse_date(&d)
@@ -143,7 +141,7 @@ mod tests {
 
     #[test]
     fn test_121_parse_date_day_month_no_year() {
-        // Day.Month with no year: re_dm matches and produces "0006-16".
+        // Day.Month with no year: RE_DM matches and produces "0006-16".
         // PersonDate parses this as year 6, month 16 which is invalid.
         assert_eq!(
             BespokeScraper121::parse_date("16.06"),

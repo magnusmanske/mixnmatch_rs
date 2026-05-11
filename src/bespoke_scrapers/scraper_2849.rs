@@ -5,7 +5,7 @@ use crate::{
 };
 use anyhow::Result;
 use async_trait::async_trait;
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 use rand::RngExt;
 use regex::Regex;
 use std::collections::HashSet;
@@ -106,9 +106,7 @@ impl BespokeScraper2849 {
     /// `https://.../forfattare/karin-boye/` → `karin-boye`. Mirrors PHP
     /// preg_match `|/([^/]+)/$|`.
     pub(crate) fn extract_id_from_url(url: &str) -> Option<String> {
-        lazy_static! {
-            static ref RE_TRAILING_SLUG: Regex = Regex::new(r"/([^/]+)/$").expect("regex");
-        }
+        static RE_TRAILING_SLUG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"/([^/]+)/$").expect("regex"));
         RE_TRAILING_SLUG
             .captures(url)?
             .get(1)
@@ -118,10 +116,7 @@ impl BespokeScraper2849 {
     /// Convert "Lastname, Firstname" → "Firstname Lastname". Names without
     /// a comma are returned unchanged.
     pub(crate) fn flip_lastname_first(name: &str) -> String {
-        lazy_static! {
-            static ref RE_LASTNAME_FIRST: Regex =
-                Regex::new(r"^(.+?), (.+)$").expect("regex");
-        }
+        static RE_LASTNAME_FIRST: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(.+?), (.+)$").expect("regex"));
         match RE_LASTNAME_FIRST.captures(name) {
             Some(caps) => format!("{} {}", &caps[2], &caps[1]),
             None => name.to_string(),

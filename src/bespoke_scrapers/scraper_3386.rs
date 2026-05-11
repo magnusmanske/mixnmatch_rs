@@ -4,7 +4,7 @@ use crate::{
 };
 use anyhow::Result;
 use async_trait::async_trait;
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 use rand::RngExt;
 use regex::Regex;
 use std::collections::HashSet;
@@ -110,10 +110,7 @@ impl BespokeScraper3386 {
     /// `None` for rows whose anchor doesn't match — those rows are
     /// skipped by the PHP `else continue` path.
     pub(crate) fn extract_id_and_name(html: &str) -> Option<(String, String)> {
-        lazy_static! {
-            static ref RE_ANCHOR: Regex =
-                Regex::new(r#"<a href="/autor/(\d+)">(.+?)</a>"#).expect("regex");
-        }
+        static RE_ANCHOR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"<a href="/autor/(\d+)">(.+?)</a>"#).expect("regex"));
         let caps = RE_ANCHOR.captures(html)?;
         Some((
             caps.get(1)?.as_str().to_string(),
@@ -124,10 +121,7 @@ impl BespokeScraper3386 {
     /// "Lastname, Firstname" → "Firstname Lastname". Names without a
     /// comma are returned unchanged.
     pub(crate) fn flip_lastname_first(name: &str) -> String {
-        lazy_static! {
-            static ref RE_LASTNAME_FIRST: Regex =
-                Regex::new(r"^(.+), (.+)$").expect("regex");
-        }
+        static RE_LASTNAME_FIRST: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(.+), (.+)$").expect("regex"));
         match RE_LASTNAME_FIRST.captures(name) {
             Some(caps) => format!("{} {}", &caps[2], &caps[1]),
             None => name.to_string(),

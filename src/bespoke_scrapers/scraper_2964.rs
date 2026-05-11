@@ -7,7 +7,7 @@ use crate::{
 };
 use anyhow::Result;
 use async_trait::async_trait;
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 use rand::RngExt;
 use regex::Regex;
 use wikimisc::timestamp::TimeStamp;
@@ -177,9 +177,7 @@ impl BespokeScraper2964 {
     /// numeric portion as `isize`. Anything else → None, mirroring the
     /// PHP `preg_match('/^Q\d+$/i', $entry->wp_id)` gate.
     pub(crate) fn parse_wp_id(wp_id: &str) -> Option<isize> {
-        lazy_static! {
-            static ref RE_QID: Regex = Regex::new(r"^[Qq](\d+)$").expect("regex");
-        }
+        static RE_QID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[Qq](\d+)$").expect("regex"));
         RE_QID.captures(wp_id)?.get(1)?.as_str().parse().ok()
     }
 }

@@ -2,7 +2,7 @@ use std::sync::Arc;
 use crate::{app_state::AppContext, entry::Entry, extended_entry::ExtendedEntry};
 use anyhow::Result;
 use async_trait::async_trait;
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 use rand::RngExt;
 use regex::Regex;
 
@@ -60,21 +60,17 @@ impl BespokeScraper for BespokeScraper5311 {
 impl BespokeScraper5311 {
     /// Collapse all runs of whitespace (including newlines) to a single space.
     pub(crate) fn collapse_whitespace(html: &str) -> String {
-        lazy_static! {
-            static ref RE_WS: Regex = Regex::new(r"\s+").unwrap();
-        }
+        static RE_WS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+").unwrap());
         RE_WS.replace_all(html, " ").to_string()
     }
 
     /// Parse subcategory links from the top-level category page.
     /// Matches `<li><a href="(/index.php\?title=Kategoria:Osoby_[^"]*)"`.
     pub(crate) fn parse_subcategory_links(html: &str) -> Vec<String> {
-        lazy_static! {
-            static ref RE_SUBCAT: Regex = Regex::new(
+        static RE_SUBCAT: LazyLock<Regex> = LazyLock::new(|| Regex::new(
                 r#"<li><a href="(/index\.php\?title=Kategoria:Osoby_[^"]*)""#
             )
-            .unwrap();
-        }
+            .unwrap());
         RE_SUBCAT
             .captures_iter(html)
             .filter_map(|caps| Some(caps.get(1)?.as_str().to_string()))
@@ -84,12 +80,10 @@ impl BespokeScraper5311 {
     /// Find the "następne 200" (next 200) pagination link.
     /// Returns the absolute URL if found.
     pub(crate) fn find_next_page_url(html: &str) -> Option<String> {
-        lazy_static! {
-            static ref RE_NEXT: Regex = Regex::new(
+        static RE_NEXT: LazyLock<Regex> = LazyLock::new(|| Regex::new(
                 r#"<a href="(/index\.php\?[^"]*)"[^>]*>następne 200</a>"#
             )
-            .unwrap();
-        }
+            .unwrap());
         let relative = RE_NEXT.captures(html)?.get(1)?.as_str();
         let url = relative.replace("&amp;", "&");
         Some(format!("https://wiki.ormianie.pl{}", url))
@@ -108,11 +102,8 @@ impl BespokeScraper5311 {
 
     /// Extract the block between "Strony w kategorii" heading and catlinks div.
     pub(crate) fn extract_pages_block(html: &str) -> Option<String> {
-        lazy_static! {
-            static ref RE_BLOCK: Regex =
-                Regex::new(r#"(?s)<h2>Strony w kategorii[^<]*</h2>(.*?)<div id="catlinks""#)
-                    .unwrap();
-        }
+        static RE_BLOCK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?s)<h2>Strony w kategorii[^<]*</h2>(.*?)<div id="catlinks""#)
+                    .unwrap());
         Some(RE_BLOCK.captures(html)?.get(1)?.as_str().to_string())
     }
 
@@ -121,12 +112,10 @@ impl BespokeScraper5311 {
         catalog_id: usize,
         block: &str,
     ) -> Vec<ExtendedEntry> {
-        lazy_static! {
-            static ref RE_ENTRY: Regex = Regex::new(
+        static RE_ENTRY: LazyLock<Regex> = LazyLock::new(|| Regex::new(
                 r#"<li><a href="/index\.php\?title=([^"]+)" title="([^"]+)">"#
             )
-            .unwrap();
-        }
+            .unwrap());
         RE_ENTRY
             .captures_iter(block)
             .filter_map(|caps| {

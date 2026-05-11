@@ -7,7 +7,7 @@ use crate::{
 };
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 use rand::RngExt;
 use regex::Regex;
 
@@ -42,9 +42,7 @@ impl BespokeScraper for BespokeScraper5335 {
 impl BespokeScraper5335 {
     /// Extract the `var museums=[...]` JS array and convert it to `ExtendedEntry` records.
     pub(crate) fn parse_page(catalog_id: usize, html: &str) -> Result<Vec<ExtendedEntry>> {
-        lazy_static! {
-            static ref RE: Regex = Regex::new(r"(?s)var museums=(\[.+?\]);").unwrap();
-        }
+        static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)var museums=(\[.+?\]);").unwrap());
         let caps = RE
             .captures(html)
             .ok_or_else(|| anyhow!("museums JS variable not found in page"))?;
