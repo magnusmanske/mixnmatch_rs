@@ -212,6 +212,7 @@ pub async fn run_bespoke_scraper(catalog_id: usize, app: Arc<dyn AppContext>) ->
         .await?;
     let mut catalog = Catalog::from_id(catalog_id, app.as_ref()).await?;
     let _ = catalog.check_and_set_person_date(app.as_ref()).await;
+    let _ = catalog.queue_microsync_if_applicable(app.as_ref()).await;
     Ok(())
 }
 

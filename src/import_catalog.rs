@@ -173,6 +173,7 @@ pub async fn import_meta_entries(
 
     if let Ok(mut catalog) = Catalog::from_id(catalog_id, app).await {
         let _ = catalog.check_and_set_person_date(app).await;
+        let _ = catalog.queue_microsync_if_applicable(app).await;
     }
 
     Ok(result)

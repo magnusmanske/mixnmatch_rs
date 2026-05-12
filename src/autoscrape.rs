@@ -451,7 +451,7 @@ impl Autoscrape {
         let _ = self.clear_offset().await;
         let _ = Job::queue_simple_job(self.app_ref(), self.catalog_id, "automatch_by_search", None)
             .await;
-        let _ = Job::queue_simple_job(self.app_ref(), self.catalog_id, "microsync", None).await;
+        let _ = catalog.queue_microsync_if_applicable(self.app_ref()).await;
         Ok(())
     }
 

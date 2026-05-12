@@ -1,6 +1,7 @@
 use crate::app_state::{AppContext, ExternalServicesContext};
 use crate::entry::EntryWriter;
 use crate::auxiliary_data::AuxiliaryRow;
+use crate::job::Job;
 use crate::util::wikidata_props as wp;
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
@@ -326,12 +327,43 @@ impl Catalog {
             .number_of_entries_in_catalog(self.get_valid_id()?)
             .await
     }
+
+    /// Queue a `microsync` job for this catalog if it has a `wd_prop`.
+    /// Called at the successful end of import / autoscrape / bespoke scraper.
+    /// If a `(catalog, "microsync")` row already exists the underlying upsert
+    /// resets its status back to `TODO`.
+    pub async fn queue_microsync_if_applicable(
+        &self,
+        app: &dyn ExternalServicesContext,
+    ) -> Result<()> {
+        if self.wd_prop.is_none() {
+            return Ok(());
+        }
+        let catalog_id = self.get_valid_id()?;
+        Job::queue_simple_job(app, catalog_id, "microsync", None).await?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_support;
+    use mysql_async::prelude::*;
+
+    async fn fetch_microsync_status(catalog_id: usize) -> Option<String> {
+        let (pool, mut conn) = test_support::raw_conn().await.unwrap();
+        let row: Option<(String,)> = conn
+            .exec_first(
+                "SELECT `status` FROM `jobs` WHERE `catalog`=:catalog AND `action`='microsync'",
+                params! { "catalog" => catalog_id },
+            )
+            .await
+            .unwrap();
+        drop(conn);
+        pool.disconnect().await.ok();
+        row.map(|(s,)| s)
+    }
 
     #[tokio::test]
     async fn test_catalog_from_id() {
@@ -339,6 +371,66 @@ mod tests {
         let (catalog_id, _) = test_support::seed_minimal_entry(&app).await.unwrap();
         let catalog = Catalog::from_id(catalog_id, &app).await.unwrap();
         assert_eq!(catalog.name.unwrap(), format!("test_catalog_{catalog_id}"));
+    }
+
+    #[tokio::test]
+    async fn queue_microsync_skips_when_no_wd_prop() {
+        let app = test_support::test_app().await;
+        let (catalog_id, _) = test_support::seed_minimal_entry(&app).await.unwrap();
+        let catalog = Catalog::from_id(catalog_id, &app).await.unwrap();
+        assert!(catalog.wd_prop().is_none());
+
+        catalog.queue_microsync_if_applicable(&app).await.unwrap();
+
+        assert_eq!(
+            fetch_microsync_status(catalog_id).await,
+            None,
+            "no microsync job should be queued for a catalog without wd_prop"
+        );
+    }
+
+    #[tokio::test]
+    async fn queue_microsync_inserts_when_wd_prop_set() {
+        let app = test_support::test_app().await;
+        let (catalog_id, _) = test_support::seed_entry_with_catalog_wd_prop(31, 5).await.unwrap();
+        let catalog = Catalog::from_id(catalog_id, &app).await.unwrap();
+        assert_eq!(catalog.wd_prop(), Some(31));
+
+        catalog.queue_microsync_if_applicable(&app).await.unwrap();
+
+        assert_eq!(
+            fetch_microsync_status(catalog_id).await.as_deref(),
+            Some("TODO"),
+        );
+    }
+
+    #[tokio::test]
+    async fn queue_microsync_resets_existing_to_todo() {
+        let app = test_support::test_app().await;
+        let (catalog_id, _) = test_support::seed_entry_with_catalog_wd_prop(31, 5).await.unwrap();
+
+        // Pre-seed an existing microsync row, then mark it DONE so we can
+        // verify the helper resets it to TODO (ON DUPLICATE KEY UPDATE path).
+        test_support::seed_job("microsync", catalog_id).await.unwrap();
+        let (pool, mut conn) = test_support::raw_conn().await.unwrap();
+        conn.exec_drop(
+            "UPDATE `jobs` SET `status`='DONE' WHERE `catalog`=:catalog AND `action`='microsync'",
+            params! { "catalog" => catalog_id },
+        )
+        .await
+        .unwrap();
+        drop(conn);
+        pool.disconnect().await.ok();
+        assert_eq!(fetch_microsync_status(catalog_id).await.as_deref(), Some("DONE"));
+
+        let catalog = Catalog::from_id(catalog_id, &app).await.unwrap();
+        catalog.queue_microsync_if_applicable(&app).await.unwrap();
+
+        assert_eq!(
+            fetch_microsync_status(catalog_id).await.as_deref(),
+            Some("TODO"),
+            "existing microsync job should be reset to TODO"
+        );
     }
 
     #[tokio::test]
