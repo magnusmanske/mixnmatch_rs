@@ -50,9 +50,18 @@ export default Vue.extend({
 				{text: 'Random'}
 			]"></mnm-breadcrumb>
 			<catalog-header :catalog="get_catalog(entry.catalog)"></catalog-header>
-			<entry-details :entry='entry' :random="1" v-on:random_entry_button_clicked="loadData"
+			<!--
+				Force fresh instances of every child that does async work whenever
+				the entry changes. Without the key Vue reuses the same instance and
+				only swaps the prop — pending fetches from the previous entry can
+				then complete after the swap and overwrite results for the current
+				entry. The key destroys the old instance so its in-flight writes
+				land on detached reactive data and never reach the DOM. Keying
+				entry-details also re-mounts its descendant catalog-entry-multi-match.
+			-->
+			<entry-details :entry='entry' :key='entry.id' :random="1" v-on:random_entry_button_clicked="loadData"
 				:show_catalog='typeof id=="undefined"'></entry-details>
-			<match-entry :entry='entry'></match-entry>
+			<match-entry :entry='entry' :key='entry.id'></match-entry>
 		</div>
 		<div v-else>
 			<i tt="loading"></i>
