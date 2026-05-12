@@ -394,11 +394,16 @@ pub(crate) fn parse_csv_date(s: &str) -> Option<PersonDate> {
 
 /// Parse a year-only cell. Some `fodselsdato` columns contain only the
 /// year (e.g. `"1872"`), and `fodselsaar` always does.
+///
+/// Years outside `1..=9999` are rejected. The CSV reader runs in
+/// `flexible = true` mode, so a misaligned row can land a multi-digit
+/// numeric ID-fragment in the `fodselsaar` column; without an upper
+/// bound that overflows `person_dates.year_born` (varchar(5)).
 pub(crate) fn parse_year(s: &str) -> Option<PersonDate> {
     let s = s.trim();
     if s.is_empty() { return None; }
     let y: i32 = s.parse().ok()?;
-    if y < 1 { return None; }
+    if !(1..=9999).contains(&y) { return None; }
     Some(PersonDate::year_only(y))
 }
 
@@ -573,6 +578,17 @@ mod tests {
     fn test_7895_parse_year_rejects_zero() {
         assert_eq!(parse_year("0"), None);
         assert_eq!(parse_year("1872"), Some(PersonDate::year_only(1872)));
+    }
+
+    #[test]
+    fn test_7895_parse_year_rejects_out_of_range() {
+        // Misaligned CSV rows can land a numeric ID-fragment in the fodselsaar
+        // column. Returning Some(year=19490002390) would overflow
+        // person_dates.year_born (varchar(5)) at INSERT time.
+        assert_eq!(parse_year("19490002390"), None);
+        assert_eq!(parse_year("10000"), None);
+        assert_eq!(parse_year("9999"), Some(PersonDate::year_only(9999)));
+        assert_eq!(parse_year("1"), Some(PersonDate::year_only(1)));
     }
 
     // ── compose_registered_name / desc helpers ───────────────────────
