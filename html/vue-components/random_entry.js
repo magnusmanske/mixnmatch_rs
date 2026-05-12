@@ -26,14 +26,24 @@ export default Vue.extend({
     methods: {
         loadData: async function () {
             let me = this;
+            // Monotonic request token. If the user presses 's'/'n' twice in
+            // quick succession, two loadData calls run concurrently and can
+            // resolve out of order — without this, an older response can
+            // overwrite a newer one. After each await, check that this call
+            // is still the latest; if not, bail silently (the newer call owns
+            // loaded/entry/catalog/error display).
+            let token = me._loadToken = (me._loadToken || 0) + 1;
             me.loaded = false;
             try {
                 let d = await mnm_api('random', { catalog: (me.id || 0), submode: me.submode });
+                if (token !== me._loadToken) return;
                 me.entry = d.data;
                 await ensure_catalog(me.entry.catalog);
+                if (token !== me._loadToken) return;
                 me.catalog = get_specific_catalog(me.entry.catalog) || {};
                 me.loaded = true;
             } catch (e) {
+                if (token !== me._loadToken) return;
                 mnm_notify(e.message || 'Failed to load random entry', 'danger');
                 me.loaded = true;
             }
