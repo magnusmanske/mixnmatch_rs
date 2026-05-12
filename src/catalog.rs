@@ -257,7 +257,8 @@ impl Catalog {
             }
             _ => {
                 if !entry.ext_url.is_empty() {
-                    let snak = Snak::new_string(wp::P_REFERENCE_URL, &entry.ext_url);
+                    let url = sanitize_reference_url(&entry.ext_url);
+                    let snak = Snak::new_string(wp::P_REFERENCE_URL, &url);
                     snaks.push(snak);
                 }
             }
@@ -345,11 +346,75 @@ impl Catalog {
     }
 }
 
+/// Percent-encode characters Wikidata's URL validator rejects (spaces,
+/// square brackets, braces, pipe, backslash, angle brackets, double quote,
+/// caret, backtick, control chars). Other characters — including already
+/// percent-encoded sequences — pass through untouched, so this is
+/// idempotent on well-formed URLs.
+fn sanitize_reference_url(url: &str) -> String {
+    let mut out = String::with_capacity(url.len());
+    for c in url.chars() {
+        match c {
+            ' ' => out.push_str("%20"),
+            '"' => out.push_str("%22"),
+            '<' => out.push_str("%3C"),
+            '>' => out.push_str("%3E"),
+            '[' => out.push_str("%5B"),
+            '\\' => out.push_str("%5C"),
+            ']' => out.push_str("%5D"),
+            '^' => out.push_str("%5E"),
+            '`' => out.push_str("%60"),
+            '{' => out.push_str("%7B"),
+            '|' => out.push_str("%7C"),
+            '}' => out.push_str("%7D"),
+            c if (c as u32) < 0x20 || c == '\x7f' => {
+                out.push_str(&format!("%{:02X}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_support;
     use mysql_async::prelude::*;
+
+    #[test]
+    fn sanitize_reference_url_encodes_space() {
+        let raw = "http://scan-bugs.org/portal/taxa/index.php?taxon=Oecophylla longiceps";
+        assert_eq!(
+            sanitize_reference_url(raw),
+            "http://scan-bugs.org/portal/taxa/index.php?taxon=Oecophylla%20longiceps"
+        );
+    }
+
+    #[test]
+    fn sanitize_reference_url_encodes_brackets_and_pipes() {
+        assert_eq!(sanitize_reference_url("http://x/a[1]"), "http://x/a%5B1%5D");
+        assert_eq!(sanitize_reference_url("http://x/a|b"), "http://x/a%7Cb");
+        assert_eq!(sanitize_reference_url("http://x/{q}"), "http://x/%7Bq%7D");
+    }
+
+    #[test]
+    fn sanitize_reference_url_is_idempotent_on_clean_urls() {
+        let clean = "https://example.com/foo/bar?baz=qux&n=1#frag";
+        assert_eq!(sanitize_reference_url(clean), clean);
+    }
+
+    #[test]
+    fn sanitize_reference_url_preserves_percent_encoded_sequences() {
+        let already = "https://example.com/a%20b";
+        assert_eq!(sanitize_reference_url(already), already);
+    }
+
+    #[test]
+    fn sanitize_reference_url_encodes_control_chars() {
+        assert_eq!(sanitize_reference_url("http://x/a\tb"), "http://x/a%09b");
+        assert_eq!(sanitize_reference_url("http://x/a\nb"), "http://x/a%0Ab");
+    }
 
     async fn fetch_microsync_status(catalog_id: usize) -> Option<String> {
         let (pool, mut conn) = test_support::raw_conn().await.unwrap();
