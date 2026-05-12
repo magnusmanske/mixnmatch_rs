@@ -1,5 +1,5 @@
 import { entryDisplayMixin, editEntryMixin, entryMixin } from './mnm-mixins.js';
-import { mnm_api, mnm_fetch_json, ensure_catalog, get_specific_catalog, tt_update_interface, tt, widar } from './store.js';
+import { mnm_api, mnm_fetch_json, ensure_catalog, get_specific_catalog, tt_update_interface, tt, auth } from './store.js';
 
 export default {
     name: 'match-entry',
@@ -225,7 +225,7 @@ export default {
 		<div v-if="entry.q==null">
 
 			<div> <!-- Actions -->
-				<div class="card" style="margin-bottom:1em" v-if='widar.is_logged_in'>
+				<div class="card" style="margin-bottom:1em" v-if='auth.is_logged_in'>
 					<div class="card-body">
 						<h4 class="card-title" tt='enter_q_number'></h4>
 						<div class="card-text">

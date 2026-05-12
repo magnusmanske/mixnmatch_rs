@@ -1,4 +1,4 @@
-import { mnm_api, mnm_notify, tt_update_interface, widar } from './store.js';
+import { mnm_api, mnm_notify, tt_update_interface, auth } from './store.js';
 
 var code_editor_counter = 0;
 
@@ -32,7 +32,7 @@ export default {
     updated: function () { tt_update_interface() },
     mounted: async function () {
         let me = this;
-        me.is_logged_in = widar.is_logged_in;
+        me.is_logged_in = auth.is_logged_in;
         if (typeof ace === 'undefined') {
             await new Promise(function (resolve, reject) {
                 var s = document.createElement('script');
@@ -81,7 +81,7 @@ export default {
             let frag = me.get_frag_for_query();
             try {
                 let d = await mnm_api('save_code_fragment', {
-                    username: widar.getUserName(),
+                    username: auth.getUserName(),
                     catalog: me.test_entry.catalog,
                     fragment: JSON.stringify(frag)
                 }, { method: 'POST' });
@@ -98,7 +98,7 @@ export default {
             me.tested_via = '';
             try {
                 let d = await mnm_api('test_code_fragment', {
-                    username: widar.getUserName(),
+                    username: auth.getUserName(),
                     entry_id: me.test_entry.id,
                     fragment: JSON.stringify(frag)
                 }, { method: 'POST' });

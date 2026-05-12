@@ -111,8 +111,8 @@ pub async fn query_creation_candidates(
 
 /// `prep_new_item`: fetch a list of MnM entries, build a single Wikibase
 /// item JSON suitable for `action=wbeditentity&new=item`, and hand it back
-/// to the frontend. The frontend then signs that body via Widar so the
-/// edit is attributed to the user — we only build the payload here.
+/// to the frontend. The frontend then signs that body via the auth endpoint
+/// so the edit is attributed to the user — we only build the payload here.
 ///
 /// Mirrors the PHP `query_prep_new_item` shape: returns the entity JSON
 /// under the standard `data` envelope key. The caller does the
@@ -138,8 +138,8 @@ pub async fn query_prep_new_item(
 }
 
 /// `prep_match_claim`: build the `wbeditentity` data payload for confirming
-/// an automatch. The frontend used to dispatch the match via Widar's
-/// `set_string` action, which sets the catalog property without a
+/// an automatch. The frontend used to dispatch the match via the auth
+/// endpoint's `set_string` action, which sets the catalog property without a
 /// reference, leaving every confirmed match unsourced on Wikidata. This
 /// endpoint returns the same catalog-property claim that the new-item
 /// path produces, with the canonical reference set (P248 stated_in,

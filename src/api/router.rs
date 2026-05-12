@@ -5,9 +5,9 @@
 
 use crate::api::common::{ApiError, Params};
 use crate::api::{
-    admin, catalog, code_fragments, data, dg, download, entry, import, issues, jobs,
+    admin, auth, catalog, code_fragments, data, dg, download, entry, import, issues, jobs,
     large_catalogs, locations, lua, matching, misc, navigation, proxy, quick_compare, rc,
-    sparql, sync, upload, widar,
+    sparql, sync, upload,
 };
 use crate::app_state::AppState;
 use axum::Router;
@@ -168,9 +168,8 @@ async fn panic_recovery_middleware(
 
 async fn dispatcher_common(app: &AppState, session: &Session, params: Params) -> Response {
     // Intercept the OAuth callback (user returning from Special:OAuth/authorize).
-    // This mirrors PHP's constructor-time check in MW_OAuth::__construct.
     if params.contains_key("oauth_verifier") && params.contains_key("oauth_token") {
-        return widar::handle_oauth_callback(app, session, &params).await;
+        return auth::handle_oauth_callback(app, session, &params).await;
     }
 
     // Mirror the PHP behaviour: legacy callers may use "action" instead of "query"
@@ -183,7 +182,7 @@ async fn dispatcher_common(app: &AppState, session: &Session, params: Params) ->
         },
     };
     // JSONP wrapping is disabled on auth endpoints — cookies + JSONP is a CSRF vector.
-    let callback_allowed = query != "widar";
+    let callback_allowed = query != "auth";
     let callback = if callback_allowed {
         params.get("callback").cloned().unwrap_or_default()
     } else {
@@ -468,7 +467,7 @@ const ROUTES: &[(&str, ApiHandler)] = &[
     route!("import_source",                import::query_import_source),
     route!("get_source_headers",           import::query_get_source_headers, app_params),
     route!("test_import_source",           import::query_test_import_source, app_params),
-    route!("widar",                        widar::query_widar),
+    route!("auth",                         auth::query_auth),
 ];
 
 async fn dispatch(
@@ -511,7 +510,7 @@ mod tests {
             "search",
             "match_q",
             "sync_match_q_multi",
-            "widar",
+            "auth",
             "get_jobs",
             "start_new_job",
             "manage_job",

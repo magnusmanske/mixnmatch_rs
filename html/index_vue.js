@@ -56,7 +56,7 @@ window.addEventListener('unhandledrejection', function (event) {
 // `router` is now scoped inside the boot callback (declared with `const`
 // at the VueRouter() site). The other names are still set there as
 // implicit globals to keep magnustools-style external code working.
-var wd, widar, app, tt;
+var wd, auth, app, tt;
 
 // Stub mnm_notify until the real one loads from store.js
 window.mnm_notify = function () {};

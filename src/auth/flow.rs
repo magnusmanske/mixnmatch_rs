@@ -143,8 +143,8 @@ pub async fn wikidata_create_string_claim(
 }
 
 /// Run an arbitrary mutating MediaWiki API call on behalf of the
-/// OAuth-authenticated user. Used by Widar's `action=generic` route, which
-/// is how the frontend currently fires `wbeditentity`/`wbsetclaim` calls
+/// OAuth-authenticated user. Used by the auth endpoint's `action=generic`
+/// route, which is how the frontend fires `wbeditentity`/`wbsetclaim` calls
 /// where building a parameter list field-by-field doesn't make sense.
 ///
 /// `params` are the raw API form params (already serialised — non-string
@@ -174,7 +174,7 @@ pub async fn wikidata_generic_edit(
 
 /// Fetch `meta=userinfo` on the editing wiki, signed with the access token.
 /// PHP equivalent: `MW_OAuth::doApiQuery(['action'=>'query','meta'=>'userinfo'])`,
-/// which is how `Widar::get_username` resolves the logged-in user.
+/// which is how the legacy code resolved the logged-in user.
 ///
 /// Matches PHP's `doApiQuery`: POSTs the API params as form data and passes the
 /// OAuth parameters in an `Authorization: OAuth ...` header. MediaWiki's OAuth
@@ -200,7 +200,7 @@ pub async fn fetch_userinfo(cfg: &OauthConfig, access: &TokenPair) -> Result<Wik
 /// path: the signature is computed over the union of POST params and OAuth
 /// header params (minus `oauth_signature` itself).
 ///
-/// Pub within the crate so the widar handler can issue authenticated
+/// Pub within the crate so the auth API handler can issue authenticated
 /// MediaWiki API calls (CSRF token fetch, `wbcreateclaim`, …).
 pub(crate) async fn signed_api_post(
     cfg: &OauthConfig,

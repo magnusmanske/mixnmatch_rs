@@ -1,4 +1,4 @@
-import { mnm_api, mnm_notify, ensure_catalog, get_specific_catalog, tt_update_interface, widar } from './store.js';
+import { mnm_api, mnm_notify, ensure_catalog, get_specific_catalog, tt_update_interface, auth } from './store.js';
 
 export default Vue.extend({
 	props: ['id'],
@@ -15,7 +15,7 @@ export default Vue.extend({
 			const me = this;
 			try {
 				await mnm_api('add_aliases', {
-					username: widar.getUserName(),
+					username: auth.getUserName(),
 					catalog: me.id,
 					text: me.text
 				}, { method: 'POST' });
@@ -35,14 +35,14 @@ export default Vue.extend({
 	]"></mnm-breadcrumb>
 	<catalog-header :catalog="catalog"></catalog-header>
 	<h2 tt='aliases'></h2>
-	<div v-if='!(widar.is_catalog_admin||widar.userinfo.name==catalog.username)' class="alert alert-warning" tt='no_catalog_admin_or_owner'></div>
+	<div v-if='!(auth.is_catalog_admin||auth.userinfo.name==catalog.username)' class="alert alert-warning" tt='no_catalog_admin_or_owner'></div>
 	<form>
-		<fieldset :disabled='!(widar.is_catalog_admin||widar.userinfo.name==catalog.username)'>
+		<fieldset :disabled='!(auth.is_catalog_admin||auth.userinfo.name==catalog.username)'>
 			<div tt='aliases_blurb'></div>
 			<div>
 				<textarea v-model='text' style='width:100%' rows=10 tt_placeholder='ph_paste_text_here'></textarea>
 			</div>
-			<div v-if='(widar.is_catalog_admin||widar.userinfo.name==catalog.username)' class="mb-3">
+			<div v-if='(auth.is_catalog_admin||auth.userinfo.name==catalog.username)' class="mb-3">
 				<button class='btn btn-outline-primary' @click.prevent='onSave' tt='save'></button>
 				<span tt='aliases_save_note'></span>
 			</div>

@@ -1,4 +1,4 @@
-import { mnm_api, mnm_notify, ensure_catalog, get_specific_catalog, tt_update_interface, widar } from './store.js';
+import { mnm_api, mnm_notify, ensure_catalog, get_specific_catalog, tt_update_interface, auth } from './store.js';
 
 // Every status the job runner can set, in the order we want them to appear
 // as filter chips. DEACTIVATED is excluded by default — it's a "park this
@@ -174,7 +174,7 @@ export default Vue.extend({
                 await mnm_api('start_new_job', {
                     catalog:me.id,
                     action:action,
-                    username:widar.getUserName()
+                    username:auth.getUserName()
                 }) ;
                 me.load(); // Referesh
             } catch (e) {
@@ -218,10 +218,10 @@ export default Vue.extend({
         // Returns true if the current user may control (stop/pause/resume) this job.
         // Mirrors the server-side is_job_manager check.
         can_control_job : function(job) {
-            if (!widar || !widar.loaded || !widar.is_logged_in) return false;
-            if (widar.is_catalog_admin) return true;
-            if (widar.mnm_user_id && (
-                (job.user_id && job.user_id == widar.mnm_user_id) ||
+            if (!auth || !auth.loaded || !auth.is_logged_in) return false;
+            if (auth.is_catalog_admin) return true;
+            if (auth.mnm_user_id && (
+                (job.user_id && job.user_id == auth.mnm_user_id) ||
                 job.user_name === 'automatic'
             )) return true;
             return false;
@@ -232,7 +232,7 @@ export default Vue.extend({
                 await mnm_api('manage_job', {
                     job_id: job_id,
                     action: action,
-                    username: widar.getUserName()
+                    username: auth.getUserName()
                 });
                 me.load();
             } catch(e) {

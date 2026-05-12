@@ -1,5 +1,5 @@
 import { entryDisplayMixin, editEntryMixin, entryMixin } from './mnm-mixins.js';
-import { wd, tt, tt_update_interface, get_specific_catalog, widar } from './store.js';
+import { wd, tt, tt_update_interface, get_specific_catalog, auth } from './store.js';
 
 export default {
 	name: 'catalog-entry-multi-match',
@@ -65,7 +65,7 @@ export default {
 			const me = this;
 			me.editing = true;
 			me.setEntryQ(me.entry, q, skip_wikidata_edit, me.stopEditing, undefined, { silent: true });
-			me.entry.username = widar.getUserName();
+			me.entry.username = auth.getUserName();
 			me.entry.q = q;
 			me.display = false;
 			return false;

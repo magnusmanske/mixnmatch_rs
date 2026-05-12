@@ -72,8 +72,8 @@ Vue.component('match-entry', MatchEntry);
 import Translator from './translator.js';
 Vue.component('translator', Translator);
 
-import WidarComp, { UserLink } from './widar.js';
-Vue.component('widar', WidarComp);
+import AuthComp, { UserLink } from './auth.js';
+Vue.component('auth', AuthComp);
 Vue.component('userlink', UserLink);
 
 import WikidataMap from './wikidatamap.js';

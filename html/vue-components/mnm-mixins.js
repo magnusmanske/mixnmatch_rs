@@ -2,7 +2,7 @@
  * MnM Vue 2 mixins for ES6 modules.
  */
 import {
-	mnm_api, mnm_notify, get_specific_catalog, widar,
+	mnm_api, mnm_notify, get_specific_catalog, auth,
 	filteredEntryName, buildSearchString, decodeEntities,
 	removeTags, miscFixes, pipe2newline, padDigits
 } from './store.js';
@@ -37,7 +37,7 @@ export const editEntryMixin = {
 				padDigits(d.getMinutes(), 2) +
 				padDigits(d.getSeconds(), 2);
 
-			entry.username = widar.getUserName();
+			entry.username = auth.getUserName();
 			entry.user = null;
 			entry.timestamp = ts;
 		},
@@ -57,7 +57,7 @@ export const editEntryMixin = {
 				if (typeof callback !== 'undefined') callback(q);
 			}
 
-			mnm_api('match_q', { tusc_user: widar.getUserName(), entry: entry.id, q: q }, { method: 'POST' })
+			mnm_api('match_q', { tusc_user: auth.getUserName(), entry: entry.id, q: q }, { method: 'POST' })
 				.then(function () { fin(); })
 				.catch(function (e) {
 					mnm_notify(e.message, 'danger');
@@ -88,7 +88,7 @@ export const editEntryMixin = {
 						fin();
 						return;
 					}
-					widar.run({
+					auth.run({
 						botmode: 1,
 						action: 'generic',
 						summary: summary,
@@ -109,7 +109,7 @@ export const editEntryMixin = {
 		},
 		removeAllMultimatches: async function (entry) {
 			try {
-				await mnm_api('remove_all_multimatches', { tusc_user: widar.getUserName(), entry: entry.id }, { method: 'POST' });
+				await mnm_api('remove_all_multimatches', { tusc_user: auth.getUserName(), entry: entry.id }, { method: 'POST' });
 			} catch (e) {
 				mnm_notify(e.message, 'danger');
 			}
@@ -214,7 +214,7 @@ export const editEntryMixin = {
 			}
 			var first_catalog = get_specific_catalog(first_entry.catalog);
 			var summary = 'New item based on [[:toollabs:mix-n-match/#/entry/' + first_entry.id + '|' + first_entry.ext_name + ' (#' + first_entry.id + ')]]' + (first_catalog ? ' in [[:toollabs:mix-n-match/#/catalog/' + first_catalog.id + '|' + first_catalog.name + ']]' : '');
-			widar.run({
+			auth.run({
 				action: 'generic', summary: summary,
 				json: JSON.stringify({ action: 'wbeditentity', 'new': 'item', data: d.data })
 			}, function (d) {
@@ -234,7 +234,7 @@ export const editEntryMixin = {
 		removeEntryQ: async function (entry, callback) {
 			if (entry.user > 0 && !confirm('Remove this manual match (Q' + entry.q + ')?')) return;
 			try {
-				await mnm_api('remove_q', { tusc_user: widar.getUserName(), entry: entry.id }, { method: 'POST' });
+				await mnm_api('remove_q', { tusc_user: auth.getUserName(), entry: entry.id }, { method: 'POST' });
 				entry.q = null; entry.user = null; entry.username = null; entry.timestamp = null;
 			} catch (e) {
 				mnm_notify(e.message, 'danger');
@@ -244,7 +244,7 @@ export const editEntryMixin = {
 		removeEntryAllQ: async function (entry, callback) {
 			if (entry.user > 0 && !confirm('Remove all matches for this entry?')) return;
 			try {
-				await mnm_api('remove_all_q', { tusc_user: widar.getUserName(), entry: entry.id }, { method: 'POST' });
+				await mnm_api('remove_all_q', { tusc_user: auth.getUserName(), entry: entry.id }, { method: 'POST' });
 				entry.q = null; entry.user = null; entry.username = null; entry.timestamp = null;
 			} catch (e) {
 				mnm_notify(e.message, 'danger');

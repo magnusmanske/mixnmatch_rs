@@ -12,6 +12,7 @@
 //!   - `status` is the small set of HTTP status codes we actually
 //!     return (400/401/403/404/500/200…),
 //!   - `reason` is a hand-curated short enum.
+//!
 //! Don't add high-cardinality labels like entry id, catalog id, or
 //! arbitrary user input.
 
@@ -35,7 +36,10 @@ pub fn init() {
 /// format. Returns an empty string if the recorder wasn't installed
 /// (e.g. in tests that don't go through `init`).
 pub fn render() -> String {
-    HANDLE.get().map(PrometheusHandle::render).unwrap_or_default()
+    HANDLE
+        .get()
+        .map(PrometheusHandle::render)
+        .unwrap_or_default()
 }
 
 /// Record one completed `/api.php?query=…` request. Emits:

@@ -1,4 +1,4 @@
-import { mnm_api, mnm_loading, mnm_notify, tt_update_interface, widar } from './store.js';
+import { mnm_api, mnm_loading, mnm_notify, tt_update_interface, auth } from './store.js';
 
 const TYPE_LABELS = {
 	'MISMATCH': 'Value mismatch',
@@ -218,12 +218,12 @@ var LcReport = Vue.extend({
 function rowActionButtons(rowVar) {
 	// Returns a reusable template fragment for the per-row action cell.
 	return `
-<button v-if='`+rowVar+`.status!="DONE" && widar.is_logged_in' class='btn btn-outline-success btn-sm'
+<button v-if='`+rowVar+`.status!="DONE" && auth.is_logged_in' class='btn btn-outline-success btn-sm'
 	@click.prevent='setStatus(`+rowVar+`,"DONE")' title='Mark as done'>Done</button>
-<button v-else-if='`+rowVar+`.status=="DONE" && widar.is_logged_in' class='btn btn-outline-danger btn-sm'
+<button v-else-if='`+rowVar+`.status=="DONE" && auth.is_logged_in' class='btn btn-outline-danger btn-sm'
 	@click.prevent='setStatus(`+rowVar+`,"REOPENED")' title='Re-open'>Re-open</button>
-<small v-else-if='!widar.is_logged_in' class='text-muted'>
-	<a href='/widar/index.php?action=authorize' target='_blank' rel='noopener'>Log in</a>
+<small v-else-if='!auth.is_logged_in' class='text-muted'>
+	<a href='/api.php?query=auth&action=authorize' target='_blank' rel='noopener'>Log in</a>
 </small>
 `;
 }
@@ -248,7 +248,7 @@ var LcReportList = Vue.extend({
 	},
 	updated: function () { tt_update_interface(); },
 	computed: {
-		widar: function () { return widar; },
+		auth: function () { return auth; },
 		hasFilters: function () { return !!(this.prop || this.status || this.type || this.user); },
 	},
 	methods: {
@@ -308,7 +308,7 @@ var LcReportList = Vue.extend({
 		setStatus: async function (row, new_status) {
 			try {
 				await mnm_api('lc_set_status', {
-					id: row.id, status: new_status, user: widar.getUserName()
+					id: row.id, status: new_status, user: auth.getUserName()
 				});
 				row.status = new_status;
 			} catch (e) {
@@ -394,12 +394,12 @@ var LcReportList = Vue.extend({
 						</td>
 						<td nowrap><small>{{prettyTime(row.timestamp)}}</small></td>
 						<td class='mnm-lc-action-cell'>
-							<button v-if='row.status!="DONE" && widar.is_logged_in' class='btn btn-outline-success btn-sm'
+							<button v-if='row.status!="DONE" && auth.is_logged_in' class='btn btn-outline-success btn-sm'
 								@click.prevent='setStatus(row,"DONE")' title='Mark as done'>Done</button>
-							<button v-else-if='row.status=="DONE" && widar.is_logged_in' class='btn btn-outline-danger btn-sm'
+							<button v-else-if='row.status=="DONE" && auth.is_logged_in' class='btn btn-outline-danger btn-sm'
 								@click.prevent='setStatus(row,"REOPENED")' title='Re-open'>Re-open</button>
-							<small v-else-if='!widar.is_logged_in' class='text-muted'>
-								<a href='/widar/index.php?action=authorize' target='_blank' rel='noopener'>Log in</a>
+							<small v-else-if='!auth.is_logged_in' class='text-muted'>
+								<a href='/api.php?query=auth&action=authorize' target='_blank' rel='noopener'>Log in</a>
 							</small>
 						</td>
 					</tr>
@@ -427,7 +427,7 @@ var LcRecentChanges = Vue.extend({
 	},
 	updated: function () { tt_update_interface(); },
 	computed: {
-		widar: function () { return widar; },
+		auth: function () { return auth; },
 	},
 	methods: {
 		load: async function () {
@@ -473,7 +473,7 @@ var LcRecentChanges = Vue.extend({
 		setStatus: async function (row, new_status) {
 			try {
 				await mnm_api('lc_set_status', {
-					id: row.id, status: new_status, user: widar.getUserName()
+					id: row.id, status: new_status, user: auth.getUserName()
 				});
 				row.status = new_status;
 			} catch (e) {
@@ -538,12 +538,12 @@ var LcRecentChanges = Vue.extend({
 						</td>
 						<td nowrap><small>{{prettyTime(row.timestamp)}}</small></td>
 						<td class='mnm-lc-action-cell'>
-							<button v-if='row.status!="DONE" && widar.is_logged_in' class='btn btn-outline-success btn-sm'
+							<button v-if='row.status!="DONE" && auth.is_logged_in' class='btn btn-outline-success btn-sm'
 								@click.prevent='setStatus(row,"DONE")' title='Mark as done'>Done</button>
-							<button v-else-if='row.status=="DONE" && widar.is_logged_in' class='btn btn-outline-danger btn-sm'
+							<button v-else-if='row.status=="DONE" && auth.is_logged_in' class='btn btn-outline-danger btn-sm'
 								@click.prevent='setStatus(row,"REOPENED")' title='Re-open'>Re-open</button>
-							<small v-else-if='!widar.is_logged_in' class='text-muted'>
-								<a href='/widar/index.php?action=authorize' target='_blank' rel='noopener'>Log in</a>
+							<small v-else-if='!auth.is_logged_in' class='text-muted'>
+								<a href='/api.php?query=auth&action=authorize' target='_blank' rel='noopener'>Log in</a>
 							</small>
 						</td>
 					</tr>

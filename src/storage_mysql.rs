@@ -12,7 +12,7 @@ mod util;
 
 use crate::{
     ItemId,
-    app_state::{USER_AUX_MATCH, USER_AUTO, USER_DATE_MATCH, USER_LOCATION_MATCH},
+    app_state::{USER_AUTO, USER_AUX_MATCH, USER_DATE_MATCH, USER_LOCATION_MATCH},
     auxiliary_data::AuxiliaryRow,
     auxiliary_matcher::AuxiliaryResults,
     catalog::Catalog,
@@ -148,8 +148,7 @@ impl StorageMySQL {
             }
             let entry_ids_csv = Itertools::join(&mut entry_ids.iter(), ",");
             for table in Self::TABLES_ENTRY_ID {
-                let sql =
-                    format!("DELETE FROM `{table}` WHERE `entry_id` IN ({entry_ids_csv})");
+                let sql = format!("DELETE FROM `{table}` WHERE `entry_id` IN ({entry_ids_csv})");
                 self.get_conn().await?.exec_drop(sql, ()).await?;
             }
             let sql = format!("DELETE FROM `entry` WHERE `id` IN ({entry_ids_csv})");
@@ -818,7 +817,7 @@ impl Storage for StorageMySQL {
         // us to pure external-id catalogs — qualifier-bearing catalogs
         // need a qualifier value the reference doesn't carry, so they
         // can't have produced this rewrite.
-        let sql = "SELECT /* rust:storage:find_entry_for_reference */ `entry`.`id` \
+        let sql = "SELECT /* storage:find_entry_for_reference */ `entry`.`id` \
                    FROM `entry` \
                    INNER JOIN `catalog` ON `catalog`.`id` = `entry`.`catalog` \
                    WHERE `entry`.`q` = :q_numeric \
@@ -840,7 +839,7 @@ impl Storage for StorageMySQL {
         // many means we can't safely attribute the edit to any single
         // catalog, so the caller treats both ambiguous and missing the
         // same way.
-        let sql = "SELECT /* rust:storage:find_unique_catalog_for_wd_prop */ `id` \
+        let sql = "SELECT /* storage:find_unique_catalog_for_wd_prop */ `id` \
                    FROM `catalog` \
                    WHERE `wd_prop` = :wd_prop \
                      AND `wd_qual` IS NULL \
@@ -2143,7 +2142,7 @@ impl Storage for StorageMySQL {
             .get_conn_ro()
             .await?
             .exec_iter(
-                r"SELECT /* rust:storage:entry_get_language_descriptions */ `language`,`label` FROM `descriptions` WHERE `entry_id`=:entry_id",
+                r"SELECT /* storage:entry_get_language_descriptions */ `language`,`label` FROM `descriptions` WHERE `entry_id`=:entry_id",
                 params! {entry_id},
             )
             .await?
@@ -2157,7 +2156,7 @@ impl Storage for StorageMySQL {
     }
 
     async fn entry_remove_auxiliary(&self, entry_id: usize, prop_numeric: usize) -> Result<()> {
-        let sql = "DELETE /* rust:storage:entry_remove_auxiliary */ FROM `auxiliary` WHERE `entry_id`=:entry_id AND `aux_p`=:prop_numeric";
+        let sql = "DELETE /* storage:entry_remove_auxiliary */ FROM `auxiliary` WHERE `entry_id`=:entry_id AND `aux_p`=:prop_numeric";
         let mut conn = self.get_conn().await?;
         conn.exec_drop(sql, params! {entry_id,prop_numeric}).await?;
         Ok(())
@@ -2169,7 +2168,7 @@ impl Storage for StorageMySQL {
         prop_numeric: usize,
         value: String,
     ) -> Result<()> {
-        let sql = "REPLACE /* rust:storage:entry_set_auxiliary */ INTO `auxiliary` (`entry_id`,`aux_p`,`aux_name`) VALUES (:entry_id,:prop_numeric,:value)";
+        let sql = "REPLACE /* storage:entry_set_auxiliary */ INTO `auxiliary` (`entry_id`,`aux_p`,`aux_name`) VALUES (:entry_id,:prop_numeric,:value)";
         let mut conn = self.get_conn().await?;
         conn.exec_drop(sql, params! {entry_id,prop_numeric,value})
             .await?;
@@ -2177,7 +2176,7 @@ impl Storage for StorageMySQL {
     }
 
     async fn entry_remove_coordinate_location(&self, entry_id: usize) -> Result<()> {
-        let sql = "DELETE /* rust:storage:entry_remove_coordinate_location */ FROM `location` WHERE `entry_id`=:entry_id";
+        let sql = "DELETE /* storage:entry_remove_coordinate_location */ FROM `location` WHERE `entry_id`=:entry_id";
         let mut conn = self.get_conn().await?;
         conn.exec_drop(sql, params! {entry_id}).await?;
         Ok(())
@@ -2190,7 +2189,7 @@ impl Storage for StorageMySQL {
         lon: f64,
         precision: Option<f64>,
     ) -> Result<()> {
-        let sql = "REPLACE /* rust:storage:entry_set_coordinate_location */ INTO `location` (`entry_id`,`lat`,`lon`,`precision`) VALUES (:entry_id,:lat,:lon,:precision)";
+        let sql = "REPLACE /* storage:entry_set_coordinate_location */ INTO `location` (`entry_id`,`lat`,`lon`,`precision`) VALUES (:entry_id,:lat,:lon,:precision)";
         let mut conn = self.get_conn().await?;
         conn.exec_drop(sql, params! {entry_id,lat,lon,precision})
             .await?;
@@ -2204,7 +2203,7 @@ impl Storage for StorageMySQL {
         let mut conn = self.get_conn_ro().await?;
         let ret = conn
             .exec_iter(
-                r"SELECT /* rust:storage:entry_get_coordinate_location */ `lat`,`lon`,`precision` FROM `location` WHERE `entry_id`=:entry_id LIMIT 1",
+                r"SELECT /* storage:entry_get_coordinate_location */ `lat`,`lon`,`precision` FROM `location` WHERE `entry_id`=:entry_id LIMIT 1",
                 params! {entry_id},
             )
             .await?
@@ -2222,7 +2221,7 @@ impl Storage for StorageMySQL {
     async fn entry_get_aux(&self, entry_id: usize) -> Result<Vec<AuxiliaryRow>> {
         let mut conn = self.get_conn_ro().await?;
         let ret = conn
-            .exec_iter(r"SELECT /* rust:storage:entry_get_aux */ `id`,`aux_p`,`aux_name`,`in_wikidata`,`entry_is_matched` FROM `auxiliary` WHERE `entry_id`=:entry_id",params! {entry_id}).await?
+            .exec_iter(r"SELECT /* storage:entry_get_aux */ `id`,`aux_p`,`aux_name`,`in_wikidata`,`entry_is_matched` FROM `auxiliary` WHERE `entry_id`=:entry_id",params! {entry_id}).await?
             .map_and_drop(|row| AuxiliaryRow::from_row(&row)).await?
             .into_iter().flatten().collect();
         Ok(ret)
@@ -2237,11 +2236,16 @@ impl Storage for StorageMySQL {
         timestamp: &str,
     ) -> Result<bool> {
         let entry_id = entry.get_valid_id()?;
-        let mut sql = "UPDATE /* rust:storage:entry_set_match */ `entry` SET `q`=:q_numeric,`user`=:user_id,`timestamp`=:timestamp WHERE `id`=:entry_id AND (`q` IS NULL OR `q`!=:q_numeric OR `user`!=:user_id)".to_string();
+        let mut sql = "UPDATE /* storage:entry_set_match */ `entry` SET `q`=:q_numeric,`user`=:user_id,`timestamp`=:timestamp WHERE `id`=:entry_id AND (`q` IS NULL OR `q`!=:q_numeric OR `user`!=:user_id)".to_string();
         // All automated matchers are restricted to unmatched or user=0 auto-matched entries
         // so they cannot overwrite a human-confirmed match (or each other's matches).
         // avoid_auto_match (log-table check) remains USER_AUTO only.
-        const BOT_USER_IDS: &[usize] = &[USER_AUTO, USER_DATE_MATCH, USER_AUX_MATCH, USER_LOCATION_MATCH];
+        const BOT_USER_IDS: &[usize] = &[
+            USER_AUTO,
+            USER_DATE_MATCH,
+            USER_AUX_MATCH,
+            USER_LOCATION_MATCH,
+        ];
         if BOT_USER_IDS.contains(&user_id) {
             if user_id == USER_AUTO {
                 if self.avoid_auto_match(entry_id, Some(q_numeric)).await? {
@@ -3538,7 +3542,13 @@ impl Storage for StorageMySQL {
         type_q: &str,
         query: CommonNamesQuery,
     ) -> Result<Vec<serde_json::Value>> {
-        let CommonNamesQuery { other_cats_desc, min, max, limit, offset } = query;
+        let CommonNamesQuery {
+            other_cats_desc,
+            min,
+            max,
+            limit,
+            offset,
+        } = query;
         let cond1 = if other_cats_desc {
             " AND e2.ext_desc!=''"
         } else {
@@ -3728,12 +3738,17 @@ impl Storage for StorageMySQL {
         Ok(())
     }
 
-    async fn api_edit_catalog(
-        &self,
-        catalog_id: usize,
-        update: CatalogUpdate,
-    ) -> Result<()> {
-        let CatalogUpdate { name, url, desc, type_name, search_wp, wd_prop, wd_qual, active } = update;
+    async fn api_edit_catalog(&self, catalog_id: usize, update: CatalogUpdate) -> Result<()> {
+        let CatalogUpdate {
+            name,
+            url,
+            desc,
+            type_name,
+            search_wp,
+            wd_prop,
+            wd_qual,
+            active,
+        } = update;
         let active_val: u8 = if active { 1 } else { 0 };
         // Coerce 0 → NULL before the UPDATE; the frontend form yields 0 when
         // a user clears the property field (input type=number), and leaving
@@ -4372,14 +4387,30 @@ impl Storage for StorageMySQL {
             .await?
             .map_and_drop(|row: mysql_async::Row| {
                 let id: usize = row.get::<Option<usize>, _>("id").flatten().unwrap_or(0);
-                let function: String = row.get::<Option<String>, _>("function").flatten().unwrap_or_default();
-                let catalog: usize = row.get::<Option<usize>, _>("catalog").flatten().unwrap_or(0);
-                let php: String = row.get::<Option<String>, _>("php").flatten().unwrap_or_default();
+                let function: String = row
+                    .get::<Option<String>, _>("function")
+                    .flatten()
+                    .unwrap_or_default();
+                let catalog: usize = row
+                    .get::<Option<usize>, _>("catalog")
+                    .flatten()
+                    .unwrap_or(0);
+                let php: String = row
+                    .get::<Option<String>, _>("php")
+                    .flatten()
+                    .unwrap_or_default();
                 let is_active: i8 = row.get::<Option<i8>, _>("is_active").flatten().unwrap_or(0);
-                let note: Option<String> = row.get::<Option<String>, _>("note").flatten().filter(|s| !s.is_empty());
+                let note: Option<String> = row
+                    .get::<Option<String>, _>("note")
+                    .flatten()
+                    .filter(|s| !s.is_empty());
                 let last_run: Option<String> = row.get::<Option<String>, _>("last_run").flatten();
-                let lua: Option<String> = row.get::<Option<String>, _>("lua").flatten().filter(|s| !s.is_empty());
-                let catalog_name: Option<String> = row.get::<Option<String>, _>("catalog_name").flatten();
+                let lua: Option<String> = row
+                    .get::<Option<String>, _>("lua")
+                    .flatten()
+                    .filter(|s| !s.is_empty());
+                let catalog_name: Option<String> =
+                    row.get::<Option<String>, _>("catalog_name").flatten();
                 let php_opt: Option<String> = if php.is_empty() { None } else { Some(php) };
                 serde_json::json!({
                     "id": id,
@@ -4669,7 +4700,10 @@ impl Storage for StorageMySQL {
         random_threshold: f64,
         max_results: usize,
     ) -> Result<Vec<serde_json::Value>> {
-        let QcEntryFilter { require_image, require_coordinates } = filter;
+        let QcEntryFilter {
+            require_image,
+            require_coordinates,
+        } = filter;
         let mut select = "SELECT entry.*, catalog.search_wp AS language".to_string();
         let mut from = " FROM entry, catalog".to_string();
         let mut where_clause;
@@ -6705,8 +6739,14 @@ mod tests {
     #[test]
     fn coordinate_matcher_includes_limit_in_random_branch() {
         let sql = StorageMySQL::coordinate_matcher_main_query_sql(&None, &[], 75);
-        assert!(sql.contains("LIMIT 75"), "LIMIT must appear in random-sample SQL");
-        assert!(sql.contains("ORDER BY `random`"), "ORDER BY must appear in random-sample SQL");
+        assert!(
+            sql.contains("LIMIT 75"),
+            "LIMIT must appear in random-sample SQL"
+        );
+        assert!(
+            sql.contains("ORDER BY `random`"),
+            "ORDER BY must appear in random-sample SQL"
+        );
     }
 
     #[test]
@@ -6740,7 +6780,10 @@ mod tests {
         // No `<digit>AND` token (the original bug had `100AND `catalog` NOT IN`).
         for digit in '0'..='9' {
             let bad = format!("{digit}AND");
-            assert!(!sql.contains(&bad), "malformed `{bad}` (no space) in: {sql}");
+            assert!(
+                !sql.contains(&bad),
+                "malformed `{bad}` (no space) in: {sql}"
+            );
         }
     }
 
@@ -6985,11 +7028,7 @@ mod tests {
     }
 
     /// Insert an entry with given `ext_id` and matched `q` in the given catalog.
-    async fn seed_entry_for_ref_test(
-        catalog_id: usize,
-        ext_id: &str,
-        q: Option<isize>,
-    ) -> usize {
+    async fn seed_entry_for_ref_test(catalog_id: usize, ext_id: &str, q: Option<isize>) -> usize {
         let (pool, mut conn) = test_support::raw_conn().await.unwrap();
         conn.exec_drop(
             "INSERT INTO entry (catalog, ext_id, ext_url, ext_name, ext_desc, type, random, q, user, timestamp) \
@@ -7006,7 +7045,11 @@ mod tests {
         )
         .await
         .unwrap();
-        let entry_id: u64 = "SELECT LAST_INSERT_ID()".first(&mut conn).await.unwrap().unwrap();
+        let entry_id: u64 = "SELECT LAST_INSERT_ID()"
+            .first(&mut conn)
+            .await
+            .unwrap()
+            .unwrap();
         drop(conn);
         pool.disconnect().await.ok();
         entry_id as usize
@@ -7133,7 +7176,10 @@ mod tests {
             .find_unique_catalog_for_wd_prop(wd_prop)
             .await
             .unwrap();
-        assert_eq!(got, None, "two catalogs sharing wd_prop must be treated as ambiguous");
+        assert_eq!(
+            got, None,
+            "two catalogs sharing wd_prop must be treated as ambiguous"
+        );
     }
 
     #[tokio::test]

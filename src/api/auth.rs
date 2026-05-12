@@ -1,4 +1,4 @@
-//! Widar (OAuth) endpoint and the `oauth_verifier` callback that finishes the dance.
+//! OAuth (authentication) endpoint and the `oauth_verifier` callback that finishes the dance.
 
 use crate::api::common::{ApiError, Params, json_resp};
 use crate::app_state::AppState;
@@ -6,11 +6,11 @@ use crate::auth;
 use axum::response::{IntoResponse, Redirect, Response};
 use tower_sessions::Session;
 
-/// Implements `?query=widar&action=…`. Mirrors PHP `query_widar` →
-/// `Widar::render_reponse`, which reads the sub-action from the `action`
-/// form field and writes its userinfo into the `result` key (not `data`).
-/// Sub-actions: `authorize`, `get_rights`, `logout`.
-pub async fn query_widar(
+/// Implements `?query=auth&action=…`. The sub-action is the `action`
+/// form field; the userinfo response is written into the `result` key
+/// (not `data`) to match the legacy response shape the frontend reads.
+/// Sub-actions: `authorize`, `get_rights`, `logout`, `set_string`, `generic`.
+pub async fn query_auth(
     app: &AppState,
     session: &Session,
     params: &Params,
@@ -19,21 +19,17 @@ pub async fn query_widar(
         .oauth_config()
         .ok_or_else(|| ApiError::Internal("OAuth is not configured on this server".into()))?
         .clone();
-    // Match the PHP Widar convention: the sub-action is the `action` parameter.
-    // `widar_action` is accepted as a legacy alias so older callers keep working.
     let action = params
         .get("action")
         .filter(|s| !s.is_empty())
         .cloned()
-        .or_else(|| params.get("widar_action").cloned())
         .unwrap_or_else(|| "get_rights".to_string());
     match action.as_str() {
         // Per-entry match from the Vue frontend: the caller supplies the
         // entry's ext_id (as the new string claim's value), the target item,
         // and the catalog's wd_prop, and we make the edit on behalf of the
-        // OAuth-authenticated user. Mirrors PHP `Widar::set_string`, which
-        // is what the mnm-mixins `setEntryQ` flow calls when a catalog has
-        // a wd_prop set.
+        // OAuth-authenticated user. This is what the mnm-mixins `setEntryQ`
+        // flow calls when a catalog has a wd_prop set.
         "set_string" => handle_set_string(app, session, params).await,
         // Free-form mutating call: the frontend builds the full MediaWiki
         // API payload (e.g. `wbeditentity new=item` for new-item creation
@@ -68,9 +64,8 @@ pub async fn query_widar(
         }
         // Default (including the explicit "get_rights").
         _ => {
-            // Return the shape PHP `Widar::render_reponse` produces:
-            // a top-level `result` holding the rights query, not `data`.
-            // The Vue frontend reads `d.result.query.userinfo`.
+            // Response shape: top-level `result` holds the rights query
+            // (not `data`). The Vue frontend reads `d.result.query.userinfo`.
             if let Some(u) = auth::guard::dev_bypass_user() {
                 return Ok(json_resp(serde_json::json!({
                     "status": "OK",
@@ -121,10 +116,10 @@ pub async fn query_widar(
     }
 }
 
-/// JSON envelope the frontend `widar.run` callback expects. Success is
+/// JSON envelope the frontend `auth.run` callback expects. Success is
 /// signalled by `error: "OK"` at the top level; any other string is shown
 /// to the user verbatim.
-fn widar_ok() -> Response {
+fn auth_ok() -> Response {
     json_resp(serde_json::json!({
         "status": "OK",
         "error": "OK",
@@ -132,7 +127,7 @@ fn widar_ok() -> Response {
     }))
 }
 
-fn widar_error(msg: impl Into<String>) -> Response {
+fn auth_error(msg: impl Into<String>) -> Response {
     json_resp(serde_json::json!({
         "status": "OK",
         "error": msg.into(),
@@ -150,7 +145,7 @@ async fn handle_set_string(
     // In local dev we bypass OAuth and therefore can't make real edits;
     // return OK so the frontend keeps behaving as if the edit succeeded.
     if auth::guard::dev_bypass_user().is_some() {
-        return Ok(widar_ok());
+        return Ok(auth_ok());
     }
 
     let cfg = app
@@ -160,7 +155,7 @@ async fn handle_set_string(
 
     let (entity_id, property_id, value, summary) = match read_set_string_params(params) {
         Ok(v) => v,
-        Err(msg) => return Ok(widar_error(msg)),
+        Err(msg) => return Ok(auth_error(msg)),
     };
 
     let access = match auth::session::load(session).await.state {
@@ -172,7 +167,7 @@ async fn handle_set_string(
             key: access_token_key,
             secret: access_token_secret,
         },
-        _ => return Ok(widar_error("Not logged in")),
+        _ => return Ok(auth_error("Not logged in")),
     };
 
     // Skip the edit if the item already carries this exact property=value
@@ -180,7 +175,7 @@ async fn handle_set_string(
     // through and let the edit attempt run — the API still rejects true
     // duplicates server-side in most cases.
     if let Ok(true) = wikidata_string_claim_exists(&entity_id, &property_id, &value).await {
-        return Ok(widar_ok());
+        return Ok(auth_ok());
     }
 
     match auth::flow::wikidata_create_string_claim(
@@ -199,11 +194,11 @@ async fn handle_set_string(
                     .get("info")
                     .and_then(|i| i.as_str())
                     .unwrap_or("Wikidata API error");
-                return Ok(widar_error(info.to_string()));
+                return Ok(auth_error(info.to_string()));
             }
-            Ok(widar_ok())
+            Ok(auth_ok())
         }
-        Err(e) => Ok(widar_error(format!("Wikidata edit failed: {e}"))),
+        Err(e) => Ok(auth_error(format!("Wikidata edit failed: {e}"))),
     }
 }
 
@@ -234,7 +229,7 @@ async fn handle_generic(
 
     let (api_params, summary) = match read_generic_params(params) {
         Ok(v) => v,
-        Err(msg) => return Ok(widar_error(msg)),
+        Err(msg) => return Ok(auth_error(msg)),
     };
 
     let access = match auth::session::load(session).await.state {
@@ -246,7 +241,7 @@ async fn handle_generic(
             key: access_token_key,
             secret: access_token_secret,
         },
-        _ => return Ok(widar_error("Not logged in")),
+        _ => return Ok(auth_error("Not logged in")),
     };
 
     match auth::flow::wikidata_generic_edit(&cfg, &access, api_params, &summary).await {
@@ -256,7 +251,7 @@ async fn handle_generic(
                     .get("info")
                     .and_then(|i| i.as_str())
                     .unwrap_or("Wikidata API error");
-                return Ok(widar_error(info.to_string()));
+                return Ok(auth_error(info.to_string()));
             }
             Ok(json_resp(serde_json::json!({
                 "status": "OK",
@@ -265,7 +260,7 @@ async fn handle_generic(
                 "res": v,
             })))
         }
-        Err(e) => Ok(widar_error(format!("Wikidata edit failed: {e}"))),
+        Err(e) => Ok(auth_error(format!("Wikidata edit failed: {e}"))),
     }
 }
 
@@ -544,7 +539,7 @@ mod tests {
 
     #[test]
     fn read_generic_params_extracts_form_params_and_serialises_objects() {
-        // The frontend's `widar.run({action:'generic', json: JSON.stringify({...})})`
+        // The frontend's `auth.run({action:'generic', json: JSON.stringify({...})})`
         // posts a stringified JSON body. Object/array values inside the body
         // (e.g. wbeditentity's `data` field) must be re-stringified because
         // MediaWiki form params are scalars.

@@ -1,5 +1,5 @@
 import { editEntryMixin } from './mnm-mixins.js';
-import { mnm_api, mnm_fetch_json, mnm_notify, tt_update_interface, widar, tt } from './store.js';
+import { mnm_api, mnm_fetch_json, mnm_notify, tt_update_interface, auth, tt } from './store.js';
 
 // Inject leaflet CSS
 (function () {
@@ -59,7 +59,7 @@ MapSourceMnM.prototype.action_remove_match = async function (data, callback) {
 	let entry = data.entry.aux.entry;
 	try {
 		await mnm_api('remove_q', {
-			tusc_user: widar.getUserName(),
+			tusc_user: auth.getUserName(),
 			entry: entry.id
 		}, { method: 'POST' });
 		entry.q = null;
@@ -93,7 +93,7 @@ MapSourceMnM.prototype._match_entry_to_q = function (data, q_norm, callback) {
 	let entry = data.entry.aux.entry;
 	let summary = 'Matched to [[:toollabs:mix-n-match/#/entry/' + entry.id + '|' + entry.ext_name + ' (#' + entry.id + ')]]';
 
-	function onWidarReply(d) {
+	function onAuthReply(d) {
 		if (d.error != 'OK') {
 			mnm_notify(d.error, 'danger');
 			return callback(false);
@@ -118,14 +118,14 @@ MapSourceMnM.prototype._match_entry_to_q = function (data, q_norm, callback) {
 				if (!hasClaim) {
 					// Server returned no claim — treat as already-OK and proceed
 					// with MnM-side bookkeeping only.
-					return onWidarReply({ error: 'OK' });
+					return onAuthReply({ error: 'OK' });
 				}
-				widar.run({
+				auth.run({
 					botmode: 1,
 					action: 'generic',
 					summary: summary,
 					json: JSON.stringify({ action: 'wbeditentity', id: q_norm, data: pc.data })
-				}, onWidarReply);
+				}, onAuthReply);
 			})
 			.catch(function (e) {
 				mnm_notify(e.message, 'danger');
@@ -141,7 +141,7 @@ MapSourceMnM.prototype._match_entry_to_q = function (data, q_norm, callback) {
 		return callback(false);
 	}
 	let params = { botmode: 1, action: 'set_string', id: q_norm, prop: 'P973', text: value, summary: summary };
-	widar.run(params, onWidarReply);
+	auth.run(params, onAuthReply);
 };
 
 MapSourceMnM.prototype.action_match_to_item = function (data, callback) {
@@ -185,7 +185,7 @@ MapSourceMnM.prototype.action_create_new_item = async function (data, callback) 
 			summary: summary,
 			json: JSON.stringify(params)
 		};
-		widar.run(params, function (d) {
+		auth.run(params, function (d) {
 			if (d.error != 'OK') {
 				mnm_notify(d.error, 'danger');
 				return callback();

@@ -1,4 +1,4 @@
-import { mnm_api, mnm_fetch_json, mnm_loading, mnm_notify, ensure_catalog, get_specific_catalog, tt_update_interface, wd, widar } from './store.js';
+import { mnm_api, mnm_fetch_json, mnm_loading, mnm_notify, ensure_catalog, get_specific_catalog, tt_update_interface, wd, auth } from './store.js';
 
 export default Vue.extend({
 	props: ["id"],
@@ -15,7 +15,7 @@ export default Vue.extend({
 			try {
 				var d = await mnm_api('sync_match_q_multi', {
 					catalog: me.id,
-					tusc_user: widar.getUserName(),
+					tusc_user: auth.getUserName(),
 					data: JSON.stringify(me.data.wd_no_mm)
 				}, { method: 'POST' });
 				me.update_mnm_result = d;

@@ -9,7 +9,7 @@ use crate::{
     extended_entry::ExtendedEntry,
     person_date::PersonDate,
 };
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
 use log::info;
 use rand::RngExt;
@@ -69,16 +69,16 @@ impl BespokeScraper for BespokeScraper7895 {
 
         Self::extend_unique(&mut cache, &mut seen, Self::fetch_hbrid_listing(
             &client, cid, "/index.php/celebrities").await?);
-        self.maybe_flush_cache(&mut cache).await?;
+        self.maybe_flush_cache(&mut cache).await.context("flush after /celebrities")?;
         tokio::time::sleep(CRAWL_DELAY).await;
 
         Self::extend_unique(&mut cache, &mut seen, Self::fetch_hbrid_listing(
             &client, cid, "/index.php/examples").await?);
-        self.maybe_flush_cache(&mut cache).await?;
+        self.maybe_flush_cache(&mut cache).await.context("flush after /examples")?;
         tokio::time::sleep(CRAWL_DELAY).await;
 
         Self::extend_unique(&mut cache, &mut seen, Self::fetch_registered(&client, cid).await?);
-        self.maybe_flush_cache(&mut cache).await?;
+        self.maybe_flush_cache(&mut cache).await.context("flush after /registered")?;
         tokio::time::sleep(CRAWL_DELAY).await;
 
         // Bulk thematic CSVs — the bulk of the catalog (~600k rows).
@@ -100,10 +100,12 @@ impl BespokeScraper for BespokeScraper7895 {
             let count = rows.len();
             Self::extend_unique(&mut cache, &mut seen, rows);
             info!("histreg.no: {slug}: {count} rows");
-            self.maybe_flush_cache(&mut cache).await?;
+            self.maybe_flush_cache(&mut cache)
+                .await
+                .with_context(|| format!("flush after themareg slug {slug:?} ({count} rows)"))?;
         }
 
-        self.process_cache(&mut cache).await?;
+        self.process_cache(&mut cache).await.context("final process_cache flush")?;
         Ok(())
     }
 }

@@ -1,4 +1,4 @@
-import { mnm_api, mnm_fetch_json, mnm_notify, tt_update_interface, widar } from './store.js';
+import { mnm_api, mnm_fetch_json, mnm_notify, tt_update_interface, auth } from './store.js';
 
 // Shared inline reference for the $n / $Ln / $RID notation used in both
 // the Scraper and Resolve cards.
@@ -607,7 +607,7 @@ export default Vue.extend({
 		saveScraper: async function () {
 			const me = this;
 			if (!me.canSaveScraper()) return;
-			var params = { scraper: me.scraper, options: me.normalizedOptions(), levels: me.levels, tusc_user: widar.getUserName(), meta: me.meta };
+			var params = { scraper: me.scraper, options: me.normalizedOptions(), levels: me.levels, tusc_user: auth.getUserName(), meta: me.meta };
 			params.scraper = JSON.stringify(params.scraper); params.meta = JSON.stringify(params.meta);
 			params.levels = JSON.stringify(params.levels); params.options = JSON.stringify(params.options);
 			var btn = document.getElementById('save_scraper_button');
@@ -629,7 +629,7 @@ export default Vue.extend({
 			if (me.meta.catalog_id == '') {
 				if (me.meta.name == '' || me.meta.desc == '' || me.meta.lang == '') { me.can_save_message = 'Catalog information missing'; return false; }
 			}
-			var username = widar.getUserName();
+			var username = auth.getUserName();
 			if (typeof username == 'undefined') { me.can_save_message = 'You are not logged in'; return false; }
 			me.can_save_message = 'OK';
 			return true;

@@ -23,7 +23,7 @@ const state = Vue.observable({
 	// can access them via the global mixin below.
 	wd: null,
 	tt: null,
-	widar: null,
+	auth: null,
 });
 
 // Expose for index_vue.js to create window.specific_catalogs_cache alias
@@ -39,19 +39,19 @@ export var specific_catalogs_cache = state.specific_catalogs_cache;
 
 export var wd = null;
 export var tt = null;
-export var widar = null;
+export var auth = null;
 
 export function setWd(w) { wd = w; state.wd = w; }
 export function setTt(t) { tt = t; state.tt = t; }
-export function setWidar(w) { widar = w; state.widar = w; }
+export function setAuth(a) { auth = a; state.auth = a; }
 
-// Make wd/tt/widar available in every component's template as
+// Make wd/tt/auth available in every component's template as
 // reactive computed properties (templates can't see module imports).
 Vue.mixin({
 	computed: {
 		wd: function () { return state.wd; },
 		tt: function () { return state.tt; },
-		widar: function () { return state.widar; },
+		auth: function () { return state.auth; },
 	}
 });
 

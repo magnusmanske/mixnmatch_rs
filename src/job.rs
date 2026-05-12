@@ -139,10 +139,10 @@ impl Job {
             0 => self.set_status(JobStatus::Done).await?, // Don't fail
             _ => self.set_status(JobStatus::Failed).await?,
         }
-        let note = Some(format!("{error}"));
+        let note = Some(format!("{error:#}"));
         self.set_note(note).await?;
         let job_id = self.get_id().await?;
-        info!("Job {job_id} catalog {catalog_id}:{action} FAILED: {error}");
+        info!("Job {job_id} catalog {catalog_id}:{action} FAILED: {error:#}");
         Ok(())
     }
 

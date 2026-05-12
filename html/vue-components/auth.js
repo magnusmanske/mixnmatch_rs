@@ -1,4 +1,4 @@
-import { mnm_notify, tt_update_interface, setWidar } from './store.js';
+import { mnm_notify, tt_update_interface, setAuth } from './store.js';
 
 export const UserLink = {
 	name: 'userlink',
@@ -14,7 +14,7 @@ export const UserLink = {
 			if (this.username === 'automatic') return 'Automatic, preliminary matcher';
 			if (this.username === 'Automatic name/date matcher') return 'Automatic name/date matcher';
 			if (this.username === 'Auxiliary data matcher') return 'Auxiliary data matcher';
-			return this.username || '\u2014';
+			return this.username || '—';
 		},
 		is_system: function () {
 			return !this.username || /^-?\d+$/.test(this.username) ||
@@ -28,22 +28,22 @@ export const UserLink = {
 		'</span>'
 };
 
-var WIDAR_CACHE_KEY = 'mnm_widar_login';
+var AUTH_CACHE_KEY = 'mnm_auth_login';
 
 export default {
-	name: 'widar',
+	name: 'auth',
 	data: function () {
 		return {
 			is_logged_in: false,
 			userinfo: {},
-			widar_api: './api.php',
+			auth_api: './api.php',
 			loaded: false,
 			is_catalog_admin: false,
 			mnm_user_id: 0
 		}
 	},
 	created: function () {
-		setWidar(this);
+		setAuth(this);
 		this.restoreFromCache();
 		this.checkLogin();
 	},
@@ -52,7 +52,7 @@ export default {
 	methods: {
 		restoreFromCache: function () {
 			try {
-				var raw = sessionStorage.getItem(WIDAR_CACHE_KEY);
+				var raw = sessionStorage.getItem(AUTH_CACHE_KEY);
 				if (!raw) return;
 				var cached = JSON.parse(raw);
 				if (cached && cached.is_logged_in && cached.userinfo && cached.userinfo.name) {
@@ -66,7 +66,7 @@ export default {
 		},
 		saveToCache: function () {
 			try {
-				sessionStorage.setItem(WIDAR_CACHE_KEY, JSON.stringify({
+				sessionStorage.setItem(AUTH_CACHE_KEY, JSON.stringify({
 					is_logged_in: this.is_logged_in,
 					userinfo: this.userinfo,
 					is_catalog_admin: this.is_catalog_admin,
@@ -75,12 +75,12 @@ export default {
 			} catch (e) { /* quota or private-mode — ignore */ }
 		},
 		clearCache: function () {
-			try { sessionStorage.removeItem(WIDAR_CACHE_KEY); } catch (e) {}
+			try { sessionStorage.removeItem(AUTH_CACHE_KEY); } catch (e) {}
 		},
 		checkLogin: async function () {
 			const me = this;
 			try {
-				var resp = await fetch(me.widar_api + '?' + new URLSearchParams({ query: 'widar', action: 'get_rights', botmode: 1 }));
+				var resp = await fetch(me.auth_api + '?' + new URLSearchParams({ query: 'auth', action: 'get_rights', botmode: 1 }));
 				var d = await resp.json();
 				me.loaded = true;
 				if (d.result && d.result.query && d.result.query.userinfo) {
@@ -112,9 +112,9 @@ export default {
 			_retries = _retries || 0;
 			params.tool_hashtag = "mix'n'match";
 			params.botmode = 1;
-			params.query = 'widar';
+			params.query = 'auth';
 			try {
-				var resp = await fetch(me.widar_api, {
+				var resp = await fetch(me.auth_api, {
 					method: 'POST',
 					headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
 					body: new URLSearchParams(params)
@@ -150,6 +150,6 @@ export default {
 		<div v-if='is_logged_in' style='line-height:1.4em'><span tt="welcome"></span><br />
 			<userlink :username="userinfo.name" />
 		</div>
-		<div v-else><i tt="log_into_widar"></i></div>
+		<div v-else><i tt="log_into_auth"></i></div>
 	</div>`
 };

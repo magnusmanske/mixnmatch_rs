@@ -1,4 +1,4 @@
-import { mnm_api, mnm_fetch_json, mnm_notify, get_all_catalogs, tt_update_interface, wd, tt, widar } from './store.js';
+import { mnm_api, mnm_fetch_json, mnm_notify, get_all_catalogs, tt_update_interface, wd, tt, auth } from './store.js';
 
 function escHtml(s) {
 	var d = document.createElement('div');
@@ -219,7 +219,7 @@ export default Vue.extend({
 			var entry = me.current_entry;
 			var do_create = (q === '0');
 
-			// Edit Wikidata via WiDaR
+			// Edit Wikidata via the OAuth endpoint
 			if (me.catalog && me.catalog.wd_prop != null) {
 				var prop = 'P' + me.catalog.wd_prop;
 				var j;
@@ -234,7 +234,7 @@ export default Vue.extend({
 				}
 				try {
 					var wd_result = await new Promise(function (resolve) {
-						widar.run({ action: 'generic', json: JSON.stringify(j) }, function (d) { resolve(d); });
+						auth.run({ action: 'generic', json: JSON.stringify(j) }, function (d) { resolve(d); });
 					});
 					if (wd_result.error !== 'OK') {
 						mnm_notify('Wikidata error: ' + wd_result.error, 'danger');
@@ -253,7 +253,7 @@ export default Vue.extend({
 			// Set match in MnM
 			try {
 				await mnm_api('match_q', {
-					tusc_user: widar.getUserName(), entry: entry.id, q: q
+					tusc_user: auth.getUserName(), entry: entry.id, q: q
 				}, { method: 'POST' });
 			} catch (e) {
 				mnm_notify("Mix'n'match error: " + (e.message || e), 'danger');
@@ -288,8 +288,8 @@ export default Vue.extend({
 	<!-- Header -->
 	<div class='vm-header'>
 		<div v-if='catalog' style='float:right'>
-			<div v-if='widar && widar.is_logged_in'>{{widar.getUserName()}}</div>
-			<div v-else><a href='/widar/index.php?action=authorize' target='_blank'>Log in</a></div>
+			<div v-if='auth && auth.is_logged_in'>{{auth.getUserName()}}</div>
+			<div v-else><a href='/api.php?query=auth&action=authorize' target='_blank'>Log in</a></div>
 			<label style='font-weight:normal;margin-top:5px'><input type='checkbox' v-model='auto_advance' /> Load next on empty results</label>
 		</div>
 		<h1 v-if='catalog' style='margin:0;padding:0'>

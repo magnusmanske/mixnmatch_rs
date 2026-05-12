@@ -246,13 +246,13 @@ pub async fn merge_duplicate_claims_on_wikidata(
 
 /// Check whether item `q` on Wikidata already carries a top-level claim
 /// for `property` whose main snak's value equals `value`. Used as a
-/// pre-write guard so endpoints like `prep_match_claim` and Widar's
-/// `set_string` don't return a payload that the frontend would POST and
-/// thereby create a duplicate statement.
+/// pre-write guard so endpoints like `prep_match_claim` and the auth
+/// endpoint's `set_string` action don't return a payload that the frontend
+/// would POST and thereby create a duplicate statement.
 ///
 /// Uses the lightweight unauthenticated `wbgetclaims` API (no entity
 /// fetch, no auth, single property), matching the pattern in
-/// `api::widar::wikidata_string_claim_exists`. Network/parse failures
+/// `api::auth::wikidata_string_claim_exists`. Network/parse failures
 /// fall through to `false` — risk an occasional duplicate over dropping
 /// a legitimate match because the API blipped.
 pub async fn external_id_claim_exists(q: &str, property: &str, value: &str) -> bool {

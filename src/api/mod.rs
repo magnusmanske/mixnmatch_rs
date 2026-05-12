@@ -30,7 +30,7 @@ mod router;
 mod sparql;
 mod sync;
 mod upload;
-mod widar;
+mod auth;
 
 // Re-export business-logic entry points used by `crate::micro_api` while it
 // still exists. Once micro_api is removed these can become `pub(crate)`.

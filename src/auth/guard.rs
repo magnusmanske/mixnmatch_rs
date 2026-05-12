@@ -51,7 +51,7 @@ pub struct AuthedUser {
 /// If the caller DID pass such a parameter (the legacy PHP frontend always
 /// does), we verify it matches the session user and reject mismatches. This
 /// mirrors PHP `API::check_and_get_user_id` which compares the claimed name
-/// against `Widar::get_username()`.
+/// against the OAuth-verified session username.
 pub async fn require_user(
     app: &dyn ExternalServicesContext,
     session: &Session,

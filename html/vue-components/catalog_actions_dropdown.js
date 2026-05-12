@@ -1,4 +1,4 @@
-import { widar } from './store.js';
+import { auth } from './store.js';
 
 export default {
 	name: 'catalog-actions-dropdown',
@@ -42,7 +42,7 @@ export default {
 		<router-link :to='"/rc/"+catalog.id' class="dropdown-item" style="padding:2px"
 			tt="rc_for_catalog"></router-link>
 		<router-link :to='"/aliases/"+catalog.id' class="dropdown-item" style="padding:2px" tt="aliases"></router-link>
-		<router-link v-if='widar.is_logged_in' :to='"/jobs/"+catalog.id' class="dropdown-item" style="padding:2px"
+		<router-link v-if='auth.is_logged_in' :to='"/jobs/"+catalog.id' class="dropdown-item" style="padding:2px"
 			tt="jobs"></router-link>
 		<router-link :to='getSearchCatalogPath()' class="dropdown-item" style="padding:2px"
 			tt="search_this_catalog"></router-link>
@@ -54,7 +54,7 @@ export default {
 			tt='issues_in_this_catalog'></router-link>
 		<router-link v-if='catalog.wd_prop!=null && catalog.wd_qual==null' :to='"/sync/"+catalog.id'
 			class="dropdown-item" style="padding:2px" tt="sync_catalog"></router-link>
-		<router-link v-if='widar.is_catalog_admin || (widar.mnm_user_id && catalog.owner && widar.mnm_user_id==catalog.owner)'
+		<router-link v-if='auth.is_catalog_admin || (auth.mnm_user_id && catalog.owner && auth.mnm_user_id==catalog.owner)'
 			:to='"/catalog_editor/"+catalog.id' class="dropdown-item"
 			style="padding:2px" tt="catalog_editor"></router-link>
 		<!--

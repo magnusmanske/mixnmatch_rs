@@ -1,5 +1,5 @@
 import { editEntryMixin } from './mnm-mixins.js';
-import { mnm_api, mnm_fetch_json, mnm_notify, ensure_catalogs, tt_update_interface, widar } from './store.js';
+import { mnm_api, mnm_fetch_json, mnm_notify, ensure_catalogs, tt_update_interface, auth } from './store.js';
 
 export default Vue.extend({
 	mixins: [editEntryMixin],
@@ -372,7 +372,7 @@ export default Vue.extend({
 							@click.prevent="resetDefaultEntry" tt="reset_default_entry"></button>
 						<button class="btn btn-outline-secondary mnm-action-btn" @click.prevent="toggleCheckboxes"
 							tt="toggle_checkboxes"></button>
-						<template v-if="widar.is_logged_in && checkedInGroup(num) > 0">
+						<template v-if="auth.is_logged_in && checkedInGroup(num) > 0">
 							<button v-if="typeof assign_q_input[num] === 'undefined'"
 								class="btn btn-outline-primary mnm-action-btn"
 								@click.prevent="showAssignQ(num)">
@@ -395,7 +395,7 @@ export default Vue.extend({
 			<div>
 				<button class="btn btn-outline-primary next_cc_set" @click.prevent='entries=[];loadData();return false'
 					tt='next_set'></button>
-				<span v-if='widar.is_logged_in'>
+				<span v-if='auth.is_logged_in'>
 					<button v-if='edits_todo.length==0' class='btn btn-outline-success' @click.prevent='createNewItem'
 						tt_title='creation_warning'><span tt='create_new_item_for'></span>
 						"{{entries[0].ext_name}}"</button>

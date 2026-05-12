@@ -1,4 +1,4 @@
-import { mnm_api, mnm_notify, ensure_catalogs, get_specific_catalog, tt_update_interface, widar } from './store.js';
+import { mnm_api, mnm_notify, ensure_catalogs, get_specific_catalog, tt_update_interface, auth } from './store.js';
 
 const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
@@ -91,7 +91,7 @@ export default Vue.extend({
 			if (typeof window != 'undefined' && window.scrollTo) window.scrollTo(0, 0);
 		},
 		canResolve: function () {
-			return typeof widar.getUserName() != 'undefined'
+			return typeof auth.getUserName() != 'undefined'
 		},
 		get_catalog: function (catalog_id) {
 			return get_specific_catalog(catalog_id);
@@ -108,7 +108,7 @@ export default Vue.extend({
 			try {
 				await mnm_api('resolve_issue', {
 					issue_id: issue_id,
-					username: widar.getUserName()
+					username: auth.getUserName()
 				});
 				let idx = me.issues.findIndex(function (i) { return i.id === issue_id; });
 				if (idx >= 0) Vue.set(me.issues[idx], 'is_resolved', true);
@@ -234,7 +234,7 @@ export default Vue.extend({
 					</div>
 					<div v-if='!i.is_resolved' class='ms-auto'>
 						<button v-if='canResolve()' class='btn btn-outline-primary btn-sm' tt='resolve' @click.prevent='resolve(i.id)'></button>
-						<small v-else class='text-muted' tt='log_into_widar'></small>
+						<small v-else class='text-muted' tt='log_into_auth'></small>
 					</div>
 				</div>
 			</div>

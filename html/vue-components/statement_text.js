@@ -1,4 +1,4 @@
-import { mnm_api, mnm_fetch_json, ensure_catalog, get_specific_catalog, tt_update_interface, widar, tt } from './store.js';
+import { mnm_api, mnm_fetch_json, ensure_catalog, get_specific_catalog, tt_update_interface, auth, tt } from './store.js';
 
 export default Vue.extend({
 	props: ['id'],
@@ -204,7 +204,7 @@ export default Vue.extend({
 
 			try {
 				await mnm_api('set_statement_text_q', {
-					tusc_user: widar.getUserName(),
+					tusc_user: auth.getUserName(),
 					catalog: me.id,
 					property: property,
 					text: text,

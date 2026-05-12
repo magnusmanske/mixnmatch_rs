@@ -1,4 +1,4 @@
-import { mnm_api, mnm_fetch_json, mnm_notify, ensure_catalog, get_specific_catalog, widar, escapeHtml, wd } from './store.js';
+import { mnm_api, mnm_fetch_json, mnm_notify, ensure_catalog, get_specific_catalog, auth, escapeHtml, wd } from './store.js';
 
 export default Vue.extend({
   props: ['id'],
@@ -16,7 +16,7 @@ export default Vue.extend({
       score: 0,
       remaining: 0,
       last_created_q: null,
-      widar_ready: false,
+      auth_ready: false,
       wd_local: null,
       wp_query: '',
       running: 0,
@@ -51,7 +51,7 @@ export default Vue.extend({
     if (me.id) {
       me.catalog_id = me.id;
     }
-    me.checkWidar();
+    me.checkAuth();
   },
   mounted: function () {
     const me = this;
@@ -70,13 +70,13 @@ export default Vue.extend({
     }
   },
   methods: {
-    checkWidar: function () {
+    checkAuth: function () {
       const me = this;
-      // Wait for the global widar component to be ready
+      // Wait for the global auth component to be ready
       function poll() {
-        if (typeof widar !== 'undefined' && widar.loaded) {
-          me.widar_ready = widar.is_logged_in;
-          if (me.widar_ready && me.catalog_id) me.loadRandom();
+        if (typeof auth !== 'undefined' && auth.loaded) {
+          me.auth_ready = auth.is_logged_in;
+          if (me.auth_ready && me.catalog_id) me.loadRandom();
         } else {
           setTimeout(poll, 100);
         }
@@ -117,12 +117,12 @@ export default Vue.extend({
       return h;
     },
 
-    // === WiDaR wrapper ===
-    getWidar: async function (p, callback, _retries) {
+    // === Auth wrapper ===
+    getAuth: async function (p, callback, _retries) {
       const me = this;
       const maxRetries = 5;
       _retries = _retries || 0;
-      p.query = 'widar';
+      p.query = 'auth';
       p.tool_hashtag = "mix'n'match-mobile-game";
       try {
         var resp = await fetch('./api.php?' + new URLSearchParams(p));
@@ -131,7 +131,7 @@ export default Vue.extend({
           var retryable = /Invalid token|happen|Problem creating item/.test(d.error) ||
             (p.action != 'create_redirect' && /failed/.test(d.error));
           if (_retries < maxRetries && retryable) {
-            setTimeout(function () { me.getWidar(p, callback, _retries + 1); }, 500 * (_retries + 1));
+            setTimeout(function () { me.getAuth(p, callback, _retries + 1); }, 500 * (_retries + 1));
           } else {
             if (_retries >= maxRetries) mnm_notify('Wikidata edit failed after ' + maxRetries + ' retries', 'danger');
             callback(d);
@@ -141,7 +141,7 @@ export default Vue.extend({
         }
       } catch (e) {
         if (_retries < maxRetries) {
-          setTimeout(function () { me.getWidar(p, callback, _retries + 1); }, 1000 * (_retries + 1));
+          setTimeout(function () { me.getAuth(p, callback, _retries + 1); }, 1000 * (_retries + 1));
         } else {
           mnm_notify('Network error: could not reach API after ' + maxRetries + ' retries', 'danger');
           callback({ error: 'Network error after ' + maxRetries + ' retries' });
@@ -155,7 +155,7 @@ export default Vue.extend({
       q = ('' + q).replace(/\D/g, '');
       try {
         var d = await mnm_api('match_q', {
-          tusc_user: widar.getUserName(), entry: me.current_entry.id, q: q
+          tusc_user: auth.getUserName(), entry: me.current_entry.id, q: q
         }, { method: 'POST' });
         if (q * 1 > 0 && d.entry && d.entry.wd_prop && parseInt(d.entry.wd_prop) > 0 &&
           d.entry.wd_qual === null && !(d.entry.ext_id || '').match(/^fake_id_/)) {
@@ -169,7 +169,7 @@ export default Vue.extend({
           var hasClaim = pc && pc.data && pc.data.claims &&
             (Array.isArray(pc.data.claims) ? pc.data.claims.length > 0 : Object.keys(pc.data.claims).length > 0);
           if (!hasClaim) { callback(); return; }
-          me.getWidar({
+          me.getAuth({
             botmode: 1,
             action: 'generic',
             json: JSON.stringify({ action: 'wbeditentity', id: qid, data: pc.data })
@@ -185,7 +185,7 @@ export default Vue.extend({
     matchEntrySpecial: async function (qValue, callback) {
       try {
         await mnm_api('match_q', {
-          tusc_user: widar.getUserName(), entry: this.current_entry.id, q: qValue
+          tusc_user: auth.getUserName(), entry: this.current_entry.id, q: qValue
         }, { method: 'POST' });
         callback();
       } catch (e) {
@@ -196,7 +196,7 @@ export default Vue.extend({
     matchEntryToNewQ: async function (q, callback) {
       try {
         await mnm_api('match_q', {
-          tusc_user: widar.getUserName(), entry: this.current_entry.id, q: q
+          tusc_user: auth.getUserName(), entry: this.current_entry.id, q: q
         }, { method: 'POST' });
         callback();
       } catch (e) {
@@ -246,7 +246,7 @@ export default Vue.extend({
         var summary = 'New item based on [[:toollabs:mix-n-match/#/entry/' +
           me.current_entry.id + '|' + me.current_entry.ext_name + ' (#' + me.current_entry.id + ')]]' +
           (catalog ? ' in [[:toollabs:mix-n-match/#/catalog/' + catalog.id + '|' + catalog.name + ']]' : '');
-        me.getWidar({
+        me.getAuth({
           botmode: 1, action: 'generic', summary: summary,
           json: JSON.stringify({ action: 'wbeditentity', 'new': 'item', data: d.data })
         }, function (wd_result) {
@@ -488,9 +488,9 @@ export default Vue.extend({
   },
   template: `<div class='mt-2'>
     <mnm-breadcrumb :crumbs="[{text: 'Quick match'}]"></mnm-breadcrumb>
-    <div v-if='!widar_ready'>
+    <div v-if='!auth_ready'>
         <div class='alert alert-warning m-3'>
-            <a href='/widar/index.php?action=authorize' target='_blank'>Log into WiDaR</a>
+            <a href='/api.php?query=auth&action=authorize' target='_blank'>Log in</a>
             to make edits, then reload this page.
         </div>
     </div>

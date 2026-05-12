@@ -1,4 +1,4 @@
-import { mnm_api, mnm_fetch_json, mnm_notify, ensure_catalog, get_specific_catalog, tt_update_interface, widar } from './store.js';
+import { mnm_api, mnm_fetch_json, mnm_notify, ensure_catalog, get_specific_catalog, tt_update_interface, auth } from './store.js';
 
 // Seconds for autoscraper repeat options.
 const REPEAT_SECONDS = {
@@ -85,9 +85,9 @@ export default Vue.extend({
 	computed: {
 		// Admin OR creator of this catalog can edit.
 		can_edit: function () {
-			if (widar.is_catalog_admin) return true;
-			if (!widar.mnm_user_id || !this.catalog || !this.catalog.owner) return false;
-			return widar.mnm_user_id == this.catalog.owner;
+			if (auth.is_catalog_admin) return true;
+			if (!auth.mnm_user_id || !this.catalog || !this.catalog.owner) return false;
+			return auth.mnm_user_id == this.catalog.owner;
 		},
 		has_locations: function () {
 			if (!this.catalog) return false;
@@ -147,7 +147,7 @@ export default Vue.extend({
 			if (!confirm('Delete this autoscraper? This cannot be undone.')) return;
 			try {
 				await mnm_api('delete_autoscraper', {
-					username: widar.getUserName(),
+					username: auth.getUserName(),
 					catalog: me.id,
 				}, { method: 'POST' });
 				me.has_autoscraper = false;
@@ -246,7 +246,7 @@ export default Vue.extend({
 					if (c.rank == 'preferred' || (url == '' && c.rank == 'normal')) url = c.mainsnak.datavalue.value;
 				});
 				if (url == '') { mnm_notify(prop + ' has no suitable formatter URL', 'danger'); return; }
-				await mnm_api('update_ext_urls', { username: widar.getUserName(), url: url, catalog: me.id });
+				await mnm_api('update_ext_urls', { username: auth.getUserName(), url: url, catalog: me.id });
 				mnm_notify('Done', 'success');
 			} catch (e) { mnm_notify(e.message, 'danger'); }
 		},
@@ -290,7 +290,7 @@ export default Vue.extend({
 					payload.autoscraper_repeat = REPEAT_SECONDS[me.autoscraper_repeat] || null;
 				}
 				await mnm_api('edit_catalog', {
-					username: widar.getUserName(),
+					username: auth.getUserName(),
 					catalog: me.id,
 					data: JSON.stringify(payload)
 				}, { method: 'POST' });

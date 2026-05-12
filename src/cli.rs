@@ -323,7 +323,7 @@ impl ShellCommands {
         // Persistent session store: one JSON file per session under
         // `oauth.session_dir`. Users stay logged in across restarts up to the
         // configured `session_lifetime_days` (default 90 days, matching the
-        // PHP Widar cookie lifetime).
+        // legacy OAuth cookie lifetime).
         let session_store =
             crate::auth::file_store::FileSessionStore::new(PathBuf::from(&oauth_cfg.session_dir))
                 .map_err(|e| anyhow!("cannot open session_dir '{}': {e}", oauth_cfg.session_dir))?;

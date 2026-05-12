@@ -1,5 +1,5 @@
 import { entryDisplayMixin, editEntryMixin, entryMixin } from './mnm-mixins.js';
-import { wd, tt, tt_update_interface, get_specific_catalog, widar } from './store.js';
+import { wd, tt, tt_update_interface, get_specific_catalog, auth } from './store.js';
 
 export default {
 	name: 'entry-list-item',
@@ -255,7 +255,7 @@ export default {
 					</div>
 				</div>
 				<div class='entry_cell_right col-sm-12 col-md-3'>
-					<div v-if='widar.is_logged_in' class='btn-group btn-group-sm'>
+					<div v-if='auth.is_logged_in' class='btn-group btn-group-sm'>
 						<button class='btn btn-outline-success mnm-action-btn' @click.prevent='setUserQ' tt='set_q'></button>
 						<button v-if="canCreateNewWikidataItem()" class='btn btn-outline-danger mnm-action-btn' @click.prevent='newItem' tt='new_item'></button>
 						<button class='btn btn-outline-warning mnm-action-btn' @click.prevent='setNA' tt='n_a'></button>

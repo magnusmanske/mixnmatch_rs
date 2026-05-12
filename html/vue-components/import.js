@@ -1,5 +1,5 @@
 import { validate_meta_entry, parseAndValidateImportFile } from './import-json-validator.js';
-import { mnm_api, mnm_fetch_json, mnm_notify, tt_update_interface, widar } from './store.js';
+import { mnm_api, mnm_fetch_json, mnm_notify, tt_update_interface, auth } from './store.js';
 
 export default Vue.extend({
     props: ['original_catalog_id'],
@@ -200,7 +200,7 @@ export default Vue.extend({
             let formData = new FormData();
             formData.append('query', 'upload_import_file');
             formData.append('data_format', self.json_data_format);
-            formData.append('username', widar.getUserName());
+            formData.append('username', auth.getUserName());
             formData.append('import_file', blob, filename);
             try {
                 let resp = await fetch('/api.php', { method: 'POST', body: formData });
@@ -224,7 +224,7 @@ export default Vue.extend({
             var data = new FormData(form);
             data.append('query', 'upload_import_file');
             data.append('data_format', self.update_info.data_format);
-            data.append('username', widar.getUserName());
+            data.append('username', auth.getUserName());
             var xhr = new XMLHttpRequest();
             xhr.upload.addEventListener('progress', function (e) {
                 if (e.lengthComputable) self.file_upload_pct = Math.round(e.loaded / e.total * 100);
@@ -280,7 +280,7 @@ export default Vue.extend({
                     meta: JSON.stringify(self.meta),
                     catalog: self.meta.catalog_id == '' ? 0 : self.meta.catalog_id * 1,
                     seconds: self.seconds,
-                    username: widar.getUserName()
+                    username: auth.getUserName()
                 }, { method: 'POST' });
                 self.importing = false;
                 // Server wraps the payload under `data` (see common::ok);
@@ -677,7 +677,7 @@ export default Vue.extend({
 								<strong>Upload file</strong>
 							</div>
 							<div v-if="source === 'file'">
-								<div v-if='widar.is_logged_in'>
+								<div v-if='auth.is_logged_in'>
 									<form class='file_upload_form'>
 										<div style="max-width:400px">
 											<input type="file" name="import_file" class="form-control"
@@ -695,7 +695,7 @@ export default Vue.extend({
 										<small class="text-muted">Uploading&hellip; {{file_upload_pct}}%</small>
 									</div>
 								</div>
-								<div v-else class="text-danger" tt='log_into_widar'></div>
+								<div v-else class="text-danger" tt='log_into_auth'></div>
 							</div>
 						</div>
 					</div>
@@ -773,7 +773,7 @@ export default Vue.extend({
 					</div>
 				</div>
 
-				<div v-if='widar.is_logged_in'>
+				<div v-if='auth.is_logged_in'>
 					<div class="mb-3">
 						<label class="fw-bold">{{json_data_format.toUpperCase()}} file</label>
 						<div style="max-width:500px">
@@ -843,7 +843,7 @@ export default Vue.extend({
 						</div>
 					</div>
 				</div>
-				<div v-else class="alert alert-warning" tt='log_into_widar'></div>
+				<div v-else class="alert alert-warning" tt='log_into_auth'></div>
 
 				<div class="d-flex justify-content-between mt-3">
 					<button class="btn btn-outline-secondary" @click.prevent="step=0">&larr; Back</button>
@@ -999,7 +999,7 @@ export default Vue.extend({
 
 					<!-- Import button -->
 					<div class="text-center">
-						<div v-if='widar.is_logged_in'>
+						<div v-if='auth.is_logged_in'>
 							<button class='btn btn-success btn-lg px-5' @click.prevent='import_source'
 								:disabled="importing">
 								<span v-if="importing">
@@ -1009,7 +1009,7 @@ export default Vue.extend({
 								<span v-else tt='looks_good_import'></span>
 							</button>
 						</div>
-						<div v-else class="alert alert-warning" tt='log_into_widar'></div>
+						<div v-else class="alert alert-warning" tt='log_into_auth'></div>
 					</div>
 				</div>
 

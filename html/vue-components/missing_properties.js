@@ -1,4 +1,4 @@
-import { mnm_api, mnm_notify, tt_update_interface, widar } from './store.js';
+import { mnm_api, mnm_notify, tt_update_interface, auth } from './store.js';
 
 const PAGE_SIZE_OPTIONS = [25, 50, 100, 250];
 const STATUS_LABELS = {
@@ -56,7 +56,7 @@ export default Vue.extend({
 	updated: function () { tt_update_interface() },
 	mounted: function () { tt_update_interface() },
 	computed: {
-		widar: function () { return widar; },
+		auth: function () { return auth; },
 		total: function () { return this.props_filtered.length; },
 		rows: function () {
 			return this.props_filtered.slice(this.start, this.start + this.max);
@@ -95,7 +95,7 @@ export default Vue.extend({
 					row_id: row.id,
 					status: row.status,
 					note: note,
-					username: widar.getUserName(),
+					username: auth.getUserName(),
 				});
 				// Recompute the per-status counts so the progress bar reflects the change.
 				this.recount_statuses();
@@ -222,7 +222,7 @@ export default Vue.extend({
 						<td>{{row.property_name}}</td>
 						<td><small class='text-muted'>{{row.default_type}}</small></td>
 						<td class='mnm-mp-status-cell'>
-							<span v-if='widar.is_logged_in'>
+							<span v-if='auth.is_logged_in'>
 								<select @change='on_status_change(row)' v-model='row.status' class='form-select form-select-sm' @click.stop>
 									<option v-for='(value,status) in statuses' :key='status' :value='status'>
 										{{statusLabel(status)}}

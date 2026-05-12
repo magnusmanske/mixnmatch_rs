@@ -1,4 +1,4 @@
-import { mnm_api, mnm_notify, mnm_loading, ensure_catalogs, get_specific_catalog, tt_update_interface, widar } from './store.js';
+import { mnm_api, mnm_notify, mnm_loading, ensure_catalogs, get_specific_catalog, tt_update_interface, auth } from './store.js';
 
 export default Vue.extend({
 	props: ['id'],
@@ -98,7 +98,7 @@ export default Vue.extend({
 					group_id: me.selected_group.id,
 					group_name: me.selected_group.name,
 					catalogs: cids,
-					username: widar.getUserName()
+					username: auth.getUserName()
 				}, { method: 'POST' });
 				me.selected_group.catalogs = cids;
 				me.original_catalog_ids = me.current_catalogs.map(function (c) { return String(c.id); });
@@ -120,7 +120,7 @@ export default Vue.extend({
 					group_id: 0,
 					group_name: name,
 					catalogs: '',
-					username: widar.getUserName()
+					username: auth.getUserName()
 				}, { method: 'POST' });
 				me.new_group_name = '';
 				me.show_create = false;
@@ -142,7 +142,7 @@ export default Vue.extend({
 			try {
 				await mnm_api('remove_empty_top_group', {
 					group_id: me.selected_group.id,
-					username: widar.getUserName()
+					username: auth.getUserName()
 				}, { method: 'POST' });
 				me.groups = me.groups.filter(function (g) { return g.id * 1 !== me.selected_group.id * 1; });
 				me.filterGroups();
@@ -184,7 +184,7 @@ export default Vue.extend({
 		<div v-if='loading_detail' class='text-center py-3'><i tt='loading'></i></div>
 		<div v-else>
 			<!-- Catalog list: editable picker for logged-in users, read-only tags otherwise -->
-			<div v-if='widar.is_logged_in' class='mb-3'>
+			<div v-if='auth.is_logged_in' class='mb-3'>
 				<catalog-search-picker :multi='true' :linkable='true' :value='current_catalogs' @change='onCatalogsChange'
 					placeholder='Search catalogs to add...'></catalog-search-picker>
 			</div>
@@ -207,7 +207,7 @@ export default Vue.extend({
 				<small v-if='has_changes' class='text-muted'>{{changes_summary}}</small>
 			</div>
 
-			<div v-if='widar.is_logged_in && current_catalogs.length==0 && !has_changes' class='mt-3'>
+			<div v-if='auth.is_logged_in && current_catalogs.length==0 && !has_changes' class='mt-3'>
 				<button class='btn btn-outline-danger btn-sm' @click.prevent='deleteEmptyGroup' tt='remove_empty_group'></button>
 			</div>
 		</div>
@@ -233,7 +233,7 @@ export default Vue.extend({
 			</a>
 		</div>
 
-		<div v-if='widar.is_logged_in'>
+		<div v-if='auth.is_logged_in'>
 			<div v-if='!show_create'>
 				<button class='btn btn-outline-primary btn-sm' @click.prevent='show_create=true' tt='create_new_group'></button>
 			</div>

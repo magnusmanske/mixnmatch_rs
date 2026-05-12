@@ -1,4 +1,4 @@
-import { mnm_api, mnm_notify, ensure_catalog, get_specific_catalog, tt_update_interface, widar } from './store.js';
+import { mnm_api, mnm_notify, ensure_catalog, get_specific_catalog, tt_update_interface, auth } from './store.js';
 
 
 export default Vue.extend({
@@ -64,12 +64,12 @@ export default Vue.extend({
         },
         loadCode: async function () {
             let me = this;
-            if (!widar.loaded) {
+            if (!auth.loaded) {
                 return setTimeout(me.loadCode, 100);
             }
             let d = await mnm_api('get_code_fragments', {
                 catalog: me.catalog_id,
-                username: widar.getUserName(),
+                username: auth.getUserName(),
             });
             me.code_fragments = d.data.fragments;
             me.all_functions = d.data.all_functions;
