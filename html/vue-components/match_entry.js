@@ -29,45 +29,69 @@ export default {
             me.wp_failed = false;
             me.wp_entries = [];
             me.wp_q_by_title = {};
-            try {
-                var d = await mnm_fetch_json('https://' + me.catalog.search_wp + '.wikipedia.org/w/api.php', {
-                    action: 'query',
-                    list: 'search',
-                    format: 'json',
-                    origin: '*',
-                    srsearch: me.filteredName()
-                });
-                me.wp_entries = (d && d.query && d.query.search) ? d.query.search : [];
 
-                var titles = me.wp_entries.map(function (v) { return v.title; });
-                if (titles.length == 0) return;
+            // Retry once after a short delay on any thrown error. mnm_fetch_json
+            // already handles 429 internally (reads Retry-After, one retry); this
+            // outer loop covers 5xx, network blips, and the case where the
+            // internal 429 retry itself was rate-limited again. During the wait
+            // loaded_wp stays false so the card stays hidden — no flash of the
+            // "Wikipedia search unavailable" message.
+            var maxAttempts = 2;
+            var retryDelayMs = 5000;
+            var lastError = null;
+            for (var attempt = 1; attempt <= maxAttempts; attempt++) {
+                try {
+                    var d = await mnm_fetch_json('https://' + me.catalog.search_wp + '.wikipedia.org/w/api.php', {
+                        action: 'query',
+                        list: 'search',
+                        format: 'json',
+                        origin: '*',
+                        srsearch: me.filteredName()
+                    });
+                    me.wp_entries = (d && d.query && d.query.search) ? d.query.search : [];
 
-                // Resolve each Wikipedia title to its Wikidata item in one
-                // wbgetentities call, then drive the template's "WD" column
-                // off `wp_q_by_title`. The previous implementation did this
-                // via querySelector + innerHTML + manual event wiring — a
-                // pattern that breaks on shape changes and is a real XSS
-                // surface (raw HTML concatenation of remote-API values).
-                var site = me.catalog.search_wp + 'wiki';
-                var d2 = await mnm_fetch_json('https://www.wikidata.org/w/api.php', {
-                    action: 'wbgetentities',
-                    props: 'sitelinks',
-                    titles: titles.join('|'),
-                    sites: site,
-                    format: 'json',
-                    origin: '*'
-                });
-                var entities = (d2 && d2.entities) ? d2.entities : {};
-                Object.entries(entities).forEach(function ([q, v]) {
-                    if (q * 1 < 0) return;
-                    if (!v || !v.sitelinks || !v.sitelinks[site]) return;
-                    var title = v.sitelinks[site].title;
-                    Vue.set(me.wp_q_by_title, me.normaliseTitle(title), q);
-                });
-            } finally {
-                me.loaded_wp = true;
-                tt_update_interface();
+                    var titles = me.wp_entries.map(function (v) { return v.title; });
+                    if (titles.length > 0) {
+                        // Resolve each Wikipedia title to its Wikidata item in one
+                        // wbgetentities call, then drive the template's "WD" column
+                        // off `wp_q_by_title`. The previous implementation did this
+                        // via querySelector + innerHTML + manual event wiring — a
+                        // pattern that breaks on shape changes and is a real XSS
+                        // surface (raw HTML concatenation of remote-API values).
+                        var site = me.catalog.search_wp + 'wiki';
+                        var d2 = await mnm_fetch_json('https://www.wikidata.org/w/api.php', {
+                            action: 'wbgetentities',
+                            props: 'sitelinks',
+                            titles: titles.join('|'),
+                            sites: site,
+                            format: 'json',
+                            origin: '*'
+                        });
+                        var entities = (d2 && d2.entities) ? d2.entities : {};
+                        Object.entries(entities).forEach(function ([q, v]) {
+                            if (q * 1 < 0) return;
+                            if (!v || !v.sitelinks || !v.sitelinks[site]) return;
+                            var title = v.sitelinks[site].title;
+                            Vue.set(me.wp_q_by_title, me.normaliseTitle(title), q);
+                        });
+                    }
+                    lastError = null;
+                    break;
+                } catch (e) {
+                    lastError = e;
+                    console.error('Wikipedia search failed (attempt ' + attempt + '/' + maxAttempts + '):', e);
+                    if (attempt < maxAttempts) {
+                        // Reset partial state so a failed first attempt doesn't
+                        // leak entries into the retry's accumulator.
+                        me.wp_entries = [];
+                        me.wp_q_by_title = {};
+                        await new Promise(function (r) { setTimeout(r, retryDelayMs); });
+                    }
+                }
             }
+            if (lastError) me.wp_failed = true;
+            me.loaded_wp = true;
+            tt_update_interface();
         },
 
         /// Click handler for the WD-column "↑" button: assigns the row's
@@ -147,7 +171,9 @@ export default {
             }).catch(function () {}).then(function () { me.loaded_wd = true });
 
             me.loadDataWikipedia().catch(function (e) {
-                console.error('Wikipedia search failed:', e);
+                // loadDataWikipedia handles its own retries and never throws;
+                // this catch is defensive in case future edits regress that.
+                console.error('Wikipedia search failed unexpectedly:', e);
                 me.wp_failed = true;
                 me.loaded_wp = true;
             });
