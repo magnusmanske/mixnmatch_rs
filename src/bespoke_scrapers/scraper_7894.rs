@@ -3,6 +3,7 @@ use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use rand::RngExt;
 use std::sync::Arc;
+use std::time::Duration;
 
 use super::BespokeScraper;
 
@@ -19,8 +20,16 @@ use super::BespokeScraper;
 // PASE has no precise birth/death dates — only "floruit" notation
 // (e.g. "m x" = mid-10th century). The summary `details` field carries
 // the floruit plus a one-line role, which we use as ext_desc.
+//
+// pase.ac.uk currently serves an **expired TLS certificate**, and its
+// nginx 301-redirects any plain-http request back to https, so the
+// shared `AppContext::http_client()` (which validates certs) fails
+// with a generic "error sending request" on the redirect target.
+// We build a dedicated client that skips cert validation — narrow
+// scope, public read-only data, and the issue is the academic host's,
+// not ours.
 
-const BASE: &str = "http://pase.ac.uk/pase";
+const BASE: &str = "https://pase.ac.uk/pase";
 
 #[derive(Debug)]
 pub struct BespokeScraper7894 {
@@ -32,7 +41,7 @@ impl BespokeScraper for BespokeScraper7894 {
     scraper_boilerplate!(7894);
 
     async fn run(&self) -> Result<()> {
-        let client = self.http_client();
+        let client = build_pase_client()?;
         let mut entry_cache: Vec<ExtendedEntry> = vec![];
         let mut page: u32 = 1;
         let mut total_pages: u32 = 1;
@@ -59,6 +68,18 @@ impl BespokeScraper for BespokeScraper7894 {
         self.process_cache(&mut entry_cache).await?;
         Ok(())
     }
+}
+
+/// Build a one-off `reqwest::Client` that tolerates pase.ac.uk's
+/// expired TLS cert. Reused across the whole `run()` so the
+/// connection pool stays warm for the ~200 list-page fetches.
+fn build_pase_client() -> Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .danger_accept_invalid_certs(true)
+        .user_agent("mix-n-match (https://mix-n-match.toolforge.org)")
+        .build()
+        .map_err(|e| anyhow!("failed to build PASE HTTP client: {e}"))
 }
 
 impl BespokeScraper7894 {
