@@ -439,6 +439,22 @@ impl AppState {
             self.max_concurrent_jobs
         );
         loop {
+            // HIGH_PRIORITY fast-path: bypass the capacity gate, the big-job
+            // size filter, and per-action concurrency caps. A flood of HP
+            // jobs all start immediately; they still count toward
+            // `current_jobs`, so normal-priority dispatch waits for the cap
+            // as usual. The `continue` is intentional — on a successful
+            // dispatch we re-check for more HP jobs before doing anything
+            // else, so a queued batch drains back-to-back without sleeps.
+            match self
+                .forever_loop_try_dispatch_high_priority(&current_jobs, &action_counts)
+                .await
+            {
+                Ok(true) => continue,
+                Ok(false) => {}
+                Err(e) => error!("HIGH_PRIORITY fast-path error: {e}"),
+            }
+
             let current_jobs_len = current_jobs.len();
             if current_jobs_len >= self.max_concurrent_jobs {
                 Self::hold_on();
@@ -458,6 +474,50 @@ impl AppState {
             }
         }
         // self.disconnect().await?; // Never happens
+    }
+
+    /// Pick the next HIGH_PRIORITY job ignoring every dispatch gate.
+    ///
+    /// Unlike [`Job::get_next_high_priority_job`] (which respects the
+    /// caller's `skip_actions`, populated from the big-job size filter and
+    /// per-action concurrency caps), this passes an empty filter list — by
+    /// design, HIGH_PRIORITY means "start now, regardless of capacity, job
+    /// size, or per-action caps." Used by the forever-loop fast-path.
+    ///
+    /// Returns `Ok(None)` when no HP job is pending, or when a row was
+    /// found but vanished before it could be loaded (rare; treated as
+    /// "no HP available" and falls through to normal dispatch).
+    pub(crate) async fn pick_high_priority_job(&self) -> Result<Option<Job>> {
+        let Some(job_id) = self
+            .storage()
+            .jobs_get_next_job(JobStatus::HighPriority, None, &[], None)
+            .await
+        else {
+            return Ok(None);
+        };
+        let mut job = Job::new(self);
+        if !job.set_from_id(job_id).await? {
+            return Ok(None);
+        }
+        Ok(Some(job))
+    }
+
+    /// Dispatch a HIGH_PRIORITY job if one is pending. Returns `true` when
+    /// a job was dispatched (the caller should loop immediately to check
+    /// for more), `false` when nothing was pending.
+    async fn forever_loop_try_dispatch_high_priority(
+        &self,
+        current_jobs: &Arc<DashMap<usize, TaskSize>>,
+        action_counts: &Arc<DashMap<String, usize>>,
+    ) -> Result<bool> {
+        let Some(job) = self.pick_high_priority_job().await? else {
+            return Ok(false);
+        };
+        let task_size = self.storage().jobs_get_tasks().await.unwrap_or_default();
+        let job_id = job.get_id().await?;
+        info!("HIGH_PRIORITY fast-path: dispatching job {job_id}");
+        Self::run_job(job, task_size, current_jobs, action_counts).await;
+        Ok(true)
     }
 
     async fn forever_loop_initalize(
@@ -706,6 +766,143 @@ mod tests {
 
         let app4 = crate::test_support::test_app().await;
         let _dyn_ctx: &dyn AppContext = &app4;
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // HIGH_PRIORITY fast-path tests
+    //
+    // The pick query is global (`SELECT ... LIMIT 1` over the whole
+    // jobs table) so multiple HP tests in parallel would step on each
+    // other's seeded rows. Verified by grep: no other test in the
+    // codebase seeds HIGH_PRIORITY, so we only have to serialize HP
+    // tests against each other — done via HP_TEST_MUTEX below, with a
+    // pre-test purge of any stale HP rows from earlier runs in the same
+    // test process.
+    // ──────────────────────────────────────────────────────────────
+
+    static HP_TEST_MUTEX: LazyLock<tokio::sync::Mutex<()>> =
+        LazyLock::new(|| tokio::sync::Mutex::new(()));
+
+    async fn purge_hp_jobs() -> anyhow::Result<()> {
+        use mysql_async::prelude::Queryable;
+        let (pool, mut conn) = crate::test_support::raw_conn().await?;
+        conn.exec_drop("DELETE FROM jobs WHERE status='HIGH_PRIORITY'", ())
+            .await?;
+        drop(conn);
+        pool.disconnect().await.ok();
+        Ok(())
+    }
+
+    /// Seed a job row with a caller-specified status. Mirrors
+    /// `test_support::seed_job` (which hard-codes 'TODO') so the HP
+    /// fast-path tests can stage rows in HIGH_PRIORITY / LOW_PRIORITY etc.
+    async fn seed_job_with_status(
+        action: &str,
+        catalog_id: usize,
+        status: &str,
+    ) -> anyhow::Result<usize> {
+        use mysql_async::prelude::*;
+        let (pool, mut conn) = crate::test_support::raw_conn().await?;
+        r"INSERT INTO jobs (action, catalog, status, last_ts, next_ts, user_id)
+          VALUES (:action, :catalog, :status, '20220101000000', '', 0)"
+            .with(mysql_async::params! {
+                "action"  => action,
+                "catalog" => catalog_id,
+                "status"  => status,
+            })
+            .ignore(&mut conn)
+            .await?;
+        let id: u64 = "SELECT LAST_INSERT_ID()".first(&mut conn).await?.unwrap();
+        drop(conn);
+        pool.disconnect().await.ok();
+        Ok(id as usize)
+    }
+
+    #[tokio::test]
+    async fn pick_high_priority_returns_none_when_no_hp_jobs() {
+        let _guard = HP_TEST_MUTEX.lock().await;
+        purge_hp_jobs().await.unwrap();
+
+        let app = crate::test_support::test_app().await;
+        let result = app.pick_high_priority_job().await.unwrap();
+        assert!(result.is_none(), "no HP jobs seeded — must return None");
+    }
+
+    #[tokio::test]
+    async fn pick_high_priority_returns_hp_job() {
+        let _guard = HP_TEST_MUTEX.lock().await;
+        purge_hp_jobs().await.unwrap();
+
+        let app = crate::test_support::test_app().await;
+        let (catalog_id, _) = crate::test_support::seed_minimal_entry(&app).await.unwrap();
+        let hp_id = seed_job_with_status("microsync", catalog_id, "HIGH_PRIORITY")
+            .await
+            .unwrap();
+
+        let job = app
+            .pick_high_priority_job()
+            .await
+            .unwrap()
+            .expect("HP job should be picked");
+        assert_eq!(job.get_id().await.unwrap(), hp_id);
+    }
+
+    #[tokio::test]
+    async fn pick_high_priority_ignores_todo_jobs() {
+        let _guard = HP_TEST_MUTEX.lock().await;
+        purge_hp_jobs().await.unwrap();
+
+        let app = crate::test_support::test_app().await;
+        let (catalog_id, _) = crate::test_support::seed_minimal_entry(&app).await.unwrap();
+        let _todo_id = crate::test_support::seed_job("microsync", catalog_id)
+            .await
+            .unwrap();
+
+        let result = app.pick_high_priority_job().await.unwrap();
+        assert!(
+            result.is_none(),
+            "TODO jobs must not be picked by the HP fast-path"
+        );
+    }
+
+    #[tokio::test]
+    async fn pick_high_priority_picks_only_hp_among_mixed_statuses() {
+        let _guard = HP_TEST_MUTEX.lock().await;
+        purge_hp_jobs().await.unwrap();
+
+        // Seed one HP job and several other-status jobs; assert HP is the one chosen.
+        let app = crate::test_support::test_app().await;
+        let (catalog_id, _) = crate::test_support::seed_minimal_entry(&app).await.unwrap();
+        let _ = seed_job_with_status("automatch_by_search", catalog_id, "LOW_PRIORITY")
+            .await
+            .unwrap();
+        let _ = seed_job_with_status("aux2wd", catalog_id, "DONE").await.unwrap();
+        let hp_id = seed_job_with_status("microsync", catalog_id, "HIGH_PRIORITY")
+            .await
+            .unwrap();
+
+        let job = app
+            .pick_high_priority_job()
+            .await
+            .unwrap()
+            .expect("HP job should be picked among mixed statuses");
+        assert_eq!(job.get_id().await.unwrap(), hp_id);
+    }
+
+    #[tokio::test]
+    async fn try_dispatch_high_priority_returns_false_when_no_hp_jobs() {
+        let _guard = HP_TEST_MUTEX.lock().await;
+        purge_hp_jobs().await.unwrap();
+
+        let app = crate::test_support::test_app().await;
+        let current_jobs: Arc<DashMap<usize, TaskSize>> = Arc::new(DashMap::new());
+        let action_counts: Arc<DashMap<String, usize>> = Arc::new(DashMap::new());
+        let dispatched = app
+            .forever_loop_try_dispatch_high_priority(&current_jobs, &action_counts)
+            .await
+            .unwrap();
+        assert!(!dispatched);
+        assert!(current_jobs.is_empty(), "must not have spawned anything");
     }
 
     #[test]
