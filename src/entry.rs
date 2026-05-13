@@ -1,10 +1,7 @@
 use crate::app_state::{AppContext, ExternalServicesContext, USER_AUTO, item2numeric};
 use crate::auxiliary_data::AuxiliaryRow;
-use crate::catalog::Catalog;
 use crate::coordinates::CoordinateLocation;
-use crate::person::Person;
 use crate::person_date::PersonDate;
-use crate::util::wikidata_props as wp;
 use crate::{DbId, ItemId, PropertyId};
 use anyhow::{Result, anyhow};
 use mysql_async::Value;
@@ -14,11 +11,8 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use wikimisc::timestamp::TimeStamp;
-use wikimisc::wikibase::entity_container::EntityContainer;
 use wikimisc::wikibase::locale_string::LocaleString;
-use wikimisc::wikibase::{EntityTrait, ItemEntity, Reference, Snak, Statement};
-
-pub const WESTERN_LANGUAGES: &[&str] = &["en", "de", "fr", "es", "nl", "it", "pt"];
+use wikimisc::wikibase::ItemEntity;
 
 /// Normalise an `entry.type` value to the storage contract: either an
 /// empty string or the form `Q\d+`. Legacy PHP-era imports sometimes
@@ -47,37 +41,6 @@ pub fn normalize_entry_type(type_name: Option<&str>) -> String {
         return out;
     }
     String::new()
-}
-
-/// Default precision (1 arcsecond ≈ 31 m) used when we need to emit a
-/// `P625` globe-coordinate claim but the source didn't record a precision.
-/// `wbeditentity` rejects coordinates with a `null`/missing precision, so
-/// we must always hand it a concrete number. 1/3600 is Wikidata's own
-/// default when picking a point from the map UI, so it matches the fidelity
-/// of hand-entered coordinates at city/landmark level.
-const DEFAULT_COORDINATE_PRECISION: f64 = 1.0 / 3600.0;
-
-/// Build a `P625` snak. `Snak::new_coordinate` from wikibase sets precision
-/// to `None`, which `wbeditentity` rejects — so construct the snak
-/// ourselves and fill in a concrete precision (the stored value if we have
-/// one, otherwise the arcsecond default).
-fn build_p625_snak(lat: f64, lon: f64, precision: Option<f64>) -> Snak {
-    use wikimisc::wikibase::{Coordinate, DataValue, DataValueType, SnakDataType, SnakType};
-    Snak::new(
-        SnakDataType::GlobeCoordinate,
-        wp::P_COORDINATES,
-        SnakType::Value,
-        Some(DataValue::new(
-            DataValueType::GlobeCoordinate,
-            wikimisc::wikibase::Value::Coordinate(Coordinate::new(
-                None,
-                "http://www.wikidata.org/entity/Q2".to_string(),
-                lat,
-                lon,
-                Some(precision.unwrap_or(DEFAULT_COORDINATE_PRECISION)),
-            )),
-        )),
-    )
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -515,7 +478,7 @@ impl<'a> EntryWriter<'a> {
     }
 
     pub async fn add_to_item(&self, item: &mut ItemEntity) -> Result<()> {
-        build_item_from_entry(self.ctx, self.entry, item).await
+        crate::wikidata_item_builder::build_item_from_entry(self.ctx, self.entry, item).await
     }
 }
 
@@ -584,198 +547,6 @@ async fn write_person_dates(
 // forward here, so reading entry-related rows doesn't depend on
 // `Entry::app: Option<AppState>` being set. New code that has a
 // `&AppState` and a `DbId` can call these directly.
-
-// ── Wikidata `ItemEntity` builder (driven by `Entry::add_to_item`) ──
-//
-// The chain that constructs a fresh Wikidata item from an `Entry`'s
-// data. Each step takes `(ctx, entry, item, …)` explicitly so the
-// builder doesn't depend on `Entry::app: Option<AppState>` being set;
-// the Wikidata API and the catalog table are accessed via `ctx`. The
-// per-section reads (`read_aux`, `read_person_dates`, …) are the same
-// helpers Entry's getters now use.
-
-async fn build_item_from_entry(
-    ctx: &dyn AppContext,
-    entry: &Entry,
-    item: &mut ItemEntity,
-) -> Result<()> {
-    let catalog = Catalog::from_id(entry.catalog, ctx).await?;
-    let references = catalog.references(ctx, entry).await;
-    let language = catalog.search_wp().to_string();
-    let kv = catalog.get_key_value_pairs(ctx).await.unwrap_or_default();
-    // `use_description_for_new` gates whether the catalog's ext_desc is
-    // copied into a newly-created item's description. Default is on;
-    // catalog admins can opt out via kv_catalog.
-    let use_desc = kv
-        .get("use_description_for_new")
-        .map(|v| v != "0")
-        .unwrap_or(true);
-    // `no_descriptions` = "1" suppresses ALL descriptions (ext_desc +
-    // language-description table) for newly-created items.
-    let no_descriptions = kv.get("no_descriptions").map(|v| v == "1").unwrap_or(false);
-    // `no_dates_import` = "1" prevents P569/P570 from being added to
-    // newly-created items.
-    let no_dates_import = kv.get("no_dates_import").map(|v| v == "1").unwrap_or(false);
-    add_own_id_to_item(entry, &catalog, &references, item);
-    add_type_to_item(entry, &references, item);
-    add_name_and_aliases_to_item(ctx, entry, &language, item).await?;
-    if !no_descriptions {
-        add_descriptions_to_item(ctx, entry, language, use_desc, item).await?;
-    }
-    add_coordinates_to_item(ctx, entry, &references, item).await?;
-    if !no_dates_import {
-        add_person_dates_to_item(ctx, entry, &references, item).await?;
-    }
-    add_auxiliary_to_item(ctx, entry, references, item).await?;
-    Ok(())
-}
-
-async fn add_auxiliary_to_item(
-    ctx: &dyn AppContext,
-    entry: &Entry,
-    references: Vec<Reference>,
-    item: &mut ItemEntity,
-) -> Result<()> {
-    let auxiliary = read_aux(ctx, entry.get_valid_id()?).await?;
-    if auxiliary.is_empty() {
-        return Ok(());
-    }
-    let api = ctx.wikidata().get_mw_api().await?;
-    let ec = EntityContainer::new();
-    let props2load: Vec<String> = auxiliary.iter().map(|a| a.prop_as_string()).collect();
-    // Pre-load all property entities in one batch; per-entity load below is
-    // a no-op for ones the batch already cached.
-    let _ = ec.load_entities(&api, &props2load).await;
-    for aux in auxiliary {
-        if let Ok(prop) = ec.load_entity(&api, aux.prop_as_string()).await {
-            if let Some(claim) = aux.get_claim_for_aux(prop, &references) {
-                Entry::add_claim_or_references(item, claim);
-            }
-        }
-    }
-    Ok(())
-}
-
-async fn add_person_dates_to_item(
-    ctx: &dyn AppContext,
-    entry: &Entry,
-    references: &[Reference],
-    item: &mut ItemEntity,
-) -> Result<()> {
-    let (born, died) = read_person_dates(ctx, entry.get_valid_id()?).await?;
-    if let Some(pd) = born {
-        let snak = Snak::new_time(
-            wp::P_DATE_OF_BIRTH,
-            &pd.to_wikidata_time(),
-            pd.wikidata_precision(),
-        );
-        let claim = Statement::new_normal(snak, vec![], references.to_owned());
-        Entry::add_claim_or_references(item, claim);
-    }
-    if let Some(pd) = died {
-        let snak = Snak::new_time(
-            wp::P_DATE_OF_DEATH,
-            &pd.to_wikidata_time(),
-            pd.wikidata_precision(),
-        );
-        let claim = Statement::new_normal(snak, vec![], references.to_owned());
-        Entry::add_claim_or_references(item, claim);
-    }
-    Ok(())
-}
-
-async fn add_coordinates_to_item(
-    ctx: &dyn AppContext,
-    entry: &Entry,
-    references: &[Reference],
-    item: &mut ItemEntity,
-) -> Result<()> {
-    if let Some(coord) = read_coordinate_location(ctx, entry.get_valid_id()?).await? {
-        let snak = build_p625_snak(coord.lat(), coord.lon(), coord.precision());
-        let claim = Statement::new_normal(snak, vec![], references.to_owned());
-        Entry::add_claim_or_references(item, claim);
-    }
-    Ok(())
-}
-
-async fn add_descriptions_to_item(
-    ctx: &dyn AppContext,
-    entry: &Entry,
-    language: String,
-    use_ext_desc: bool,
-    item: &mut ItemEntity,
-) -> Result<()> {
-    let mut descriptions = read_language_descriptions(ctx, entry.get_valid_id()?).await?;
-    if use_ext_desc && !entry.ext_desc.is_empty() {
-        descriptions.insert(language.to_owned(), entry.ext_desc.to_owned());
-    }
-    for (lang, desc) in descriptions {
-        if item.description_in_locale(&lang).is_none() {
-            let desc = LocaleString::new(&lang, &desc);
-            item.descriptions_mut().push(desc);
-        }
-    }
-    Ok(())
-}
-
-async fn add_name_and_aliases_to_item(
-    ctx: &dyn AppContext,
-    entry: &Entry,
-    language: &str,
-    item: &mut ItemEntity,
-) -> Result<()> {
-    let mut aliases = read_aliases(ctx, entry.get_valid_id()?).await?;
-    let name = Person::sanitize_name(&entry.ext_name);
-    let locale_string = LocaleString::new(language, &name);
-    // Q5 + a Western-script language → write the label as `mul` so it
-    // covers every Latin-script language at once. Mirrors PHP behaviour.
-    let names = if entry.type_name == Some("Q5".into()) && WESTERN_LANGUAGES.contains(&language) {
-        vec![LocaleString::new("mul", &name)]
-    } else {
-        vec![locale_string.to_owned()]
-    };
-    for ls in names {
-        if item.label_in_locale(ls.language()).is_none() {
-            item.labels_mut().push(ls);
-        } else {
-            aliases.push(ls);
-        }
-    }
-    for alias in aliases {
-        if !item.labels().contains(&alias) && !item.aliases().contains(&alias) {
-            item.aliases_mut().push(alias);
-        }
-    }
-    Ok(())
-}
-
-fn add_type_to_item(entry: &Entry, references: &[Reference], item: &mut ItemEntity) {
-    if let Some(tn) = &entry.type_name {
-        if !tn.is_empty() {
-            let snak = Snak::new_item(wp::P_INSTANCE_OF, tn);
-            let claim = Statement::new_normal(snak, vec![], references.to_owned());
-            Entry::add_claim_or_references(item, claim);
-        }
-    }
-}
-
-fn add_own_id_to_item(
-    entry: &Entry,
-    catalog: &Catalog,
-    references: &[Reference],
-    item: &mut ItemEntity,
-) {
-    if let (Some(prop), None) = (catalog.wd_prop(), catalog.wd_qual()) {
-        let prop_str = format!("P{prop}");
-        // Normalize the value the same way get_claim_for_aux does, so that
-        // claim_core_equivalent can merge own-ID and aux-sourced statements
-        // for the same property+value (e.g. ISNI P213 without spaces).
-        let value = AuxiliaryRow::fix_external_id(&prop_str, &entry.ext_id);
-        let snak = Snak::new_external_id(&prop_str, &value);
-        let claim = Statement::new_normal(snak, vec![], references.to_owned());
-        Entry::add_claim_or_references(item, claim);
-    }
-}
 
 async fn read_creation_time(ctx: &dyn AppContext, entry_id: DbId) -> Option<String> {
     ctx.storage().entry_get_creation_time(entry_id).await
@@ -980,14 +751,6 @@ impl Entry {
         &self.ext_desc
     }
 
-    /// Thin wrapper around `crate::claim_dedup::add_claim_or_references`
-    /// kept on `Entry` so the dozens of in-tree call sites need not change.
-    /// All the logic lives in `claim_dedup` so the same primitives can be
-    /// reused for post-creation cleanup of items on Wikidata.
-    fn add_claim_or_references(item: &mut ItemEntity, claim: Statement) {
-        crate::claim_dedup::add_claim_or_references(item, claim);
-    }
-
     /// Before q query or an update to the entry in the database, checks if this is a valid entry ID (eg not a new entry)
     pub fn get_valid_id(&self) -> Result<DbId> {
         match self.id {
@@ -1019,6 +782,7 @@ impl Entry {
 mod tests {
     use super::*;
     use crate::test_support;
+    use wikimisc::wikibase::{EntityTrait, Reference, Snak, Statement};
 
     #[allow(dead_code)]
     const TEST_CATALOG_ID: DbId = 5526;
@@ -1754,44 +1518,6 @@ mod tests {
         assert_eq!(legacy.type_name.as_deref(), Some("Q5"));
     }
 
-    // ----- P625 snak precision -----
-
-    fn snak_precision(snak: &Snak) -> Option<f64> {
-        let dv = snak.data_value().as_ref()?;
-        match dv.value() {
-            wikimisc::wikibase::Value::Coordinate(c) => *c.precision(),
-            _ => None,
-        }
-    }
-
-    #[test]
-    fn build_p625_snak_applies_stored_precision() {
-        let snak = build_p625_snak(51.5, -0.1, Some(0.001));
-        assert_eq!(snak_precision(&snak), Some(0.001));
-    }
-
-    #[test]
-    fn build_p625_snak_falls_back_to_arcsecond_default() {
-        // Missing precision is what was triggering "Missing required field
-        // 'precision'" in wbeditentity — make sure we always emit a number.
-        let snak = build_p625_snak(51.5, -0.1, None);
-        let prec = snak_precision(&snak).expect("precision must be set");
-        assert!((prec - 1.0 / 3600.0).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn build_p625_snak_serializes_precision_as_number() {
-        let snak = build_p625_snak(51.5, -0.1, None);
-        let json = serde_json::to_value(&snak).unwrap();
-        let precision = json
-            .pointer("/datavalue/value/precision")
-            .expect("precision key must be present in JSON");
-        assert!(
-            precision.is_number(),
-            "precision must serialize as a number, got {precision:?}"
-        );
-    }
-
     // ----- Claim/reference dedup (no DB, no network) -----
 
     fn stmt_item(prop: &str, q: &str) -> Statement {
@@ -1819,15 +1545,15 @@ mod tests {
     #[test]
     fn dedup_merges_same_main_snak_and_unions_references() {
         let mut item = ItemEntity::new_empty();
-        Entry::add_claim_or_references(
+        crate::claim_dedup::add_claim_or_references(
             &mut item,
             with_refs(stmt_item("P31", "Q5"), vec![r_url("https://a")]),
         );
-        Entry::add_claim_or_references(
+        crate::claim_dedup::add_claim_or_references(
             &mut item,
             with_refs(stmt_item("P31", "Q5"), vec![r_url("https://b")]),
         );
-        Entry::add_claim_or_references(
+        crate::claim_dedup::add_claim_or_references(
             &mut item,
             with_refs(stmt_item("P31", "Q5"), vec![r_url("https://a")]),
         );
@@ -1860,11 +1586,11 @@ mod tests {
             Snak::new_string("P248", "Q1"),
         ]);
         let mut item = ItemEntity::new_empty();
-        Entry::add_claim_or_references(
+        crate::claim_dedup::add_claim_or_references(
             &mut item,
             with_refs(stmt_item("P31", "Q5"), vec![block_a_then_b]),
         );
-        Entry::add_claim_or_references(
+        crate::claim_dedup::add_claim_or_references(
             &mut item,
             with_refs(stmt_item("P31", "Q5"), vec![block_b_then_a]),
         );
@@ -1881,7 +1607,7 @@ mod tests {
 
         let claim = Statement::new_normal(main, vec![], vec![block]);
         let mut item = ItemEntity::new_empty();
-        Entry::add_claim_or_references(&mut item, claim);
+        crate::claim_dedup::add_claim_or_references(&mut item, claim);
         let refs = item.claims()[0].references();
         assert_eq!(refs.len(), 1, "the block should survive, shrunk");
         assert_eq!(refs[0].snaks().len(), 1);
@@ -1900,8 +1626,8 @@ mod tests {
             vec![Snak::new_item("P1686", "Q12345")],
         );
         let mut item = ItemEntity::new_empty();
-        Entry::add_claim_or_references(&mut item, bare);
-        Entry::add_claim_or_references(&mut item, with_q);
+        crate::claim_dedup::add_claim_or_references(&mut item, bare);
+        crate::claim_dedup::add_claim_or_references(&mut item, with_q);
         assert_eq!(item.claims().len(), 2);
     }
 
@@ -1912,8 +1638,8 @@ mod tests {
         let a = with_quals(stmt_item("P39", "Q11696"), vec![q1.clone(), q2.clone()]);
         let b = with_quals(stmt_item("P39", "Q11696"), vec![q2, q1]);
         let mut item = ItemEntity::new_empty();
-        Entry::add_claim_or_references(&mut item, a);
-        Entry::add_claim_or_references(&mut item, b);
+        crate::claim_dedup::add_claim_or_references(&mut item, a);
+        crate::claim_dedup::add_claim_or_references(&mut item, b);
         assert_eq!(item.claims().len(), 1);
     }
 
@@ -1925,7 +1651,7 @@ mod tests {
         ]);
         let claim = Statement::new_normal(Snak::new_item("P31", "Q5"), vec![], vec![dup]);
         let mut item = ItemEntity::new_empty();
-        Entry::add_claim_or_references(&mut item, claim);
+        crate::claim_dedup::add_claim_or_references(&mut item, claim);
         assert_eq!(item.claims()[0].references()[0].snaks().len(), 1);
     }
 
@@ -1934,15 +1660,15 @@ mod tests {
         let q = Snak::new_item("P580", "Q1");
         let claim = with_quals(stmt_string("P214", "123"), vec![q.clone(), q.clone(), q]);
         let mut item = ItemEntity::new_empty();
-        Entry::add_claim_or_references(&mut item, claim);
+        crate::claim_dedup::add_claim_or_references(&mut item, claim);
         assert_eq!(item.claims()[0].qualifiers().len(), 1);
     }
 
     #[test]
     fn dedup_does_not_conflate_different_main_snaks() {
         let mut item = ItemEntity::new_empty();
-        Entry::add_claim_or_references(&mut item, stmt_item("P31", "Q5"));
-        Entry::add_claim_or_references(&mut item, stmt_item("P31", "Q16521"));
+        crate::claim_dedup::add_claim_or_references(&mut item, stmt_item("P31", "Q5"));
+        crate::claim_dedup::add_claim_or_references(&mut item, stmt_item("P31", "Q16521"));
         assert_eq!(item.claims().len(), 2);
     }
 
@@ -1962,8 +1688,8 @@ mod tests {
             vec![r_url("https://other-source.org")],
         );
         let mut item = ItemEntity::new_empty();
-        Entry::add_claim_or_references(&mut item, ext_id_claim);
-        Entry::add_claim_or_references(&mut item, string_claim);
+        crate::claim_dedup::add_claim_or_references(&mut item, ext_id_claim);
+        crate::claim_dedup::add_claim_or_references(&mut item, string_claim);
         assert_eq!(item.claims().len(), 1, "ExternalId and String for same property/value should merge");
         assert_eq!(item.claims()[0].references().len(), 2, "both reference blocks should be kept");
     }
@@ -1973,8 +1699,8 @@ mod tests {
         // Sanity-check: two ExternalId snaks for the same property but
         // different values must remain separate statements.
         let mut item = ItemEntity::new_empty();
-        Entry::add_claim_or_references(&mut item, stmt_ext_id("P213", "0000000012345678"));
-        Entry::add_claim_or_references(&mut item, stmt_ext_id("P213", "9999999987654321"));
+        crate::claim_dedup::add_claim_or_references(&mut item, stmt_ext_id("P213", "0000000012345678"));
+        crate::claim_dedup::add_claim_or_references(&mut item, stmt_ext_id("P213", "9999999987654321"));
         assert_eq!(item.claims().len(), 2);
     }
 

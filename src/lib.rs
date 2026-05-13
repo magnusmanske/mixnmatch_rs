@@ -103,6 +103,7 @@ pub mod wdqs;
 pub mod wdrc;
 pub mod wikidata;
 pub mod wikidata_commands;
+pub mod wikidata_item_builder;
 pub mod wikidata_writer;
 
 /*
