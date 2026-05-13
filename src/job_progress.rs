@@ -96,6 +96,31 @@ pub fn merge_progress_into_json(existing: Option<&Value>, progress: &JobProgress
     Value::Object(obj)
 }
 
+/// Merge an `offset` resume cursor into the existing `jobs.json`
+/// document **without** publishing a `progress` payload. Use for
+/// strategies whose offset isn't a count of processed rows
+/// (e.g. an entry_id watermark): persisting it as `processed` would
+/// surface as a misleading counter in the UI.
+///
+/// Same legacy-shape normalisation as [`merge_progress_into_json`].
+pub fn merge_offset_into_json(existing: Option<&Value>, offset: u64) -> Value {
+    let mut obj = match existing {
+        Some(Value::Object(map)) => map.clone(),
+        Some(Value::Array(arr)) => {
+            let mut m = Map::new();
+            m.insert("levels".to_string(), Value::Array(arr.clone()));
+            m
+        }
+        _ => Map::new(),
+    };
+    obj.insert("offset".to_string(), json!(offset));
+    // Drop any stale `progress` from an earlier `report_progress` call —
+    // if the strategy has reverted to offset-only mode, the old percent
+    // would be misleading.
+    obj.remove("progress");
+    Value::Object(obj)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,5 +227,51 @@ mod tests {
         let merged = merge_progress_into_json(None, &original);
         let parsed = JobProgress::from_json(&merged).expect("parses back");
         assert_eq!(parsed, original);
+    }
+
+    // merge_offset_into_json ────────────────────────────────────────────
+
+    #[test]
+    fn merge_offset_writes_offset_only() {
+        let merged = merge_offset_into_json(None, 12_345);
+        let obj = merged.as_object().unwrap();
+        assert_eq!(obj.get("offset"), Some(&json!(12_345)));
+        assert!(obj.get("progress").is_none(), "must not publish progress");
+    }
+
+    #[test]
+    fn merge_offset_strips_stale_progress() {
+        // If a prior report_progress wrote `progress`, subsequent
+        // offset-only writes should remove it — otherwise the UI keeps
+        // showing an out-of-date percent.
+        let existing = json!({
+            "offset": 100,
+            "progress": {"processed": 100, "total": 200, "percent": 50.0}
+        });
+        let merged = merge_offset_into_json(Some(&existing), 150);
+        let obj = merged.as_object().unwrap();
+        assert_eq!(obj.get("offset"), Some(&json!(150)));
+        assert!(obj.get("progress").is_none());
+    }
+
+    #[test]
+    fn merge_offset_preserves_other_keys() {
+        let existing = json!({"levels": [{"position": 3}]});
+        let merged = merge_offset_into_json(Some(&existing), 7);
+        let obj = merged.as_object().unwrap();
+        assert_eq!(obj.get("levels"), Some(&json!([{"position": 3}])));
+        assert_eq!(obj.get("offset"), Some(&json!(7)));
+    }
+
+    #[test]
+    fn merge_offset_wraps_legacy_autoscrape_array() {
+        let legacy = json!([{"position": 0}, {"current_value": 2000}]);
+        let merged = merge_offset_into_json(Some(&legacy), 42);
+        let obj = merged.as_object().unwrap();
+        assert_eq!(
+            obj.get("levels"),
+            Some(&json!([{"position": 0}, {"current_value": 2000}]))
+        );
+        assert_eq!(obj.get("offset"), Some(&json!(42)));
     }
 }
