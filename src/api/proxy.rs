@@ -35,13 +35,20 @@ fn resources_cache() -> &'static dashmap::DashMap<String, Arc<CachedResource>> {
 
 /// Reused HTTP client (pool/connection reuse). Built once per process so we
 /// don't pay TLS-handshake costs per asset.
+///
+/// The total-request and connect timeouts bound how long a single asset
+/// fetch can pin an axum request task. Without them, a hung upstream
+/// (magnustools) would stall every in-flight `/resources/*` call until
+/// the client gave up — which it would never do.
 fn http_client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
             .user_agent("mix-n-match (https://mix-n-match.toolforge.org)")
+            .timeout(std::time::Duration::from_secs(30))
+            .connect_timeout(std::time::Duration::from_secs(5))
             .build()
-            .unwrap_or_else(|_| reqwest::Client::new())
+            .expect("proxy HTTP client init failed")
     })
 }
 
