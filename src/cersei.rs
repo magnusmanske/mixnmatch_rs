@@ -2,7 +2,6 @@ use anyhow::{Result, anyhow};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::thread;
 use std::time::Duration;
 
 use crate::app_state::AppContext;
@@ -219,7 +218,7 @@ impl CerseiSync {
                 Ok(response) => match response.json::<CerseiEntriesResponse>().await {
                     Ok(data) => return Ok(data),
                     Err(_) if attempt < 5 => {
-                        thread::sleep(Duration::from_secs((attempt + 1) * 5));
+                        tokio::time::sleep(Duration::from_secs((attempt + 1) * 5)).await;
                         url = format!(
                             "{}&blah{}={}",
                             url,
@@ -229,7 +228,9 @@ impl CerseiSync {
                     }
                     Err(_) => {}
                 },
-                Err(_) if attempt < 5 => thread::sleep(Duration::from_secs((attempt + 1) * 5)),
+                Err(_) if attempt < 5 => {
+                    tokio::time::sleep(Duration::from_secs((attempt + 1) * 5)).await
+                }
                 Err(_) => {}
             }
         }

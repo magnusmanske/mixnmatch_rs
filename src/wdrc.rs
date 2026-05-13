@@ -59,7 +59,7 @@ impl WDRC {
             if !text.contains("<head><title>429 Too Many Requests</title></head>") {
                 break;
             }
-            std::thread::sleep(std::time::Duration::from_secs(1));
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         }
         Ok(text
             .split('\n')

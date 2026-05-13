@@ -75,7 +75,7 @@ impl BespokeScraper for BespokeScraper7433 {
                 entry_cache.push(ee);
             }
             self.process_cache(&mut entry_cache).await?;
-            std::thread::sleep(std::time::Duration::from_secs(10));
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
         }
         Ok(())
     }

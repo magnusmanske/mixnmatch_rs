@@ -20,7 +20,7 @@ use std::env;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::{thread, time};
+use std::time;
 use sysinfo::System;
 use tokio::time::sleep;
 use wikimisc::timestamp::TimeStamp;
@@ -457,7 +457,7 @@ impl AppState {
 
             let current_jobs_len = current_jobs.len();
             if current_jobs_len >= self.max_concurrent_jobs {
-                Self::hold_on();
+                Self::hold_on().await;
                 continue;
             }
             match self
@@ -602,11 +602,11 @@ impl AppState {
             }
             Ok(false) => {
                 // println!("No jobs available, waiting... (not using: {:?})",job.skip_actions);
-                Self::hold_on();
+                Self::hold_on().await;
             }
             Err(e) => {
                 error!("MAIN LOOP: Something went wrong: {e}");
-                Self::hold_on();
+                Self::hold_on().await;
             }
         }
         Ok(())
@@ -644,8 +644,8 @@ impl AppState {
         Ok((job, task_size))
     }
 
-    fn hold_on() {
-        thread::sleep(time::Duration::from_secs(5));
+    async fn hold_on() {
+        sleep(time::Duration::from_secs(5)).await;
     }
 
     fn print_sysinfo() {
