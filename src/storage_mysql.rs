@@ -6059,6 +6059,37 @@ impl crate::storage::AuxiliaryMatcherQueries for StorageMySQL {
         Ok(results)
     }
 
+    async fn auxiliary_matcher_match_via_aux_count(
+        &self,
+        catalog_id: usize,
+        extid_props: &[String],
+        blacklisted_catalogs: &[String],
+    ) -> Result<usize> {
+        // Bail before constructing an invalid SQL fragment when callers
+        // pass an empty list (the paged variant would also fail here, but
+        // we're explicit so that the COUNT path can never error a job
+        // that would otherwise just no-op out of the loop).
+        if extid_props.is_empty() || blacklisted_catalogs.is_empty() {
+            return Ok(0);
+        }
+        let sql = format!(
+            "SELECT count(*) AS cnt FROM entry,auxiliary
+            WHERE entry_id=entry.id AND catalog=:catalog_id
+            {}
+            AND in_wikidata=0
+            AND aux_p IN ({})
+            AND catalog NOT IN ({})",
+            MatchState::not_fully_matched().get_sql(),
+            extid_props.join(","),
+            blacklisted_catalogs.join(",")
+        );
+        let results: Vec<usize> = sql
+            .with(params! {catalog_id})
+            .map(self.get_conn_ro().await?, |num| num)
+            .await?;
+        Ok(*results.first().unwrap_or(&0))
+    }
+
     async fn auxiliary_matcher_add_auxiliary_to_wikidata(
         &self,
         blacklisted_properties: &[String],

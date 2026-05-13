@@ -554,6 +554,17 @@ pub trait AuxiliaryMatcherQueries: std::fmt::Debug + Send + Sync {
         extid_props: &[String],
         blacklisted_catalogs: &[String],
     ) -> Result<Vec<AuxiliaryResults>>;
+    /// Total rows the paged [`auxiliary_matcher_match_via_aux`] would
+    /// yield over its full iteration — same WHERE clause, COUNT(*) instead
+    /// of SELECT, no LIMIT/OFFSET. Used by the `auxiliary_matcher` job to
+    /// publish a progress percentage. Returns 0 on an empty/blacklisted
+    /// configuration (does not error).
+    async fn auxiliary_matcher_match_via_aux_count(
+        &self,
+        catalog_id: usize,
+        extid_props: &[String],
+        blacklisted_catalogs: &[String],
+    ) -> Result<usize>;
     async fn auxiliary_matcher_add_auxiliary_to_wikidata(
         &self,
         blacklisted_properties: &[String],

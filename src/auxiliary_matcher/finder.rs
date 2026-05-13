@@ -45,6 +45,19 @@ impl AuxiliaryMatcher {
         let sparql_batch_size = self.get_sparql_batch_size();
         let search_batch_size = self.get_search_batch_size();
         let mw_api = self.app.wikidata().get_mw_api().await?;
+        // COUNT matching the same WHERE clause the paged fetch uses. One
+        // query at job start; small overhead vs hours-long body of work.
+        let total = self
+            .app
+            .storage()
+            .auxiliary_matcher_match_via_aux_count(
+                catalog_id,
+                &extid_props,
+                &blacklisted_catalogs,
+            )
+            .await
+            .ok()
+            .map(|n| n as u64);
         loop {
             let results = self
                 .app
@@ -74,7 +87,7 @@ impl AuxiliaryMatcher {
                 break;
             }
             offset += results.len();
-            let _ = self.remember_offset(offset).await;
+            let _ = self.report_progress(offset as u64, total).await;
         }
         let _ = self.clear_offset().await;
         let _ = Job::queue_simple_job(self.app.as_ref(), catalog_id, "aux2wd", None).await;
