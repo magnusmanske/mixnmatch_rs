@@ -426,6 +426,38 @@ impl AppState {
         });
     }
 
+    /// Periodically kills queries on the main storage pool that have been
+    /// running longer than `REAPER_THRESHOLD_SECS`. Acts as a backstop
+    /// behind the `max_statement_time` session setting (which only catches
+    /// read-only SELECTs): writes that hang and any connections that
+    /// somehow bypassed the session setup still get cleaned up here.
+    fn reaper(&self) {
+        const REAPER_INTERVAL_SECS: u64 = 300;
+        const REAPER_THRESHOLD_SECS: u64 = 300;
+        let app = self.clone();
+        tokio::spawn(async move {
+            loop {
+                sleep(tokio::time::Duration::from_secs(REAPER_INTERVAL_SECS)).await;
+                match app
+                    .storage()
+                    .kill_long_running_queries(REAPER_THRESHOLD_SECS)
+                    .await
+                {
+                    Ok(ids) if !ids.is_empty() => {
+                        info!(
+                            "reaper: killed {} long-running queries (>{}s): {:?}",
+                            ids.len(),
+                            REAPER_THRESHOLD_SECS,
+                            ids
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(e) => error!("reaper: kill_long_running_queries failed: {e}"),
+                }
+            }
+        });
+    }
+
     pub async fn forever_loop(&self) -> Result<()> {
         let (current_jobs, action_counts) = self.forever_loop_initalize().await?;
         let threshold_job_size = TaskSize::Medium;
@@ -568,6 +600,7 @@ impl AppState {
         }
         info!("Old jobs reset, starting bot");
         self.seppuku();
+        self.reaper();
         let current_time_str = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
         self.storage()
             .set_kv_value("forever_loop_start", &current_time_str)
