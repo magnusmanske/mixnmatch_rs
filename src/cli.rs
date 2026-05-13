@@ -473,10 +473,12 @@ impl ShellCommands {
         let cli = Cli::parse();
         match &cli.command {
             Some(Commands::Server { config }) => {
-                Self::path2app(config)?.forever_loop().await?;
+                let app = Self::path2app(config)?;
+                crate::job_runner::JobRunner::new(app).forever_loop().await?;
             }
             Some(Commands::Job { config, id }) => {
-                Self::path2app(config)?.run_single_job(*id).await?;
+                let app = Self::path2app(config)?;
+                crate::job_runner::JobRunner::new(app).run_single_job(*id).await?;
             }
             Some(Commands::DeleteCatalog { config, id, really }) => {
                 let _ = really; // To suppress warning, flag is not actually used

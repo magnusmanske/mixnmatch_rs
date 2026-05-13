@@ -71,6 +71,7 @@ pub mod issue;
 pub mod item_creator;
 pub mod job;
 pub mod job_row;
+pub mod job_runner;
 pub mod job_status;
 pub mod large_catalogs;
 pub mod maintenance;
