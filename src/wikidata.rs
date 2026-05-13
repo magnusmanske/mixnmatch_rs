@@ -275,7 +275,9 @@ impl Wikidata {
     pub async fn get_mw_api(
         &self,
     ) -> Result<mediawiki::api::Api, mediawiki::media_wiki_error::MediaWikiError> {
-        let builder = reqwest::Client::builder().timeout(Duration::from_secs(60));
+        let builder = reqwest::Client::builder()
+            .timeout(Duration::from_secs(60))
+            .connect_timeout(Duration::from_secs(5));
         mediawiki::api::Api::new_from_builder(&self.api_url, builder).await
     }
 

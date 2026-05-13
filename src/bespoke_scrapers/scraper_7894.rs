@@ -76,6 +76,7 @@ impl BespokeScraper for BespokeScraper7894 {
 fn build_pase_client() -> Result<reqwest::Client> {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
+        .connect_timeout(Duration::from_secs(5))
         .danger_accept_invalid_certs(true)
         .user_agent("mix-n-match (https://mix-n-match.toolforge.org)")
         .build()

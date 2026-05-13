@@ -108,6 +108,7 @@ impl ReferenceFixer {
     pub fn new(app: Arc<dyn AppContext>) -> Result<Self> {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(60))
+            .connect_timeout(Duration::from_secs(5))
             .user_agent("Mix'n'match reference fixer (https://mix-n-match.toolforge.org)")
             .build()?;
         Ok(Self {

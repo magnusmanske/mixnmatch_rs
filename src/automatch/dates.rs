@@ -165,6 +165,7 @@ impl AutoMatch {
         let mw_api = self.app.wikidata().get_mw_api().await?;
         let http_client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
+            .connect_timeout(std::time::Duration::from_secs(5))
             .build()
             .unwrap_or_default();
         let mut min_entry_id = self.get_last_job_offset().await;

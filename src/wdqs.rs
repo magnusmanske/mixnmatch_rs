@@ -57,6 +57,7 @@ pub const USER_AGENT: &str = "mix-n-match (https://mix-n-match.toolforge.org)";
 pub fn build_client() -> Result<reqwest::Client> {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(SPARQL_TIMEOUT_SECS))
+        .connect_timeout(Duration::from_secs(5))
         .user_agent(USER_AGENT)
         .build()
         .map_err(|e| anyhow!("WDQS HTTP client init failed: {e}"))

@@ -461,6 +461,7 @@ impl Autoscrape {
             .timeout(core::time::Duration::from_secs(
                 AUTOSCRAPE_URL_LOAD_TIMEOUT_SEC,
             ))
+            .connect_timeout(core::time::Duration::from_secs(5))
             .connection_verbose(true)
             .gzip(true)
             .deflate(true)

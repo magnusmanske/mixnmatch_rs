@@ -192,6 +192,7 @@ impl AppState {
         // majority of consumers.
         let http_client = reqwest::Client::builder()
             .timeout(time::Duration::from_secs(30))
+            .connect_timeout(time::Duration::from_secs(5))
             .build()
             .map_err(|e| anyhow!("failed to build shared HTTP client: {e}"))?;
         Ok(Self {

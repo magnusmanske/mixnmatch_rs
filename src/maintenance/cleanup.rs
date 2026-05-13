@@ -327,6 +327,7 @@ impl Maintenance {
         }
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
+            .connect_timeout(std::time::Duration::from_secs(5))
             .user_agent("mix-n-match (https://mix-n-match.toolforge.org)")
             .build()?;
 
