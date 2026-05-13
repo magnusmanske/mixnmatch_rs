@@ -44,8 +44,7 @@ use wikimisc::timestamp::TimeStamp;
 /// concurrent `wdrc_sync` jobs would serialise on the pool anyway; the
 /// cap just documents the intent and avoids dispatching a second
 /// `wdrc_sync` only for it to block on a connection acquisition.
-const ACTION_CONCURRENCY_CAPS: &[(&str, usize)] =
-    &[("microsync", 4), ("wdrc_sync", 1)];
+const ACTION_CONCURRENCY_CAPS: &[(&str, usize)] = &[("microsync", 4), ("wdrc_sync", 1)];
 
 /// Append any action whose running count meets or exceeds its
 /// `ACTION_CONCURRENCY_CAPS` entry to `skip_actions`. Pulled out of
@@ -159,15 +158,13 @@ impl JobRunner {
     pub async fn forever_loop(&self) -> Result<()> {
         let (current_jobs, action_counts) = self.forever_loop_initalize().await?;
         let threshold_job_size = TaskSize::Medium;
-        let threshold_percent = 50;
+        let threshold_percent = 80;
         let max_concurrent_jobs = self.app.max_concurrent_jobs();
 
         // TO MANUALLY FIND ACTIONS NOT ASSIGNED A TASK SIZE:
         // select distinct action from jobs where action not in (select action from job_sizes);
 
-        info!(
-            "\n=== Starting forever loop with max_concurrent_jobs={max_concurrent_jobs}"
-        );
+        info!("\n=== Starting forever loop with max_concurrent_jobs={max_concurrent_jobs}");
         loop {
             // HIGH_PRIORITY fast-path: bypass the capacity gate, the big-job
             // size filter, and per-action concurrency caps. A flood of HP
@@ -243,7 +240,12 @@ impl JobRunner {
         let Some(job) = self.pick_high_priority_job().await? else {
             return Ok(false);
         };
-        let task_size = self.app.storage().jobs_get_tasks().await.unwrap_or_default();
+        let task_size = self
+            .app
+            .storage()
+            .jobs_get_tasks()
+            .await
+            .unwrap_or_default();
         let job_id = job.get_id().await?;
         info!("HIGH_PRIORITY fast-path: dispatching job {job_id}");
         Self::run_job(job, task_size, current_jobs, action_counts).await;
@@ -252,10 +254,7 @@ impl JobRunner {
 
     async fn forever_loop_initalize(
         &self,
-    ) -> Result<(
-        Arc<DashMap<usize, TaskSize>>,
-        Arc<DashMap<String, usize>>,
-    )> {
+    ) -> Result<(Arc<DashMap<usize, TaskSize>>, Arc<DashMap<String, usize>>)> {
         let current_jobs: Arc<DashMap<usize, TaskSize>> = Arc::new(DashMap::new());
         // Per-action running counts. Used to enforce per-action concurrency
         // caps via `ACTION_CONCURRENCY_CAPS` — see `get_next_job`.
@@ -577,7 +576,9 @@ mod tests {
         let _ = seed_job_with_status("automatch_by_search", catalog_id, "LOW_PRIORITY")
             .await
             .unwrap();
-        let _ = seed_job_with_status("aux2wd", catalog_id, "DONE").await.unwrap();
+        let _ = seed_job_with_status("aux2wd", catalog_id, "DONE")
+            .await
+            .unwrap();
         let hp_id = seed_job_with_status("microsync", catalog_id, "HIGH_PRIORITY")
             .await
             .unwrap();
