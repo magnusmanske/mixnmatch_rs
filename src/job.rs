@@ -121,7 +121,23 @@ impl Job {
     pub async fn run(&mut self) -> Result<()> {
         let catalog_id = self.get_catalog().await?;
         let action = self.get_action().await?;
-        let res = self.run_this_job().await;
+        let budget = action_timeout_secs(&action);
+        // Wall-clock cap on the handler future. On timeout the inner
+        // future is dropped (cancelling at the next .await point); any
+        // server-side DB query left behind is mopped up by
+        // `max_statement_time` and the periodic reaper. The job is
+        // marked Failed via the usual `run_error` path.
+        let res = match tokio::time::timeout(
+            std::time::Duration::from_secs(budget),
+            self.run_this_job(),
+        )
+        .await
+        {
+            Ok(r) => r,
+            Err(_) => Err(anyhow!(
+                "job exceeded {budget}s wall-clock budget for action '{action}'"
+            )),
+        };
         match res {
             Ok(_) => self.run_ok(catalog_id, action).await?,
             Err(e) => self.run_error(catalog_id, &action, &e).await?,
@@ -485,6 +501,42 @@ macro_rules! maintenance_with_cat {
     };
 }
 
+/// Wall-clock budget for the default action. One hour is comfortably
+/// above the 99th-percentile runtime of most short actions; anything
+/// expected to run longer should be listed in [`ACTION_TIMEOUTS_SECS`].
+const DEFAULT_ACTION_TIMEOUT_SECS: u64 = 3_600;
+
+/// Per-action overrides to [`DEFAULT_ACTION_TIMEOUT_SECS`]. Tunes the
+/// budget up for long-running scrape / match jobs and (currently) does
+/// not tune anything down — the default is already generous. Operators
+/// adding a new long action should add it here rather than relaxing the
+/// default.
+#[rustfmt::skip]
+const ACTION_TIMEOUTS_SECS: &[(&str, u64)] = &[
+    ("autoscrape",                   14_400), // 4 h: paginated external sites
+    ("bespoke_scraper",              14_400), // 4 h: per-catalog scrapers
+    ("automatch",                     7_200), // 2 h: WDQS-heavy
+    ("automatch_complex",             7_200),
+    ("automatch_from_other_catalogs", 7_200),
+    ("auxiliary_matcher",             7_200),
+    ("aux2wd",                        7_200),
+    ("taxon_matcher",                 7_200),
+    ("match_by_coordinates",          7_200),
+    ("sync_from_cersei",              7_200),
+    ("wdrc_sync",                     7_200),
+    ("update_property_cache",         7_200),
+];
+
+/// Resolve an action name to its wall-clock budget in seconds. Falls
+/// back to [`DEFAULT_ACTION_TIMEOUT_SECS`] for unlisted actions.
+fn action_timeout_secs(action: &str) -> u64 {
+    ACTION_TIMEOUTS_SECS
+        .iter()
+        .find(|(a, _)| *a == action)
+        .map(|(_, secs)| *secs)
+        .unwrap_or(DEFAULT_ACTION_TIMEOUT_SECS)
+}
+
 /// Single-source-of-truth dispatch table. Add new actions here.
 #[rustfmt::skip]
 const JOB_HANDLER_REGISTRY: &[(&str, JobHandlerFn)] = &[
@@ -775,6 +827,52 @@ mod tests {
     fn test_job_error_display_s() {
         let err = JobError::S("something went wrong".to_string());
         assert_eq!(format!("{err}"), "JobError::S: something went wrong");
+    }
+
+    #[test]
+    fn action_timeout_secs_returns_override_for_listed_action() {
+        assert_eq!(action_timeout_secs("autoscrape"), 14_400);
+        assert_eq!(action_timeout_secs("automatch"), 7_200);
+    }
+
+    #[test]
+    fn action_timeout_secs_returns_default_for_unlisted_action() {
+        assert_eq!(
+            action_timeout_secs("definitely_not_a_real_action"),
+            DEFAULT_ACTION_TIMEOUT_SECS
+        );
+    }
+
+    /// Every override must name an action that actually exists in the
+    /// handler registry — otherwise the entry is a typo doing nothing.
+    #[test]
+    fn action_timeouts_only_reference_registered_actions() {
+        let registered: HashSet<&'static str> =
+            JOB_HANDLER_REGISTRY.iter().map(|(n, _)| *n).collect();
+        for (action, _) in ACTION_TIMEOUTS_SECS {
+            assert!(
+                registered.contains(action),
+                "ACTION_TIMEOUTS_SECS references unknown action: {action}"
+            );
+        }
+    }
+
+    /// Times must be plausibly bounded — neither zero (every job would
+    /// instantly time out) nor obviously copy-pasted from a different unit.
+    #[test]
+    fn action_timeouts_are_within_sane_range() {
+        const ONE_MINUTE: u64 = 60;
+        const ONE_DAY: u64 = 86_400;
+        for (action, secs) in ACTION_TIMEOUTS_SECS {
+            assert!(
+                *secs >= ONE_MINUTE && *secs <= ONE_DAY,
+                "ACTION_TIMEOUTS_SECS[{action}]={secs} is outside [60, 86_400]"
+            );
+        }
+        assert!(
+            DEFAULT_ACTION_TIMEOUT_SECS >= ONE_MINUTE
+                && DEFAULT_ACTION_TIMEOUT_SECS <= ONE_DAY
+        );
     }
 
     #[test]
