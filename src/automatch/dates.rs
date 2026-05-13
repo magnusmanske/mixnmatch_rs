@@ -508,6 +508,15 @@ impl AutoMatch {
 
         let mut offset = self.get_last_job_offset().await;
         let batch_size = 10;
+        // COUNT matching the same WHERE clause the paged fetch uses
+        // (`q IS NULL` + no prior remove_q log + not_fully_matched).
+        let total = self
+            .app
+            .storage()
+            .automatch_complex_get_el_chunk_count(catalog_id)
+            .await
+            .ok()
+            .map(|n| n as u64);
         loop {
             let el_chunk = self
                 .app
@@ -526,7 +535,7 @@ impl AutoMatch {
                 break;
             }
             offset += el_chunk.len();
-            let _ = self.remember_offset(offset).await;
+            let _ = self.report_progress(offset as u64, total).await;
         }
         let _ = self.clear_offset().await;
         Ok(())
