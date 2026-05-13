@@ -6090,6 +6090,31 @@ impl crate::storage::AuxiliaryMatcherQueries for StorageMySQL {
             .await?;
         Ok(results)
     }
+
+    async fn auxiliary_matcher_add_auxiliary_to_wikidata_count(
+        &self,
+        blacklisted_properties: &[String],
+        catalog_id: usize,
+    ) -> Result<usize> {
+        if blacklisted_properties.is_empty() {
+            return Ok(0);
+        }
+        let sql = format!(
+            "SELECT count(*) AS cnt FROM entry,auxiliary
+            WHERE entry_id=entry.id AND catalog=:catalog_id
+            {}
+            AND in_wikidata=0
+            AND aux_p NOT IN ({})
+            AND (aux_p!=17 OR `type`!='Q5')",
+            MatchState::fully_matched().get_sql(),
+            blacklisted_properties.join(",")
+        );
+        let results: Vec<usize> = sql
+            .with(params! {catalog_id})
+            .map(self.get_conn_ro().await?, |num| num)
+            .await?;
+        Ok(*results.first().unwrap_or(&0))
+    }
 }
 
 #[async_trait]
