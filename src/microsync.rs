@@ -60,8 +60,15 @@ struct ExtIdNoMnM {
 #[derive(Debug)]
 pub struct Microsync {
     app: Arc<dyn AppContext>,
-    /// Wikidata write session. Production code holds a real `Wikidata`
-    /// (boxed); tests substitute `MockWikidataWriter` via `new_with_writer`.
+    /// Per-worker Wikidata write session, independent of the shared
+    /// `app.wikidata()` read handle. Each worker instance gets its own
+    /// session at construction (cloned from `app.wikidata()` — `Wikidata`
+    /// derives `Clone` and carries no `Arc`/`Mutex` guard, so sessions
+    /// are independent). This sidesteps `&mut AppState::wikidata_mut()`,
+    /// preserves `&mut self` honesty on write methods, and avoids any
+    /// `Mutex`-across-`.await` risk under concurrent jobs.
+    /// Tests substitute `MockWikidataWriter` via `new_with_writer`.
+    /// Cf. `STATUS.md` #5, `audits/code_solid.md` #11.
     wikidata: Box<dyn WikidataWriter>,
     job: Option<Job>,
 }

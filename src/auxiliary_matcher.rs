@@ -120,8 +120,15 @@ pub struct AuxiliaryMatcher {
     pub(super) properties_that_have_external_ids: Vec<String>,
     pub(super) properties_with_coordinates: Vec<String>,
     pub(super) app: Arc<dyn AppContext>,
-    /// Wikidata write session. Production code holds a real `Wikidata`
-    /// (boxed); tests substitute `MockWikidataWriter` via `new_with_writer`.
+    /// Per-worker Wikidata write session, independent of the shared
+    /// `app.wikidata()` read handle. Each worker instance gets its own
+    /// session at construction (cloned from `app.wikidata()` — `Wikidata`
+    /// derives `Clone` and carries no `Arc`/`Mutex` guard, so sessions
+    /// are independent). This sidesteps `&mut AppState::wikidata_mut()`,
+    /// preserves `&mut self` honesty on write methods, and avoids any
+    /// `Mutex`-across-`.await` risk under concurrent jobs.
+    /// Tests substitute `MockWikidataWriter` via `new_with_writer`.
+    /// Cf. `STATUS.md` #5, `audits/code_solid.md` #11.
     pub(super) wikidata: Box<dyn WikidataWriter>,
     pub(super) catalogs: HashMap<usize, Option<Catalog>>,
     pub(super) properties: EntityContainer,
