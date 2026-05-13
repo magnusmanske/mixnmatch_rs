@@ -579,6 +579,16 @@ impl AutoMatch {
     pub async fn automatch_from_other_catalogs(&mut self, catalog_id: usize) -> Result<()> {
         let mut offset = self.get_last_job_offset().await;
         let batch_size = 500;
+        // Row-fetch filters by bare `q IS NULL` (see
+        // `automatch_from_other_catalogs_get_results`); use the same filter
+        // for the total so processed/total agree on the same population.
+        let total = self
+            .app
+            .storage()
+            .number_of_entries_in_catalog_filtered(catalog_id, &MatchState::unmatched())
+            .await
+            .ok()
+            .map(|n| n as u64);
         loop {
             let results_in_original_catalog = self
                 .app
@@ -610,7 +620,11 @@ impl AutoMatch {
             if results_in_original_catalog.len() < batch_size {
                 break;
             }
-            let _ = self.remember_offset(offset).await;
+            // Preserve the existing flush ordering: persist `offset` (the
+            // start of the just-processed batch) as the safe resume point
+            // before advancing. The progress bar therefore lags by one
+            // batch but the resume cursor is honest.
+            let _ = self.report_progress(offset as u64, total).await;
             offset += results_in_original_catalog.len();
         }
         let _ = self.clear_offset().await;
