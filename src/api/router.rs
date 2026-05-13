@@ -18,6 +18,23 @@ use futures::future::BoxFuture;
 use std::sync::Arc;
 use tower_sessions::Session;
 
+/// Maximum number of concurrent in-flight `/api.php` requests. Above
+/// this, additional requests are immediately rejected with HTTP 503.
+///
+/// Sized for steady-state SPA traffic plus burst headroom: a single
+/// page load fans out ~20 calls, so 256 supports a dozen users in
+/// flight without rejecting any. The cap exists primarily to prevent
+/// runaway pile-up when an upstream (Wikidata, WDQS) stalls and slow
+/// requests accumulate. `/metrics`, `/resources/*` and the import
+/// endpoint are not behind this limit — they're either size-bounded
+/// (uploads) or low-cost (Prometheus scrape, cached static assets).
+const API_PHP_MAX_CONCURRENT_REQUESTS: usize = 256;
+
+/// Permits guarding in-flight `/api.php` requests. `Semaphore::const_new`
+/// makes this a true `static` — no `OnceLock` or `Lazy` needed.
+static API_PHP_SEMAPHORE: tokio::sync::Semaphore =
+    tokio::sync::Semaphore::const_new(API_PHP_MAX_CONCURRENT_REQUESTS);
+
 pub type SharedState = Arc<AppState>;
 
 pub fn router(app: AppState) -> Router {
@@ -45,7 +62,8 @@ pub fn router(app: AppState) -> Router {
     let api_php_routes = Router::new()
         .route("/api.php", get(api_dispatcher).post(api_dispatcher_form))
         .route_layer(axum::middleware::from_fn(panic_recovery_middleware))
-        .route_layer(axum::middleware::from_fn(origin_check_middleware));
+        .route_layer(axum::middleware::from_fn(origin_check_middleware))
+        .route_layer(axum::middleware::from_fn(concurrency_limit_middleware));
 
     Router::new()
         .merge(api_php_routes)
@@ -162,6 +180,39 @@ async fn panic_recovery_middleware(
             // strings embedded in a panic payload don't leak to the client.
             log::error!("{path} panicked: {msg}");
             ApiError::Internal("internal error".to_string()).into_response()
+        }
+    }
+}
+
+/// Reject `/api.php` requests above [`API_PHP_MAX_CONCURRENT_REQUESTS`]
+/// concurrent in-flight calls with HTTP 503 Service Unavailable. The
+/// permit is held for the lifetime of the response future, so a slow
+/// handler counts against the limit until it actually returns.
+///
+/// `try_acquire` (not `acquire().await`) is intentional: under overload
+/// we want callers to see fast failures and back off, not queue up and
+/// drive memory growth.
+async fn concurrency_limit_middleware(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    match API_PHP_SEMAPHORE.try_acquire() {
+        Ok(permit) => {
+            let response = next.run(req).await;
+            drop(permit);
+            response
+        }
+        Err(_) => {
+            metrics::counter!("mnm_api_overload_total").increment(1);
+            (
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                [(
+                    axum::http::header::RETRY_AFTER,
+                    axum::http::HeaderValue::from_static("1"),
+                )],
+                "server overloaded; try again",
+            )
+                .into_response()
         }
     }
 }
@@ -488,6 +539,29 @@ async fn dispatch(
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    /// Pin the size of the concurrency cap. Too low would reject during
+    /// normal SPA traffic (one page-load fans out ~20 calls); too high
+    /// would defeat the point of the cap entirely. Also sanity-check
+    /// that the static `Semaphore` was actually initialised with the
+    /// constant value — a wiring regression would leave the available
+    /// count at a different number.
+    #[test]
+    fn concurrency_limit_constants_are_sane() {
+        assert!(
+            API_PHP_MAX_CONCURRENT_REQUESTS >= 64,
+            "cap is too tight to absorb normal SPA fanout"
+        );
+        assert!(
+            API_PHP_MAX_CONCURRENT_REQUESTS <= 10_000,
+            "cap is so loose it provides no protection"
+        );
+        assert!(
+            API_PHP_SEMAPHORE.available_permits() <= API_PHP_MAX_CONCURRENT_REQUESTS,
+            "static Semaphore has more permits than the configured cap — \
+             initialisation is wrong"
+        );
+    }
 
     /// Catches a copy-paste typo in the route table that would silently
     /// shadow an existing route name and never call the second handler.
