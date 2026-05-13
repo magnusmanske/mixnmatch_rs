@@ -70,6 +70,7 @@ pub mod import_catalog;
 pub mod issue;
 pub mod item_creator;
 pub mod job;
+pub mod job_progress;
 pub mod job_row;
 pub mod job_runner;
 pub mod job_status;

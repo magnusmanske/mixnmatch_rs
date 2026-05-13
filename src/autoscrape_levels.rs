@@ -14,6 +14,17 @@ trait Level {
     fn current(&self) -> String;
     fn get_state(&self) -> Value;
     fn set_state(&mut self, json: &Value);
+
+    /// Total number of `tick()` outcomes this level will yield, if it can
+    /// be determined ahead of time. `None` for data-driven levels (Follow,
+    /// MediaWiki) whose size depends on a yet-to-be-fetched response.
+    fn size_hint(&self) -> Option<usize>;
+
+    /// Zero-based index of the current `tick()` within `size_hint()`. `None`
+    /// when `size_hint()` is `None`. Used together with `size_hint` to
+    /// compute the flat mixed-radix index into the cartesian product of
+    /// levels.
+    fn position_hint(&self) -> Option<usize>;
 }
 
 #[derive(Debug, Clone)]
@@ -49,6 +60,14 @@ impl Level for AutoscrapeKeys {
                 self.position = position as usize;
             }
         }
+    }
+
+    fn size_hint(&self) -> Option<usize> {
+        Some(self.keys.len())
+    }
+
+    fn position_hint(&self) -> Option<usize> {
+        Some(self.position.min(self.keys.len()))
     }
 }
 
@@ -102,6 +121,26 @@ impl Level for AutoscrapeRange {
                 self.current_value = current_value;
             }
         }
+    }
+
+    fn size_hint(&self) -> Option<usize> {
+        // Range is inclusive of `end` (tick returns true only after
+        // current_value > end), so e.g. start=1,end=3,step=1 yields three
+        // values: 1, 2, 3. Defensive against zero/inverted ranges that
+        // would be configuration bugs but shouldn't panic the worker.
+        if self.step == 0 || self.start > self.end {
+            return None;
+        }
+        Some(((self.end - self.start) / self.step) as usize + 1)
+    }
+
+    fn position_hint(&self) -> Option<usize> {
+        if self.step == 0 || self.current_value < self.start {
+            return None;
+        }
+        let size = self.size_hint()?;
+        let pos = ((self.current_value - self.start) / self.step) as usize;
+        Some(pos.min(size))
     }
 }
 
@@ -161,6 +200,17 @@ impl Level for AutoscrapeFollow {
                 self.regex = regex.to_string();
             }
         }
+    }
+
+    fn size_hint(&self) -> Option<usize> {
+        // Size is data-driven (depends on the response of an HTTP fetch
+        // performed on each outer-level tick), so it cannot be known up
+        // front. Treated as opaque by the percentage calculation.
+        None
+    }
+
+    fn position_hint(&self) -> Option<usize> {
+        None
     }
 }
 
@@ -272,6 +322,16 @@ impl Level for AutoscrapeMediaWiki {
             }
         }
     }
+
+    fn size_hint(&self) -> Option<usize> {
+        // Streamed via apfrom; total unknown until the last page is
+        // empty. Treated as opaque by the percentage calculation.
+        None
+    }
+
+    fn position_hint(&self) -> Option<usize> {
+        None
+    }
 }
 
 impl AutoscrapeMediaWiki {
@@ -379,6 +439,65 @@ impl AutoscrapeLevelType {
             AutoscrapeLevelType::MediaWiki(x) => x.set_state(json),
         }
     }
+
+    pub fn size_hint(&self) -> Option<usize> {
+        match self {
+            AutoscrapeLevelType::Keys(x) => x.size_hint(),
+            AutoscrapeLevelType::Range(x) => x.size_hint(),
+            AutoscrapeLevelType::Follow(x) => x.size_hint(),
+            AutoscrapeLevelType::MediaWiki(x) => x.size_hint(),
+        }
+    }
+
+    pub fn position_hint(&self) -> Option<usize> {
+        match self {
+            AutoscrapeLevelType::Keys(x) => x.position_hint(),
+            AutoscrapeLevelType::Range(x) => x.position_hint(),
+            AutoscrapeLevelType::Follow(x) => x.position_hint(),
+            AutoscrapeLevelType::MediaWiki(x) => x.position_hint(),
+        }
+    }
+}
+
+/// Returns `(flat_index, total)` over the cartesian product of the
+/// longest contiguous prefix of levels whose size is knowable up front
+/// (Keys, Range). Inner levels with unknown size (Follow, MediaWiki)
+/// terminate the prefix; their state contributes nothing.
+///
+/// Returns `None` when no level has a size hint or when the prefix's
+/// total iteration count would be zero. The percent is derived by
+/// [`crate::job_progress::JobProgress::from_counts`].
+///
+/// Math: a standard mixed-radix decode over the sized prefix —
+/// `flat = Σᵢ positionᵢ · Πⱼ₍ⱼ>ᵢ₎ sizeⱼ`, with `total = Πᵢ sizeᵢ`. This
+/// matches the autoscrape outer-to-inner cartesian iteration order
+/// (`Autoscrape::tick` resets level[N-1] when it exhausts, ticking
+/// level[N-2]).
+pub fn sized_prefix_index(levels: &[AutoscrapeLevel]) -> Option<(u64, u64)> {
+    let mut sizes: Vec<u64> = Vec::with_capacity(levels.len());
+    let mut positions: Vec<u64> = Vec::with_capacity(levels.len());
+    for level in levels {
+        match (level.size_hint(), level.position_hint()) {
+            (Some(s), Some(p)) => {
+                sizes.push(s as u64);
+                positions.push(p as u64);
+            }
+            _ => break,
+        }
+    }
+    if sizes.is_empty() {
+        return None;
+    }
+    let total: u64 = sizes.iter().product();
+    if total == 0 {
+        return None;
+    }
+    let mut flat: u64 = 0;
+    for i in 0..sizes.len() {
+        let inner_product: u64 = sizes[i + 1..].iter().product();
+        flat += positions[i] * inner_product;
+    }
+    Some((flat, total))
 }
 
 #[derive(Debug, Clone)]
@@ -422,6 +541,18 @@ impl AutoscrapeLevel {
     pub fn current(&self) -> String {
         self.level_type.current()
     }
+
+    /// Total number of `tick()` outcomes this level will yield, or `None`
+    /// if the level's size is data-driven (Follow, MediaWiki).
+    pub fn size_hint(&self) -> Option<usize> {
+        self.level_type.size_hint()
+    }
+
+    /// Zero-based index of the current `tick()` within `size_hint()`, or
+    /// `None` if the level is unsized.
+    pub fn position_hint(&self) -> Option<usize> {
+        self.level_type.position_hint()
+    }
 }
 
 #[cfg(test)]
@@ -460,5 +591,154 @@ mod tests {
         assert_eq!(level.current(), "3");
         assert!(level.tick().await);
         assert_eq!(level.current(), "4");
+    }
+
+    // size_hint / position_hint ─────────────────────────────────────────
+
+    #[test]
+    fn keys_size_and_position_hints() {
+        let json = json!({"mode": "keys", "keys": ["a", "b", "c"]});
+        let level = AutoscrapeLevel::from_json(&json).unwrap();
+        assert_eq!(level.size_hint(), Some(3));
+        assert_eq!(level.position_hint(), Some(0));
+    }
+
+    #[tokio::test]
+    async fn keys_position_hint_advances_with_tick() {
+        let json = json!({"mode": "keys", "keys": ["a", "b", "c"]});
+        let mut level = AutoscrapeLevel::from_json(&json).unwrap();
+        level.tick().await;
+        assert_eq!(level.position_hint(), Some(1));
+        level.tick().await;
+        assert_eq!(level.position_hint(), Some(2));
+    }
+
+    #[test]
+    fn range_size_hint_inclusive_of_end() {
+        // start=1, end=3, step=1 yields 3 values: 1, 2, 3.
+        let json = json!({"mode": "range", "start": 1, "end": 3, "step": 1});
+        let level = AutoscrapeLevel::from_json(&json).unwrap();
+        assert_eq!(level.size_hint(), Some(3));
+    }
+
+    #[test]
+    fn range_size_hint_with_step() {
+        // start=0, end=6, step=2 yields 4 values: 0, 2, 4, 6.
+        let json = json!({"mode": "range", "start": 0, "end": 6, "step": 2});
+        let level = AutoscrapeLevel::from_json(&json).unwrap();
+        assert_eq!(level.size_hint(), Some(4));
+    }
+
+    #[test]
+    fn range_position_hint_zero_at_start() {
+        let json = json!({"mode": "range", "start": 2000, "end": 2025, "step": 1});
+        let level = AutoscrapeLevel::from_json(&json).unwrap();
+        assert_eq!(level.position_hint(), Some(0));
+    }
+
+    #[tokio::test]
+    async fn range_position_hint_advances() {
+        let json = json!({"mode": "range", "start": 2000, "end": 2005, "step": 1});
+        let mut level = AutoscrapeLevel::from_json(&json).unwrap();
+        level.tick().await; // 2001
+        level.tick().await; // 2002
+        assert_eq!(level.position_hint(), Some(2));
+    }
+
+    #[test]
+    fn range_size_hint_none_on_zero_step() {
+        // Defensive: step=0 would be a configuration bug; don't crash.
+        let json = json!({"mode": "range", "start": 0, "end": 5, "step": 0});
+        let level = AutoscrapeLevel::from_json(&json).unwrap();
+        assert_eq!(level.size_hint(), None);
+    }
+
+    #[test]
+    fn follow_returns_none_for_both_hints() {
+        // Follow is data-driven; size/position cannot be known ahead.
+        let json = json!({"mode": "follow", "url": "http://example.com/$1", "rx": "(.+)"});
+        let level = AutoscrapeLevel::from_json(&json).unwrap();
+        assert_eq!(level.size_hint(), None);
+        assert_eq!(level.position_hint(), None);
+    }
+
+    #[test]
+    fn mediawiki_returns_none_for_both_hints() {
+        let json = json!({"mode": "mediawiki", "url": "https://en.wikipedia.org/w/api.php"});
+        let level = AutoscrapeLevel::from_json(&json).unwrap();
+        assert_eq!(level.size_hint(), None);
+        assert_eq!(level.position_hint(), None);
+    }
+
+    // sized_prefix_percent ──────────────────────────────────────────────
+
+    fn keys_level(n: usize) -> AutoscrapeLevel {
+        let keys: Vec<Value> = (0..n).map(|i| json!(format!("k{i}"))).collect();
+        AutoscrapeLevel::from_json(&json!({"mode": "keys", "keys": keys})).unwrap()
+    }
+
+    fn range_level(start: u64, end: u64, step: u64) -> AutoscrapeLevel {
+        AutoscrapeLevel::from_json(&json!({
+            "mode": "range", "start": start, "end": end, "step": step,
+        }))
+        .unwrap()
+    }
+
+    fn follow_level() -> AutoscrapeLevel {
+        AutoscrapeLevel::from_json(&json!({
+            "mode": "follow", "url": "http://example.com/", "rx": "(.+)",
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn prefix_index_empty_levels_is_none() {
+        assert_eq!(sized_prefix_index(&[]), None);
+    }
+
+    #[test]
+    fn prefix_index_outermost_unsized_is_none() {
+        let levels = vec![follow_level(), keys_level(10)];
+        assert_eq!(sized_prefix_index(&levels), None);
+    }
+
+    #[test]
+    fn prefix_index_at_start_is_zero_flat() {
+        // Two levels of size 10 × 20 = 200 total iterations, all at position 0.
+        let levels = vec![keys_level(10), range_level(0, 19, 1)];
+        assert_eq!(sized_prefix_index(&levels), Some((0, 200)));
+    }
+
+    #[tokio::test]
+    async fn prefix_index_mid_iteration() {
+        // outer keys=10, inner range=20 (start 0, end 19, step 1)
+        // Tick outer 3 times, inner 7 times → positions = (3, 7).
+        // flat = 3*20 + 7 = 67, total = 200.
+        let mut levels = vec![keys_level(10), range_level(0, 19, 1)];
+        for _ in 0..3 {
+            levels[0].tick().await;
+        }
+        for _ in 0..7 {
+            levels[1].tick().await;
+        }
+        assert_eq!(sized_prefix_index(&levels), Some((67, 200)));
+    }
+
+    #[tokio::test]
+    async fn prefix_index_coarse_when_inner_unsized() {
+        // Outer keys=10 (sized), inner follow (unsized). After ticking
+        // outer 3 times, prefix is just keys: flat=3, total=10.
+        let mut levels = vec![keys_level(10), follow_level()];
+        for _ in 0..3 {
+            levels[0].tick().await;
+        }
+        assert_eq!(sized_prefix_index(&levels), Some((3, 10)));
+    }
+
+    #[test]
+    fn prefix_index_zero_total_is_none() {
+        // A 0-key list yields total=0; avoid div by zero.
+        let levels = vec![keys_level(0)];
+        assert_eq!(sized_prefix_index(&levels), None);
     }
 }

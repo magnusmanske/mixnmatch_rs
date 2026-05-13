@@ -215,6 +215,48 @@ export default Vue.extend({
             this.load();
             if (typeof window != 'undefined' && window.scrollTo) window.scrollTo(0, 0);
         },
+        // Progress payload (server-parsed from jobs.json under the
+        // `progress` field). Returns null when the job hasn't published
+        // any progress (legacy rows, jobs that don't track it yet).
+        progress_of : function(job) {
+            return (job && job.progress) ? job.progress : null;
+        },
+        has_progress_bar : function(job) {
+            const p = this.progress_of(job);
+            return !!(p && p.percent != null && p.total != null && p.total > 0);
+        },
+        has_progress_counter : function(job) {
+            // Counter-only when we know `processed` but no `total`.
+            const p = this.progress_of(job);
+            return !!(p && p.processed != null && (p.total == null || p.total === 0));
+        },
+        progress_percent : function(job) {
+            const p = this.progress_of(job);
+            if (!p || p.percent == null) return 0;
+            return Math.min(100, Math.max(0, p.percent));
+        },
+        progress_label : function(job) {
+            const p = this.progress_of(job);
+            if (!p) return '';
+            if (p.total != null && p.total > 0) {
+                const pct = (p.percent != null) ? p.percent.toFixed(1) : '?';
+                return `${pct}% (${this.fmt_count(p.processed)} / ${this.fmt_count(p.total)})`;
+            }
+            return `${this.fmt_count(p.processed)} done`;
+        },
+        fmt_count : function(n) {
+            if (n == null) return '?';
+            // 12,345 — easier to read at a glance than 12345.
+            return Number(n).toLocaleString();
+        },
+        // Show the progress indicator only for jobs that are doing work
+        // right now (or queued); DONE/FAILED/DEACTIVATED would just be
+        // visual clutter — the final outcome already lives in the status
+        // chip.
+        show_progress : function(job) {
+            return ACTIVE_JOB_STATUSES.has(job.status)
+                && (this.has_progress_bar(job) || this.has_progress_counter(job));
+        },
         // Returns true if the current user may control (stop/pause/resume) this job.
         // Mirrors the server-side is_job_manager check.
         can_control_job : function(job) {
@@ -333,6 +375,13 @@ export default Vue.extend({
                             class='jobs-ctrl-btn btn btn-sm btn-outline-danger'
                             title='Stop job' @click.prevent='manage_job(job.id,"stop")'>&#x23F9;</button>
                     </span>
+                    <div v-if='show_progress(job)' class='jobs-progress' :title='progress_label(job)'>
+                        <span v-if='has_progress_bar(job)' class='jobs-progress-bar'>
+                            <span class='jobs-progress-bar-fill' :style='{ width: progress_percent(job) + "%" }'></span>
+                        </span>
+                        <span class='jobs-progress-label' v-if='has_progress_bar(job)'>{{progress_percent(job).toFixed(1)}}%</span>
+                        <span class='jobs-progress-text' v-else>{{progress_label(job)}}</span>
+                    </div>
                 </td>
                 <td class='jobs-ts'>
                     <span class='jobs-ts-date'>{{date_part(job.last_ts)}}</span>

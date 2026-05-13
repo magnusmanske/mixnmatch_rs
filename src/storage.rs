@@ -644,6 +644,14 @@ pub trait Storage:
 
     async fn create_catalog(&self, catalog: &Catalog) -> Result<usize>;
     async fn number_of_entries_in_catalog(&self, catalog_id: usize) -> Result<usize>;
+    /// Count entries in a catalog, filtered by a [`MatchState`] (e.g.
+    /// [`MatchState::not_fully_matched`]). Used by long-running match
+    /// strategies to report total work for progress percentage.
+    async fn number_of_entries_in_catalog_filtered(
+        &self,
+        catalog_id: usize,
+        match_state: &MatchState,
+    ) -> Result<usize>;
     async fn get_catalog_from_id(&self, catalog_id: usize) -> Result<Catalog>;
     async fn get_catalog_from_name(&self, name: &str) -> Result<Catalog>;
     async fn get_catalog_key_value_pairs(

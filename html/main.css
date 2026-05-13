@@ -1103,6 +1103,47 @@ table.quick_compare_table td {
 	line-height: 1;
 }
 
+/* ========== Job progress indicator ========== */
+
+/* Renders under the status chip when a job has published a JobProgress
+   payload in jobs.json. Two render modes:
+   - .jobs-progress-bar  for jobs with a known total (real percentage);
+   - .jobs-progress-text for counter-only (e.g. autoscrape with an
+     unsized outermost level, or strategies without a total query yet).
+*/
+.jobs-progress {
+	margin-top: 0.2rem;
+	font-size: 0.75rem;
+	line-height: 1;
+}
+
+.jobs-progress-bar {
+	display: block;
+	width: 6rem;
+	height: 0.4rem;
+	background: #e9ecef;
+	border-radius: 0.2rem;
+	overflow: hidden;
+}
+
+.jobs-progress-bar-fill {
+	display: block;
+	height: 100%;
+	background: #0d6efd;
+	transition: width 0.3s ease;
+}
+
+.jobs-progress-label {
+	display: block;
+	color: #6c757d;
+	margin-top: 0.1rem;
+}
+
+.jobs-progress-text {
+	display: block;
+	color: #6c757d;
+}
+
 /* ========== Large catalogs ========== */
 
 .mnm-lc-catalog-card {

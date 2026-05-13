@@ -505,6 +505,26 @@ impl Storage for StorageMySQL {
         Ok(*results.first().unwrap_or(&0))
     }
 
+    async fn number_of_entries_in_catalog_filtered(
+        &self,
+        catalog_id: usize,
+        match_state: &MatchState,
+    ) -> Result<usize> {
+        // `MatchState::get_sql()` returns a clause beginning with " AND ..."
+        // (or empty for "any state") so it composes safely after a fixed
+        // `WHERE catalog=:catalog_id` predicate. The MatchState values are
+        // fixed strings — no user input flows in here.
+        let sql = format!(
+            "SELECT count(*) AS cnt FROM `entry` WHERE `catalog`=:catalog_id {}",
+            match_state.get_sql()
+        );
+        let results: Vec<usize> = sql
+            .with(params! {catalog_id})
+            .map(self.get_conn_ro().await?, |num| num)
+            .await?;
+        Ok(*results.first().unwrap_or(&0))
+    }
+
     async fn get_catalog_from_id(&self, catalog_id: usize) -> Result<Catalog> {
         let sql = r"SELECT id,`name`,url,`desc`,`type`,wd_prop,wd_qual,search_wp,active,owner,note,source_item,has_person_date,taxon_run FROM `catalog` WHERE `id`=:catalog_id";
         let mut conn = self.get_conn_ro().await?;
@@ -3008,12 +3028,25 @@ impl Storage for StorageMySQL {
                     row.get::<Option<String>, _>("catalog_name").flatten();
                 let note: Option<String> = row.get::<Option<String>, _>("note").flatten();
                 let json_str: Option<String> = row.get::<Option<String>, _>("json").flatten();
+                // Surface the typed `progress` payload as a top-level
+                // field so the frontend doesn't need to parse the raw
+                // jobs.json blob. `None` for legacy shapes (bare offset
+                // object, bare autoscrape level array) and for jobs that
+                // never published progress.
+                let progress: Option<serde_json::Value> = json_str
+                    .as_deref()
+                    .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                    .and_then(|v| {
+                        crate::job_progress::JobProgress::from_json(&v)
+                            .and_then(|p| serde_json::to_value(p).ok())
+                    });
                 json!({
                     "id": id, "catalog": catalog, "catalog_name": catalog_name,
                     "action": action, "status": status,
                     "last_ts": last_ts, "next_ts": next_ts,
                     "repeat_after_sec": repeat_after_sec, "depends_on": depends_on,
-                    "user_id": user_id, "user_name": user_name, "note": note, "json": json_str
+                    "user_id": user_id, "user_name": user_name, "note": note,
+                    "json": json_str, "progress": progress
                 })
             })
             .await?;

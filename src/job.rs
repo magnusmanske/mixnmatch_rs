@@ -14,13 +14,13 @@ use crate::php_wrapper::PhpWrapper;
 use crate::task_size::TaskSize;
 use crate::taxon_matcher::TaxonMatcher;
 use crate::update_catalog::UpdateCatalog;
+use crate::job_progress::{JobProgress, merge_progress_into_json};
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use chrono::Duration;
 use chrono::Local;
 use futures::future::BoxFuture;
 use log::info;
-use serde_json::json;
 use wikimisc::timestamp::TimeStamp;
 
 /// A trait that allows to manage temporary job data (eg offset)
@@ -59,13 +59,29 @@ pub trait Jobbable {
         })
     }
 
+    /// Persist a resume cursor as `offset` in `jobs.json`. Equivalent to
+    /// [`report_progress`] with no total — emits a typed progress payload
+    /// (`{processed: offset, total: None, percent: None}`) so the UI can
+    /// still render a counter even when the strategy doesn't know its
+    /// total. Preserves any other keys in `jobs.json` (e.g. autoscrape's
+    /// `levels` array).
     async fn remember_offset(&mut self, offset: usize) -> Result<()> {
+        self.report_progress(offset as u64, None).await
+    }
+
+    /// Persist a typed progress payload to `jobs.json`, merging with the
+    /// existing document. The `offset` key is kept in sync with `processed`
+    /// for backward compatibility with [`get_last_job_offset`] and any
+    /// external readers that already parse it directly.
+    async fn report_progress(&mut self, processed: u64, total: Option<u64>) -> Result<()> {
         let job = match self.get_current_job_mut() {
             Some(job) => job,
             None => return Ok(()),
         };
-        // println!("{}: {offset} [{}]",job.get_id().await.unwrap_or(0), Utc::now());
-        job.set_json(Some(json!({ "offset": offset }))).await?;
+        let progress = JobProgress::from_counts(processed, total);
+        let existing = job.get_json_value().await;
+        let merged = merge_progress_into_json(existing.as_ref(), &progress);
+        job.set_json(Some(merged)).await?;
         Ok(())
     }
 

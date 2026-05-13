@@ -1,10 +1,11 @@
 use crate::app_state::AppContext;
-use crate::autoscrape_levels::AutoscrapeLevel;
+use crate::autoscrape_levels::{AutoscrapeLevel, sized_prefix_index};
 use crate::autoscrape_resolve::RE_SIMPLE_SPACE;
 use crate::autoscrape_scraper::AutoscrapeScraper;
 use crate::catalog::Catalog;
 use crate::extended_entry::ExtendedEntry;
 use crate::job::{Job, Jobbable};
+use crate::job_progress::{JobProgress, merge_progress_into_json};
 use anyhow::Result;
 use futures::StreamExt;
 use serde_json::{Value, json};
@@ -336,13 +337,29 @@ impl Autoscrape {
     }
 
     pub async fn remember_state(&mut self) -> Result<()> {
-        let json: Vec<Value> = self
+        // Persist level state under `levels` (new object shape) so the
+        // typed progress payload can sit alongside without overwriting it.
+        // `start()` keeps a backward-compatible reader for the legacy bare
+        // array shape that pre-progress autoscrape runs wrote.
+        let levels: Vec<Value> = self
             .levels
             .iter()
             .map(|level| level.level_type().get_state())
             .collect();
-        let json = json!(json);
-        self.remember_job_data(&json).await?;
+        let mut state = json!({ "levels": levels });
+
+        // Coarse percentage over the sized prefix of levels (Keys/Range);
+        // None when the outermost level is unsized (Follow/MediaWiki),
+        // in which case we still publish a `urls_loaded` counter via
+        // `processed` so the UI has something to render.
+        let (processed, total) = match sized_prefix_index(&self.levels) {
+            Some((flat, total)) => (flat, Some(total)),
+            None => (self.urls_loaded as u64, None),
+        };
+        let progress = JobProgress::from_counts(processed, total);
+        state = merge_progress_into_json(Some(&state), &progress);
+
+        self.remember_job_data(&state).await?;
         Ok(())
     }
 
@@ -426,7 +443,21 @@ impl Autoscrape {
             .autoscrape_start(autoscrape_id)
             .await?;
         if let Some(json) = self.get_last_job_data().await {
-            if let Some(arr) = json.as_array() {
+            // Accept both shapes for backward compatibility:
+            // - new: object with `levels` array (+ optional `progress`);
+            // - legacy: bare array of level states.
+            let levels_value = json
+                .as_object()
+                .and_then(|o| o.get("levels"))
+                .cloned()
+                .or_else(|| {
+                    if json.is_array() {
+                        Some(json.clone())
+                    } else {
+                        None
+                    }
+                });
+            if let Some(Value::Array(arr)) = levels_value {
                 if arr.len() == self.levels.len() {
                     arr.iter()
                         .enumerate()

@@ -319,6 +319,22 @@ impl AutoMatch {
             .get("automatch_by_search_search_batch_size")
             .unwrap_or(&50);
 
+        // One COUNT at the start so the UI can render a real percent
+        // alongside the resume cursor. Total may drift while the job runs
+        // (entries get matched, possibly added) — accept that as cheaper
+        // than re-querying every batch. `from_counts` clamps overshoot to
+        // 100%.
+        let total = self
+            .app
+            .storage()
+            .number_of_entries_in_catalog_filtered(
+                catalog_id,
+                &MatchState::not_fully_matched(),
+            )
+            .await
+            .ok()
+            .map(|n| n as u64);
+
         loop {
             let results = self
                 .app
@@ -333,7 +349,7 @@ impl AutoMatch {
                 break;
             }
             offset += results.len();
-            let _ = self.remember_offset(offset).await;
+            let _ = self.report_progress(offset as u64, total).await;
         }
         let _ = self.clear_offset().await;
         Ok(())
