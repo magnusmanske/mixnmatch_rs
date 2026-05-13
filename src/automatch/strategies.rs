@@ -492,6 +492,18 @@ impl AutoMatch {
     pub async fn automatch_simple(&mut self, catalog_id: usize) -> Result<()> {
         let mut offset = self.get_last_job_offset().await;
         let batch_size = 5000;
+        // Total over the same `not_fully_matched` filter the row-fetch uses
+        // (see `automatch_simple_get_results`), so processed/total agree.
+        let total = self
+            .app
+            .storage()
+            .number_of_entries_in_catalog_filtered(
+                catalog_id,
+                &MatchState::not_fully_matched(),
+            )
+            .await
+            .ok()
+            .map(|n| n as u64);
         loop {
             // TODO make this more efficient, too many wd replica queries
             let results = self
@@ -513,7 +525,7 @@ impl AutoMatch {
                 break;
             }
             offset += results.len();
-            let _ = self.remember_offset(offset).await;
+            let _ = self.report_progress(offset as u64, total).await;
         }
         let _ = self.clear_offset().await;
         Ok(())
