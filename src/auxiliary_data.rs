@@ -2,7 +2,36 @@ use crate::util::wikidata_props as wp;
 use crate::{DbId, PropertyId};
 use mysql_async::Row;
 use serde::{Deserialize, Serialize};
+use std::sync::LazyLock;
 use wikimisc::wikibase::{Entity, EntityTrait, Reference, Snak, SnakDataType, Statement};
+
+/// Wikidata canonical time form: `±YYYY-MM-DDTHH:MM:SSZ`. Year may be more
+/// than 4 digits (Wikidata accepts up to 16 digits for prehistoric dates).
+static RE_WIKIDATA_TIME: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r"^[+-]\d{1,16}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+        .expect("RE_WIKIDATA_TIME regex must compile")
+});
+
+/// Parse an auxiliary `Time` value of the form
+/// `+YYYY-MM-DDTHH:MM:SSZ/PRECISION` (e.g. `+1079-01-01T00:00:00Z/9`).
+///
+/// Returns `Some((time_string, precision))` when both halves are present and
+/// well-formed, or `None` otherwise. The precision suffix is **required** —
+/// without it we cannot tell whether `+1079-01-01T00:00:00Z` means "year
+/// 1079" (precision 9) or "1 January 1079" (precision 11), and guessing
+/// would risk writing wrong claims.
+fn parse_time_aux_value(value: &str) -> Option<(String, u64)> {
+    let (time, precision_str) = value.rsplit_once('/')?;
+    if !RE_WIKIDATA_TIME.is_match(time) {
+        return None;
+    }
+    let precision: u64 = precision_str.parse().ok()?;
+    // Wikidata defines time precision values 0..=14 (0 = billion years … 14 = second).
+    if precision > 14 {
+        return None;
+    }
+    Some((time.to_string(), precision))
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct AuxiliaryRow {
@@ -95,15 +124,25 @@ impl AuxiliaryRow {
                 Snak::new_external_id(prop.id(), &Self::fix_external_id(prop.id(), &self.value))
             }
             SnakDataType::CommonsMedia => Snak::new_string(prop.id(), &self.value),
-            SnakDataType::Time
-            | SnakDataType::WikibaseProperty
+            SnakDataType::Url => Snak::new_url(prop.id(), &self.value),
+            SnakDataType::Time => match parse_time_aux_value(&self.value) {
+                Some((time, precision)) => Snak::new_time(prop.id(), &time, precision),
+                None => {
+                    log::warn!(
+                        "auxiliary_data: skipping Time property {} — value {:?} is not in the expected `+YYYY-MM-DDTHH:MM:SSZ/PRECISION` form",
+                        prop.id(),
+                        self.value
+                    );
+                    return None;
+                }
+            },
+            SnakDataType::WikibaseProperty
             | SnakDataType::WikibaseLexeme
             | SnakDataType::WikibaseSense
             | SnakDataType::WikibaseForm
             | SnakDataType::GlobeCoordinate
             | SnakDataType::MonolingualText
             | SnakDataType::Quantity
-            | SnakDataType::Url
             | SnakDataType::Math
             | SnakDataType::TabularData
             | SnakDataType::MusicalNotation
@@ -152,12 +191,9 @@ mod tests {
         assert_eq!(*claim.unwrap().main_snak(), expected);
     }
 
-    /// Previously every variant that wasn't WikibaseItem / String /
-    /// ExternalId / CommonsMedia panicked via `todo!()` — and the
-    /// codebase serves these via job workers, so a single auxiliary
-    /// row pointing at a `Time` / `Quantity` / `GlobeCoordinate` etc.
-    /// property would kill the worker. Pin the safe-skip behaviour so
-    /// that doesn't silently regress.
+    /// Variants without a documented aux-string convention still skip rather
+    /// than panic. Time / Url were unsupported here historically but are now
+    /// projected (see dedicated tests below) when the aux value is parseable.
     #[test]
     fn test_get_claim_for_aux_unsupported_datatype_returns_none() {
         let aux = AuxiliaryRow {
@@ -168,10 +204,8 @@ mod tests {
             entry_is_matched: true,
         };
         for unsupported in [
-            SnakDataType::Time,
             SnakDataType::Quantity,
             SnakDataType::GlobeCoordinate,
-            SnakDataType::Url,
             SnakDataType::MonolingualText,
             SnakDataType::Math,
         ] {
@@ -190,6 +224,94 @@ mod tests {
                 "unsupported datatype {unsupported:?} must skip, not panic"
             );
         }
+    }
+
+    fn make_property(id: &str, datatype: SnakDataType) -> Entity {
+        Entity::Property(wikimisc::wikibase::PropertyEntity::new(
+            id.to_string(),
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            Some(datatype),
+            false,
+        ))
+    }
+
+    /// Aux value of the form `+YYYY-MM-DDTHH:MM:SSZ/PRECISION` becomes a Time
+    /// snak with the trailing precision stripped from the time string and
+    /// passed as the snak's precision integer. Pinning the canonical case
+    /// from the bug report (`+1079-01-01T00:00:00Z/9`, year precision).
+    #[test]
+    fn test_get_claim_for_aux_time_with_precision_suffix() {
+        let aux = AuxiliaryRow::new(569, "+1079-01-01T00:00:00Z/9".to_string());
+        let claim = aux
+            .get_claim_for_aux(make_property("P569", SnakDataType::Time), &[])
+            .expect("Time aux with precision suffix must produce a claim");
+        let expected = Snak::new_time("P569", "+1079-01-01T00:00:00Z", 9);
+        assert_eq!(*claim.main_snak(), expected);
+    }
+
+    /// Day-level precision suffix (`/11`) must round-trip through the parser.
+    #[test]
+    fn test_get_claim_for_aux_time_day_precision() {
+        let aux = AuxiliaryRow::new(569, "+1452-04-15T00:00:00Z/11".to_string());
+        let claim = aux
+            .get_claim_for_aux(make_property("P569", SnakDataType::Time), &[])
+            .expect("Time aux with day precision must produce a claim");
+        let expected = Snak::new_time("P569", "+1452-04-15T00:00:00Z", 11);
+        assert_eq!(*claim.main_snak(), expected);
+    }
+
+    /// Negative-year (BC) time values must work — the leading `-` is part of
+    /// the Wikidata canonical format and must not be confused with the
+    /// precision separator.
+    #[test]
+    fn test_get_claim_for_aux_time_bc_year() {
+        let aux = AuxiliaryRow::new(569, "-0500-01-01T00:00:00Z/9".to_string());
+        let claim = aux
+            .get_claim_for_aux(make_property("P569", SnakDataType::Time), &[])
+            .expect("BC year time aux must produce a claim");
+        let expected = Snak::new_time("P569", "-0500-01-01T00:00:00Z", 9);
+        assert_eq!(*claim.main_snak(), expected);
+    }
+
+    /// When the aux value carries no `/precision` suffix we cannot tell at
+    /// what fidelity the upstream source recorded the date, so skip the row
+    /// rather than guess. (Matches the `cersei.rs::parse_time` contract.)
+    #[test]
+    fn test_get_claim_for_aux_time_without_precision_skips() {
+        let aux = AuxiliaryRow::new(569, "+1079-01-01T00:00:00Z".to_string());
+        assert!(
+            aux.get_claim_for_aux(make_property("P569", SnakDataType::Time), &[])
+                .is_none(),
+            "Time aux without precision suffix must skip — guessing precision risks wrong claims"
+        );
+    }
+
+    /// Malformed time strings must skip cleanly, not panic.
+    #[test]
+    fn test_get_claim_for_aux_time_malformed_skips() {
+        for bad in ["not-a-time", "1452-04-15", "+xxxx-01-01T00:00:00Z/9", "+1079-01-01T00:00:00Z/abc"] {
+            let aux = AuxiliaryRow::new(569, bad.to_string());
+            assert!(
+                aux.get_claim_for_aux(make_property("P569", SnakDataType::Time), &[])
+                    .is_none(),
+                "malformed time aux {bad:?} must skip"
+            );
+        }
+    }
+
+    /// Url aux values are projected straight into a Url snak — the value is
+    /// already a fully-formed URL by the time it lands in the aux table.
+    #[test]
+    fn test_get_claim_for_aux_url() {
+        let aux = AuxiliaryRow::new(856, "https://example.com/foo".to_string());
+        let claim = aux
+            .get_claim_for_aux(make_property("P856", SnakDataType::Url), &[])
+            .expect("Url aux must produce a claim");
+        let expected = Snak::new_url("P856", "https://example.com/foo");
+        assert_eq!(*claim.main_snak(), expected);
     }
 
     #[test]
