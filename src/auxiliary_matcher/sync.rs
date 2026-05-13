@@ -43,6 +43,18 @@ impl AuxiliaryMatcher {
         let mut offset = self.get_last_job_offset().await;
         let batch_size = 500;
         let mw_api = self.app.wikidata().get_mw_api().await?;
+        // COUNT matching the same WHERE clause the paged fetch uses. One
+        // query at job start so the UI can render a real percentage.
+        let total = self
+            .app
+            .storage()
+            .auxiliary_matcher_add_auxiliary_to_wikidata_count(
+                &blacklisted_properties,
+                catalog_id,
+            )
+            .await
+            .ok()
+            .map(|n| n as u64);
 
         loop {
             let results = self
@@ -64,7 +76,7 @@ impl AuxiliaryMatcher {
                 break;
             }
             offset += results.len();
-            let _ = self.remember_offset(offset).await;
+            let _ = self.report_progress(offset as u64, total).await;
         }
         let _ = self.clear_offset().await;
         Ok(())

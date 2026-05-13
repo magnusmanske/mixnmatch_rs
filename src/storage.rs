@@ -572,6 +572,17 @@ pub trait AuxiliaryMatcherQueries: std::fmt::Debug + Send + Sync {
         offset: usize,
         batch_size: usize,
     ) -> Result<Vec<AuxiliaryResults>>;
+    /// Total rows the paged
+    /// [`auxiliary_matcher_add_auxiliary_to_wikidata`] would yield —
+    /// same WHERE clause, `COUNT(*)`, no LIMIT/OFFSET. Used by the
+    /// `aux2wd` job to publish a progress percentage. Returns 0 when
+    /// the blacklisted-properties list is empty (the paged variant
+    /// would build invalid `NOT IN ()` SQL there).
+    async fn auxiliary_matcher_add_auxiliary_to_wikidata_count(
+        &self,
+        blacklisted_properties: &[String],
+        catalog_id: usize,
+    ) -> Result<usize>;
 }
 
 /// ISP-segregated sub-trait covering the CERSEI sync flow.
