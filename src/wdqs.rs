@@ -17,6 +17,19 @@
 use anyhow::{Result, anyhow};
 use std::time::Duration;
 
+use crate::util::circuit::Breaker;
+
+/// Circuit breaker fronting the WDQS endpoint. After five consecutive
+/// failures the breaker opens for 60 s, during which `run_tsv_query`
+/// fast-fails without touching the network. Tuning rationale:
+/// - WDQS has been observed to suffer 10–30 min outages; a 60 s open
+///   window means we re-probe twelve times an hour rather than retrying
+///   every queued query.
+/// - Five failures rather than three keeps a noisy-but-not-broken
+///   WDQS (occasional 502 in a recovering cluster) from tripping the
+///   breaker against the operator's intent.
+static WDQS_BREAKER: Breaker = Breaker::new("wdqs", 5, 60);
+
 /// WDQS production endpoint. POSTs are signed-form-encoded for parity
 /// with the mediawiki crate's `sparql_query` (keeps the network path
 /// uniform whether we go through the crate or directly).
@@ -60,10 +73,21 @@ pub fn build_client() -> Result<reqwest::Client> {
 /// length themselves — see `Maintenance::update_property_cache` for
 /// the canonical pattern.
 pub async fn run_tsv_query(client: &reqwest::Client, sparql: &str) -> Result<Vec<Vec<String>>> {
+    // Fast-fail when the breaker is open. Saves a 90 s timeout per
+    // call against an upstream that's already known to be down — the
+    // dominant cost during a WDQS outage.
+    if WDQS_BREAKER.is_open() {
+        WDQS_BREAKER.record_rejected();
+        crate::metrics::record_sparql_failure("breaker_open");
+        return Err(anyhow!("WDQS request rejected: breaker open"));
+    }
     let mut last_err: Option<String> = None;
     for attempt in 0..SPARQL_MAX_ATTEMPTS {
         match send_once(client, sparql).await {
-            Ok(rows) => return Ok(rows),
+            Ok(rows) => {
+                WDQS_BREAKER.record_success();
+                return Ok(rows);
+            }
             Err(e) => {
                 last_err = Some(e);
                 if attempt + 1 < SPARQL_MAX_ATTEMPTS {
@@ -75,6 +99,7 @@ pub async fn run_tsv_query(client: &reqwest::Client, sparql: &str) -> Result<Vec
             }
         }
     }
+    WDQS_BREAKER.record_failure();
     let reason = classify_sparql_failure(last_err.as_deref());
     crate::metrics::record_sparql_failure(reason);
     Err(anyhow!(
