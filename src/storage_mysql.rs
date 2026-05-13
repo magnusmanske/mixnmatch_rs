@@ -1898,6 +1898,23 @@ impl Storage for StorageMySQL {
         Ok(el_chunk)
     }
 
+    async fn automatch_complex_get_el_chunk_count(
+        &self,
+        catalog_id: usize,
+    ) -> Result<usize> {
+        let sql = format!(
+            "SELECT count(*) AS cnt FROM entry WHERE catalog=:catalog_id AND q IS NULL
+            AND NOT EXISTS (SELECT * FROM `log` WHERE log.entry_id=entry.id AND log.action='remove_q')
+            {}",
+            MatchState::unmatched().get_sql()
+        );
+        let results: Vec<usize> = sql
+            .with(params! {catalog_id})
+            .map(self.get_conn_ro().await?, |num| num)
+            .await?;
+        Ok(*results.first().unwrap_or(&0))
+    }
+
     // Entry
 
     async fn entry_from_id(&self, entry_id: usize) -> Result<Entry> {

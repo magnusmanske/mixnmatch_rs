@@ -900,6 +900,14 @@ pub trait Storage:
         offset: usize,
         batch_size: usize,
     ) -> Result<Vec<(usize, String)>>;
+    /// Total rows the paged [`automatch_complex_get_el_chunk`] would
+    /// yield — same WHERE clause (`q IS NULL` + no prior `remove_q` log +
+    /// `not_fully_matched`), `COUNT(*)`, no LIMIT/OFFSET. Used by the
+    /// `automatch_complex` job to publish a progress percentage.
+    async fn automatch_complex_get_el_chunk_count(
+        &self,
+        catalog_id: usize,
+    ) -> Result<usize>;
 
     // Entry
 
