@@ -78,6 +78,57 @@ impl AppState {
         Self::from_config(&config)
     }
 
+    /// Construct an `AppState` from already-built dependency instances.
+    ///
+    /// This is the injection seam for tests and embedders that want to
+    /// substitute specific implementations (e.g. a fake `Storage` for a
+    /// unit test, or a wiremock-backed `Wikidata` for HTTP fixtures).
+    /// [`from_config`](Self::from_config) hard-wires `StorageMySQL` and
+    /// `Wikidata::new`, which is correct for production but doesn't leave
+    /// a seam — `from_parts` does.
+    ///
+    /// The six parameters are the dependencies that have no sensible
+    /// default. The remaining configuration fields — paths, the
+    /// `max_concurrent_jobs` cap, OAuth, etc. — take inert defaults
+    /// matching what a fresh test process needs:
+    /// - `import_file_path` / `flickr_key_path`: empty strings
+    /// - `task_specific_usize`: empty map
+    /// - `max_concurrent_jobs`: 10 (matches the `from_config` fallback)
+    /// - `toolforge_php_command`: `"php8.3"`
+    /// - `oauth_config` / `html_dir_override`: `None`
+    ///
+    /// **For production code:** prefer [`from_config`](Self::from_config) /
+    /// [`from_config_file`](Self::from_config_file). They read everything
+    /// from disk in one shot. **For tests:** prefer
+    /// `test_support::test_app()` unless you specifically need to
+    /// substitute a dependency.
+    ///
+    /// See `audits/code_solid.md` #2.
+    pub fn from_parts(
+        storage: Arc<Box<dyn Storage>>,
+        wikidata: Wikidata,
+        wdt: Wikidata,
+        wdrc: Arc<WDRC>,
+        large_catalogs: Arc<crate::large_catalogs::LargeCatalogs>,
+        http_client: Arc<reqwest::Client>,
+    ) -> Self {
+        Self {
+            wikidata,
+            wdt,
+            wdrc,
+            storage,
+            large_catalogs,
+            import_file_path: Arc::new(String::new()),
+            flickr_key_path: Arc::new(String::new()),
+            task_specific_usize: Arc::new(HashMap::new()),
+            max_concurrent_jobs: 10,
+            toolforge_php_command: "php8.3".to_string(),
+            oauth_config: None,
+            html_dir_override: None,
+            http_client,
+        }
+    }
+
     pub fn import_file_path(&self) -> &str {
         &self.import_file_path
     }
@@ -380,6 +431,57 @@ mod tests {
         let _dyn_ctx: &dyn AppContext = &app4;
     }
 
+    /// Smoke test for the `from_parts` injection seam (audits/code_solid.md
+    /// #2). Builds an AppState by handing real dependency instances to
+    /// `from_parts` rather than letting `from_config` allocate them, and
+    /// verifies:
+    /// - the resulting struct satisfies all three sub-traits + AppContext;
+    /// - storage is accessible through the trait;
+    /// - the non-injected fields received their documented defaults
+    ///   (the audit's whole point: ensure the seam doesn't silently
+    ///   produce an unusable AppState in the absence of explicit values).
+    ///
+    /// Construction goes through `test_support::test_app()` to acquire
+    /// real handles for the testcontainer-backed dependencies — once a
+    /// future `MockStorage` exists, a tighter variant of this test will
+    /// stop touching Docker entirely. Today the test still spins the
+    /// container but exercises the seam itself.
+    #[tokio::test]
+    async fn from_parts_yields_app_context_with_defaults() {
+        let source = crate::test_support::test_app().await;
+        let part_app = AppState::from_parts(
+            Arc::clone(&source.storage),
+            source.wikidata.clone(),
+            source.wdt.clone(),
+            Arc::clone(&source.wdrc),
+            Arc::clone(&source.large_catalogs),
+            Arc::clone(&source.http_client),
+        );
+
+        // (a) The struct produced by from_parts satisfies AppContext.
+        fn takes_context<C: AppContext>(c: &C) -> usize {
+            Arc::strong_count(c.storage())
+        }
+        let _ = takes_context(&part_app);
+
+        // (b) The three sub-traits each work through dynamic dispatch.
+        let dyn_ext: &dyn ExternalServicesContext = &part_app;
+        let _ = Arc::strong_count(dyn_ext.storage());
+        let dyn_cfg: &dyn RuntimeConfig = &part_app;
+        let dyn_wd: &dyn WikidataContext = &part_app;
+        let _ = dyn_wd.wikidata();
+
+        // (c) Defaults applied for non-injected fields. Any future change
+        // to the from_parts defaults must update this test deliberately,
+        // not silently — that's what the assertions are pinning.
+        assert_eq!(dyn_cfg.toolforge_php_command(), "php8.3");
+        assert_eq!(part_app.max_concurrent_jobs(), 10);
+        assert!(dyn_cfg.import_file_path().is_empty());
+        assert!(dyn_cfg.flickr_key_path().is_empty());
+        assert!(dyn_cfg.task_specific_usize().is_empty());
+        assert!(dyn_cfg.oauth_config().is_none());
+        assert!(dyn_cfg.html_dir_override().is_none());
+    }
 
     #[test]
     fn test_item2numeric() {
