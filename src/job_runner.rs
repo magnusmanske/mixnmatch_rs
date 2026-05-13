@@ -29,15 +29,23 @@ use wikimisc::timestamp::TimeStamp;
 /// action has at least this many jobs running, the SQL job picker skips
 /// queued rows for that action until a slot frees up.
 ///
-/// `microsync` is capped to keep the user-triggered "manual sync on every
-/// catalog containing Q" pattern (GitHub #6) from saturating the Wikidata
-/// replica connection pool — each microsync runs `fix_matched_items`,
-/// which in turn calls `get_deleted_items` against the replica, and the
-/// pool has only a handful of connections in production. Two concurrent
-/// microsyncs comfortably fit; a thundering herd does not. Other actions
-/// either don't hit the Wikidata replica or aren't user-triggered, so
-/// they don't need a cap here.
-const ACTION_CONCURRENCY_CAPS: &[(&str, usize)] = &[("microsync", 2)];
+/// **`microsync` → 4.** Capped to keep the user-triggered "manual sync on
+/// every catalog containing Q" pattern (GitHub #6) from saturating the
+/// Wikidata terms-replica pool — each microsync runs `fix_matched_items`,
+/// which in turn calls `get_deleted_items` against `wdt`. The production
+/// `wdt` pool is currently `max_connections=8`, so the cap is set to half
+/// the pool: enough headroom for ad-hoc one-off `wdt` reads from other
+/// code paths, while doubling the previous (cap=2) parallelism now that
+/// the pool itself grew. Raising further is fine if a load profile shows
+/// the cap is the bottleneck.
+///
+/// **`wdrc_sync` → 1.** The `wdrc` MariaDB pool is intentionally tiny
+/// (`max_connections=1` — it's a small auxiliary database). Two
+/// concurrent `wdrc_sync` jobs would serialise on the pool anyway; the
+/// cap just documents the intent and avoids dispatching a second
+/// `wdrc_sync` only for it to block on a connection acquisition.
+const ACTION_CONCURRENCY_CAPS: &[(&str, usize)] =
+    &[("microsync", 4), ("wdrc_sync", 1)];
 
 /// Append any action whose running count meets or exceeds its
 /// `ACTION_CONCURRENCY_CAPS` entry to `skip_actions`. Pulled out of
@@ -600,11 +608,22 @@ mod tests {
         assert!(current_jobs.is_empty(), "must not have spawned anything");
     }
 
+    /// Reads the cap for an action from the canonical
+    /// [`ACTION_CONCURRENCY_CAPS`] table so tests don't drift when the
+    /// production value is retuned — the assertion that matters is the
+    /// *behaviour at the boundary*, not the literal number.
+    fn cap_for(action: &str) -> usize {
+        ACTION_CONCURRENCY_CAPS
+            .iter()
+            .find(|(a, _)| *a == action)
+            .map(|(_, c)| *c)
+            .expect("test references an action that isn't in ACTION_CONCURRENCY_CAPS")
+    }
+
     #[test]
     fn action_cap_skips_when_at_capacity() {
         let counts: DashMap<String, usize> = DashMap::new();
-        // Cap for microsync is 2 in ACTION_CONCURRENCY_CAPS.
-        counts.insert("microsync".to_string(), 2);
+        counts.insert("microsync".to_string(), cap_for("microsync"));
         let mut skip: Vec<String> = vec![];
         apply_action_concurrency_caps(&mut skip, &counts);
         assert!(skip.iter().any(|a| a == "microsync"));
@@ -613,12 +632,12 @@ mod tests {
     #[test]
     fn action_cap_does_not_skip_below_capacity() {
         let counts: DashMap<String, usize> = DashMap::new();
-        counts.insert("microsync".to_string(), 1);
+        counts.insert("microsync".to_string(), cap_for("microsync") - 1);
         let mut skip: Vec<String> = vec![];
         apply_action_concurrency_caps(&mut skip, &counts);
         assert!(
             !skip.iter().any(|a| a == "microsync"),
-            "1 running, cap is 2 — must not skip"
+            "running one below cap — must not skip"
         );
     }
 
@@ -627,7 +646,7 @@ mod tests {
         // If `microsync` is already in skip_actions (e.g. because it was
         // marked too-big upstream), don't append a duplicate.
         let counts: DashMap<String, usize> = DashMap::new();
-        counts.insert("microsync".to_string(), 5);
+        counts.insert("microsync".to_string(), cap_for("microsync") + 3);
         let mut skip: Vec<String> = vec!["microsync".to_string()];
         apply_action_concurrency_caps(&mut skip, &counts);
         assert_eq!(
@@ -646,5 +665,16 @@ mod tests {
         let mut skip: Vec<String> = vec![];
         apply_action_concurrency_caps(&mut skip, &counts);
         assert!(skip.is_empty(), "uncapped action must not be skipped");
+    }
+
+    #[test]
+    fn action_cap_wdrc_sync_skips_at_one_running() {
+        // wdrc pool has max_connections=1 in production, so a single
+        // running wdrc_sync already saturates it.
+        let counts: DashMap<String, usize> = DashMap::new();
+        counts.insert("wdrc_sync".to_string(), 1);
+        let mut skip: Vec<String> = vec![];
+        apply_action_concurrency_caps(&mut skip, &counts);
+        assert!(skip.iter().any(|a| a == "wdrc_sync"));
     }
 }
