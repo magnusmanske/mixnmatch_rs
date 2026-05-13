@@ -14,7 +14,7 @@ use crate::php_wrapper::PhpWrapper;
 use crate::task_size::TaskSize;
 use crate::taxon_matcher::TaxonMatcher;
 use crate::update_catalog::UpdateCatalog;
-use crate::job_progress::{JobProgress, merge_progress_into_json};
+use crate::job_progress::{JobProgress, merge_offset_into_json, merge_progress_into_json};
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use chrono::Duration;
@@ -59,14 +59,26 @@ pub trait Jobbable {
         })
     }
 
-    /// Persist a resume cursor as `offset` in `jobs.json`. Equivalent to
-    /// [`report_progress`] with no total — emits a typed progress payload
-    /// (`{processed: offset, total: None, percent: None}`) so the UI can
-    /// still render a counter even when the strategy doesn't know its
-    /// total. Preserves any other keys in `jobs.json` (e.g. autoscrape's
-    /// `levels` array).
+    /// Persist a resume cursor as `offset` in `jobs.json`, *without*
+    /// publishing a progress payload. Use this when the cursor value
+    /// isn't a count of processed rows — e.g. an entry_id watermark
+    /// (`automatch::match_person_by_dates`). Strategies whose cursor
+    /// *is* a row count should call [`report_progress`] instead so
+    /// the UI can render a real counter (and a percentage if a total
+    /// is known).
+    ///
+    /// Preserves any other keys in `jobs.json` (e.g. autoscrape's
+    /// `levels` array) and clears any stale `progress` payload — see
+    /// [`crate::job_progress::merge_offset_into_json`].
     async fn remember_offset(&mut self, offset: usize) -> Result<()> {
-        self.report_progress(offset as u64, None).await
+        let job = match self.get_current_job_mut() {
+            Some(job) => job,
+            None => return Ok(()),
+        };
+        let existing = job.get_json_value().await;
+        let merged = merge_offset_into_json(existing.as_ref(), offset as u64);
+        job.set_json(Some(merged)).await?;
+        Ok(())
     }
 
     /// Persist a typed progress payload to `jobs.json`, merging with the
