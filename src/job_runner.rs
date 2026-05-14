@@ -128,19 +128,35 @@ impl JobRunner {
     /// behind the `max_statement_time` session setting (which only catches
     /// read-only SELECTs): writes that hang and any connections that
     /// somehow bypassed the session setup still get cleaned up here.
+    ///
+    /// Each iteration is wrapped in a `tokio::time::timeout` strictly
+    /// smaller than the interval. The exact failure mode the reaper exists
+    /// to recover from is pool exhaustion — but `kill_long_running_queries`
+    /// itself acquires a connection from that same pool. Without the
+    /// timeout, an exhausted pool blocks the reaper future indefinitely
+    /// and the reaper is silently disabled until the binary restarts.
+    /// With the timeout, a hung acquire surfaces as a logged error and
+    /// the next tick still fires on schedule.
     fn reaper(&self) {
         const REAPER_INTERVAL_SECS: u64 = 300;
         const REAPER_THRESHOLD_SECS: u64 = 300;
+        const REAPER_ITERATION_TIMEOUT_SECS: u64 = 60;
+        // Compile-time guard: the per-iteration timeout must be strictly
+        // less than the inter-tick sleep, otherwise two iterations can
+        // overlap and pile up against the pool the timeout exists to
+        // protect.
+        const _: () = assert!(REAPER_ITERATION_TIMEOUT_SECS < REAPER_INTERVAL_SECS);
         let app = self.app.clone();
         tokio::spawn(async move {
             loop {
                 sleep(tokio::time::Duration::from_secs(REAPER_INTERVAL_SECS)).await;
-                match app
-                    .storage()
-                    .kill_long_running_queries(REAPER_THRESHOLD_SECS)
-                    .await
-                {
-                    Ok(ids) if !ids.is_empty() => {
+                let iteration = tokio::time::timeout(
+                    tokio::time::Duration::from_secs(REAPER_ITERATION_TIMEOUT_SECS),
+                    app.storage().kill_long_running_queries(REAPER_THRESHOLD_SECS),
+                )
+                .await;
+                match iteration {
+                    Ok(Ok(ids)) if !ids.is_empty() => {
                         info!(
                             "reaper: killed {} long-running queries (>{}s): {:?}",
                             ids.len(),
@@ -148,8 +164,11 @@ impl JobRunner {
                             ids
                         );
                     }
-                    Ok(_) => {}
-                    Err(e) => error!("reaper: kill_long_running_queries failed: {e}"),
+                    Ok(Ok(_)) => {}
+                    Ok(Err(e)) => error!("reaper: kill_long_running_queries failed: {e}"),
+                    Err(_) => error!(
+                        "reaper: kill_long_running_queries timed out after {REAPER_ITERATION_TIMEOUT_SECS}s — pool likely exhausted"
+                    ),
                 }
             }
         });
