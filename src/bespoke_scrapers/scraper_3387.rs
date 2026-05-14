@@ -32,8 +32,15 @@ impl BespokeScraper for BespokeScraper3387 {
     scraper_boilerplate!(3387);
 
     async fn run(&self) -> Result<()> {
-        let url = "https://www.geschichtsquellen.de/werk.json?item_id=0";
-        let json: serde_json::Value = self.http_client().get(url).send().await?.json().await?;
+        let url = "https://www.geschichtsquellen.de/werk/data?item_id=0";
+        let json: serde_json::Value = self
+            .http_client()
+            .get(url)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
         let rows = match json["data"].as_array() {
             Some(arr) => arr,
             None => return Ok(()),
@@ -151,13 +158,20 @@ impl BespokeScraper3387 {
     }
 
     /// Pull `(id, name)` out of `<a href="/werk/ID">NAME</a>`.
+    /// The upstream switched to wrapping the title in `<cite>…</cite>`;
+    /// the wrapper is stripped when present so the rest of the pipeline
+    /// keeps seeing plain names.
     pub(crate) fn extract_id_and_name(html: &str) -> Option<(String, String)> {
         static RE_ANCHOR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"<a href="/werk/(\d+)">(.+?)</a>"#).expect("regex"));
         let caps = RE_ANCHOR.captures(html)?;
-        Some((
-            caps.get(1)?.as_str().to_string(),
-            caps.get(2)?.as_str().to_string(),
-        ))
+        let id = caps.get(1)?.as_str().to_string();
+        let raw_name = caps.get(2)?.as_str();
+        let name = raw_name
+            .strip_prefix("<cite>")
+            .and_then(|s| s.strip_suffix("</cite>"))
+            .unwrap_or(raw_name)
+            .to_string();
+        Some((id, name))
     }
 
     /// Extract the autor id from `<a href="/autor/ID">…</a>`.
@@ -187,6 +201,16 @@ mod tests {
     #[test]
     fn test_3387_extract_id_and_name_no_match() {
         assert_eq!(BespokeScraper3387::extract_id_and_name("garbage"), None);
+    }
+
+    #[test]
+    fn test_3387_extract_id_and_name_cite_wrapped() {
+        assert_eq!(
+            BespokeScraper3387::extract_id_and_name(
+                r#"<a href="/werk/1129"><cite>Abbreviatio in gestis</cite></a>"#
+            ),
+            Some(("1129".to_string(), "Abbreviatio in gestis".to_string()))
+        );
     }
 
     #[test]

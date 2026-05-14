@@ -29,7 +29,17 @@ impl BespokeScraper for BespokeScraper4681 {
 
     async fn run(&self) -> Result<()> {
         let url = "https://www.photolondon.org.uk/api/public/people/a/0/1000";
-        let json: serde_json::Value = self.http_client().get(url).send().await?.json().await?;
+        // `error_for_status` converts an HTTP failure (e.g. Cloudflare 522
+        // when the PhotoLondon origin is unreachable) into a clean HTTP
+        // error rather than a misleading JSON-parse error on the error body.
+        let json: serde_json::Value = self
+            .http_client()
+            .get(url)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
         let arr = match json["people"].as_array() {
             Some(arr) => arr,
             None => return Ok(()),

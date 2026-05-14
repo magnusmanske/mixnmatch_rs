@@ -34,8 +34,15 @@ impl BespokeScraper for BespokeScraper3386 {
     scraper_boilerplate!(3386);
 
     async fn run(&self) -> Result<()> {
-        let url = "https://www.geschichtsquellen.de/autor.json?item_id=0";
-        let json: serde_json::Value = self.http_client().get(url).send().await?.json().await?;
+        let url = "https://www.geschichtsquellen.de/autor/data?item_id=0";
+        let json: serde_json::Value = self
+            .http_client()
+            .get(url)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
         let rows = match json["data"].as_array() {
             Some(arr) => arr,
             None => return Ok(()),
