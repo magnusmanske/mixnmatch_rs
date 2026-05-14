@@ -14,11 +14,13 @@ use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
 
-//pub type AutoscrapeRegex = fancy_regex::Regex;
-//pub type AutoscrapeRegexBuilder = fancy_regex::RegexBuilder;
-
-pub type AutoscrapeRegex = regex::Regex;
-pub type AutoscrapeRegexBuilder = regex::RegexBuilder;
+// Re-exports of the two-engine regex facade. The wrapper compiles every
+// pattern with the linear-time `regex` crate first and on a parse error
+// falls back to backtracking `fancy_regex` (lookaround, literal `{`,
+// etc.). See `autoscrape_regex.rs`.
+pub use crate::autoscrape_regex::{
+    AutoscrapeCaptures, AutoscrapeRegex, AutoscrapeRegexBuilder, AutoscrapeRegexError,
+};
 
 /// Return value of `Autoscrape::test_fetch`, used by the scraper-builder
 /// wizard. Keeps `url`/`html`/`results` for the success path (unchanged
@@ -110,6 +112,11 @@ pub enum AutoscrapeError {
     UnknownLevelType(String),
     BadType(Value),
     MediawikiFailure(String),
+    /// A `resolve` rx pattern failed to compile under both regex engines.
+    /// Carries the underlying compile error so the job's `note` field
+    /// shows the catalog author what's wrong, rather than the opaque
+    /// resolve sub-JSON we used to dump.
+    RegexCompile(AutoscrapeRegexError),
 }
 
 impl Error for AutoscrapeError {}
@@ -123,7 +130,14 @@ impl fmt::Display for AutoscrapeError {
             AutoscrapeError::NoAutoscrapeForCatalog(catalog_id) => {
                 write!(f, "No Autoscraper for catalog {catalog_id}")
             }
+            AutoscrapeError::RegexCompile(e) => write!(f, "{e}"),
         }
+    }
+}
+
+impl From<AutoscrapeRegexError> for AutoscrapeError {
+    fn from(e: AutoscrapeRegexError) -> Self {
+        AutoscrapeError::RegexCompile(e)
     }
 }
 

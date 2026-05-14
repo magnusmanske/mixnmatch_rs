@@ -235,12 +235,12 @@ impl AutoscrapeFollow {
     }
 
     fn refill_cache_text_to_cache(&mut self, text: String) -> Result<()> {
-        let regex = AutoscrapeRegex::new(&self.regex)?;
+        let regex = AutoscrapeRegex::new(&self.regex)
+            .map_err(crate::autoscrape::AutoscrapeError::from)?;
         self.cache = regex
             .captures_iter(&text)
-            //.filter_map(|caps|caps.ok())
-            .filter_map(|cap| cap.get(1))
-            .map(|url| url.as_str().to_string())
+            .into_iter()
+            .filter_map(|cap| cap.get(1).map(|m| m.as_str().to_string()))
             .collect();
         Ok(())
     }

@@ -1,12 +1,12 @@
 use crate::autoscrape::{
-    Autoscrape, AutoscrapeError, AutoscrapeRegex, AutoscrapeRegexBuilder, JsonStuff,
+    Autoscrape, AutoscrapeCaptures, AutoscrapeError, AutoscrapeRegex, AutoscrapeRegexBuilder,
+    JsonStuff,
 };
 use crate::autoscrape_resolve::{AutoscrapeResolve, AutoscrapeResolveAux};
 use crate::entry::Entry;
 use crate::extended_entry::ExtendedEntry;
 use anyhow::Result;
 use rand::prelude::*;
-use regex::Regex;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
@@ -96,9 +96,8 @@ impl AutoscrapeScraper {
             |regex_block| {
                 regex_block
                     .captures_iter(html)
-                    //.filter_map(|caps|caps.ok())
-                    .filter_map(|cap| cap.get(1))
-                    .map(|s| s.as_str().to_string())
+                    .into_iter()
+                    .filter_map(|cap| cap.get(1).map(|m| m.as_str().to_string()))
                     .flat_map(|s| self.process_html_block(&s, autoscrape))
                     .collect()
             },
@@ -132,6 +131,7 @@ impl AutoscrapeScraper {
             if let Some(rb) = self.regex_block.as_ref() {
                 let caps: Vec<String> = rb
                     .captures_iter(html)
+                    .into_iter()
                     .filter_map(|cap| cap.get(1).map(|m| m.as_str().to_string()))
                     .collect();
                 (Some(caps.len()), caps)
@@ -145,7 +145,7 @@ impl AutoscrapeScraper {
                     continue;
                 }
                 for cap in regex_entry.captures_iter(block) {
-                    let entry_ex = self.process_html_block_generate_entry_ex(cap, autoscrape);
+                    let entry_ex = self.process_html_block_generate_entry_ex(&cap, autoscrape);
                     entries.push(entry_ex);
                     regex_entry_match_counts[i] += 1;
                 }
@@ -173,7 +173,7 @@ impl AutoscrapeScraper {
                 continue;
             }
             for cap in regex_entry.captures_iter(html) {
-                let entry_ex = self.process_html_block_generate_entry_ex(cap, autoscrape);
+                let entry_ex = self.process_html_block_generate_entry_ex(&cap, autoscrape);
                 ret.push(entry_ex);
             }
             break; // First regexp to match wins
@@ -183,7 +183,7 @@ impl AutoscrapeScraper {
 
     fn process_html_block_generate_entry_ex(
         &self,
-        cap: regex::Captures,
+        cap: &AutoscrapeCaptures,
         autoscrape: &Autoscrape,
     ) -> ExtendedEntry {
         let mut map = Self::process_html_block_generate_map(cap, autoscrape);
@@ -223,7 +223,7 @@ impl AutoscrapeScraper {
         }
     }
 
-    fn regex_entry_from_json_array(rx_entry: &Value, json: &Value) -> Result<Vec<Regex>> {
+    fn regex_entry_from_json_array(rx_entry: &Value, json: &Value) -> Result<Vec<AutoscrapeRegex>> {
         let arr = rx_entry
             .as_array()
             .ok_or_else(|| AutoscrapeError::BadType(json.to_owned()))?;
@@ -240,7 +240,7 @@ impl AutoscrapeScraper {
         Ok(ret)
     }
 
-    fn regex_entry_from_json_string(rx_entry: &Value, json: &Value) -> Result<Vec<Regex>> {
+    fn regex_entry_from_json_string(rx_entry: &Value, json: &Value) -> Result<Vec<AutoscrapeRegex>> {
         let s = rx_entry
             .as_str()
             .ok_or_else(|| AutoscrapeError::BadType(json.to_owned()))?;
@@ -252,7 +252,7 @@ impl AutoscrapeScraper {
     }
 
     fn process_html_block_generate_map(
-        cap: regex::Captures,
+        cap: &AutoscrapeCaptures,
         autoscrape: &Autoscrape,
     ) -> HashMap<String, String> {
         let values: Vec<String> = cap

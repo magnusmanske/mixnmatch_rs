@@ -68,7 +68,7 @@ impl AutoscrapeResolve {
     fn from_json_regex(
         regex: Value,
         json: &Value,
-        regexs: &mut Vec<(Regex, String)>,
+        regexs: &mut Vec<(AutoscrapeRegex, String)>,
     ) -> Result<(), AutoscrapeError> {
         let arr = regex
             .as_array()
@@ -84,9 +84,12 @@ impl AutoscrapeResolve {
             .as_str()
             .ok_or_else(|| AutoscrapeError::UnknownLevelType(json.to_string()))?;
         let re_pattern = &Self::fix_regex(pattern);
-        let regex_ok = AutoscrapeRegex::new(re_pattern).ok();
-        let err = AutoscrapeError::UnknownLevelType(json.to_string());
-        let regex_final = regex_ok.ok_or(err)?;
+        // Surface the real regex compile error in the job note instead
+        // of the opaque resolve sub-JSON. Before this, a bad rx here
+        // produced notes like `{"rx":[[…]],"use":"$2"}` with no clue as
+        // to which pattern failed or why.
+        let regex_final =
+            AutoscrapeRegex::new(re_pattern).map_err(AutoscrapeError::from)?;
         regexs.push((regex_final, replacement.to_string()));
         Ok(())
     }

@@ -49,6 +49,7 @@ pub mod auth;
 pub mod automatch;
 pub mod autoscrape;
 pub mod autoscrape_levels;
+pub mod autoscrape_regex;
 pub mod autoscrape_resolve;
 pub mod autoscrape_scraper;
 pub mod auxiliary_data;
