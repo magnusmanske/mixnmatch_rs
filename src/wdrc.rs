@@ -49,22 +49,68 @@ impl WDRC {
         Ok(results)
     }
 
+    /// Maximum number of WDRC retry attempts on `429 Too Many Requests`.
+    /// Previously this loop was unbounded with a fixed 1-second sleep — a
+    /// genuine WDRC outage parked the calling job forever. 6 attempts with
+    /// 1/2/4/8/16/30 s capped backoff sums to ~61 s of patience, well within
+    /// the per-action wall-clock budget defined in `job.rs`.
+    const WDRC_MAX_ATTEMPTS: u32 = 6;
+    const WDRC_BACKOFF_CAP_SECS: u64 = 30;
+    /// Sentinel HTML produced by the WDRC frontend when rate-limiting.
+    /// We match on the title string rather than HTTP 429 because the
+    /// reverse proxy in front of WDRC returns 200 + this body.
+    const WDRC_RATE_LIMIT_MARKER: &str = "<head><title>429 Too Many Requests</title></head>";
+
     async fn get_wrdc_api_responses(&self, query: &str) -> Result<Vec<serde_json::Value>> {
         let rand = rand::random::<u32>();
         let url = format!("https://wdrc.toolforge.org/api.php?format=jsonl&{query}&random={rand}");
         let client = wikimisc::wikidata::Wikidata::new().reqwest_client()?;
-        let mut text;
-        loop {
-            text = client.get(&url).send().await?.text().await?;
-            if !text.contains("<head><title>429 Too Many Requests</title></head>") {
-                break;
+        let mut backoff = std::time::Duration::from_secs(1);
+        for attempt in 0..Self::WDRC_MAX_ATTEMPTS {
+            let text = client.get(&url).send().await?.text().await?;
+            if !text.contains(Self::WDRC_RATE_LIMIT_MARKER) {
+                return Self::parse_wdrc_jsonl(&text);
             }
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            if attempt + 1 == Self::WDRC_MAX_ATTEMPTS {
+                return Err(anyhow!(
+                    "WDRC kept returning 429 after {} attempts",
+                    Self::WDRC_MAX_ATTEMPTS
+                ));
+            }
+            tokio::time::sleep(backoff).await;
+            backoff = (backoff * 2).min(std::time::Duration::from_secs(Self::WDRC_BACKOFF_CAP_SECS));
         }
-        Ok(text
-            .split('\n')
-            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-            .collect())
+        unreachable!("loop returned or errored on every branch")
+    }
+
+    /// Parse a WDRC JSONL body. Distinguishes "no lines" (legitimate empty
+    /// response) from "all lines failed to parse" (upstream sent HTML or
+    /// some other non-JSONL surface that didn't trigger the 429 marker).
+    /// Without this, a malformed 500 page used to silently advance the
+    /// `wdrc_sync_*` KV pointer and skip the outage window.
+    fn parse_wdrc_jsonl(text: &str) -> Result<Vec<serde_json::Value>> {
+        let lines: Vec<&str> = text.split('\n').filter(|l| !l.trim().is_empty()).collect();
+        let total = lines.len();
+        let parsed: Vec<serde_json::Value> = lines
+            .iter()
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .collect();
+        if total > 0 && parsed.is_empty() {
+            // Truncate to keep the error message bounded and char-boundary
+            // safe (see auth/flow.rs::truncate_for_log for the canonical
+            // version; inlined here to avoid a cross-module export).
+            const MAX: usize = 200;
+            let mut end = text.len().min(MAX);
+            while end > 0 && !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            return Err(anyhow!(
+                "WDRC returned {total} non-empty lines, none parseable as JSONL: {}{}",
+                &text[..end],
+                if text.len() > MAX { "…" } else { "" }
+            ));
+        }
+        Ok(parsed)
     }
 
     fn yesterday() -> String {
@@ -373,5 +419,74 @@ impl WDRC {
             })
             .collect();
         prop_values
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_wdrc_jsonl_empty_input_returns_empty_vec() {
+        let out = WDRC::parse_wdrc_jsonl("").unwrap();
+        assert!(out.is_empty(), "empty input must be Ok([])");
+    }
+
+    #[test]
+    fn parse_wdrc_jsonl_only_whitespace_returns_empty_vec() {
+        let out = WDRC::parse_wdrc_jsonl("\n\n   \n").unwrap();
+        assert!(out.is_empty(), "whitespace-only must be Ok([])");
+    }
+
+    #[test]
+    fn parse_wdrc_jsonl_valid_lines() {
+        let body = r#"{"a":1}
+{"b":2}
+{"c":3}"#;
+        let out = WDRC::parse_wdrc_jsonl(body).unwrap();
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0]["a"], 1);
+        assert_eq!(out[2]["c"], 3);
+    }
+
+    #[test]
+    fn parse_wdrc_jsonl_mixes_valid_and_invalid() {
+        // Half-and-half: invalid lines are dropped, valid lines kept.
+        // total>0 && parsed not empty → Ok.
+        let body = "not json\n{\"a\":1}\nalso not json\n{\"b\":2}\n";
+        let out = WDRC::parse_wdrc_jsonl(body).unwrap();
+        assert_eq!(out.len(), 2);
+    }
+
+    /// Regression for F-16: a 500 HTML page from WDRC that didn't trigger
+    /// the 429 marker used to silently return Ok([]) — the same surface as
+    /// a legitimate empty response. The wdrc_sync_* KV pointer would
+    /// advance past the outage window, skipping real edits.
+    #[test]
+    fn parse_wdrc_jsonl_all_invalid_returns_err() {
+        let body = "<html><body>500 Internal Server Error</body></html>";
+        let err = WDRC::parse_wdrc_jsonl(body)
+            .expect_err("non-empty body where every line is unparseable must Err");
+        let msg = err.to_string();
+        assert!(msg.contains("none parseable"), "msg={msg}");
+        // Ensure the truncated body appears for operator debugging.
+        assert!(msg.contains("html"), "msg={msg}");
+    }
+
+    /// Sanity-check the retry bounds. The job-level budget is 1h for
+    /// wdrc_sync (per `job.rs` ACTION_TIMEOUTS_SECS), so the WDRC backoff
+    /// total must stay well below that.
+    #[test]
+    fn wdrc_retry_budget_is_bounded() {
+        assert!(
+            WDRC::WDRC_MAX_ATTEMPTS >= 3 && WDRC::WDRC_MAX_ATTEMPTS <= 10,
+            "WDRC_MAX_ATTEMPTS={} outside sane window [3, 10]",
+            WDRC::WDRC_MAX_ATTEMPTS
+        );
+        assert!(
+            WDRC::WDRC_BACKOFF_CAP_SECS <= 60,
+            "WDRC_BACKOFF_CAP_SECS={} too large",
+            WDRC::WDRC_BACKOFF_CAP_SECS
+        );
     }
 }
