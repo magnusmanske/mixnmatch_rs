@@ -1,7 +1,7 @@
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use core::time::Duration;
-use mysql_async::{Opts, OptsBuilder, PoolConstraints, PoolOpts, futures::GetConn};
+use mysql_async::{Conn, Opts, OptsBuilder, PoolConstraints, PoolOpts};
 use serde_json::Value;
 
 /// Default per-statement timeout for read-only SELECTs, in seconds.
@@ -10,17 +10,46 @@ use serde_json::Value;
 /// should be moved to a dedicated batch path rather than relaxing this.
 const DEFAULT_MAX_STATEMENT_TIME_SECS: u64 = 120;
 
+/// Maximum time we wait for a connection to be acquired from the pool.
+/// `mysql_async::Pool::get_conn` has no built-in acquisition timeout — under
+/// pool exhaustion it blocks indefinitely, which previously made an exhausted
+/// pool propagate into a hung reaper (the supervisor that exists to recover
+/// from exhaustion). 15 s is comfortably greater than any healthy acquisition
+/// (sub-100 ms in steady state, single-digit seconds under burst) while
+/// surfacing a real outage in time for the per-request budget to react.
+pub const GET_CONN_TIMEOUT_SECS: u64 = 15;
+
+/// Wrap a `GetConn` future in `tokio::time::timeout` and map the two error
+/// shapes onto a single `anyhow::Error` chain. Free function so it can be
+/// shared between the default trait method and the `StorageMySQL` inherent
+/// methods without duplicating the timeout literal.
+pub async fn acquire_with_timeout(fut: mysql_async::futures::GetConn) -> Result<Conn> {
+    match tokio::time::timeout(Duration::from_secs(GET_CONN_TIMEOUT_SECS), fut).await {
+        Ok(Ok(conn)) => Ok(conn),
+        Ok(Err(e)) => Err(anyhow!("DB connection failed: {e}")),
+        Err(_) => Err(anyhow!(
+            "DB connection acquisition timed out after {GET_CONN_TIMEOUT_SECS}s"
+        )),
+    }
+}
+
 #[async_trait]
 pub trait MySQLMisc {
     fn pool(&self) -> &mysql_async::Pool;
 
-    fn get_conn(&self) -> GetConn {
-        self.pool().get_conn()
+    /// Acquire a connection, bounded by `GET_CONN_TIMEOUT_SECS`. The async
+    /// signature is compatible with the original `fn -> GetConn` shape at
+    /// every call site that does `.get_conn().await?` (the universal form
+    /// across the codebase) — the only observable change is that a hung
+    /// acquire now surfaces as a logged error after 15 s instead of
+    /// blocking the calling future forever.
+    async fn get_conn(&self) -> Result<Conn> {
+        acquire_with_timeout(self.pool().get_conn()).await
     }
 
     // TODO FIXME this should return a connection to the x0 (wbt_) cluster
-    fn get_conn_wbt(&self) -> GetConn {
-        self.pool().get_conn()
+    async fn get_conn_wbt(&self) -> Result<Conn> {
+        acquire_with_timeout(self.pool().get_conn()).await
     }
 
     async fn disconnect_db(&self) -> Result<()> {
@@ -66,5 +95,35 @@ pub trait MySQLMisc {
 
     fn sql_placeholders(num: usize) -> String {
         vec!["?"; num].join(",")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The acquisition timeout must be comfortably greater than any healthy
+    /// pool acquire (single-digit seconds even under burst) but small enough
+    /// that an exhausted pool surfaces inside a single API request budget
+    /// (~30 s for most handlers). 5..=60 seconds is the safe window — drift
+    /// outside it is almost certainly a bug.
+    #[test]
+    fn get_conn_timeout_within_sensible_bounds() {
+        assert!(
+            (5..=60).contains(&GET_CONN_TIMEOUT_SECS),
+            "GET_CONN_TIMEOUT_SECS={GET_CONN_TIMEOUT_SECS} outside sane window [5, 60]"
+        );
+    }
+
+    /// Pin the failure-mode behaviour: a future that never resolves must
+    /// surface as an `Elapsed` error from `tokio::time::timeout` — the
+    /// primitive `acquire_with_timeout` is built on. We use a 10ms timeout
+    /// against a pending-forever future so the test runs instantly without
+    /// needing virtual-time control.
+    #[tokio::test]
+    async fn pending_future_times_out_not_blocks() {
+        let never = std::future::pending::<()>();
+        let res = tokio::time::timeout(Duration::from_millis(10), never).await;
+        assert!(res.is_err(), "expected Elapsed, got {res:?}");
     }
 }

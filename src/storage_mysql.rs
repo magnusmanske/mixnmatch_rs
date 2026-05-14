@@ -22,7 +22,7 @@ use crate::{
     match_state::MatchState,
     meta_entry::{MetaIssue, MetaKvEntry, MetaLogEntry, MetaMnmRelation, MetaStatementText},
     mnm_link::MnmLink,
-    mysql_misc::MySQLMisc,
+    mysql_misc::{self, MySQLMisc},
     prop_todo::PropTodo,
     storage::{
         AutomatchSearchRow, AutoscrapeQueries, CandidateDatesRow, CatalogEntryListFilter,
@@ -38,7 +38,7 @@ use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use itertools::Itertools;
 use mysql_async::Params::Empty;
-use mysql_async::{Params, Row, from_row, futures::GetConn, prelude::*};
+use mysql_async::{Params, Row, from_row, prelude::*};
 use rand::prelude::*;
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -71,13 +71,18 @@ impl StorageMySQL {
     /// `pub(super)` so per-trait impl blocks living in sibling submodules
     /// (e.g. `storage_mysql::issue_queries`) can borrow a writable
     /// connection without re-implementing the pool plumbing.
-    pub(super) fn get_conn(&self) -> GetConn {
-        self.pool.get_conn()
+    ///
+    /// Bounded by `GET_CONN_TIMEOUT_SECS` (see `mysql_misc::acquire_with_timeout`).
+    /// Hung acquire under pool exhaustion surfaces as `anyhow::Error` instead
+    /// of blocking the calling future indefinitely — the bug F-15 patched.
+    pub(super) async fn get_conn(&self) -> Result<mysql_async::Conn> {
+        mysql_misc::acquire_with_timeout(self.pool.get_conn()).await
     }
 
-    /// Read-only counterpart of `get_conn`. Same `pub(super)` rationale.
-    pub(super) fn get_conn_ro(&self) -> GetConn {
-        self.pool_ro.get_conn()
+    /// Read-only counterpart of `get_conn`. Same `pub(super)` rationale and
+    /// same acquisition timeout.
+    pub(super) async fn get_conn_ro(&self) -> Result<mysql_async::Conn> {
+        mysql_misc::acquire_with_timeout(self.pool_ro.get_conn()).await
     }
 
     async fn entry_set_match_cleanup(
@@ -2309,10 +2314,16 @@ impl Storage for StorageMySQL {
         status: &str,
         is_matched: i32,
     ) -> Result<()> {
+        // Each async block now has to be explicitly typed as anyhow::Result
+        // because `self.get_conn().await?` propagates anyhow::Error while the
+        // inner `.exec_drop().await` returns mysql_async::Result — without
+        // the trailing `Ok::<(), anyhow::Error>(())` the block would infer
+        // mysql_async::Result and refuse the cross-type `?`.
         let f1 = async {
             let timestamp = TimeStamp::now();
             let mut conn = self.get_conn().await?;
-            conn.exec_drop(r"INSERT INTO `wd_matches` (`entry_id`,`status`,`timestamp`,`catalog`) VALUES (:entry_id,:status,:timestamp,(SELECT entry.catalog FROM entry WHERE entry.id=:entry_id)) ON DUPLICATE KEY UPDATE `status`=:status,`timestamp`=:timestamp",params! {entry_id,status,timestamp}).await
+            conn.exec_drop(r"INSERT INTO `wd_matches` (`entry_id`,`status`,`timestamp`,`catalog`) VALUES (:entry_id,:status,:timestamp,(SELECT entry.catalog FROM entry WHERE entry.id=:entry_id)) ON DUPLICATE KEY UPDATE `status`=:status,`timestamp`=:timestamp",params! {entry_id,status,timestamp}).await?;
+            Ok::<(), anyhow::Error>(())
         };
         let f2 = async {
             let mut conn = self.get_conn().await?;
@@ -2320,7 +2331,8 @@ impl Storage for StorageMySQL {
                 r"UPDATE `person_dates` SET is_matched=:is_matched WHERE entry_id=:entry_id",
                 params! {is_matched,entry_id},
             )
-            .await
+            .await?;
+            Ok::<(), anyhow::Error>(())
         };
         let f3 = async {
             let mut conn = self.get_conn().await?;
@@ -2328,7 +2340,8 @@ impl Storage for StorageMySQL {
                 r"UPDATE `auxiliary` SET entry_is_matched=:is_matched WHERE entry_id=:entry_id",
                 params! {is_matched,entry_id},
             )
-            .await
+            .await?;
+            Ok::<(), anyhow::Error>(())
         };
         let f4 = async {
             let mut conn = self.get_conn().await?;
@@ -2336,9 +2349,10 @@ impl Storage for StorageMySQL {
             r"UPDATE `statement_text` SET entry_is_matched=:is_matched WHERE entry_id=:entry_id",
             params! {is_matched,entry_id},
             )
-            .await
+            .await?;
+            Ok::<(), anyhow::Error>(())
         };
-        let _ = tokio::try_join!(f1, f2, f3, f4)?;
+        tokio::try_join!(f1, f2, f3, f4)?;
         Ok(())
     }
 
