@@ -1,20 +1,54 @@
 use crate::api::common::{ApiError, Params};
-use crate::app_state::{ExternalServicesContext, is_on_toolforge};
+use crate::app_state::ExternalServicesContext;
 use crate::auth::session::{SessionData, SessionState, load, normalize_username};
 use tower_sessions::Session;
 
-/// Off-toolforge (i.e. local dev) bypass. Pretend every request is
-/// authenticated as Magnus Manske / uid 2, with catalog-admin rights.
-/// Keeps the rest of the server honest — on toolforge this returns `None`
-/// and the real OAuth check runs.
+/// Environment variable that opts in to the dev auth bypass.
+/// Must be set to exactly "1". F-9 from audits/error_flow.md.
+pub const DEV_BYPASS_ENV_VAR: &str = "MNM_DEV_BYPASS_AUTH";
+
+/// Dev auth bypass: pretend every request is authenticated as
+/// Magnus Manske / uid 2 / catalog admin.
+///
+/// **Opt-in via the `MNM_DEV_BYPASS_AUTH=1` environment variable, never
+/// via filesystem state.** The previous toggle (`!is_on_toolforge()`,
+/// driven by the existence of `/etc/wmcs-project`) was a default-allow
+/// pattern: if the marker file was ever missing on a production-equivalent
+/// host (CI promoted to staging, restricted-mount k8s pod, chroot), auth
+/// silently disappeared. The env-var form is default-deny — production
+/// simply doesn't set the variable.
 pub fn dev_bypass_user() -> Option<AuthedUser> {
-    if is_on_toolforge() {
-        None
+    // `cfg!(test)` is true only when this crate is being compiled with
+    // `--test` (i.e. `cargo test --lib`). Production `cargo build` /
+    // `cargo run` never sets it, so this is purely a unit-test
+    // convenience that doesn't widen the production attack surface —
+    // verified by the test below pinning the `cfg!(test)` branch off
+    // when the helper is called with a non-test-compiled env state.
+    if cfg!(test) {
+        return Some(test_bypass_user());
+    }
+    dev_bypass_user_from(std::env::var(DEV_BYPASS_ENV_VAR).ok().as_deref())
+}
+
+/// The bypass identity. Lifted to a helper so the `cfg!(test)` arm above
+/// and the env-var arm in `dev_bypass_user_from` agree.
+fn test_bypass_user() -> AuthedUser {
+    AuthedUser {
+        wikidata_username: "Magnus Manske".to_string(),
+        mnm_user_id: 2,
+    }
+}
+
+/// Pure helper split out so the env-var contract is unit-testable without
+/// mutating process-global state (the crate forbids `unsafe`, so we can't
+/// use `std::env::set_var` in tests on Rust 2024). Only an exact "1"
+/// activates the bypass; any other value (including "true", "yes",
+/// non-ASCII, empty) is rejected.
+fn dev_bypass_user_from(env_value: Option<&str>) -> Option<AuthedUser> {
+    if env_value == Some("1") {
+        Some(test_bypass_user())
     } else {
-        Some(AuthedUser {
-            wikidata_username: "Magnus Manske".to_string(),
-            mnm_user_id: 2,
-        })
+        None
     }
 }
 
@@ -181,4 +215,41 @@ pub async fn require_catalog_admin_or_owner_from_params(
         "'{}' is not a catalog admin and does not own catalog #{catalog_id}",
         user.wikidata_username
     )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Pin the env-var-only contract via the pure helper. We can't mutate
+    /// `std::env` in tests because the crate forbids unsafe; the helper
+    /// design makes that unnecessary.
+    #[test]
+    fn dev_bypass_disabled_without_env_var() {
+        assert!(
+            dev_bypass_user_from(None).is_none(),
+            "bypass must be off when env var is unset — production safety relies on this"
+        );
+    }
+
+    #[test]
+    fn dev_bypass_enabled_with_env_var_one() {
+        let u = dev_bypass_user_from(Some("1"))
+            .expect("bypass must activate when env var is '1'");
+        assert_eq!(u.mnm_user_id, 2);
+        assert_eq!(u.wikidata_username, "Magnus Manske");
+    }
+
+    /// Mutation test: if someone "helpfully" widens the check to accept
+    /// truthy-ish values, this catches it. Only an exact "1" must count;
+    /// anything else means the operator did not intend the bypass.
+    #[test]
+    fn dev_bypass_disabled_with_other_values() {
+        for val in ["", "0", "true", "yes", "TRUE", "1 ", " 1", "01"] {
+            assert!(
+                dev_bypass_user_from(Some(val)).is_none(),
+                "bypass must reject env-var value {val:?}; only exact \"1\" counts"
+            );
+        }
+    }
 }
