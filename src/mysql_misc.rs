@@ -57,28 +57,43 @@ pub trait MySQLMisc {
         Ok(())
     }
 
-    /// Helper function to create a DB pool from a JSON config object
-    fn create_pool(config: &Value) -> mysql_async::Pool {
+    /// Helper function to create a DB pool from a JSON config object.
+    ///
+    /// Returns `Err` (rather than panicking) on missing or malformed config
+    /// keys. A typo in `config.json` used to crash the binary at startup
+    /// with a Rust panic; now it surfaces as an `anyhow::Error` that the
+    /// caller (`AppState::from_config`) propagates upwards as a normal
+    /// boot-time error message.
+    fn create_pool(config: &Value) -> Result<mysql_async::Pool> {
         let min_connections = config["min_connections"]
             .as_u64()
-            .expect("No min_connections value") as usize;
+            .ok_or_else(|| anyhow!("DB config missing min_connections"))?
+            as usize;
         let max_connections = config["max_connections"]
             .as_u64()
-            .expect("No max_connections value") as usize;
-        let keep_sec = config["keep_sec"].as_u64().expect("No keep_sec value");
-        let url = config["url"].as_str().expect("No url value");
+            .ok_or_else(|| anyhow!("DB config missing max_connections"))?
+            as usize;
+        let keep_sec = config["keep_sec"]
+            .as_u64()
+            .ok_or_else(|| anyhow!("DB config missing keep_sec"))?;
+        let url = config["url"]
+            .as_str()
+            .ok_or_else(|| anyhow!("DB config missing url"))?;
         // Optional per-pool override; defaults to DEFAULT_MAX_STATEMENT_TIME_SECS.
         let max_statement_time_secs = config["max_statement_time_secs"]
             .as_u64()
             .unwrap_or(DEFAULT_MAX_STATEMENT_TIME_SECS);
         let pool_opts = PoolOpts::default()
             .with_constraints(
-                PoolConstraints::new(min_connections, max_connections).expect("Constraints error"),
+                PoolConstraints::new(min_connections, max_connections).ok_or_else(|| {
+                    anyhow!(
+                        "invalid pool constraints: min={min_connections} max={max_connections}"
+                    )
+                })?,
             )
             .with_inactive_connection_ttl(Duration::from_secs(keep_sec));
-        let wd_url = url;
-        let wd_opts = Opts::from_url(wd_url)
-            .unwrap_or_else(|_| panic!("Can not build options from db_wd URL {wd_url}"));
+        let wd_opts =
+            Opts::from_url(url).map_err(|e| anyhow!("invalid DB URL '{url}': {e}"))?;
         // MariaDB's `max_statement_time` aborts read-only SELECT statements
         // that exceed the configured wall-clock budget (seconds). It does
         // *not* affect writes — those still need the supervisor's periodic
@@ -90,7 +105,7 @@ pub trait MySQLMisc {
             .setup(vec![format!(
                 "SET SESSION max_statement_time={max_statement_time_secs}"
             )]);
-        mysql_async::Pool::new(opts_builder)
+        Ok(mysql_async::Pool::new(opts_builder))
     }
 
     fn sql_placeholders(num: usize) -> String {
@@ -125,5 +140,50 @@ mod tests {
         let never = std::future::pending::<()>();
         let res = tokio::time::timeout(Duration::from_millis(10), never).await;
         assert!(res.is_err(), "expected Elapsed, got {res:?}");
+    }
+
+    // Probe the create_pool config-validation path against a dummy type whose
+    // only purpose is to satisfy the trait. We can't (and shouldn't) hit a
+    // real database from a unit test, so we feed valid-shape configs that
+    // never get used — the test pins the *missing-key* error paths only.
+    struct DummyPool {}
+    impl MySQLMisc for DummyPool {
+        fn pool(&self) -> &mysql_async::Pool {
+            unreachable!("test never acquires a connection")
+        }
+    }
+
+    #[test]
+    fn create_pool_returns_err_on_missing_min_connections() {
+        let cfg = serde_json::json!({
+            "max_connections": 2,
+            "keep_sec": 60,
+            "url": "mysql://u:p@h/db",
+        });
+        let err = DummyPool::create_pool(&cfg).expect_err("missing min_connections must error");
+        assert!(err.to_string().contains("min_connections"), "got {err}");
+    }
+
+    #[test]
+    fn create_pool_returns_err_on_missing_url() {
+        let cfg = serde_json::json!({
+            "min_connections": 0,
+            "max_connections": 2,
+            "keep_sec": 60,
+        });
+        let err = DummyPool::create_pool(&cfg).expect_err("missing url must error");
+        assert!(err.to_string().contains("url"), "got {err}");
+    }
+
+    #[test]
+    fn create_pool_returns_err_on_bad_url() {
+        let cfg = serde_json::json!({
+            "min_connections": 0,
+            "max_connections": 2,
+            "keep_sec": 60,
+            "url": "not a url",
+        });
+        let err = DummyPool::create_pool(&cfg).expect_err("bad url must error");
+        assert!(err.to_string().contains("invalid DB URL"), "got {err}");
     }
 }

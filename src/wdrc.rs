@@ -24,10 +24,10 @@ impl MySQLMisc for WDRC {
 }
 
 impl WDRC {
-    pub fn new(config: &Value) -> Self {
-        Self {
-            pool: Self::create_pool(config),
-        }
+    pub fn new(config: &Value) -> Result<Self> {
+        Ok(Self {
+            pool: Self::create_pool(config)?,
+        })
     }
 
     pub async fn get_item_property_ts(

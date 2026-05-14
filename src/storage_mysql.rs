@@ -61,11 +61,11 @@ impl MySQLMisc for StorageMySQL {
 }
 
 impl StorageMySQL {
-    pub fn new(j: &Value, j_ro: &Value) -> Self {
-        Self {
-            pool: Self::create_pool(j),
-            pool_ro: Self::create_pool(j_ro),
-        }
+    pub fn new(j: &Value, j_ro: &Value) -> Result<Self> {
+        Ok(Self {
+            pool: Self::create_pool(j)?,
+            pool_ro: Self::create_pool(j_ro)?,
+        })
     }
 
     /// `pub(super)` so per-trait impl blocks living in sibling submodules

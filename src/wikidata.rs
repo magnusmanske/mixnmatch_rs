@@ -40,18 +40,18 @@ impl MySQLMisc for Wikidata {
 }
 
 impl Wikidata {
-    pub fn new(config: &Value, bot_name: String, bot_password: String) -> Self {
+    pub fn new(config: &Value, bot_name: String, bot_password: String) -> Result<Self> {
         let api_url = config["api_url"]
             .as_str()
             .unwrap_or(WIKIDATA_API_URL)
             .to_string();
-        Self {
-            pool: Self::create_pool(config),
+        Ok(Self {
+            pool: Self::create_pool(config)?,
             mw_api: None,
             bot_name,
             bot_password,
             api_url,
-        }
+        })
     }
 
     fn testing() -> bool {

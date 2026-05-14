@@ -208,14 +208,17 @@ impl AppState {
             .connect_timeout(time::Duration::from_secs(5))
             .build()
             .map_err(|e| anyhow!("failed to build shared HTTP client: {e}"))?;
+        // Boot-time `?`: a missing or malformed DB-config key surfaces as a
+        // clean error from `AppState::from_config` instead of a Rust panic
+        // inside `create_pool`. F-3 from audits/error_flow.md.
         Ok(Self {
-            wikidata: Wikidata::new(&config["wikidata"], bot_name.clone(), bot_password.clone()),
-            wdt: Wikidata::new(&config["wdt"], bot_name, bot_password),
-            wdrc: Arc::new(WDRC::new(&config["wdrc"])),
+            wikidata: Wikidata::new(&config["wikidata"], bot_name.clone(), bot_password.clone())?,
+            wdt: Wikidata::new(&config["wdt"], bot_name, bot_password)?,
+            wdrc: Arc::new(WDRC::new(&config["wdrc"])?),
             storage: Arc::new(Box::new(StorageMySQL::new(
                 &config["mixnmatch"],
                 &config["mixnmatch_ro"],
-            ))),
+            )?)),
             large_catalogs: Arc::new(large_catalogs),
             import_file_path,
             flickr_key_path,
