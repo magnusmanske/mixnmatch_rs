@@ -569,6 +569,7 @@ const ACTION_TIMEOUTS_SECS: &[(&str, u64)] = &[
     ("autoscrape",                   14_400), // 4 h: paginated external sites
     ("bespoke_scraper",              14_400), // 4 h: per-catalog scrapers
     ("automatch",                     7_200), // 2 h: WDQS-heavy
+    ("automatch_by_search",           7_200), // 2 h: one Wikidata search API call per unique (label, type) pair
     ("automatch_complex",             7_200),
     ("automatch_from_other_catalogs", 7_200),
     ("auxiliary_matcher",             7_200),
