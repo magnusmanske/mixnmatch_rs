@@ -2025,3 +2025,24 @@ span.wikidatamap_note {
 span.wikidatamap_note:last-of-type {
 	border-right: none;
 }
+
+/* ========== Search-result card loading state ========== */
+
+/*
+ * Applied to .card elements whose async fetch hasn't resolved yet (Wikidata /
+ * Wikipedia / Mix'n'match search panels on the entry and random-entry pages).
+ * Dims the card and animates a soft pulse so it visibly reads as "still
+ * loading" instead of "empty results".
+ */
+.card.card-loading {
+	opacity: 0.55;
+	pointer-events: none;
+	cursor: progress;
+	background-color: var(--mnm-bg-alt);
+	animation: card-loading-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes card-loading-pulse {
+	0%, 100% { opacity: 0.55; }
+	50% { opacity: 0.35; }
+}

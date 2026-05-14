@@ -328,7 +328,7 @@ export default {
 
 
 			<div> <!-- Wikidata search results -->
-				<div class="card" style="margin-bottom:1em">
+				<div class="card" :class="{ 'card-loading': !loaded_wd }" style="margin-bottom:1em">
 					<div class="card-body">
 						<h4 class="card-title" tt='wikidata_search_results'></h4>
 						<div class="card-text">
@@ -364,7 +364,7 @@ export default {
 
 
 			<div> <!-- Wikipedia search results -->
-				<div class="card" style="margin-bottom:1em">
+				<div class="card" :class="{ 'card-loading': !loaded_wp }" style="margin-bottom:1em">
 					<div class="card-body">
 						<h4 class="card-title" tt='wikipedia_search_results' :tt1='catalog.search_wp'></h4>
 						<div class="card-text">
@@ -403,7 +403,7 @@ export default {
 			</div>
 
 			<div> <!-- Mix'n'match search results -->
-				<div class="card" style="margin-bottom:1em">
+				<div class="card" :class="{ 'card-loading': !loaded_mnm }" style="margin-bottom:1em">
 					<div class="card-body">
 						<h4 class="card-title">
 							<span tt='results_other_catalogs'></span>
