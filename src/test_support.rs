@@ -237,13 +237,25 @@ pub async fn seed_person_dates(entry_id: usize, born: &str, died: &str) -> Resul
 
 /// Insert a `jobs` row and return `job_id`.
 pub async fn seed_job(action: &str, catalog_id: usize) -> Result<usize> {
+    seed_job_with_user_and_status(action, catalog_id, 0, "TODO").await
+}
+
+/// Insert a `jobs` row owned by `user_id` with the given `status` and return `job_id`.
+pub async fn seed_job_with_user_and_status(
+    action: &str,
+    catalog_id: usize,
+    user_id: usize,
+    status: &str,
+) -> Result<usize> {
     let (pool, mut conn) = seed_conn().await?;
 
     r"INSERT INTO jobs (action, catalog, status, last_ts, next_ts, user_id)
-      VALUES (:action, :catalog, 'TODO', '20220101000000', '', 0)"
+      VALUES (:action, :catalog, :status, '20220101000000', '', :user_id)"
         .with(params! {
             "action"  => action,
             "catalog" => catalog_id,
+            "status"  => status,
+            "user_id" => user_id,
         })
         .ignore(&mut conn)
         .await?;
@@ -252,6 +264,29 @@ pub async fn seed_job(action: &str, catalog_id: usize) -> Result<usize> {
     drop(conn);
     pool.disconnect().await.ok();
     Ok(job_id as usize)
+}
+
+/// Insert a `user` row with the given name and admin flag, returning the new
+/// user id. Uses `INSERT IGNORE` so re-seeding the same name is a no-op; in
+/// that case the returned id refers to the pre-existing row.
+pub async fn seed_user(name: &str, is_admin: bool) -> Result<usize> {
+    let (pool, mut conn) = seed_conn().await?;
+    let admin_flag: i32 = if is_admin { 1 } else { 0 };
+    r"INSERT IGNORE INTO `user` (`name`, `is_catalog_admin`) VALUES (:name, :is_admin)"
+        .with(params! {
+            "name" => name,
+            "is_admin" => admin_flag,
+        })
+        .ignore(&mut conn)
+        .await?;
+    let id: u64 = r"SELECT `id` FROM `user` WHERE `name`=:name"
+        .with(params! { "name" => name })
+        .first(&mut conn)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("user row not found after insert"))?;
+    drop(conn);
+    pool.disconnect().await.ok();
+    Ok(id as usize)
 }
 
 /// Seed a wdt page row that is a redirect (page_is_redirect=1) and a matching
