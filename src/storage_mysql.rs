@@ -48,6 +48,12 @@ use util::{
 };
 use wikimisc::{timestamp::TimeStamp, wikibase::LocaleString};
 
+/// Page size for the `automatch_people_with_birth_year` source-id
+/// keyset scan. Keeps each per-batch UNION+GROUP query well inside
+/// `max_statement_time` on Toolforge — the unbatched form timed out
+/// on large catalogs (Codeberg: catalog 7623).
+const AUTOMATCH_BIRTH_YEAR_BATCH_SIZE: usize = 1000;
+
 #[derive(Debug)]
 pub struct StorageMySQL {
     pool: mysql_async::Pool,
@@ -187,6 +193,127 @@ impl StorageMySQL {
             .map_and_drop(from_row::<(usize, String, String)>)
             .await?;
         Ok(results)
+    }
+
+    // --- automatch_people_with_birth_year helpers --------------------------
+
+    /// Keyset page over candidate source entries: those in `catalog_id`
+    /// that are not fully matched (user is 0 or NULL — matches the
+    /// original WHERE clause exactly) and have at least one populated
+    /// birth or death year. The `person_dates` join doubles as the
+    /// "have person dates" gate.
+    async fn birth_year_match_fetch_source_ids(
+        &self,
+        catalog_id: usize,
+        after_id: usize,
+        batch_size: usize,
+    ) -> Result<Vec<usize>> {
+        let sql = r#"SELECT /* birth_year_match_fetch_source_ids */ e.id
+            FROM entry e
+            JOIN person_dates pd ON pd.entry_id = e.id
+            WHERE e.catalog = :catalog_id
+              AND (e.user = 0 OR e.user IS NULL)
+              AND e.id > :after_id
+              AND (pd.year_born != '' OR pd.year_died != '')
+            ORDER BY e.id
+            LIMIT :batch_size"#;
+        let mut conn = self.get_conn_ro().await?;
+        let ids = conn
+            .exec_iter(sql, params! {catalog_id, after_id, batch_size})
+            .await?
+            .map_and_drop(from_row::<usize>)
+            .await?;
+        Ok(ids)
+    }
+
+    /// For a bounded set of source entry ids, find Wikidata candidates
+    /// reachable by "same ext_name, matching birth-or-death year,
+    /// fully-matched entry in a different active catalog". Returns only
+    /// entries with exactly one candidate Q (HAVING count = 1) — the
+    /// `GROUP_CONCAT` is parsed as a plain integer because uniqueness is
+    /// already enforced.
+    ///
+    /// The two-branch UNION (year_born / year_died) is kept so each
+    /// branch hits a single composite index on `person_dates` instead of
+    /// forcing the optimiser to split an `OR`. The IN-clause replaces
+    /// the cross-table `e0.catalog = :catalog_id` filter — same row set,
+    /// bounded by what the caller already paged.
+    async fn birth_year_match_find_matches(
+        &self,
+        source_ids: &[usize],
+    ) -> Result<Vec<(usize, usize)>> {
+        if source_ids.is_empty() {
+            return Ok(vec![]);
+        }
+        let placeholders = Self::sql_placeholders(source_ids.len());
+        // Both UNION branches reference the same id list, so we pass the
+        // ids twice in the same order.
+        let sql = format!(
+            r#"SELECT /* birth_year_match_find_matches */ entry_id, group_concat(DISTINCT q) AS q
+            FROM (
+                SELECT e0.id AS entry_id, e1.q
+                FROM entry e0
+                JOIN person_dates pd0 ON pd0.entry_id = e0.id AND pd0.year_born != ''
+                JOIN person_dates pd1 ON pd1.year_born = pd0.year_born
+                JOIN entry e1 ON e1.id = pd1.entry_id
+                             AND e1.ext_name = e0.ext_name
+                             AND e1.catalog != e0.catalog
+                             AND e1.user > 0 AND e1.q > 0
+                JOIN catalog c1 ON c1.id = e1.catalog AND c1.active = 1
+                WHERE e0.id IN ({placeholders})
+
+                UNION
+
+                SELECT e0.id AS entry_id, e1.q
+                FROM entry e0
+                JOIN person_dates pd0 ON pd0.entry_id = e0.id AND pd0.year_died != ''
+                JOIN person_dates pd1 ON pd1.year_died = pd0.year_died
+                JOIN entry e1 ON e1.id = pd1.entry_id
+                             AND e1.ext_name = e0.ext_name
+                             AND e1.catalog != e0.catalog
+                             AND e1.user > 0 AND e1.q > 0
+                JOIN catalog c1 ON c1.id = e1.catalog AND c1.active = 1
+                WHERE e0.id IN ({placeholders})
+            ) AS combined
+            GROUP BY entry_id
+            HAVING count(DISTINCT q) = 1"#
+        );
+        let mut params: Vec<mysql_async::Value> = Vec::with_capacity(source_ids.len() * 2);
+        for id in source_ids.iter().chain(source_ids.iter()) {
+            params.push(mysql_async::Value::from(*id));
+        }
+        let mut conn = self.get_conn_ro().await?;
+        // group_concat over a single DISTINCT q yields a string like "12345";
+        // parse defensively in case MySQL returns it as bytes vs a number.
+        let rows = conn
+            .exec_iter(sql, params)
+            .await?
+            .map_and_drop(from_row::<(usize, String)>)
+            .await?;
+        let mut out = Vec::with_capacity(rows.len());
+        for (entry_id, q_str) in rows {
+            if let Ok(q) = q_str.trim().parse::<usize>() {
+                out.push((entry_id, q));
+            }
+        }
+        Ok(out)
+    }
+
+    /// Per-match UPDATE preserving the original guards: only people
+    /// (`type='Q5'`), only entries that haven't been fully matched
+    /// (`q is null or user=0`), and skipping any (entry, q) pair that
+    /// shows up in the `log` table at all — the over-broad pre-existing
+    /// guard, deliberately not "fixed" here.
+    async fn birth_year_match_apply_matches(&self, matches: &[(usize, usize)]) -> Result<()> {
+        let sql = r#"UPDATE entry e1
+            SET e1.q=:q,e1.user=0,timestamp=date_format(now(),'%Y%m%d%H%i%S')
+            WHERE e1.type='Q5' AND e1.id=:entry_id AND (e1.q is null or e1.user=0)
+            AND NOT EXISTS (SELECT * FROM log WHERE log.entry_id=e1.id AND log.q=:q)"#;
+        let mut conn = self.get_conn().await?;
+        for (entry_id, q) in matches {
+            conn.exec_drop(sql, params! {entry_id, q}).await?;
+        }
+        Ok(())
     }
 }
 
@@ -1605,74 +1732,40 @@ impl Storage for StorageMySQL {
 
     // Automatch
 
-    /// Auto-matches unmatched and automatched people to fully matched entries that have the same name and birth year.
+    /// Auto-matches unmatched and automatched people to fully matched
+    /// entries that have the same name and birth (or death) year.
+    ///
+    /// Processed in keyset batches over the source catalog's entry ids
+    /// (`AUTOMATCH_BIRTH_YEAR_BATCH_SIZE` per batch) instead of one giant
+    /// UNION+GROUP+HAVING. Large catalogs (Codeberg / catalog 7623) used
+    /// to trip `max_statement_time` (ERROR 1969) on the unbatched form;
+    /// the batched form keeps each statement well inside the per-query
+    /// time budget. SELECTs run on the read-only pool (longer timeout,
+    /// no contention with writers); only the per-row UPDATE uses the RW
+    /// pool.
     async fn automatch_people_with_birth_year(&self, catalog_id: usize) -> Result<()> {
-        // Split the OR (year_born / year_died) into two UNION branches so each
-        // branch can use the `year_born (year_born, year_died)` composite index on
-        // person_dates.  Direct table joins replace vw_dates to avoid the hidden
-        // per-row `catalog IN (SELECT … active=1)` subquery inside the view.
-        let sql_select = r#"
-            SELECT /* automatch_people_with_birth_year */ entry_id, group_concat(DISTINCT q) AS q
-            FROM (
-                SELECT e0.id AS entry_id, e1.q
-                FROM entry e0
-                JOIN person_dates pd0 ON pd0.entry_id = e0.id AND pd0.year_born != ''
-                JOIN catalog c0 ON c0.id = e0.catalog AND c0.active = 1
-                JOIN person_dates pd1 ON pd1.year_born = pd0.year_born
-                JOIN entry e1 ON e1.id = pd1.entry_id
-                             AND e1.ext_name = e0.ext_name
-                             AND e1.catalog != e0.catalog
-                             AND e1.user > 0 AND e1.q > 0
-                JOIN catalog c1 ON c1.id = e1.catalog AND c1.active = 1
-                WHERE e0.catalog = :catalog_id
-                  AND (e0.user = 0 OR e0.user IS NULL)
-
-                UNION
-
-                SELECT e0.id AS entry_id, e1.q
-                FROM entry e0
-                JOIN person_dates pd0 ON pd0.entry_id = e0.id AND pd0.year_died != ''
-                JOIN catalog c0 ON c0.id = e0.catalog AND c0.active = 1
-                JOIN person_dates pd1 ON pd1.year_died = pd0.year_died
-                JOIN entry e1 ON e1.id = pd1.entry_id
-                             AND e1.ext_name = e0.ext_name
-                             AND e1.catalog != e0.catalog
-                             AND e1.user > 0 AND e1.q > 0
-                JOIN catalog c1 ON c1.id = e1.catalog AND c1.active = 1
-                WHERE e0.catalog = :catalog_id
-                  AND (e0.user = 0 OR e0.user IS NULL)
-            ) AS combined
-            GROUP BY entry_id
-            HAVING count(DISTINCT q) = 1"#;
-
-        let mut conn = self.get_conn().await?;
-        let entry_id2q = conn
-            .exec_iter(sql_select, params! {catalog_id})
-            .await?
-            .map_and_drop(from_row::<(usize, usize)>)
-            .await?;
-
-        for (entry_id, q) in &entry_id2q {
-            let sql_update = r#"UPDATE entry e1
-            SET e1.q=:q,e1.user=0,timestamp=date_format(now(),'%Y%m%d%H%i%S')
-            WHERE e1.type='Q5' AND e1.id=:entry_id AND (e1.q is null or e1.user=0)
-            AND NOT EXISTS (SELECT * FROM log WHERE log.entry_id=e1.id AND log.q=:q)"#;
-            conn.exec_drop(sql_update, params! {entry_id, q}).await?;
+        let mut after_id: usize = 0;
+        loop {
+            let source_ids = self
+                .birth_year_match_fetch_source_ids(
+                    catalog_id,
+                    after_id,
+                    AUTOMATCH_BIRTH_YEAR_BATCH_SIZE,
+                )
+                .await?;
+            if source_ids.is_empty() {
+                break;
+            }
+            let matches = self.birth_year_match_find_matches(&source_ids).await?;
+            if !matches.is_empty() {
+                self.birth_year_match_apply_matches(&matches).await?;
+            }
+            // Safe: source_ids is non-empty (checked above).
+            after_id = *source_ids.last().expect("non-empty");
+            if source_ids.len() < AUTOMATCH_BIRTH_YEAR_BATCH_SIZE {
+                break;
+            }
         }
-
-        // DEACTIVATED
-        // too expensive
-        // https://phabricator.wikimedia.org/T409716
-        //   let sql = r#"UPDATE entry e1
-        // INNER JOIN person_dates p1 ON p1.entry_id=e1.id AND p1.year_born IS NOT NULL
-        // INNER JOIN vw_dates p2 ON p2.ext_name=e1.ext_name AND p2.year_born=p1.year_born AND p2.q IS NOT NULL AND p2.user>0 AND p2.entry_id!=e1.id AND p2.user IS NOT NULL
-        // SET e1.q=p2.q,e1.user=0,timestamp=date_format(now(),'%Y%m%d%H%i%S')
-        // WHERE e1.type='Q5' AND e1.catalog=:catalog_id AND (e1.q is null or e1.user=0)
-        // AND NOT EXISTS (SELECT * FROM log WHERE log.entry_id=e1.id AND log.q=p2.q)"#;
-        // self.get_conn_ro()
-        //     .await?
-        //     .exec_drop(sql, params! {catalog_id})
-        //     .await?;
         Ok(())
     }
 
