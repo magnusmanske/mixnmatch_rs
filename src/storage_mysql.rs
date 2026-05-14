@@ -3206,14 +3206,17 @@ impl Storage for StorageMySQL {
     }
 
     async fn api_search_by_q(&self, q: isize, exclude_catalogs: &[usize]) -> Result<Vec<Entry>> {
-        let mut sql = format!("{} WHERE `q`={q}", Self::entry_sql_select());
+        let mut sql = format!(
+            "{} WHERE `catalog`.`active`=1 AND entry.`q`={q}",
+            Self::entry_sql_select_join_active_catalog()
+        );
         if !exclude_catalogs.is_empty() {
             let list = exclude_catalogs
                 .iter()
                 .map(|c| c.to_string())
                 .collect::<Vec<_>>()
                 .join(",");
-            sql += &format!(" AND `catalog` NOT IN ({list})");
+            sql += &format!(" AND entry.`catalog` NOT IN ({list})");
         }
         let mut conn = self.get_conn_ro().await?;
         let rows = conn
@@ -6794,8 +6797,10 @@ mod tests {
         let words = vec!["foo".to_string(), "bar".to_string()];
         let sql = StorageMySQL::build_api_search_entries_sql(&words, false, false, &[], &[], 25)
             .expect("non-empty sql");
-        assert!(sql.contains("MATCH(`ext_name`) AGAINST('+foo +bar' IN BOOLEAN MODE)"));
-        assert!(!sql.contains("MATCH(`ext_desc`)"));
+        assert!(sql.contains("MATCH(entry.`ext_name`) AGAINST('+foo +bar' IN BOOLEAN MODE)"));
+        assert!(!sql.contains("MATCH(entry.`ext_desc`)"));
+        assert!(sql.contains("STRAIGHT_JOIN `catalog`"));
+        assert!(sql.contains("`catalog`.`active`=1"));
         assert!(sql.ends_with(" LIMIT 25"));
     }
 
@@ -6805,10 +6810,10 @@ mod tests {
         let sql =
             StorageMySQL::build_api_search_entries_sql(&words, true, false, &[3, 7], &[1, 2], 10)
                 .expect("non-empty sql");
-        assert!(sql.contains("MATCH(`ext_name`)"));
-        assert!(sql.contains("MATCH(`ext_desc`)"));
-        assert!(sql.contains("`catalog` NOT IN (3,7)"));
-        assert!(sql.contains("`catalog` IN (1,2)"));
+        assert!(sql.contains("MATCH(entry.`ext_name`)"));
+        assert!(sql.contains("MATCH(entry.`ext_desc`)"));
+        assert!(sql.contains("entry.`catalog` NOT IN (3,7)"));
+        assert!(sql.contains("entry.`catalog` IN (1,2)"));
     }
 
     #[test]
@@ -6976,12 +6981,38 @@ mod tests {
         // ext_name still appears in the SELECT list, but the MATCH() clause
         // must not reference it when no_label_search=true.
         assert!(
-            !sql.contains("MATCH(`ext_name`)"),
+            !sql.contains("MATCH(entry.`ext_name`)"),
             "MATCH(ext_name) must be absent when no_label_search=true"
         );
         assert!(
             sql.contains("ext_desc"),
             "ext_desc must be present in MATCH clause"
+        );
+    }
+
+    #[test]
+    fn search_entries_sql_joins_active_catalog_instead_of_not_in() {
+        // The inactive-catalog filter is now a JOIN predicate, not a
+        // `catalog NOT IN (huge list)` literal. Regression guard: an
+        // accidental return to the NOT-IN form would silently
+        // reintroduce a sequential `api_get_inactive_catalog_ids`
+        // round-trip in `api/entry.rs::query_search`.
+        let sql = StorageMySQL::build_api_search_entries_sql(
+            &["foo".to_string()],
+            false,
+            false,
+            &[],
+            &[],
+            10,
+        )
+        .unwrap();
+        assert!(
+            sql.contains("STRAIGHT_JOIN `catalog`"),
+            "must STRAIGHT_JOIN catalog; got: {sql}"
+        );
+        assert!(
+            sql.contains("`catalog`.`active`=1"),
+            "must filter on catalog.active=1; got: {sql}"
         );
     }
 

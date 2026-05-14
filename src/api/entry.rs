@@ -67,7 +67,7 @@ pub async fn query_search(app: &dyn ExternalServicesContext, params: &Params) ->
     let max_results = common::get_param_int(params, "max", 100) as usize;
     let desc_search = common::get_param_int(params, "description_search", 0) != 0;
     let no_label = common::get_param_int(params, "no_label_search", 0) != 0;
-    let user_exclude: Vec<usize> = common::get_param(params, "exclude", "")
+    let mut exclude: Vec<usize> = common::get_param(params, "exclude", "")
         .split(',')
         .filter_map(|s| s.trim().parse().ok())
         .collect();
@@ -75,10 +75,9 @@ pub async fn query_search(app: &dyn ExternalServicesContext, params: &Params) ->
         .split(',')
         .filter_map(|s| s.trim().parse().ok())
         .collect();
-    // Mirror PHP: the effective exclude list is the user-provided one plus every
-    // inactive catalog, so disabled catalogs never leak into text or Q-number search.
-    let mut exclude = user_exclude;
-    exclude.extend(app.storage().api_get_inactive_catalog_ids().await?);
+    // Inactive catalogs are filtered out by the storage layer via a JOIN on
+    // `catalog.active=1` (see `entry_sql_select_join_active_catalog`), so we
+    // only need to pass the caller-supplied exclude list here.
     exclude.sort_unstable();
     exclude.dedup();
 

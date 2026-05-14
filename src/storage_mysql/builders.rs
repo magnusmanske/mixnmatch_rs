@@ -101,6 +101,12 @@ impl StorageMySQL {
     /// composition (including escaping of user-supplied search terms) without
     /// a live DB. Returns `None` when nothing useful can be queried
     /// (no words, or all search targets disabled).
+    ///
+    /// Inactive catalogs are filtered out via a STRAIGHT_JOIN to `catalog`
+    /// on `active=1`, rather than a `catalog NOT IN (long inactive id list)`
+    /// predicate. The previous approach forced the caller to round-trip
+    /// `api_get_inactive_catalog_ids` before the search could even be built,
+    /// and embedded a multi-kilobyte literal into every query.
     pub(super) fn build_api_search_entries_sql(
         words: &[String],
         description_search: bool,
@@ -122,29 +128,45 @@ impl StorageMySQL {
         let mut conditions: Vec<String> = Vec::new();
         if !no_label_search {
             conditions.push(format!(
-                "MATCH(`ext_name`) AGAINST('{ft_words}' IN BOOLEAN MODE)"
+                "MATCH(entry.`ext_name`) AGAINST('{ft_words}' IN BOOLEAN MODE)"
             ));
         }
         if description_search {
             conditions.push(format!(
-                "MATCH(`ext_desc`) AGAINST('{ft_words}' IN BOOLEAN MODE)"
+                "MATCH(entry.`ext_desc`) AGAINST('{ft_words}' IN BOOLEAN MODE)"
             ));
         }
         if conditions.is_empty() {
             return None;
         }
         let match_clause = conditions.join(" OR ");
-        let mut sql = format!("{} WHERE ({match_clause})", Self::entry_sql_select());
+        let mut sql = format!(
+            "{} WHERE `catalog`.`active`=1 AND ({match_clause})",
+            Self::entry_sql_select_join_active_catalog()
+        );
         if !exclude.is_empty() {
             let excl = exclude.iter().join(",");
-            sql += &format!(" AND `catalog` NOT IN ({excl})");
+            sql += &format!(" AND entry.`catalog` NOT IN ({excl})");
         }
         if !include.is_empty() {
             let incl = include.iter().join(",");
-            sql += &format!(" AND `catalog` IN ({incl})");
+            sql += &format!(" AND entry.`catalog` IN ({incl})");
         }
         sql += &format!(" LIMIT {max_results}");
         Some(sql)
+    }
+
+    /// `SELECT … FROM entry STRAIGHT_JOIN catalog ON catalog.id=entry.catalog`.
+    ///
+    /// Companion to `entry_sql_select()` for queries that must skip inactive
+    /// catalogs. STRAIGHT_JOIN forces the planner to drive from `entry` so
+    /// its fulltext / `q` indexes still lead; the small hot `catalog` table
+    /// is then probed by primary key. Column list is fully qualified
+    /// (`entry.id`, `entry.`type``, …) because `id`/`type` collide with
+    /// `catalog`'s columns. Result column names are still `id`, `type`, …
+    /// so `entry_from_row` keeps working unchanged.
+    pub(super) fn entry_sql_select_join_active_catalog() -> String {
+        r"SELECT entry.id,entry.catalog,entry.ext_id,entry.ext_url,entry.ext_name,entry.ext_desc,entry.q,entry.user,entry.timestamp,if(isnull(entry.random),rand(),entry.random) as random_v,entry.`type` FROM `entry` STRAIGHT_JOIN `catalog` ON `catalog`.`id`=entry.`catalog`".into()
     }
 
     pub(super) fn entry_sql_select() -> String {
