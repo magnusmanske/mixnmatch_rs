@@ -2419,21 +2419,18 @@ impl Storage for StorageMySQL {
         Ok(())
     }
 
-    async fn app_state_seppuku_get_running(&self, ts: &str) -> (usize, usize) {
-        let sql = format!("SELECT
-                        (SELECT count(*) FROM jobs WHERE `status` IN ('RUNNING')) AS running,
-                        (SELECT count(*) FROM jobs WHERE `status` IN ('RUNNING') AND last_ts>='{ts}') AS running_recent");
-        let mut conn = self.get_conn_ro().await.expect("seppuku: No DB connection");
-        let (running, running_recent) = *conn
-            .exec_iter(sql, ())
-            .await
-            .expect("seppuku: No results")
-            .map_and_drop(from_row::<(usize, usize)>)
-            .await
-            .expect("seppuku: Result retrieval failure")
-            .first()
-            .expect("seppuku: No DB results");
-        (running, running_recent)
+    async fn app_state_seppuku_get_running(&self, ts: &str) -> Result<(usize, usize)> {
+        // Bind `ts` as a named parameter instead of interpolating into the
+        // SQL string. `ts` is currently server-side (`TimeStamp::datetime`),
+        // so there's no live injection vector, but the codebase convention
+        // is `params!{}` and the previous `format!` would have been a
+        // foot-gun for anyone copying this method as a template.
+        const SQL: &str = "SELECT
+            (SELECT count(*) FROM jobs WHERE `status` = 'RUNNING') AS running,
+            (SELECT count(*) FROM jobs WHERE `status` = 'RUNNING' AND last_ts>=:ts) AS running_recent";
+        let mut conn = self.get_conn_ro().await?;
+        let row: Option<(usize, usize)> = conn.exec_first(SQL, params! { "ts" => ts }).await?;
+        row.ok_or_else(|| anyhow!("seppuku probe returned no rows"))
     }
 
     // CERSEI methods now live on a separate `impl CerseiQueries for

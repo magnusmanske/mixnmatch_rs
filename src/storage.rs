@@ -1022,7 +1022,7 @@ pub trait Storage:
         candidates: String,
         candidates_count: usize,
     ) -> Result<()>;
-    async fn app_state_seppuku_get_running(&self, ts: &str) -> (usize, usize);
+    async fn app_state_seppuku_get_running(&self, ts: &str) -> Result<(usize, usize)>;
 
     // CERSEI methods now live on the `CerseiQueries` sub-trait above;
     // `Storage` inherits them via supertrait bound.

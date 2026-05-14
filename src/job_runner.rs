@@ -112,7 +112,19 @@ impl JobRunner {
                 let utc = chrono::Utc::now() - min;
                 let ts = TimeStamp::datetime(&utc);
                 let (running, running_recent) =
-                    app.storage().app_state_seppuku_get_running(&ts).await;
+                    match app.storage().app_state_seppuku_get_running(&ts).await {
+                        Ok(r) => r,
+                        // A transient DB error here used to panic the
+                        // supervisor task (4-chain .expect()), silently
+                        // disabling seppuku until the next binary restart.
+                        // Log and continue — the next tick (5 min) gets
+                        // another chance, which is the only behaviour
+                        // operators care about.
+                        Err(e) => {
+                            error!("seppuku probe failed, skipping this tick: {e}");
+                            continue;
+                        }
+                    };
                 if running > 0 && running_recent == 0 {
                     error!(
                         "seppuku: {running} jobs running but no activity within {max_age_min} minutes, commiting seppuku"
