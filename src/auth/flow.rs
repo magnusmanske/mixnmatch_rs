@@ -485,12 +485,21 @@ fn parse_userinfo_response(body: &str) -> Result<WikidataUser> {
     Ok(WikidataUser { id, name })
 }
 
+/// Cap a logged body at 400 bytes, rounded *down* to the previous UTF-8 char
+/// boundary so we never panic on a multibyte character that straddles byte 400.
+/// `is_char_boundary` is `true` at index 0 and `s.len()`, and at most 3 bytes
+/// of decrement are ever needed (max UTF-8 sequence length is 4), so the loop
+/// is bounded and the slice is always valid.
 fn truncate_for_log(s: &str) -> String {
-    if s.len() > 400 {
-        format!("{}…", &s[..400])
-    } else {
-        s.to_string()
+    const MAX_BYTES: usize = 400;
+    if s.len() <= MAX_BYTES {
+        return s.to_string();
     }
+    let mut end = MAX_BYTES;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &s[..end])
 }
 
 // ---------------------------------------------------------------------------
@@ -500,6 +509,47 @@ fn truncate_for_log(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression: `&s[..400]` panicked when byte 400 fell inside a multibyte
+    /// UTF-8 sequence. Real upstreams (MediaWiki API errors quoting page
+    /// titles or usernames) routinely include non-ASCII characters at arbitrary
+    /// positions, so any long-enough error body could crash the OAuth path.
+    #[test]
+    fn truncate_for_log_handles_utf8_boundary() {
+        // Build a string whose byte index 400 lands strictly inside a 4-byte
+        // UTF-8 sequence (U+1F600 GRINNING FACE = 0xF0 0x9F 0x98 0x80). Pad
+        // with ASCII to push the emoji to start at byte 398 so byte 400 is
+        // inside it.
+        let mut s = "a".repeat(398);
+        s.push('\u{1F600}');
+        s.push_str(&"b".repeat(50));
+        assert!(s.len() > 400);
+        let out = truncate_for_log(&s);
+        // Must not panic, must end with the ellipsis, must be < input length.
+        assert!(out.ends_with('…'));
+        assert!(out.len() < s.len());
+        // And must itself be valid UTF-8 (the slice ended on a char boundary).
+        // `String::from_utf8(out.into_bytes()).is_ok()` is implicit since the
+        // function returns String, but pin the byte-content shape too: the
+        // truncated portion is the ASCII prefix only — the emoji was past byte
+        // 398 so all 4 of its bytes are past the boundary.
+        assert!(out.starts_with("aaaa"));
+        assert!(!out.contains('\u{1F600}'));
+    }
+
+    #[test]
+    fn truncate_for_log_short_string_unchanged() {
+        assert_eq!(truncate_for_log("hello"), "hello");
+        assert_eq!(truncate_for_log(""), "");
+    }
+
+    #[test]
+    fn truncate_for_log_ascii_boundary() {
+        let s = "x".repeat(500);
+        let out = truncate_for_log(&s);
+        assert_eq!(out.len(), 400 + "…".len());
+        assert!(out.ends_with('…'));
+    }
 
     #[test]
     fn rfc3986_matches_rawurlencode() {

@@ -153,9 +153,16 @@ impl ApiError {
 // the API boundary — without further context, the right classification
 // is "internal error". Handlers that want a specific status code use
 // the constructors above.
+//
+// `{err:#}` (alternate Display) renders the full anyhow context chain,
+// not just the outermost message. Without this, a `?`-propagated error
+// like `with_context("user lookup failed").with_context("pool acquire")
+// .source(io::Error)` surfaced to operators as just "pool acquire" and
+// the upstream cause was hidden. The chain is bounded (no cycles in
+// anyhow) so message length stays manageable in practice.
 impl From<anyhow::Error> for ApiError {
     fn from(err: anyhow::Error) -> Self {
-        Self::Internal(err.to_string())
+        Self::Internal(format!("{err:#}"))
     }
 }
 
@@ -472,6 +479,23 @@ mod tests {
             err.status_code(),
             axum::http::StatusCode::INTERNAL_SERVER_ERROR
         );
+    }
+
+    /// Pin the anyhow-chain expansion contract. Without `{err:#}`, a
+    /// `.context("...")` chain collapses to just the outermost message,
+    /// hiding the upstream cause that operators need to triage incidents.
+    /// Surfacing the chain lets the user-visible body and log share the
+    /// same string, so a client bug report contains the cause inline.
+    #[test]
+    fn test_api_error_from_anyhow_preserves_context_chain() {
+        use anyhow::Context;
+        let root: anyhow::Result<()> = Err(anyhow::anyhow!("connection reset"));
+        let wrapped = root.context("pool acquire").context("user lookup failed").unwrap_err();
+        let api_err = ApiError::from(wrapped);
+        let msg = api_err.message();
+        assert!(msg.contains("user lookup failed"), "outer context missing: {msg}");
+        assert!(msg.contains("pool acquire"), "middle context missing: {msg}");
+        assert!(msg.contains("connection reset"), "root cause missing: {msg}");
     }
 
     /// Pin the contract that each variant maps to the right HTTP status.

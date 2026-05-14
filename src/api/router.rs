@@ -143,12 +143,15 @@ async fn origin_check_middleware(
         .and_then(|v| v.to_str().ok())
     {
         if !crate::api::cors::is_allowed_origin(origin) {
+            // Don't echo the attacker-controlled origin in the response body.
+            // The header value is already in the attacker's request, so the
+            // echo adds nothing for legitimate clients, but a future change
+            // that surfaces this body in an HTML context would become an
+            // XSS vector. The rejected origin is still useful for operators,
+            // so log it server-side.
+            log::warn!("rejected cross-origin /api.php request from origin: {origin}");
             use axum::http::StatusCode;
-            return (
-                StatusCode::FORBIDDEN,
-                format!("origin {origin} not allowed"),
-            )
-                .into_response();
+            return (StatusCode::FORBIDDEN, "origin not allowed").into_response();
         }
     }
     next.run(req).await
