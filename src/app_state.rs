@@ -3,16 +3,16 @@ use crate::mysql_misc::MySQLMisc;
 use crate::storage::Storage;
 use crate::storage_mysql::StorageMySQL;
 use crate::wdrc::WDRC;
-use crate::wikibase::WikiBase;
+// use crate::wikibase::WikiBase;
 use crate::wikidata::Wikidata;
 use anyhow::{Result, anyhow};
-use std::sync::LazyLock;
 use regex::Regex;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::env;
 use std::fs::File;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 use std::sync::{Arc, Mutex};
 use std::time;
 
@@ -38,7 +38,8 @@ pub static TESTING: LazyLock<Mutex<bool>> = LazyLock::new(|| Mutex::new(false));
 // To lock the test entry in the database
 pub static TEST_MUTEX: LazyLock<Mutex<bool>> = LazyLock::new(|| Mutex::new(true));
 // To lock the test entry in the database
-static RE_ITEM2NUMERIC: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(-{0,1}\d+)").expect("Regex failure"));
+static RE_ITEM2NUMERIC: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(-{0,1}\d+)").expect("Regex failure"));
 
 #[derive(Debug, Clone)]
 pub struct AppState {
@@ -238,11 +239,11 @@ impl AppState {
         self.oauth_config.as_ref()
     }
 
-    pub async fn get_wikibase_from_config(&self, config: &Value) -> Result<WikiBase> {
-        WikiBase::new(&config["wikibase"])
-            .await
-            .ok_or(anyhow!("Could not create wikibase"))
-    }
+    // pub async fn get_wikibase_from_config(&self, config: &Value) -> Result<WikiBase> {
+    //     WikiBase::new(&config["wikibase"])
+    //         .await
+    //         .ok_or(anyhow!("Could not create wikibase"))
+    // }
 
     pub fn toolforge_php_command(&self) -> &str {
         &self.toolforge_php_command
@@ -401,7 +402,6 @@ pub fn tool_root_dir() -> String {
 pub fn is_on_toolforge() -> bool {
     std::path::Path::new("/etc/wmcs-project").exists()
 }
-
 
 #[cfg(test)]
 mod tests {
