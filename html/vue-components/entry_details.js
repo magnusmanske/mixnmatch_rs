@@ -23,8 +23,8 @@ export default {
 
 		<div class="card mb-3">
 			<div class="card-body">
-				<div class='d-flex justify-content-between align-items-start flex-wrap gap-2 mb-2'>
-					<h4 class="card-title mb-0">
+				<div class='d-flex justify-content-between align-items-start gap-2 mb-2'>
+					<h4 class="card-title mb-0 flex-grow-1" style="min-width: 0; word-wrap: break-word;">
 						{{entry.ext_name|decodeEntities|removeTags|miscFixes}}
 						<router-link class='ms-1' style='font-size:0.85em;' :to='"/search/"+filteredName()'
 							tt_title='search'>&#x1F50E;</router-link>
