@@ -48,11 +48,20 @@ html/                     frontend (don't move; some live-served paths assume it
 
 ```bash
 cargo build                    # clean as of last commit
-cargo test --lib               # ~812 unit tests, fast
+cargo test --lib               # full suite (~1424 tests, ~30 s on a fast machine,
+                               # ~2-3 min on slow Docker — boots a MariaDB testcontainer)
+cargo test-fast                # ~1057 pure-logic tests, ~2 s — skips every module
+                               # whose tests need the MariaDB container. Use for
+                               # local iteration on non-DB changes. Defined in
+                               # `.cargo/config.toml`; the skip list is the
+                               # authoritative reference for which modules are
+                               # "DB-heavy".
 cargo test -- --ignored        # DB- / network-dependent tests; needs config.json
 ```
 
 Two existing tests (`wikidata::tests::test_wd_search`, `microsync::tests::test_get_formatter_url_for_prop`) flake under concurrent load — they hit live Wikidata APIs and get rate-limited when the full suite runs them in parallel. Pass when run individually. **Not regressions.**
+
+The container test fixture starts MariaDB once per test process (`test_support::TEST_DB`, a `OnceCell`). Cold-start cost is ~60 s on a typical machine, longer under Docker contention. `cargo test --lib` amortises this against parallel pure-logic test execution; `cargo test-fast` avoids it entirely by skipping every module that calls `test_support::test_app()` / `seed_*()`.
 
 ## Architecture cheat sheet
 

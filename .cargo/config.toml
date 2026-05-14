@@ -1,0 +1,45 @@
+# Cargo aliases for faster local iteration.
+#
+# `cargo test --lib` boots a MariaDB testcontainer on first use, costing
+# ~60 s on a fast machine and 2-3 minutes on slower ones. The default
+# parallel run amortises this against pure-logic tests so the wall-clock
+# is bearable, but iteration on a small change still pays the full
+# container-init bill.
+#
+# `cargo test-fast` skips modules whose test suites are predominantly
+# DB-integration tests, so no test triggers `test_support::test_app()`
+# and the container never starts. Useful when iterating on a non-DB
+# change. The default `cargo test` continues to run the full suite.
+#
+# A few mostly-pure-logic modules (cersei, api::router) have one or two
+# tests that need the container — those are listed individually so the
+# rest of the module's pure tests keep running.
+
+[alias]
+test-fast = [
+    "test", "--lib", "--",
+    # Whole modules where the bulk of tests need the testcontainer.
+    "--skip", "api::catalog::",
+    "--skip", "api::data::",
+    "--skip", "api::dg::",
+    "--skip", "api::jobs::",
+    "--skip", "app_state::tests",
+    "--skip", "automatch::tests",
+    "--skip", "auxiliary_matcher::",
+    "--skip", "catalog::tests",
+    "--skip", "catalog_merger::tests",
+    "--skip", "entry::tests",
+    "--skip", "item_creator::",
+    "--skip", "job::tests",
+    "--skip", "job_runner::tests",
+    "--skip", "maintenance::",
+    "--skip", "microsync::",
+    "--skip", "reference_fixer::tests",
+    "--skip", "storage_mysql::",
+    "--skip", "taxon_matcher::tests",
+    "--skip", "update_catalog::tests",
+    "--skip", "wikidata::tests",
+    # Individual tests in otherwise-pure modules.
+    "--skip", "cersei::tests::test_get_cersei_scrapers",
+    "--skip", "api::router::tests::router_responds_through_real_listener",
+]
