@@ -1698,17 +1698,21 @@ impl Storage for StorageMySQL {
     async fn automatch_by_search_get_results(
         &self,
         catalog_id: usize,
-        offset: usize,
+        after_id: usize,
         batch_size: usize,
     ) -> Result<Vec<AutomatchSearchRow>> {
+        // Keyset pagination on `entry.id`: the driver passes the
+        // largest id of the previous page; `ORDER BY id LIMIT N` then
+        // costs O(N) plus the correlated `aliases` lookup, regardless
+        // of how far in we are. See trait doc for the rationale.
         let sql = format!("SELECT /* automatch_by_search_get_results */ `id`,`ext_name`,`type`,
 	            IFNULL((SELECT group_concat(DISTINCT `label` SEPARATOR '|') FROM aliases WHERE entry_id=entry.id),'') AS `aliases`
-	            FROM `entry` WHERE `catalog`=:catalog_id {}
-	            /* ORDER BY `id` */
-	            LIMIT :batch_size OFFSET :offset",MatchState::not_fully_matched().get_sql());
+	            FROM `entry` WHERE `catalog`=:catalog_id AND `id`>:after_id {}
+	            ORDER BY `id`
+	            LIMIT :batch_size",MatchState::not_fully_matched().get_sql());
         let mut conn = self.get_conn_ro().await?;
         let results = conn
-            .exec_iter(sql.clone(), params! {catalog_id,offset,batch_size})
+            .exec_iter(sql.clone(), params! {catalog_id,after_id,batch_size})
             .await?
             .map_and_drop(|row| {
                 let (id, name, type_name, aliases) =

@@ -307,7 +307,14 @@ impl AutoMatch {
     }
 
     pub async fn automatch_by_search(&mut self, catalog_id: usize) -> Result<()> {
-        let mut offset = self.get_last_job_offset().await;
+        // Resume cursor is an entry-id watermark (keyset pagination),
+        // same convention as `match_person_by_dates`. Any job that was
+        // mid-flight under the old OFFSET regime will, on resume, treat
+        // its persisted row-count offset as an id watermark — for almost
+        // all catalogs entry ids are well above any plausible row count,
+        // so the job effectively restarts from the beginning. That is
+        // idempotent (auto-matches are already established).
+        let mut after_id = self.get_last_job_offset().await;
         let batch_size = *self
             .app
             .task_specific_usize()
@@ -335,21 +342,58 @@ impl AutoMatch {
             .ok()
             .map(|n| n as u64);
 
+        // Prefetch pipeline: while the current batch is doing its
+        // Wikidata search round-trips (the dominant cost), the next
+        // batch's DB query runs in the background. Keeps the API
+        // saturated and overlaps DB latency with API latency.
+        let mut processed: u64 = 0;
+        let mut current = self
+            .app
+            .storage()
+            .automatch_by_search_get_results(catalog_id, after_id, batch_size)
+            .await?;
+
         loop {
-            let results = self
-                .app
-                .storage()
-                .automatch_by_search_get_results(catalog_id, offset, batch_size)
-                .await?;
-
-            self.automatch_by_search_process_results_batch(&results, concurrent)
-                .await;
-
-            if results.len() < batch_size {
+            if current.is_empty() {
                 break;
             }
-            offset += results.len();
-            let _ = self.report_progress(offset as u64, total).await;
+            let cur_count = current.len();
+            let cur_max_id = current.last().map(|r| r.entry_id).unwrap_or(after_id);
+            let last_batch = cur_count < batch_size;
+
+            // Kick off the next DB fetch *before* doing the API work,
+            // so the two overlap.
+            let next_fut = if last_batch {
+                None
+            } else {
+                let app = self.app.clone();
+                Some(tokio::spawn(async move {
+                    app.storage()
+                        .automatch_by_search_get_results(catalog_id, cur_max_id, batch_size)
+                        .await
+                }))
+            };
+
+            self.automatch_by_search_process_results_batch(&current, concurrent)
+                .await;
+            processed = processed.saturating_add(cur_count as u64);
+
+            if last_batch {
+                break;
+            }
+            after_id = cur_max_id;
+            // The progress counter (UI) is the running row count;
+            // the resume cursor (offset) is the entry-id watermark.
+            // Keep them in sync in a single JSON write.
+            let _ = self
+                .report_progress_with_cursor(processed, total, after_id as u64)
+                .await;
+
+            current = match next_fut {
+                // `??`: outer unwraps the JoinError, inner the storage Result.
+                Some(handle) => handle.await??,
+                None => break,
+            };
         }
         let _ = self.clear_offset().await;
         Ok(())
@@ -369,7 +413,7 @@ impl AutoMatch {
         self.automatch_by_search_process_results_batch_filter_search_results(&mut search_results)
             .await;
         let mut entry_id2items: HashMap<usize, Vec<String>> = HashMap::new();
-        for (entry_id, q) in search_results {
+        for (entry_id, q, _needs_filter) in search_results {
             entry_id2items.entry(entry_id).or_default().push(q);
         }
         let _ = self.match_entries_to_items(&entry_id2items).await;
@@ -377,12 +421,17 @@ impl AutoMatch {
 
     async fn automatch_by_search_process_results_batch_filter_search_results(
         &mut self,
-        search_results: &mut Vec<(usize, String)>,
+        search_results: &mut Vec<(usize, String, bool)>,
     ) {
-        let mut no_meta_items: Vec<String> = search_results
-            .iter()
-            .map(|(_entry_id, q)| q.clone())
-            .collect();
+        // `search_with_type_api` already inlines `-haswbstatement:P31=…`
+        // exclusions for every meta class when `type_q` is non-empty, so
+        // results from typed searches are pre-filtered server-side. Only
+        // untyped results need the `wbgetentities` round-trip — typically
+        // a much smaller pool, sometimes empty.
+        let mut no_meta_items = Self::collect_untyped_qs(search_results);
+        if no_meta_items.is_empty() {
+            return;
+        }
         let _ = self
             .app
             .wikidata()
@@ -391,41 +440,71 @@ impl AutoMatch {
         // Avoid an O(N·M) scan across the candidate list for every search
         // result — batches routinely run into the thousands.
         let keep: std::collections::HashSet<String> = no_meta_items.into_iter().collect();
-        search_results.retain(|(_entry_id, q)| keep.contains(q));
+        Self::retain_non_meta(search_results, &keep);
+    }
+
+    /// Unique Q-strings from search results that came from an *untyped*
+    /// search (`needs_filter == true`) and therefore still need
+    /// `wbgetentities` verification. Returns an empty list when every
+    /// result came from a typed search — the caller's check on this lets
+    /// the entire `remove_meta_items` round-trip be skipped.
+    pub(super) fn collect_untyped_qs(
+        search_results: &[(usize, String, bool)],
+    ) -> Vec<String> {
+        search_results
+            .iter()
+            .filter(|(_, _, needs_filter)| *needs_filter)
+            .map(|(_, q, _)| q.clone())
+            .collect()
+    }
+
+    /// Drops untyped search results whose Q is *not* in the post-filter
+    /// `keep` set. Typed results survive unconditionally — the API
+    /// pre-filtered them server-side, so they're known to be non-meta
+    /// even if the `keep` set happens not to mention them.
+    pub(super) fn retain_non_meta(
+        search_results: &mut Vec<(usize, String, bool)>,
+        keep: &std::collections::HashSet<String>,
+    ) {
+        search_results.retain(|(_, q, needs_filter)| !*needs_filter || keep.contains(q));
     }
 
     async fn automatch_by_search_process_results_batch_process_futures(
         &self,
         result_batch: &[AutomatchSearchRow],
         concurrent: usize,
-    ) -> Vec<(usize, String)> {
+    ) -> Vec<(usize, String, bool)> {
         if result_batch.is_empty() {
             return vec![];
         }
         let (label_map, alias_map) = Self::group_searches_by_text(result_batch);
 
-        // Two-phase search: labels first, aliases second.
-        // Running phases sequentially guarantees that each entry's label
-        // candidates are inserted before its alias candidates, preserving
-        // the relevance ordering required by Codeberg #90.
-        let label_results = run_search_phase(self, label_map, concurrent).await;
-        let alias_results = run_search_phase(self, alias_map, concurrent).await;
+        // Run label and alias searches as one merged stream so total
+        // in-flight stays at the user-tuned `concurrent` budget while
+        // both phases overlap. Per-entry ordering (label candidates
+        // before alias candidates — Codeberg #90) is preserved by
+        // bucketing the phases back into separate maps and flattening
+        // in label-then-alias order below.
+        let (label_results, alias_results) =
+            run_label_and_alias_phases(self, label_map, alias_map, concurrent).await;
 
         // Flatten: for each entry, label candidates first then alias extras,
-        // with per-entry order-preserving dedup.
+        // with per-entry order-preserving dedup. The `needs_filter` flag
+        // rides along so the downstream meta-filter can skip Q-strings
+        // already vouched for by a typed search.
         let all_entry_ids: std::collections::HashSet<usize> = label_results
             .keys()
             .chain(alias_results.keys())
             .copied()
             .collect();
-        let mut flat: Vec<(usize, String)> = Vec::new();
+        let mut flat: Vec<(usize, String, bool)> = Vec::new();
         for entry_id in all_entry_ids {
             let mut seen = std::collections::HashSet::new();
             let label_items = label_results.get(&entry_id).map_or(&[][..], |v| v.as_slice());
             let alias_items = alias_results.get(&entry_id).map_or(&[][..], |v| v.as_slice());
-            for q in label_items.iter().chain(alias_items.iter()) {
+            for (q, needs_filter) in label_items.iter().chain(alias_items.iter()) {
                 if seen.insert(q.as_str()) {
-                    flat.push((entry_id, q.clone()));
+                    flat.push((entry_id, q.clone(), *needs_filter));
                 }
             }
         }
@@ -743,53 +822,86 @@ impl AutoMatch {
     }
 }
 
+/// Tags a search future with which phase (label vs alias) it belongs to,
+/// so the merged concurrent stream can be bucketed back into per-phase
+/// maps at the end without losing the label-before-alias ordering that
+/// `automatch_by_search_process_results_batch_process_futures` relies on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SearchPhase {
+    Label,
+    Alias,
+}
+
 /// Executes a single Wikidata text search and attributes the results to all
 /// `entry_ids` that share this `(name, type_q)` key. Returns the same
-/// `entry_ids` alongside the de-ordered-deduped candidate Q-strings so the
-/// caller can fan results out to multiple entries at once.
+/// `entry_ids` alongside the de-ordered-deduped candidate Q-strings paired
+/// with a `needs_filter` flag — `true` when `type_q` was empty (so the API
+/// did not server-side filter meta items) and the caller must run
+/// `remove_meta_items` over them.
 async fn search_unique_text(
     am: &AutoMatch,
     name: String,
     type_q: String,
     entry_ids: Vec<usize>,
-) -> (Vec<usize>, Vec<String>) {
+) -> (Vec<usize>, Vec<(String, bool)>) {
+    let needs_filter = type_q.is_empty();
     let mut items = match am.app.wikidata().search_with_type_api(&name, &type_q).await {
         Ok(items) => items,
         Err(_) => return (entry_ids, vec![]),
     };
     AutoMatch::dedup_preserving_order(&mut items);
-    (entry_ids, items)
+    let tagged: Vec<(String, bool)> = items.into_iter().map(|q| (q, needs_filter)).collect();
+    (entry_ids, tagged)
 }
 
-/// Runs all searches in `search_map` with up to `concurrent` in-flight
-/// at once. Returns a map of `entry_id → candidate Q-strings` built by
-/// fanning each search result out to every entry that shared the search key.
-async fn run_search_phase(
+/// Runs both phases as one merged `buffer_unordered` stream — total
+/// in-flight stays at `concurrent` (preserves the user-tuned budget)
+/// while label and alias searches overlap instead of running back-to-back.
+async fn run_label_and_alias_phases(
     am: &AutoMatch,
-    search_map: HashMap<(String, String), Vec<usize>>,
+    label_map: HashMap<(String, String), Vec<usize>>,
+    alias_map: HashMap<(String, String), Vec<usize>>,
     concurrent: usize,
-) -> HashMap<usize, Vec<String>> {
-    if search_map.is_empty() {
-        return HashMap::new();
+) -> (
+    HashMap<usize, Vec<(String, bool)>>,
+    HashMap<usize, Vec<(String, bool)>>,
+) {
+    if label_map.is_empty() && alias_map.is_empty() {
+        return (HashMap::new(), HashMap::new());
     }
-    let futures: Vec<_> = search_map
+    // Chain both phases at the *data* level (one iterator of
+    // `(phase, key, entry_ids)`), then build a single `async move`
+    // block over it — that way both futures share the same anonymous
+    // type and the chained iterator unifies cleanly. Total in-flight
+    // stays at `concurrent`; phases overlap rather than running
+    // back-to-back.
+    let tagged = label_map
         .into_iter()
-        .map(|((name, type_q), entry_ids)| search_unique_text(am, name, type_q, entry_ids))
-        .collect();
-    let search_results = futures::stream::iter(futures)
-        .buffer_unordered(concurrent)
-        .collect::<Vec<_>>()
+        .map(|kv| (SearchPhase::Label, kv))
+        .chain(alias_map.into_iter().map(|kv| (SearchPhase::Alias, kv)));
+    let futures_iter = tagged.map(|(phase, ((name, type_q), entry_ids))| async move {
+        let (ids, items) = search_unique_text(am, name, type_q, entry_ids).await;
+        (phase, ids, items)
+    });
+    let all: Vec<_> = futures::stream::iter(futures_iter)
+        .buffer_unordered(concurrent.max(1))
+        .collect()
         .await;
-    let mut entry2items: HashMap<usize, Vec<String>> = HashMap::new();
-    for (entry_ids, items) in search_results {
+    let mut labels: HashMap<usize, Vec<(String, bool)>> = HashMap::new();
+    let mut aliases: HashMap<usize, Vec<(String, bool)>> = HashMap::new();
+    for (phase, entry_ids, items) in all {
+        let target = match phase {
+            SearchPhase::Label => &mut labels,
+            SearchPhase::Alias => &mut aliases,
+        };
         for entry_id in entry_ids {
-            entry2items
+            target
                 .entry(entry_id)
                 .or_default()
-                .extend_from_slice(&items);
+                .extend(items.iter().cloned());
         }
     }
-    entry2items
+    (labels, aliases)
 }
 
 async fn get_json_from_url_and_entry(
@@ -827,6 +939,62 @@ mod tests {
     fn make_row(id: usize, label: &str, type_q: &str, aliases: &str) -> AutomatchSearchRow {
         AutomatchSearchRow::new(id, label.into(), type_q.into(), aliases.into())
     }
+
+    // ── meta-filter skip-for-typed-results ────────────────────────────────
+
+    #[test]
+    fn collect_untyped_qs_returns_only_needs_filter_results() {
+        let results = vec![
+            (1_usize, "Q100".to_string(), false), // typed → server-side filtered
+            (2, "Q200".to_string(), true),        // untyped → needs verification
+            (3, "Q300".to_string(), true),
+            (4, "Q400".to_string(), false),
+        ];
+        let mut qs = AutoMatch::collect_untyped_qs(&results);
+        qs.sort();
+        assert_eq!(qs, vec!["Q200".to_string(), "Q300".to_string()]);
+    }
+
+    #[test]
+    fn collect_untyped_qs_empty_when_all_typed() {
+        // The common case: every catalog row declared a P31, so every
+        // search was typed and `remove_meta_items` can be skipped entirely.
+        let results = vec![
+            (1_usize, "Q1".to_string(), false),
+            (2, "Q2".to_string(), false),
+        ];
+        assert!(AutoMatch::collect_untyped_qs(&results).is_empty());
+    }
+
+    #[test]
+    fn retain_non_meta_keeps_typed_results_unconditionally() {
+        let mut results = vec![
+            (1_usize, "Q100".to_string(), false), // typed
+            (2, "Q200".to_string(), true),        // untyped, in keep
+            (3, "Q300".to_string(), true),        // untyped, NOT in keep → drop
+        ];
+        let keep: std::collections::HashSet<String> = ["Q200".to_string()].into_iter().collect();
+        AutoMatch::retain_non_meta(&mut results, &keep);
+        let qs: Vec<&str> = results.iter().map(|(_, q, _)| q.as_str()).collect();
+        assert!(qs.contains(&"Q100"), "typed result must survive any keep set");
+        assert!(qs.contains(&"Q200"), "untyped result in keep set must survive");
+        assert!(!qs.contains(&"Q300"), "untyped result missing from keep must be dropped");
+        assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn retain_non_meta_empty_keep_drops_all_untyped() {
+        let mut results = vec![
+            (1_usize, "Q1".to_string(), true),
+            (2, "Q2".to_string(), false),
+        ];
+        let keep = std::collections::HashSet::new();
+        AutoMatch::retain_non_meta(&mut results, &keep);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].1, "Q2", "only typed result survives");
+    }
+
+    // ── group_searches_by_text ────────────────────────────────────────────
 
     #[test]
     fn group_searches_deduplicates_shared_labels() {

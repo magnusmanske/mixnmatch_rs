@@ -874,10 +874,23 @@ pub trait Storage:
         offset: usize,
         batch_size: usize,
     ) -> Result<Vec<(usize, String)>>;
+    /// Fetch the next page of not-fully-matched entries in a catalog,
+    /// ordered by id ascending, starting strictly after `after_id`.
+    ///
+    /// Keyset pagination (instead of LIMIT/OFFSET) for two reasons:
+    /// * O(batch_size) per page regardless of how far in we are — large
+    ///   catalogs no longer pay the OFFSET-scan tax.
+    /// * Stable resume even as rows get matched (and thus drop out of
+    ///   the `not_fully_matched` filter) mid-run: a row-count offset
+    ///   would silently skip entries; an id watermark won't.
+    ///
+    /// Pass `0` to start at the beginning. The resume cursor stored in
+    /// `jobs.json` is the last-seen entry id (the same convention used by
+    /// `match_person_by_dates_get_results`).
     async fn automatch_by_search_get_results(
         &self,
         catalog_id: usize,
-        offset: usize,
+        after_id: usize,
         batch_size: usize,
     ) -> Result<Vec<AutomatchSearchRow>>;
     async fn automatch_creations_get_results(

@@ -14,7 +14,10 @@ use crate::php_wrapper::PhpWrapper;
 use crate::task_size::TaskSize;
 use crate::taxon_matcher::TaxonMatcher;
 use crate::update_catalog::UpdateCatalog;
-use crate::job_progress::{JobProgress, merge_offset_into_json, merge_progress_into_json};
+use crate::job_progress::{
+    JobProgress, merge_offset_into_json, merge_progress_into_json,
+    merge_progress_with_cursor_into_json,
+};
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use chrono::Duration;
@@ -93,6 +96,28 @@ pub trait Jobbable {
         let progress = JobProgress::from_counts(processed, total);
         let existing = job.get_json_value().await;
         let merged = merge_progress_into_json(existing.as_ref(), &progress);
+        job.set_json(Some(merged)).await?;
+        Ok(())
+    }
+
+    /// Like [`report_progress`] but writes an explicit resume cursor
+    /// to `offset` instead of mirroring `processed`. Use when the
+    /// progress counter and the resume cursor are different quantities
+    /// — e.g. `automatch_by_search` shows the running row count in the
+    /// UI but resumes on an entry-id watermark (keyset pagination).
+    async fn report_progress_with_cursor(
+        &mut self,
+        processed: u64,
+        total: Option<u64>,
+        cursor: u64,
+    ) -> Result<()> {
+        let job = match self.get_current_job_mut() {
+            Some(job) => job,
+            None => return Ok(()),
+        };
+        let progress = JobProgress::from_counts(processed, total);
+        let existing = job.get_json_value().await;
+        let merged = merge_progress_with_cursor_into_json(existing.as_ref(), &progress, cursor);
         job.set_json(Some(merged)).await?;
         Ok(())
     }

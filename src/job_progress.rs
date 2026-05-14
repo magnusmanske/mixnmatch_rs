@@ -96,6 +96,33 @@ pub fn merge_progress_into_json(existing: Option<&Value>, progress: &JobProgress
     Value::Object(obj)
 }
 
+/// Like [`merge_progress_into_json`] but persists an explicit resume
+/// cursor in `offset` instead of mirroring `processed`. Use when the
+/// progress counter and the resume cursor are different quantities —
+/// e.g. `automatch_by_search` shows the running row count in the UI
+/// but resumes on an entry-id watermark from keyset pagination.
+pub fn merge_progress_with_cursor_into_json(
+    existing: Option<&Value>,
+    progress: &JobProgress,
+    cursor: u64,
+) -> Value {
+    let mut obj = match existing {
+        Some(Value::Object(map)) => map.clone(),
+        Some(Value::Array(arr)) => {
+            let mut m = Map::new();
+            m.insert("levels".to_string(), Value::Array(arr.clone()));
+            m
+        }
+        _ => Map::new(),
+    };
+    obj.insert("offset".to_string(), json!(cursor));
+    obj.insert(
+        "progress".to_string(),
+        serde_json::to_value(progress).unwrap_or(Value::Null),
+    );
+    Value::Object(obj)
+}
+
 /// Merge an `offset` resume cursor into the existing `jobs.json`
 /// document **without** publishing a `progress` payload. Use for
 /// strategies whose offset isn't a count of processed rows
@@ -273,5 +300,39 @@ mod tests {
             Some(&json!([{"position": 0}, {"current_value": 2000}]))
         );
         assert_eq!(obj.get("offset"), Some(&json!(42)));
+    }
+
+    // merge_progress_with_cursor_into_json ──────────────────────────────
+
+    #[test]
+    fn merge_progress_with_cursor_writes_cursor_in_offset_slot() {
+        // Cursor is independent of `processed` — e.g. an entry-id watermark
+        // (10_000_000) paired with a row count (50) for the progress bar.
+        let progress = JobProgress::from_counts(50, Some(200));
+        let merged = merge_progress_with_cursor_into_json(None, &progress, 10_000_000);
+        let obj = merged.as_object().expect("object");
+        assert_eq!(obj.get("offset"), Some(&json!(10_000_000)));
+        let prog = obj.get("progress").expect("progress").as_object().unwrap();
+        assert_eq!(prog.get("processed"), Some(&json!(50)));
+        assert_eq!(prog.get("total"), Some(&json!(200)));
+    }
+
+    #[test]
+    fn merge_progress_with_cursor_overwrites_prior_offset() {
+        let existing = json!({"offset": 99});
+        let progress = JobProgress::from_counts(1, None);
+        let merged = merge_progress_with_cursor_into_json(Some(&existing), &progress, 12_345);
+        assert_eq!(merged.get("offset"), Some(&json!(12_345)));
+    }
+
+    #[test]
+    fn merge_progress_with_cursor_preserves_other_keys() {
+        let existing = json!({"levels": [{"position": 3}]});
+        let progress = JobProgress::from_counts(7, Some(70));
+        let merged = merge_progress_with_cursor_into_json(Some(&existing), &progress, 999);
+        let obj = merged.as_object().unwrap();
+        assert_eq!(obj.get("levels"), Some(&json!([{"position": 3}])));
+        assert_eq!(obj.get("offset"), Some(&json!(999)));
+        assert!(obj.get("progress").is_some());
     }
 }
