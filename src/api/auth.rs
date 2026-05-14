@@ -41,9 +41,10 @@ pub async fn query_auth(
             if auth::guard::dev_bypass_user().is_some() {
                 return Ok(Redirect::to("/").into_response());
             }
-            let token = auth::flow::initiate_request_token(&cfg)
-                .await
-                .map_err(|e| ApiError::Internal(format!("OAuth initiate failed: {e}")))?;
+            let token = auth::flow::initiate_request_token(&cfg).await.map_err(|e| {
+                log::warn!("OAuth initiate failed: {e:#}");
+                ApiError::Internal("OAuth initiate failed".into())
+            })?;
             let new_state = auth::session::SessionData {
                 state: auth::session::SessionState::PendingVerifier {
                     request_token_key: token.key.clone(),
@@ -429,11 +430,21 @@ pub async fn handle_oauth_callback(app: &AppState, session: &Session, params: &P
     };
     let access = match auth::flow::exchange_verifier(&cfg, &pair, &verifier).await {
         Ok(a) => a,
-        Err(e) => return ApiError::Internal(format!("OAuth exchange failed: {e}")).into_response(),
+        Err(e) => {
+            // Full anyhow chain (including any truncated upstream response
+            // body) goes to the operator log; client sees a generic message
+            // so we don't echo MediaWiki / OAuth error detail into the
+            // browser. Matches the discipline in panic_recovery_middleware.
+            log::warn!("OAuth exchange failed (verifier={verifier}): {e:#}");
+            return ApiError::Internal("OAuth exchange failed".into()).into_response();
+        }
     };
     let user = match auth::flow::fetch_userinfo(&cfg, &access).await {
         Ok(u) => u,
-        Err(e) => return ApiError::Internal(format!("OAuth userinfo failed: {e}")).into_response(),
+        Err(e) => {
+            log::warn!("OAuth userinfo fetch failed: {e:#}");
+            return ApiError::Internal("OAuth userinfo failed".into()).into_response();
+        }
     };
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

@@ -40,27 +40,40 @@ impl SessionData {
 pub async fn load(session: &Session) -> SessionData {
     match session.get::<SessionData>(SESSION_KEY).await {
         Ok(Some(data)) => data,
-        _ => SessionData::anonymous(),
+        Ok(None) => SessionData::anonymous(),
+        // A deserialize failure usually means the on-disk SessionData shape
+        // changed under us (struct rename, enum-variant rename, base64
+        // corruption). Falling through to "anonymous" gives the user a
+        // clean re-login path, but the silent path used to make this
+        // invisible to operators. Logging at warn keeps the signal grep-able
+        // without being a page-worthy error.
+        Err(e) => {
+            log::warn!("session deserialize failed, treating as anonymous: {e}");
+            SessionData::anonymous()
+        }
     }
 }
 
 pub async fn store(session: &Session, data: &SessionData) -> Result<(), ApiError> {
-    session
-        .insert(SESSION_KEY, data)
-        .await
-        .map_err(|e| ApiError::Internal(format!("session store failed: {e}")))
+    session.insert(SESSION_KEY, data).await.map_err(|e| {
+        // Underlying tower-sessions error can include the filesystem path
+        // of the session store; don't surface that to the client. Log the
+        // full chain server-side instead.
+        log::error!("session store failed: {e}");
+        ApiError::Internal("session store failed".into())
+    })
 }
 
 pub async fn clear(session: &Session) -> Result<(), ApiError> {
-    session
-        .remove::<SessionData>(SESSION_KEY)
-        .await
-        .map_err(|e| ApiError::Internal(format!("session clear failed: {e}")))?;
+    session.remove::<SessionData>(SESSION_KEY).await.map_err(|e| {
+        log::error!("session clear failed: {e}");
+        ApiError::Internal("session clear failed".into())
+    })?;
     // Also cycle the session id so the cookie is effectively invalidated.
-    session
-        .cycle_id()
-        .await
-        .map_err(|e| ApiError::Internal(format!("session cycle failed: {e}")))?;
+    session.cycle_id().await.map_err(|e| {
+        log::error!("session cycle failed: {e}");
+        ApiError::Internal("session cycle failed".into())
+    })?;
     Ok(())
 }
 

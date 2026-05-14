@@ -77,7 +77,13 @@ impl SessionStore for FileSessionStore {
         // Drop expired sessions on read. tower-sessions also checks expiry,
         // but cleaning up here keeps old files from accumulating forever.
         if record.expiry_date < time::OffsetDateTime::now_utc() {
-            let _ = tokio::fs::remove_file(&path).await;
+            // Log at debug — frequent enough during normal operation that
+            // info would be noise, but useful when triaging "why am I being
+            // logged out?" reports.
+            log::debug!("removing expired session {session_id}");
+            if let Err(e) = tokio::fs::remove_file(&path).await {
+                log::warn!("failed to remove expired session file {session_id}: {e}");
+            }
             return Ok(None);
         }
         Ok(Some(record))

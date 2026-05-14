@@ -211,30 +211,44 @@ impl CerseiSync {
 
     /// Fetch one page from the CERSEI API, retrying up to 5 times with
     /// exponential back-off and cache-busting query params on JSON parse failures.
+    ///
+    /// `last_err` captures the most recent send/decode error so the surfaced
+    /// `anyhow::Error` after retry exhaustion includes the upstream cause,
+    /// not just "failed after retries". Without that, operators triaging a
+    /// CERSEI sync failure had no signal whether the cause was DNS, TLS,
+    /// HTTP 5xx, or a JSON decode mismatch.
     async fn fetch_cersei_page(&self, url: &str) -> Result<CerseiEntriesResponse> {
         let mut url = url.to_string();
+        let mut last_err: Option<String> = None;
         for attempt in 0_u64..=5 {
             match self.http_client.get(&url).send().await {
                 Ok(response) => match response.json::<CerseiEntriesResponse>().await {
                     Ok(data) => return Ok(data),
-                    Err(_) if attempt < 5 => {
-                        tokio::time::sleep(Duration::from_secs((attempt + 1) * 5)).await;
-                        url = format!(
-                            "{}&blah{}={}",
-                            url,
-                            rand::random::<u32>(),
-                            rand::random::<u32>()
-                        );
+                    Err(e) => {
+                        last_err = Some(format!("decode: {e}"));
+                        if attempt < 5 {
+                            tokio::time::sleep(Duration::from_secs((attempt + 1) * 5)).await;
+                            url = format!(
+                                "{}&blah{}={}",
+                                url,
+                                rand::random::<u32>(),
+                                rand::random::<u32>()
+                            );
+                        }
                     }
-                    Err(_) => {}
                 },
-                Err(_) if attempt < 5 => {
-                    tokio::time::sleep(Duration::from_secs((attempt + 1) * 5)).await
+                Err(e) => {
+                    last_err = Some(format!("send: {e}"));
+                    if attempt < 5 {
+                        tokio::time::sleep(Duration::from_secs((attempt + 1) * 5)).await;
+                    }
                 }
-                Err(_) => {}
             }
         }
-        Err(anyhow!("CERSEI API failed after retries"))
+        Err(anyhow!(
+            "CERSEI API failed after retries: {}",
+            last_err.unwrap_or_else(|| "unknown error".into())
+        ))
     }
 
     /// Upsert a single CERSEI entry into the catalog.
