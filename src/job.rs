@@ -1,29 +1,29 @@
 use crate::app_state::{AppContext, AppState, ExternalServicesContext};
-use std::sync::Arc;
 use crate::automatch::AutoMatch;
 use crate::autoscrape::Autoscrape;
 use crate::auxiliary_matcher::AuxiliaryMatcher;
+use crate::code_fragment;
 use crate::coordinate_matcher::CoordinateMatcher;
+use crate::job_progress::{
+    JobProgress, merge_offset_into_json, merge_progress_into_json,
+    merge_progress_with_cursor_into_json,
+};
 use crate::job_row::JobRow;
 use crate::job_status::JobStatus;
 use crate::maintenance::Maintenance;
 use crate::match_state::MatchState;
 use crate::microsync::Microsync;
-use crate::code_fragment;
 use crate::php_wrapper::PhpWrapper;
 use crate::task_size::TaskSize;
 use crate::taxon_matcher::TaxonMatcher;
 use crate::update_catalog::UpdateCatalog;
-use crate::job_progress::{
-    JobProgress, merge_offset_into_json, merge_progress_into_json,
-    merge_progress_with_cursor_into_json,
-};
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use chrono::Duration;
 use chrono::Local;
 use futures::future::BoxFuture;
 use log::info;
+use std::sync::Arc;
 use wikimisc::timestamp::TimeStamp;
 
 /// A trait that allows to manage temporary job data (eg offset)
@@ -187,17 +187,15 @@ impl Job {
         // server-side DB query left behind is mopped up by
         // `max_statement_time` and the periodic reaper. The job is
         // marked Failed via the usual `run_error` path.
-        let res = match tokio::time::timeout(
-            std::time::Duration::from_secs(budget),
-            self.run_this_job(),
-        )
-        .await
-        {
-            Ok(r) => r,
-            Err(_) => Err(anyhow!(
-                "job exceeded {budget}s wall-clock budget for action '{action}'"
-            )),
-        };
+        let res =
+            match tokio::time::timeout(std::time::Duration::from_secs(budget), self.run_this_job())
+                .await
+            {
+                Ok(r) => r,
+                Err(_) => Err(anyhow!(
+                    "job exceeded {budget}s wall-clock budget for action '{action}'"
+                )),
+            };
         match res {
             Ok(_) => self.run_ok(catalog_id, action).await?,
             Err(e) => self.run_error(catalog_id, &action, &e).await?,
@@ -338,7 +336,14 @@ impl Job {
         user_id: usize,
     ) -> Result<usize> {
         app.storage()
-            .jobs_queue_simple_job(catalog_id, action, depends_on, "TODO", TimeStamp::now(), user_id)
+            .jobs_queue_simple_job(
+                catalog_id,
+                action,
+                depends_on,
+                "TODO",
+                TimeStamp::now(),
+                user_id,
+            )
             .await
     }
 
@@ -518,8 +523,7 @@ impl Job {
 // deletion.
 
 /// Erased async-fn signature every job handler is wrapped to.
-type JobHandlerFn =
-    for<'a> fn(&'a mut Job, usize) -> BoxFuture<'a, Result<()>>;
+type JobHandlerFn = for<'a> fn(&'a mut Job, usize) -> BoxFuture<'a, Result<()>>;
 
 /// Build a `(action, handler)` entry that delegates to the
 /// [`automatch::Matcher`] registry. Each `automatch_*` /
@@ -531,13 +535,18 @@ type JobHandlerFn =
 /// place.
 macro_rules! matcher_action {
     ($action:literal) => {
-        ($action, ((|job, catalog_id| Box::pin(async move {
-            let mut am = AutoMatch::new(Arc::clone(&job.app));
-            am.set_current_job(job);
-            crate::automatch::run_matcher_for_action($action, &mut am, catalog_id)
-                .await
-                .ok_or_else(|| anyhow!("Matcher registry missing action: {}", $action))?
-        })) as JobHandlerFn))
+        (
+            $action,
+            ((|job, catalog_id| {
+                Box::pin(async move {
+                    let mut am = AutoMatch::new(Arc::clone(&job.app));
+                    am.set_current_job(job);
+                    crate::automatch::run_matcher_for_action($action, &mut am, catalog_id)
+                        .await
+                        .ok_or_else(|| anyhow!("Matcher registry missing action: {}", $action))?
+                })
+            }) as JobHandlerFn),
+        )
     };
 }
 
@@ -545,9 +554,12 @@ macro_rules! matcher_action {
 /// Maintenance methods (~70% of the maintenance group).
 macro_rules! maintenance_no_arg {
     ($action:literal, $method:ident) => {
-        ($action, ((|job, _catalog_id| Box::pin(async move {
-            Maintenance::new(Arc::clone(&job.app)).$method().await
-        })) as JobHandlerFn))
+        (
+            $action,
+            ((|job, _catalog_id| {
+                Box::pin(async move { Maintenance::new(Arc::clone(&job.app)).$method().await })
+            }) as JobHandlerFn),
+        )
     };
 }
 
@@ -555,9 +567,16 @@ macro_rules! maintenance_no_arg {
 /// methods that take catalog_id.
 macro_rules! maintenance_with_cat {
     ($action:literal, $method:ident) => {
-        ($action, ((|job, catalog_id| Box::pin(async move {
-            Maintenance::new(Arc::clone(&job.app)).$method(catalog_id).await
-        })) as JobHandlerFn))
+        (
+            $action,
+            ((|job, catalog_id| {
+                Box::pin(async move {
+                    Maintenance::new(Arc::clone(&job.app))
+                        .$method(catalog_id)
+                        .await
+                })
+            }) as JobHandlerFn),
+        )
     };
 }
 
@@ -623,7 +642,6 @@ const JOB_HANDLER_REGISTRY: &[(&str, JobHandlerFn)] = &[
     maintenance_no_arg!("create_match_person_dates",               create_match_person_dates_jobs_for_catalogs),
     maintenance_no_arg!("maintenance_artwork",                     artwork),
     maintenance_no_arg!("maintenance_automatch",                   automatch),
-    maintenance_no_arg!("maintenance_auxiliary_item_values",       fix_auxiliary_item_values),
     maintenance_no_arg!("maintenance_common_aux",                  common_aux),
     maintenance_no_arg!("maintenance_common_names_birth_year",     common_names_birth_year),
     maintenance_no_arg!("maintenance_common_names_dates",          common_names_dates),
@@ -932,8 +950,7 @@ mod tests {
             );
         }
         assert!(
-            DEFAULT_ACTION_TIMEOUT_SECS >= ONE_MINUTE
-                && DEFAULT_ACTION_TIMEOUT_SECS <= ONE_DAY
+            DEFAULT_ACTION_TIMEOUT_SECS >= ONE_MINUTE && DEFAULT_ACTION_TIMEOUT_SECS <= ONE_DAY
         );
     }
 

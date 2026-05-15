@@ -31,26 +31,7 @@ CREATE TABLE `aliases` (
   UNIQUE KEY `language` (`language`,`label`,`entry_id`),
   KEY `entry_id` (`entry_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci;
-/*!40101 SET character_set_client = @saved_cs_client */;
-/*!40101 SET @saved_cs_client     = @@character_set_client */;
-/*!40101 SET character_set_client = utf8mb4 */;
-CREATE TABLE `auth_control_gender` (
-  `id` int(11) unsigned NOT NULL AUTO_INCREMENT,
-  `property` int(11) NOT NULL,
-  `total` int(11) DEFAULT NULL,
-  `male` int(11) DEFAULT NULL,
-  `female` int(11) DEFAULT NULL,
-  `other` int(11) DEFAULT NULL,
-  `unknown` int(11) DEFAULT NULL,
-  `p_male` double(22,0) GENERATED ALWAYS AS (`male` / `total`) STORED,
-  `p_female` double(22,0) GENERATED ALWAYS AS (`female` / `total`) STORED,
-  `p_unknown` double(22,0) GENERATED ALWAYS AS (`unknown` / `total`) STORED,
-  `number_of_records` int(11) DEFAULT NULL,
-  `p_completed` double(22,0) GENERATED ALWAYS AS (`total` / `number_of_records`) STORED,
-  `query_failed` int(11) NOT NULL DEFAULT 0,
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `property` (`property`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci;
+
 /*!40101 SET character_set_client = @saved_cs_client */;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8mb4 */;
@@ -108,40 +89,6 @@ CREATE TABLE `auxiliary` (
   KEY `entry_id` (`entry_id`,`aux_p`),
   KEY `aux_p` (`aux_p`,`aux_name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci;
-/*!40101 SET character_set_client = @saved_cs_client */;
-/*!40101 SET @saved_cs_client     = @@character_set_client */;
-/*!40101 SET character_set_client = utf8mb4 */;
-CREATE TABLE `auxiliary_broken` (
-  `id` int(11) unsigned NOT NULL DEFAULT 0,
-  `entry_id` int(11) unsigned NOT NULL,
-  `aux_p` int(10) unsigned NOT NULL,
-  `aux_name` varchar(255) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci NOT NULL DEFAULT '',
-  `in_wikidata` tinyint(1) NOT NULL DEFAULT 0,
-  `entry_is_matched` tinyint(1) NOT NULL DEFAULT 0,
-  PRIMARY KEY (`id`),
-  KEY `aux_p` (`aux_p`,`aux_name`),
-  KEY `aux_name` (`aux_name`)
-) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
-/*!40101 SET character_set_client = @saved_cs_client */;
-/*!40101 SET @saved_cs_client     = @@character_set_client */;
-/*!40101 SET character_set_client = utf8mb4 */;
-CREATE TABLE `auxiliary_fix` (
-  `id` int(11) unsigned NOT NULL AUTO_INCREMENT,
-  `aux_p` int(10) unsigned NOT NULL,
-  `aux_name` varchar(255) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci NOT NULL DEFAULT '',
-  `label` varchar(255) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci NOT NULL,
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `aux_p` (`aux_p`,`label`)
-) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
-/*!40101 SET character_set_client = @saved_cs_client */;
-/*!40101 SET @saved_cs_client     = @@character_set_client */;
-/*!40101 SET character_set_client = utf8mb4 */;
-CREATE TABLE `auxiliary_props` (
-  `p` int(11) unsigned NOT NULL AUTO_INCREMENT,
-  `type` varchar(16) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci NOT NULL,
-  PRIMARY KEY (`p`),
-  KEY `type` (`type`)
-) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8mb4 */;

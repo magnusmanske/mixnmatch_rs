@@ -546,8 +546,7 @@ pub trait MetaEntryQueries: std::fmt::Debug + Send + Sync {
     async fn meta_entry_delete_descriptions(&self, entry_id: usize) -> Result<()>;
     async fn meta_entry_delete_mnm_relations(&self, entry_id: usize) -> Result<()>;
     async fn meta_entry_delete_kv_entries(&self, entry_id: usize) -> Result<()>;
-    async fn meta_entry_set_kv_entry(&self, entry_id: usize, key: &str, value: &str)
-    -> Result<()>;
+    async fn meta_entry_set_kv_entry(&self, entry_id: usize, key: &str, value: &str) -> Result<()>;
 }
 
 /// ISP-segregated sub-trait covering the auxiliary-matcher's two
@@ -799,11 +798,6 @@ pub trait Storage:
 
     // Maintenance
 
-    async fn maintenance_update_auxiliary_props(
-        &self,
-        prop2type: &[(String, String)],
-    ) -> Result<()>;
-    async fn maintenance_use_auxiliary_broken(&self) -> Result<()>;
     async fn maintenance_common_names_dates(&self) -> Result<()>;
     async fn maintenance_common_names_birth_year(&self) -> Result<()>;
     /// Rebuild `common_names_human` from scratch: unmatched Q5 entries
@@ -948,10 +942,7 @@ pub trait Storage:
     /// yield — same WHERE clause (`q IS NULL` + no prior `remove_q` log +
     /// `not_fully_matched`), `COUNT(*)`, no LIMIT/OFFSET. Used by the
     /// `automatch_complex` job to publish a progress percentage.
-    async fn automatch_complex_get_el_chunk_count(
-        &self,
-        catalog_id: usize,
-    ) -> Result<usize>;
+    async fn automatch_complex_get_el_chunk_count(&self, catalog_id: usize) -> Result<usize>;
 
     // Entry
 
@@ -1056,38 +1047,95 @@ pub trait Storage:
 
     async fn get_user_by_name(&self, name: &str) -> Result<Option<(usize, String, bool)>>; // returns (id, name, is_catalog_admin)
     async fn get_or_create_user_id(&self, name: &str) -> Result<usize>;
-    async fn get_users_by_ids(&self, user_ids: &[usize]) -> Result<HashMap<usize, serde_json::Value>>;
+    async fn get_users_by_ids(
+        &self,
+        user_ids: &[usize],
+    ) -> Result<HashMap<usize, serde_json::Value>>;
 
     // Bulk extended entry data (for add_extended_entry_data equivalent)
-    async fn api_get_person_dates_for_entries(&self, entry_ids: &[usize]) -> Result<HashMap<usize, (String, String)>>; // entry_id -> (born, died)
-    async fn api_get_locations_for_entries(&self, entry_ids: &[usize]) -> Result<HashMap<usize, (f64, f64)>>; // entry_id -> (lat, lon)
-    async fn api_get_multi_match_for_entries(&self, entry_ids: &[usize]) -> Result<HashMap<usize, String>>; // entry_id -> candidates string
-    async fn api_get_auxiliary_for_entries(&self, entry_ids: &[usize]) -> Result<HashMap<usize, Vec<serde_json::Value>>>; // entry_id -> aux rows
-    async fn api_get_aliases_for_entries(&self, entry_ids: &[usize]) -> Result<HashMap<usize, Vec<serde_json::Value>>>; // entry_id -> alias rows
-    async fn api_get_descriptions_for_entries(&self, entry_ids: &[usize]) -> Result<HashMap<usize, Vec<serde_json::Value>>>; // entry_id -> desc rows
-    async fn api_get_kv_for_entries(&self, entry_ids: &[usize]) -> Result<HashMap<usize, Vec<(String, String, u8)>>>; // entry_id -> (key, value, done)
-    async fn api_get_mnm_relations_for_entries(&self, entry_ids: &[usize]) -> Result<HashMap<usize, Vec<serde_json::Value>>>; // entry_id -> relation rows
+    async fn api_get_person_dates_for_entries(
+        &self,
+        entry_ids: &[usize],
+    ) -> Result<HashMap<usize, (String, String)>>; // entry_id -> (born, died)
+    async fn api_get_locations_for_entries(
+        &self,
+        entry_ids: &[usize],
+    ) -> Result<HashMap<usize, (f64, f64)>>; // entry_id -> (lat, lon)
+    async fn api_get_multi_match_for_entries(
+        &self,
+        entry_ids: &[usize],
+    ) -> Result<HashMap<usize, String>>; // entry_id -> candidates string
+    async fn api_get_auxiliary_for_entries(
+        &self,
+        entry_ids: &[usize],
+    ) -> Result<HashMap<usize, Vec<serde_json::Value>>>; // entry_id -> aux rows
+    async fn api_get_aliases_for_entries(
+        &self,
+        entry_ids: &[usize],
+    ) -> Result<HashMap<usize, Vec<serde_json::Value>>>; // entry_id -> alias rows
+    async fn api_get_descriptions_for_entries(
+        &self,
+        entry_ids: &[usize],
+    ) -> Result<HashMap<usize, Vec<serde_json::Value>>>; // entry_id -> desc rows
+    async fn api_get_kv_for_entries(
+        &self,
+        entry_ids: &[usize],
+    ) -> Result<HashMap<usize, Vec<(String, String, u8)>>>; // entry_id -> (key, value, done)
+    async fn api_get_mnm_relations_for_entries(
+        &self,
+        entry_ids: &[usize],
+    ) -> Result<HashMap<usize, Vec<serde_json::Value>>>; // entry_id -> relation rows
 
     // Catalog overview
     async fn api_get_catalog_overview(&self) -> Result<Vec<serde_json::Value>>; // Full overview with catalog+overview+user+autoscrape data
-    async fn api_get_single_catalog_overview(&self, catalog_id: usize) -> Result<serde_json::Value>;
+    async fn api_get_single_catalog_overview(&self, catalog_id: usize)
+    -> Result<serde_json::Value>;
     async fn api_get_catalog_info(&self, catalog_id: usize) -> Result<serde_json::Value>; // Lightweight: catalog row only
 
     // Catalog details (3 aggregate queries)
-    async fn api_get_catalog_type_counts(&self, catalog_id: usize) -> Result<Vec<serde_json::Value>>;
-    async fn api_get_catalog_match_by_month(&self, catalog_id: usize) -> Result<Vec<serde_json::Value>>;
-    async fn api_get_catalog_matcher_by_user(&self, catalog_id: usize) -> Result<Vec<serde_json::Value>>;
+    async fn api_get_catalog_type_counts(
+        &self,
+        catalog_id: usize,
+    ) -> Result<Vec<serde_json::Value>>;
+    async fn api_get_catalog_match_by_month(
+        &self,
+        catalog_id: usize,
+    ) -> Result<Vec<serde_json::Value>>;
+    async fn api_get_catalog_matcher_by_user(
+        &self,
+        catalog_id: usize,
+    ) -> Result<Vec<serde_json::Value>>;
 
     // Jobs
-    async fn api_get_jobs(&self, catalog_id: usize, start: usize, max: usize, status_filter: &str) -> Result<(Vec<serde_json::Value>, Vec<serde_json::Value>, usize)>; // (stats, jobs, total)
+    async fn api_get_jobs(
+        &self,
+        catalog_id: usize,
+        start: usize,
+        max: usize,
+        status_filter: &str,
+    ) -> Result<(Vec<serde_json::Value>, Vec<serde_json::Value>, usize)>; // (stats, jobs, total)
 
     // Issues
     async fn api_get_issues_count(&self, issue_type: &str, catalogs: &str) -> Result<usize>;
-    async fn api_get_issues(&self, issue_type: &str, catalogs: &str, limit: usize, offset: usize, random_threshold: f64) -> Result<Vec<serde_json::Value>>;
+    async fn api_get_issues(
+        &self,
+        issue_type: &str,
+        catalogs: &str,
+        limit: usize,
+        offset: usize,
+        random_threshold: f64,
+    ) -> Result<Vec<serde_json::Value>>;
     async fn api_get_all_issues(&self, mode: &str) -> Result<Vec<serde_json::Value>>;
 
     // Search
-    async fn api_search_entries(&self, words: &[String], options: EntrySearchOptions, exclude: &[usize], include: &[usize], max_results: usize) -> Result<Vec<Entry>>;
+    async fn api_search_entries(
+        &self,
+        words: &[String],
+        options: EntrySearchOptions,
+        exclude: &[usize],
+        include: &[usize],
+        max_results: usize,
+    ) -> Result<Vec<Entry>>;
     async fn api_search_by_q(&self, q: isize, exclude_catalogs: &[usize]) -> Result<Vec<Entry>>;
 
     // Recent changes
@@ -1128,17 +1176,40 @@ pub trait Storage:
     ///   forward from a random threshold, then wrap around to threshold 0 if nothing
     ///   matched. `active_catalogs` is ignored (PHP mirrors this, so an inactive
     ///   catalog explicitly requested by id still returns entries).
-    async fn api_get_random_entry(&self, catalog_id: usize, submode: &str, entry_type: &str, active_catalogs: &[usize]) -> Result<Option<Entry>>;
+    async fn api_get_random_entry(
+        &self,
+        catalog_id: usize,
+        submode: &str,
+        entry_type: &str,
+        active_catalogs: &[usize],
+    ) -> Result<Option<Entry>>;
     async fn api_get_active_catalog_ids(&self) -> Result<Vec<usize>>;
     async fn api_get_inactive_catalog_ids(&self) -> Result<Vec<usize>>;
 
     // Additional API support methods
     async fn api_get_wd_props(&self) -> Result<Vec<usize>>;
     async fn api_get_top_missing(&self, catalogs: &str) -> Result<Vec<serde_json::Value>>;
-    async fn api_get_common_names(&self, catalog_id: usize, type_q: &str, query: CommonNamesQuery) -> Result<Vec<serde_json::Value>>;
-    async fn api_get_locations_bbox(&self, lon_min: f64, lat_min: f64, lon_max: f64, lat_max: f64) -> Result<Vec<serde_json::Value>>;
-    async fn api_get_locations_in_catalog(&self, catalog_id: usize) -> Result<Vec<serde_json::Value>>;
-    async fn api_get_download_entries(&self, catalog_id: usize) -> Result<Vec<(isize, String, String, String, Option<usize>)>>; // (q, ext_id, ext_url, ext_name, user_id)
+    async fn api_get_common_names(
+        &self,
+        catalog_id: usize,
+        type_q: &str,
+        query: CommonNamesQuery,
+    ) -> Result<Vec<serde_json::Value>>;
+    async fn api_get_locations_bbox(
+        &self,
+        lon_min: f64,
+        lat_min: f64,
+        lon_max: f64,
+        lat_max: f64,
+    ) -> Result<Vec<serde_json::Value>>;
+    async fn api_get_locations_in_catalog(
+        &self,
+        catalog_id: usize,
+    ) -> Result<Vec<serde_json::Value>>;
+    async fn api_get_download_entries(
+        &self,
+        catalog_id: usize,
+    ) -> Result<Vec<(isize, String, String, String, Option<usize>)>>; // (q, ext_id, ext_url, ext_name, user_id)
     /// Bulk entry export for `query=download2`. Column selection and row
     /// filtering are driven entirely by `filter`; values are returned as
     /// stringified representations of the underlying MySQL types so the caller
@@ -1164,32 +1235,97 @@ pub trait Storage:
         suffix: &str,
     ) -> Result<()>;
     async fn api_edit_catalog(&self, catalog_id: usize, update: CatalogUpdate) -> Result<()>;
-    async fn api_get_catalog_overview_for_ids(&self, catalog_ids: &[usize]) -> Result<Vec<serde_json::Value>>;
-    async fn api_match_q_multi(&self, catalog_id: usize, ext_id: &str, q: isize, user_id: usize) -> Result<bool>;
+    async fn api_get_catalog_overview_for_ids(
+        &self,
+        catalog_ids: &[usize],
+    ) -> Result<Vec<serde_json::Value>>;
+    async fn api_match_q_multi(
+        &self,
+        catalog_id: usize,
+        ext_id: &str,
+        q: isize,
+        user_id: usize,
+    ) -> Result<bool>;
     async fn api_remove_all_q(&self, catalog_id: usize, q: isize) -> Result<()>;
     async fn api_remove_all_multimatches(&self, entry_id: usize) -> Result<()>;
-    async fn api_suggest(&self, catalog_id: usize, ext_id: &str, q: isize, overwrite: bool) -> Result<bool>;
-    async fn api_add_alias(&self, catalog_id: usize, ext_id: &str, language: &str, label: &str, user_id: usize) -> Result<()>;
+    async fn api_suggest(
+        &self,
+        catalog_id: usize,
+        ext_id: &str,
+        q: isize,
+        overwrite: bool,
+    ) -> Result<bool>;
+    async fn api_add_alias(
+        &self,
+        catalog_id: usize,
+        ext_id: &str,
+        language: &str,
+        label: &str,
+        user_id: usize,
+    ) -> Result<()>;
     async fn api_get_cersei_catalog(&self, scraper_id: usize) -> Result<Option<usize>>;
     async fn api_get_same_names(&self) -> Result<(String, Vec<Entry>)>;
-    async fn api_get_random_person_batch(&self, gender: &str, has_desc: bool) -> Result<Vec<serde_json::Value>>;
-    async fn api_get_property_cache(&self) -> Result<(HashMap<String, Vec<(usize, usize)>>, HashMap<String, String>)>;
+    async fn api_get_random_person_batch(
+        &self,
+        gender: &str,
+        has_desc: bool,
+    ) -> Result<Vec<serde_json::Value>>;
+    async fn api_get_property_cache(
+        &self,
+    ) -> Result<(
+        HashMap<String, Vec<(usize, usize)>>,
+        HashMap<String, String>,
+    )>;
     async fn api_get_quick_compare_list(&self) -> Result<Vec<serde_json::Value>>;
-    async fn api_get_mnm_unmatched_relations(&self, property: usize, offset: usize, limit: usize) -> Result<(Vec<(usize, usize)>, Vec<Entry>)>; // (id, cnt) pairs + entries
+    async fn api_get_mnm_unmatched_relations(
+        &self,
+        property: usize,
+        offset: usize,
+        limit: usize,
+    ) -> Result<(Vec<(usize, usize)>, Vec<Entry>)>; // (id, cnt) pairs + entries
     async fn api_get_top_groups(&self) -> Result<Vec<serde_json::Value>>;
-    async fn api_set_top_group(&self, name: &str, catalogs: &str, user_id: usize, based_on: usize) -> Result<()>;
+    async fn api_set_top_group(
+        &self,
+        name: &str,
+        catalogs: &str,
+        user_id: usize,
+        based_on: usize,
+    ) -> Result<()>;
     async fn api_remove_empty_top_group(&self, group_id: usize) -> Result<()>;
-    async fn api_set_missing_properties_status(&self, row_id: usize, status: &str, note: &str, user_id: usize) -> Result<()>;
-    async fn api_get_entries_by_q_or_value(&self, q: isize, prop_catalog_map: &HashMap<usize, Vec<usize>>, prop_values: &HashMap<usize, Vec<String>>) -> Result<Vec<Entry>>;
+    async fn api_set_missing_properties_status(
+        &self,
+        row_id: usize,
+        status: &str,
+        note: &str,
+        user_id: usize,
+    ) -> Result<()>;
+    async fn api_get_entries_by_q_or_value(
+        &self,
+        q: isize,
+        prop_catalog_map: &HashMap<usize, Vec<usize>>,
+        prop_values: &HashMap<usize, Vec<String>>,
+    ) -> Result<Vec<Entry>>;
     async fn api_get_prop2catalog(&self, props: &[usize]) -> Result<HashMap<usize, Vec<usize>>>;
     async fn api_get_missing_properties_raw(&self) -> Result<Vec<serde_json::Value>>;
-    async fn api_get_rc_log_events(&self, min_ts: &str, max_ts: &str, catalog_id: usize) -> Result<Vec<serde_json::Value>>;
+    async fn api_get_rc_log_events(
+        &self,
+        min_ts: &str,
+        max_ts: &str,
+        catalog_id: usize,
+    ) -> Result<Vec<serde_json::Value>>;
 
     // Code fragments
-    async fn get_code_fragment_lua(&self, function: &str, catalog_id: usize) -> Result<Option<String>>;
+    async fn get_code_fragment_lua(
+        &self,
+        function: &str,
+        catalog_id: usize,
+    ) -> Result<Option<String>>;
     async fn touch_code_fragment(&self, function: &str, catalog_id: usize) -> Result<()>;
     async fn clear_person_dates_for_catalog(&self, catalog_id: usize) -> Result<()>;
-    async fn get_code_fragments_for_catalog(&self, catalog_id: usize) -> Result<Vec<serde_json::Value>>;
+    async fn get_code_fragments_for_catalog(
+        &self,
+        catalog_id: usize,
+    ) -> Result<Vec<serde_json::Value>>;
     async fn get_all_code_fragment_functions(&self) -> Result<Vec<String>>;
     async fn save_code_fragment(&self, fragment: &serde_json::Value) -> Result<usize>;
     async fn get_code_examples(
@@ -1201,23 +1337,50 @@ pub trait Storage:
     ) -> Result<(Vec<serde_json::Value>, usize)>;
 
     // Jobs
-    async fn queue_job(&self, catalog_id: usize, action: &str, depends_on: Option<usize>) -> Result<usize>;
+    async fn queue_job(
+        &self,
+        catalog_id: usize,
+        action: &str,
+        depends_on: Option<usize>,
+    ) -> Result<usize>;
 
     // Micro-API: sparql_list
     async fn get_entries_by_ext_names_unmatched(&self, names: &[String]) -> Result<Vec<Entry>>;
 
     // Micro-API: get_sync
-    async fn get_catalog_wd_prop(&self, catalog_id: usize) -> Result<(Option<usize>, Option<usize>)>;
-    async fn get_mnm_matched_entries_for_sync(&self, catalog_id: usize) -> Result<Vec<(isize, String)>>;
-    async fn get_mnm_double_matches(&self, catalog_id: usize) -> Result<HashMap<String, Vec<usize>>>;
+    async fn get_catalog_wd_prop(
+        &self,
+        catalog_id: usize,
+    ) -> Result<(Option<usize>, Option<usize>)>;
+    async fn get_mnm_matched_entries_for_sync(
+        &self,
+        catalog_id: usize,
+    ) -> Result<Vec<(isize, String)>>;
+    async fn get_mnm_double_matches(
+        &self,
+        catalog_id: usize,
+    ) -> Result<HashMap<String, Vec<usize>>>;
 
     // Micro-API: creation_candidates
     async fn cc_random_pick(&self, sql: &str) -> Result<Vec<serde_json::Value>>;
     async fn cc_get_entries_by_ids_active(&self, entry_ids: &str) -> Result<Vec<Entry>>;
-    async fn cc_get_entries_by_names_active(&self, names: &[String], type_filter: Option<&str>, birth_year: Option<&str>, death_year: Option<&str>) -> Result<Vec<Entry>>;
+    async fn cc_get_entries_by_names_active(
+        &self,
+        names: &[String],
+        type_filter: Option<&str>,
+        birth_year: Option<&str>,
+        death_year: Option<&str>,
+    ) -> Result<Vec<Entry>>;
 
     // Micro-API: quick_compare
-    async fn qc_get_entries(&self, catalog_id: usize, entry_id: Option<usize>, filter: QcEntryFilter, random_threshold: f64, max_results: usize) -> Result<Vec<serde_json::Value>>;
+    async fn qc_get_entries(
+        &self,
+        catalog_id: usize,
+        entry_id: Option<usize>,
+        filter: QcEntryFilter,
+        random_threshold: f64,
+        max_results: usize,
+    ) -> Result<Vec<serde_json::Value>>;
 
     // Lightweight catalog endpoints (ported from PHP API.php)
     async fn api_search_catalogs(&self, q: &str, limit: usize) -> Result<Vec<serde_json::Value>>;
@@ -1225,7 +1388,11 @@ pub trait Storage:
     async fn api_latest_catalogs(&self, limit: usize) -> Result<Vec<serde_json::Value>>;
     async fn api_catalogs_with_locations(&self) -> Result<Vec<serde_json::Value>>;
     async fn api_catalog_property_groups(&self) -> Result<serde_json::Value>;
-    async fn api_check_wd_prop_usage(&self, wd_prop: usize, exclude_catalog: usize) -> Result<serde_json::Value>;
+    async fn api_check_wd_prop_usage(
+        &self,
+        wd_prop: usize,
+        exclude_catalog: usize,
+    ) -> Result<serde_json::Value>;
     async fn api_catalog_by_group(&self, group: &str) -> Result<serde_json::Value>;
 
     // Other ported endpoints
@@ -1237,7 +1404,12 @@ pub trait Storage:
         catalog: usize,
         limit: usize,
         offset: usize,
-    ) -> Result<(Vec<serde_json::Value>, serde_json::Value, usize, Option<serde_json::Value>)>;
+    ) -> Result<(
+        Vec<serde_json::Value>,
+        serde_json::Value,
+        usize,
+        Option<serde_json::Value>,
+    )>;
     async fn api_get_statement_text_groups(
         &self,
         catalog_id: usize,
@@ -1265,11 +1437,7 @@ pub trait Storage:
     // syncMatchesToWikidata). Both helpers join `wd_matches` against
     // `entry` and `catalog` so callers get everything they need to
     // classify or push the row in a single round-trip.
-    async fn wd_matches_get_batch(
-        &self,
-        status: &str,
-        limit: usize,
-    ) -> Result<Vec<WdMatchRow>>;
+    async fn wd_matches_get_batch(&self, status: &str, limit: usize) -> Result<Vec<WdMatchRow>>;
     async fn wd_matches_set_status(&self, entry_id: usize, status: &str) -> Result<()>;
 
     // Catalog merge (PHP CatalogMerger::merge).
@@ -1371,10 +1539,7 @@ pub trait Storage:
     /// `(id, aux_name)` for every row of `auxiliary` matching the
     /// given numeric property. Used by per-property auxiliary
     /// cleanups (`fix_gnd_undifferentiated_persons`, etc.).
-    async fn auxiliary_select_for_prop(
-        &self,
-        prop: usize,
-    ) -> Result<Vec<(usize, String)>>;
+    async fn auxiliary_select_for_prop(&self, prop: usize) -> Result<Vec<(usize, String)>>;
     /// Group `auxiliary` rows by `(aux_p, aux_name)` over the supplied
     /// property allowlist, keeping only groups with multiple entries
     /// where at least one entry isn't yet matched. Used by

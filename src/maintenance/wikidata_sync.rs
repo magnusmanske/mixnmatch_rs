@@ -6,9 +6,9 @@
 //! Wikidata says (overwrite manual matches, rebuild aux candidates).
 
 use super::Maintenance;
-use crate::entry::{Entry, EntryWriter};
 use crate::app_state::USER_AUX_MATCH;
 use crate::catalog::Catalog;
+use crate::entry::{Entry, EntryWriter};
 use crate::prop_todo::PropTodo;
 use anyhow::{Result, anyhow};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -227,24 +227,6 @@ impl Maintenance {
         Ok((properties, prop_names))
     }
 
-    pub async fn fix_auxiliary_item_values(&self) -> Result<()> {
-        self.update_auxiliary_fix_table().await?;
-        self.app
-            .storage()
-            .maintenance_use_auxiliary_broken()
-            .await?;
-        Ok(())
-    }
-
-    async fn update_auxiliary_fix_table(&self) -> Result<()> {
-        let prop2type = self.get_sparql_prop2type().await?;
-        self.app
-            .storage()
-            .maintenance_update_auxiliary_props(&prop2type)
-            .await?;
-        Ok(())
-    }
-
     pub(super) async fn get_sparql_prop2type(&self) -> Result<Vec<(String, String)>> {
         let sparql = "SELECT ?p ?type { ?p a wikibase:Property; wikibase:propertyType ?type }";
         let mut reader = self.app.wikidata().load_sparql_csv(sparql).await?;
@@ -438,9 +420,7 @@ impl Maintenance {
         }
         let parts: Vec<&str> = url_pattern.splitn(2, "$1").collect();
         if parts.len() != 2 {
-            return Err(anyhow!(
-                "url_pattern '{url_pattern}' does not contain '$1'"
-            ));
+            return Err(anyhow!("url_pattern '{url_pattern}' does not contain '$1'"));
         }
         self.app
             .storage()

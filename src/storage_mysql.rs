@@ -80,6 +80,51 @@ fn halve_batch_for_retry(batch_size: usize) -> usize {
     (batch_size / 2).max(1)
 }
 
+/// Parsed shape of the `group` token consumed by `api_catalog_by_group`.
+/// Keeps classification (pure, easily testable) separate from SQL
+/// assembly (impure, DB-touching) and from quote-escaping (which
+/// belongs at the format!() boundary, not in the parser).
+#[derive(Debug, PartialEq, Eq)]
+enum CatalogGroup {
+    /// All active catalogs.
+    All,
+    /// Active catalogs lacking a wikidata property.
+    NoProperty,
+    /// Catalogs whose Wikidata `wd_prop` matches a property looked up
+    /// in `property_cache` by group + label. `prop_group=31` for the
+    /// `ig_*` prefix, `17` for `country_*`. `label` has underscores
+    /// already turned back into spaces but is otherwise verbatim — SQL
+    /// escaping is the assembly site's responsibility.
+    PropLabel { prop_group: u8, label: String },
+    /// Catalog `type` column match (e.g. `person`, `place`). Verbatim;
+    /// SQL escaping happens at the format!() boundary.
+    Type(String),
+}
+
+impl CatalogGroup {
+    fn parse(group: &str) -> Self {
+        if group == "all" {
+            return Self::All;
+        }
+        if group == "ig_no_property" {
+            return Self::NoProperty;
+        }
+        if let Some(rest) = group.strip_prefix("ig_") {
+            return Self::PropLabel {
+                prop_group: 31,
+                label: rest.replace('_', " "),
+            };
+        }
+        if let Some(rest) = group.strip_prefix("country_") {
+            return Self::PropLabel {
+                prop_group: 17,
+                label: rest.replace('_', " "),
+            };
+        }
+        Self::Type(group.to_owned())
+    }
+}
+
 #[derive(Debug)]
 pub struct StorageMySQL {
     pool: mysql_async::Pool,
@@ -1113,46 +1158,6 @@ impl Storage for StorageMySQL {
     // for StorageMySQL` (further down in this file).
 
     // Maintenance
-
-    async fn maintenance_update_auxiliary_props(
-        &self,
-        prop2type: &[(String, String)],
-    ) -> Result<()> {
-        if prop2type.is_empty() {
-            return Ok(());
-        }
-        let mut parts = vec![];
-        let mut params = vec![];
-        for (prop, prop_type) in prop2type {
-            let prop = prop.as_str()[1..].to_string(); // Remove leading P
-            parts.push(format!("({prop},?)"));
-            params.push(prop_type.clone());
-        }
-        let sql = format!(
-            "INSERT INTO `auxiliary_props` (`p`, `type`) VALUES {}",
-            parts.join(",")
-        );
-
-        let mut conn = self.get_conn().await?;
-        conn.exec_drop("TRUNCATE `auxiliary_props`", ()).await?;
-        conn.exec_drop(sql, params).await?;
-        Ok(())
-    }
-
-    async fn maintenance_use_auxiliary_broken(&self) -> Result<()> {
-        let sqls = [
-            r#"UPDATE auxiliary a INNER JOIN auxiliary_fix af ON a.aux_p=af.aux_p AND a.aux_name=af.label SET a.aux_name=af.aux_name"#,
-            r#"INSERT IGNORE INTO auxiliary_broken SELECT * FROM auxiliary WHERE aux_name NOT RLIKE "^Q\\d+$" AND aux_p IN (SELECT q FROM auxiliary_props WHERE `type`="WikibaseItem")"#,
-            r#"DELETE FROM auxiliary WHERE aux_name NOT RLIKE "^Q\\d+$" AND aux_p IN (SELECT p FROM auxiliary_props WHERE `type`="WikibaseItem")"#,
-            r#"UPDATE auxiliary_broken a INNER JOIN auxiliary_fix af ON a.aux_p=af.aux_p AND a.aux_name=af.label SET a.aux_name=af.aux_name"#,
-            r#"INSERT IGNORE INTO auxiliary SELECT * FROM auxiliary_broken WHERE aux_name RLIKE "^Q\\d+$""#,
-            r#"DELETE FROM auxiliary_broken WHERE aux_name RLIKE "^Q\\d+$""#,
-        ];
-        for sql in sqls {
-            self.get_conn().await?.exec_drop(sql, ()).await?;
-        }
-        Ok(())
-    }
 
     async fn maintenance_common_names_dates(&self) -> Result<()> {
         // Build results into a session-local TEMPORARY TABLE first (no global DDL lock
@@ -5116,42 +5121,33 @@ impl Storage for StorageMySQL {
 
     async fn api_catalog_by_group(&self, group: &str) -> Result<Value> {
         let mut conn = self.get_conn_ro().await?;
-        // Build the WHERE clause based on the group token
-        let group_safe = group.replace('\'', "''");
-        let where_clause: String = if group == "all" {
-            "c.active = 1".into()
-        } else if group == "ig_no_property" {
-            "c.active = 1 AND (c.wd_prop IS NULL OR c.wd_prop = 0)".into()
-        } else if group.starts_with("ig_") || group.starts_with("country_") {
-            let prop_group = if group.starts_with("ig_") { 31 } else { 17 };
-            let label_raw = if let Some(rest) = group.strip_prefix("ig_") {
-                rest
-            } else {
-                group.strip_prefix("country_").unwrap_or("")
-            };
-            let label = label_raw.replace('_', " ").replace('\'', "''");
-            let sql = format!(
-                "SELECT DISTINCT property FROM property_cache WHERE prop_group = {prop_group} AND LOWER(label) = LOWER('{label}')"
-            );
-            let props: Vec<usize> = conn
-                .exec_iter(sql, ())
-                .await?
-                .map_and_drop(from_row::<usize>)
-                .await?;
-            if props.is_empty() {
-                return Ok(json!({}));
+        let where_clause: String = match CatalogGroup::parse(group) {
+            CatalogGroup::All => "c.active = 1".into(),
+            CatalogGroup::NoProperty => {
+                "c.active = 1 AND (c.wd_prop IS NULL OR c.wd_prop = 0)".into()
             }
-            format!(
-                "c.active = 1 AND c.wd_qual IS NULL AND c.wd_prop IN ({})",
-                props
-                    .iter()
-                    .map(|p| p.to_string())
-                    .collect::<Vec<_>>()
-                    .join(",")
-            )
-        } else {
-            // Type group
-            format!("c.active = 1 AND c.type = '{group_safe}'")
+            CatalogGroup::PropLabel { prop_group, label } => {
+                let label_safe = label.replace('\'', "''");
+                let sql = format!(
+                    "SELECT DISTINCT property FROM property_cache WHERE prop_group = {prop_group} AND LOWER(label) = LOWER('{label_safe}')"
+                );
+                let props: Vec<usize> = conn
+                    .exec_iter(sql, ())
+                    .await?
+                    .map_and_drop(from_row::<usize>)
+                    .await?;
+                if props.is_empty() {
+                    return Ok(json!({}));
+                }
+                format!(
+                    "c.active = 1 AND c.wd_qual IS NULL AND c.wd_prop IN ({})",
+                    props.iter().join(",")
+                )
+            }
+            CatalogGroup::Type(t) => {
+                let type_safe = t.replace('\'', "''");
+                format!("c.active = 1 AND c.type = '{type_safe}'")
+            }
         };
 
         let sql = format!(
@@ -7549,6 +7545,69 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
+    // CatalogGroup parser (api_catalog_by_group classification)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn catalog_group_parse_all() {
+        assert!(matches!(CatalogGroup::parse("all"), CatalogGroup::All));
+    }
+
+    #[test]
+    fn catalog_group_parse_no_property() {
+        assert!(matches!(
+            CatalogGroup::parse("ig_no_property"),
+            CatalogGroup::NoProperty
+        ));
+    }
+
+    #[test]
+    fn catalog_group_parse_ig_with_underscores_replaces_them_with_spaces() {
+        match CatalogGroup::parse("ig_chemical_compound") {
+            CatalogGroup::PropLabel { prop_group, label } => {
+                assert_eq!(prop_group, 31);
+                assert_eq!(label, "chemical compound");
+            }
+            other => panic!("expected PropLabel, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn catalog_group_parse_country_uses_prop_group_17() {
+        match CatalogGroup::parse("country_united_kingdom") {
+            CatalogGroup::PropLabel { prop_group, label } => {
+                assert_eq!(prop_group, 17);
+                assert_eq!(label, "united kingdom");
+            }
+            other => panic!("expected PropLabel, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn catalog_group_parse_type_passes_through_unchanged() {
+        // Type strings reach the SQL layer un-escaped — `ig_no_property`
+        // is the special case, not "no_property" with an `ig_` prefix.
+        // Quote escaping for the dynamic SQL belongs at the format!()
+        // call site, not the parser.
+        match CatalogGroup::parse("person") {
+            CatalogGroup::Type(s) => assert_eq!(s, "person"),
+            other => panic!("expected Type, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn catalog_group_parse_ig_with_apostrophe_preserves_it() {
+        // The parser keeps SQL-unsafe characters verbatim; the SQL
+        // assembly site is responsible for quote-doubling. This pins
+        // the boundary so a future "let me also sanitise in parse"
+        // change can't silently double-escape.
+        match CatalogGroup::parse("ig_o'reilly") {
+            CatalogGroup::PropLabel { label, .. } => assert_eq!(label, "o'reilly"),
+            other => panic!("expected PropLabel, got {other:?}"),
+        }
+    }
+
+    // ---------------------------------------------------------------
     // automatch_by_search page-fetch: aliases-split + 1969 retry
     // ---------------------------------------------------------------
 
@@ -7590,8 +7649,7 @@ mod tests {
             message: "Query execution was interrupted (max_statement_time exceeded)".into(),
             state: "70100".into(),
         });
-        let ae: anyhow::Error =
-            anyhow::Error::from(me).context("automatch_by_search_fetch_page");
+        let ae: anyhow::Error = anyhow::Error::from(me).context("automatch_by_search_fetch_page");
         assert!(is_max_statement_time_err(&ae));
     }
 
@@ -7682,8 +7740,7 @@ mod tests {
     #[tokio::test]
     async fn automatch_by_search_get_results_respects_after_id_and_batch_size() {
         let app = test_support::test_app().await;
-        let (catalog_id, first_id) =
-            test_support::seed_entry_with_name("E1").await.unwrap();
+        let (catalog_id, first_id) = test_support::seed_entry_with_name("E1").await.unwrap();
         let second_id = test_support::seed_entry_in_catalog(catalog_id, "E2")
             .await
             .unwrap();

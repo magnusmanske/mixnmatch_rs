@@ -581,6 +581,62 @@ pub fn run_person_date(lua_code: &str, entry: &LuaEntry) -> Result<PersonDateRes
     Ok(PersonDateResult { born, died })
 }
 
+/// Read `key` from globals as a 2-slot Lua table, pulling slots `[1]` and
+/// `[2]` as the same type `T`. Returns `None` if the table is missing or
+/// either slot fails to convert — exactly the "both required" semantics
+/// the per-branch hand-rolled blocks used to encode.
+fn read_pair<T: mlua::FromLua>(lua: &Lua, key: &str) -> Option<(T, T)> {
+    let table: mlua::Table = lua.globals().get(key).ok()?;
+    let a: T = table.get(1).ok()?;
+    let b: T = table.get(2).ok()?;
+    Some((a, b))
+}
+
+/// Collect `key` from globals as a Lua list, yielding one `T` per `pairs`
+/// entry. Returns an empty `Vec` if the table is missing. Per-entry
+/// conversion failures are silently skipped (matches the pre-extraction
+/// `.flatten()` shape on `pairs`).
+fn collect_list<T: mlua::FromLua>(lua: &Lua, key: &str) -> Vec<T> {
+    let Ok(table) = lua.globals().get::<mlua::Table>(key) else {
+        return vec![];
+    };
+    table.pairs::<i64, T>().flatten().map(|(_, v)| v).collect()
+}
+
+/// Collect `key` from globals as a Lua list of 2-slot sub-tables, mapping
+/// each row to `(K, V)` via slots `[1]` and `[2]`. Rows whose slot 1 or 2
+/// fail to convert are skipped — matches the `.unwrap_or_default()` /
+/// `continue` shape the per-branch blocks used.
+fn collect_pair_list<K: mlua::FromLua, V: mlua::FromLua>(
+    lua: &Lua,
+    key: &str,
+) -> Vec<(K, V)> {
+    let Ok(table) = lua.globals().get::<mlua::Table>(key) else {
+        return vec![];
+    };
+    let mut out = Vec::new();
+    for (_, row) in table.pairs::<i64, mlua::Table>().flatten() {
+        if let (Ok(k), Ok(v)) = (row.get::<K>(1), row.get::<V>(2)) {
+            out.push((k, v));
+        }
+    }
+    out
+}
+
+/// Coerce a Lua value (Integer | Number | String) to its decimal/string
+/// representation. Used for `aux[…]` rows whose property slot can be
+/// either a P-number literal (`"P345"`) or a bare integer (`214`). Other
+/// shapes (nil, boolean, table…) return `None`, causing the caller to
+/// skip the row — same behaviour as the pre-extraction match.
+fn lua_value_to_prop_string(value: &Value) -> Option<String> {
+    match value {
+        Value::Integer(n) => Some(n.to_string()),
+        Value::String(s) => Some(s.to_string_lossy().to_string()),
+        Value::Number(n) => Some((*n as i64).to_string()),
+        _ => None,
+    }
+}
+
 /// Run a DESC_FROM_HTML Lua code fragment.
 pub fn run_desc_from_html(
     lua_code: &str,
@@ -608,72 +664,22 @@ pub fn run_desc_from_html(
 
     lua.load(lua_code).exec().map_err(lua_err)?;
 
-    // Collect results
-    let born = lua.globals().get::<String>("born").unwrap_or_default();
-    let died = lua.globals().get::<String>("died").unwrap_or_default();
-    let mut result = DescFromHtmlResult { born, died, ..DescFromHtmlResult::default() };
+    let aux = collect_pair_list::<Value, String>(&lua, "aux")
+        .into_iter()
+        .filter_map(|(raw_prop, val)| Some((lua_value_to_prop_string(&raw_prop)?, val)))
+        .collect();
 
-    // Read d[] (descriptions)
-    if let Ok(d) = lua.globals().get::<mlua::Table>("d") {
-        for (_, v) in d.pairs::<i64, String>().flatten() {
-            result.descriptions.push(v);
-        }
-    }
-
-    // Read change_type
-    if let Ok(ct) = lua.globals().get::<mlua::Table>("change_type") {
-        let ct1: Option<String> = ct.get(1).ok();
-        let ct2: Option<String> = ct.get(2).ok();
-        if let (Some(from), Some(to)) = (ct1, ct2) {
-            result.change_type = Some((from, to));
-        }
-    }
-
-    // Read change_name
-    if let Ok(cn) = lua.globals().get::<mlua::Table>("change_name") {
-        let cn1: Option<String> = cn.get(1).ok();
-        let cn2: Option<String> = cn.get(2).ok();
-        if let (Some(from), Some(to)) = (cn1, cn2) {
-            result.change_name = Some((from, to));
-        }
-    }
-
-    // Read location
-    if let Ok(loc) = lua.globals().get::<mlua::Table>("location") {
-        let lat: Option<f64> = loc.get(1).ok();
-        let lon: Option<f64> = loc.get(2).ok();
-        if let (Some(lat), Some(lon)) = (lat, lon) {
-            result.location = Some((lat, lon));
-        }
-    }
-
-    // Read aux
-    if let Ok(aux_table) = lua.globals().get::<mlua::Table>("aux") {
-        for (_, t) in aux_table.pairs::<i64, mlua::Table>().flatten() {
-            let prop: String = match t.get::<Value>(1) {
-                Ok(Value::Integer(n)) => n.to_string(),
-                Ok(Value::String(s)) => s.to_string_lossy().to_string(),
-                Ok(Value::Number(n)) => (n as i64).to_string(),
-                _ => continue,
-            };
-            let val: String = t.get(2).unwrap_or_default();
-            result.aux.push((prop, val));
-        }
-    }
-
-    // Read location_texts
-    if let Ok(lt_table) = lua.globals().get::<mlua::Table>("location_texts") {
-        for (_, t) in lt_table.pairs::<i64, mlua::Table>().flatten() {
-            let prop: usize = t.get(1).unwrap_or_default();
-            let val: String = t.get(2).unwrap_or_default();
-            result.location_texts.push((prop, val));
-        }
-    }
-
-    // Read commands from callback functions
-    result.commands = collect_commands(&lua)?;
-
-    Ok(result)
+    Ok(DescFromHtmlResult {
+        born: lua.globals().get::<String>("born").unwrap_or_default(),
+        died: lua.globals().get::<String>("died").unwrap_or_default(),
+        descriptions: collect_list::<String>(&lua, "d"),
+        change_type: read_pair::<String>(&lua, "change_type"),
+        change_name: read_pair::<String>(&lua, "change_name"),
+        location: read_pair::<f64>(&lua, "location"),
+        aux,
+        location_texts: collect_pair_list::<usize, String>(&lua, "location_texts"),
+        commands: collect_commands(&lua)?,
+    })
 }
 
 /// Run an AUX_FROM_DESC Lua code fragment.
@@ -1421,6 +1427,59 @@ died = string.match(html, "Died: (%d%d%d%d)") or ""
         let result = run_desc_from_html(lua, &entry, html).unwrap();
         assert_eq!(result.born, "1850");
         assert_eq!(result.died, "1920");
+    }
+
+    #[test]
+    fn test_desc_from_html_change_name() {
+        // Pinned: change_name = {from, to} becomes Some((from, to)).
+        let lua = r#"change_name = {"Old Name", "New Name"}"#;
+        let result = run_desc_from_html(lua, &test_entry(), "").unwrap();
+        assert_eq!(
+            result.change_name,
+            Some(("Old Name".into(), "New Name".into()))
+        );
+    }
+
+    #[test]
+    fn test_desc_from_html_change_name_missing_slot_yields_none() {
+        // Pinned: a half-populated `change_name` table must not produce
+        // a partial Some — both slots required.
+        let lua = r#"change_name = {"Old Name"}"#;
+        let result = run_desc_from_html(lua, &test_entry(), "").unwrap();
+        assert!(result.change_name.is_none());
+    }
+
+    #[test]
+    fn test_desc_from_html_location() {
+        // Pinned: location = {lat, lon} → Some((lat, lon)) as f64.
+        let lua = r#"location = {52.5, 13.4}"#;
+        let result = run_desc_from_html(lua, &test_entry(), "").unwrap();
+        assert_eq!(result.location, Some((52.5, 13.4)));
+    }
+
+    #[test]
+    fn test_desc_from_html_location_texts() {
+        // Pinned: location_texts is a list of (prop:usize, text:String)
+        // pairs. Two entries appended in Lua should round-trip in order.
+        let lua = r#"
+location_texts[#location_texts+1] = {19, "Berlin"}
+location_texts[#location_texts+1] = {20, "Hamburg"}
+"#;
+        let result = run_desc_from_html(lua, &test_entry(), "").unwrap();
+        assert_eq!(
+            result.location_texts,
+            vec![(19usize, "Berlin".into()), (20usize, "Hamburg".into())]
+        );
+    }
+
+    #[test]
+    fn test_desc_from_html_aux_string_property_coerces() {
+        // Pinned: aux entries with a *string* property (e.g. "P345")
+        // are preserved verbatim alongside the integer-property path
+        // covered by `test_desc_from_html_with_aux`.
+        let lua = r#"aux[#aux+1] = {"P345", "tt0123456"}"#;
+        let result = run_desc_from_html(lua, &test_entry(), "").unwrap();
+        assert_eq!(result.aux, vec![("P345".into(), "tt0123456".into())]);
     }
 
     // ---- re_match / re_test / re_find_all / re_sub tests ----

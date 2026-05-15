@@ -193,7 +193,6 @@ export default Vue.extend({
 			</div>
 			<!--
 				TODO
-				auth_control_gender
 				entry_creation
 				kv_entry
 				top_missing_groups (to fill catalogs_yes)

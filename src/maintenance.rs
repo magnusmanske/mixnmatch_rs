@@ -20,11 +20,11 @@ mod cleanup;
 mod wikidata_sync;
 
 use crate::app_state::{AppContext, USER_DATE_MATCH};
-use std::sync::Arc;
 use crate::catalog::Catalog;
 use crate::entry::{Entry, EntryWriter};
 use crate::job::Job;
 use anyhow::Result;
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct Maintenance {
@@ -125,10 +125,15 @@ impl Maintenance {
             .await?;
         for catalog_id in catalog_ids {
             let mut catalog = Catalog::from_id(catalog_id, self.app.as_ref()).await?;
-            catalog.set_has_person_date(self.app.as_ref(), "yes").await?;
-            Job::queue_simple_job(self.app.as_ref(), catalog_id, "match_person_dates", None).await?;
-            Job::queue_simple_job(self.app.as_ref(), catalog_id, "match_on_birthdate", None).await?;
-            Job::queue_simple_job(self.app.as_ref(), catalog_id, "match_on_deathdate", None).await?;
+            catalog
+                .set_has_person_date(self.app.as_ref(), "yes")
+                .await?;
+            Job::queue_simple_job(self.app.as_ref(), catalog_id, "match_person_dates", None)
+                .await?;
+            Job::queue_simple_job(self.app.as_ref(), catalog_id, "match_on_birthdate", None)
+                .await?;
+            Job::queue_simple_job(self.app.as_ref(), catalog_id, "match_on_deathdate", None)
+                .await?;
         }
         Ok(())
     }
@@ -162,8 +167,8 @@ mod tests {
     use crate::match_state::MatchState;
     use crate::{
         app_state::get_test_app,
-        test_support,
         entry::{Entry, EntryWriter},
+        test_support,
     };
 
     #[test]
@@ -231,7 +236,10 @@ mod tests {
         let app = test_support::test_app().await;
         let (catalog_id, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
         let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
-        EntryWriter::new(&app, &mut entry).set_match("Q16456", 0).await.unwrap();
+        EntryWriter::new(&app, &mut entry)
+            .set_match("Q16456", 0)
+            .await
+            .unwrap();
         app.storage()
             .maintenance_unlink_item_matches(catalog_id, vec!["16456".to_string()])
             .await
@@ -248,7 +256,10 @@ mod tests {
         let app = test_support::test_app().await;
         let (catalog_id, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
         let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
-        EntryWriter::new(&app, &mut entry).set_match("Q16456", 2).await.unwrap();
+        EntryWriter::new(&app, &mut entry)
+            .set_match("Q16456", 2)
+            .await
+            .unwrap();
         app.storage()
             .maintenance_unlink_item_matches(catalog_id, vec!["16456".to_string()])
             .await
@@ -268,9 +279,15 @@ mod tests {
         let (catalog_a, entry_a) = test_support::seed_minimal_entry(&app).await.unwrap();
         let (_catalog_b, entry_b) = test_support::seed_minimal_entry(&app).await.unwrap();
         let mut e_a = Entry::from_id(entry_a, &app).await.unwrap();
-        EntryWriter::new(&app, &mut e_a).set_match("Q16456", 0).await.unwrap();
+        EntryWriter::new(&app, &mut e_a)
+            .set_match("Q16456", 0)
+            .await
+            .unwrap();
         let mut e_b = Entry::from_id(entry_b, &app).await.unwrap();
-        EntryWriter::new(&app, &mut e_b).set_match("Q16456", 0).await.unwrap();
+        EntryWriter::new(&app, &mut e_b)
+            .set_match("Q16456", 0)
+            .await
+            .unwrap();
         app.storage()
             .maintenance_unlink_item_matches(catalog_a, vec!["16456".to_string()])
             .await
@@ -292,10 +309,17 @@ mod tests {
         let app = test_support::test_app().await;
         let (catalog_id, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
         let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
-        EntryWriter::new(&app, &mut entry).set_match("Q85756032", 2).await.unwrap();
-        test_support::seed_wdt_redirect("Q85756032", "Q3819700").await.unwrap();
+        EntryWriter::new(&app, &mut entry)
+            .set_match("Q85756032", 2)
+            .await
+            .unwrap();
+        test_support::seed_wdt_redirect("Q85756032", "Q3819700")
+            .await
+            .unwrap();
         let ms = Maintenance::new(Arc::new(app.clone()));
-        ms.fix_redirects(catalog_id, &MatchState::fully_matched()).await.unwrap();
+        ms.fix_redirects(catalog_id, &MatchState::fully_matched())
+            .await
+            .unwrap();
         let entry_after = Entry::from_id(entry_id, &app).await.unwrap();
         assert_eq!(entry_after.q, Some(3819700));
     }
@@ -307,10 +331,15 @@ mod tests {
         let app = test_support::test_app().await;
         let (catalog_id, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
         let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
-        EntryWriter::new(&app, &mut entry).set_match("Q115205673", 0).await.unwrap();
+        EntryWriter::new(&app, &mut entry)
+            .set_match("Q115205673", 0)
+            .await
+            .unwrap();
         // Q115205673 intentionally not seeded in `page` → treated as deleted
         let ms = Maintenance::new(Arc::new(app.clone()));
-        ms.unlink_deleted_items(catalog_id, &MatchState::any_matched()).await.unwrap();
+        ms.unlink_deleted_items(catalog_id, &MatchState::any_matched())
+            .await
+            .unwrap();
         let entry_after = Entry::from_id(entry_id, &app).await.unwrap();
         assert_eq!(entry_after.q, None);
     }
@@ -326,9 +355,15 @@ mod tests {
         let (_catalog_auto, entry_auto) = test_support::seed_minimal_entry(&app).await.unwrap();
         let (_catalog_manual, entry_manual) = test_support::seed_minimal_entry(&app).await.unwrap();
         let mut e_auto = Entry::from_id(entry_auto, &app).await.unwrap();
-        EntryWriter::new(&app, &mut e_auto).set_match("Q999000111", 0).await.unwrap();
+        EntryWriter::new(&app, &mut e_auto)
+            .set_match("Q999000111", 0)
+            .await
+            .unwrap();
         let mut e_manual = Entry::from_id(entry_manual, &app).await.unwrap();
-        EntryWriter::new(&app, &mut e_manual).set_match("Q999000111", 7).await.unwrap();
+        EntryWriter::new(&app, &mut e_manual)
+            .set_match("Q999000111", 7)
+            .await
+            .unwrap();
 
         app.storage()
             .maintenance_apply_deletions(vec![999_000_111])
@@ -357,10 +392,15 @@ mod tests {
         let app = test_support::test_app().await;
         let (catalog_id, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
         let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
-        EntryWriter::new(&app, &mut entry).set_match("Q115205673", 2).await.unwrap();
+        EntryWriter::new(&app, &mut entry)
+            .set_match("Q115205673", 2)
+            .await
+            .unwrap();
         // Q115205673 intentionally not seeded in `page` → would be flagged as deleted
         let ms = Maintenance::new(Arc::new(app.clone()));
-        ms.unlink_deleted_items(catalog_id, &MatchState::any_matched()).await.unwrap();
+        ms.unlink_deleted_items(catalog_id, &MatchState::any_matched())
+            .await
+            .unwrap();
         let after = Entry::from_id(entry_id, &app).await.unwrap();
         assert_eq!(after.q, Some(115205673), "manual match must be preserved");
         assert_eq!(after.user, Some(2));
@@ -372,7 +412,9 @@ mod tests {
     async fn test_update_ext_urls_rejects_zero_catalog() {
         let app = test_support::test_app().await;
         let ms = Maintenance::new(Arc::new(app.clone()));
-        let err = ms.update_ext_urls_from_pattern(0, "https://example.com/$1").await;
+        let err = ms
+            .update_ext_urls_from_pattern(0, "https://example.com/$1")
+            .await;
         assert!(err.is_err(), "catalog_id=0 must be rejected");
     }
 
@@ -381,7 +423,9 @@ mod tests {
         let app = test_support::test_app().await;
         let (catalog_id, _entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
         let ms = Maintenance::new(Arc::new(app.clone()));
-        let err = ms.update_ext_urls_from_pattern(catalog_id, "https://example.com/NOREPLACE").await;
+        let err = ms
+            .update_ext_urls_from_pattern(catalog_id, "https://example.com/NOREPLACE")
+            .await;
         assert!(err.is_err(), "pattern without '$1' must be rejected");
     }
 
@@ -417,7 +461,10 @@ mod tests {
         let err = ms.overwrite_from_wikidata(catalog_id).await;
         assert!(err.is_err(), "catalog without wd_prop must be rejected");
         let msg = err.unwrap_err().to_string();
-        assert!(msg.contains("wd_prop"), "error should mention wd_prop; got: {msg}");
+        assert!(
+            msg.contains("wd_prop"),
+            "error should mention wd_prop; got: {msg}"
+        );
     }
 
     #[tokio::test]
@@ -428,18 +475,26 @@ mod tests {
         let err = ms.overwrite_from_wikidata(catalog_id).await;
         assert!(err.is_err(), "inactive catalog must be rejected");
         let msg = err.unwrap_err().to_string();
-        assert!(msg.contains("not active"), "error should mention 'not active'; got: {msg}");
+        assert!(
+            msg.contains("not active"),
+            "error should mention 'not active'; got: {msg}"
+        );
     }
 
     #[tokio::test]
     async fn test_overwrite_from_wikidata_rejects_wd_qual_catalog() {
         let app = test_support::test_app().await;
-        let catalog_id = test_support::seed_catalog_with_wd_qual(214, 813).await.unwrap();
+        let catalog_id = test_support::seed_catalog_with_wd_qual(214, 813)
+            .await
+            .unwrap();
         let ms = Maintenance::new(Arc::new(app.clone()));
         let err = ms.overwrite_from_wikidata(catalog_id).await;
         assert!(err.is_err(), "catalog with wd_qual must be rejected");
         let msg = err.unwrap_err().to_string();
-        assert!(msg.contains("wd_qual"), "error should mention wd_qual; got: {msg}");
+        assert!(
+            msg.contains("wd_qual"),
+            "error should mention wd_qual; got: {msg}"
+        );
     }
 
     // ── wikidata_sync: delete_multi_match_for_fully_matched ──────────────────
@@ -450,14 +505,25 @@ mod tests {
         let (catalog_id, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
         // Fully match the entry (user > 0)
         let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
-        EntryWriter::new(&app, &mut entry).set_match("Q42", 2).await.unwrap();
+        EntryWriter::new(&app, &mut entry)
+            .set_match("Q42", 2)
+            .await
+            .unwrap();
         // Seed a multi_match row for the now-fully-matched entry
-        test_support::seed_multi_match(entry_id, catalog_id).await.unwrap();
-        assert!(test_support::multi_match_entry_exists(entry_id).await.unwrap());
+        test_support::seed_multi_match(entry_id, catalog_id)
+            .await
+            .unwrap();
+        assert!(
+            test_support::multi_match_entry_exists(entry_id)
+                .await
+                .unwrap()
+        );
         let ms = Maintenance::new(Arc::new(app.clone()));
         ms.delete_multi_match_for_fully_matched().await.unwrap();
         assert!(
-            !test_support::multi_match_entry_exists(entry_id).await.unwrap(),
+            !test_support::multi_match_entry_exists(entry_id)
+                .await
+                .unwrap(),
             "fully-matched entry's multi_match row must be deleted"
         );
     }
@@ -467,12 +533,20 @@ mod tests {
         let app = test_support::test_app().await;
         let (catalog_id, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
         // Entry remains unmatched (q=NULL, user=NULL)
-        test_support::seed_multi_match(entry_id, catalog_id).await.unwrap();
-        assert!(test_support::multi_match_entry_exists(entry_id).await.unwrap());
+        test_support::seed_multi_match(entry_id, catalog_id)
+            .await
+            .unwrap();
+        assert!(
+            test_support::multi_match_entry_exists(entry_id)
+                .await
+                .unwrap()
+        );
         let ms = Maintenance::new(Arc::new(app.clone()));
         ms.delete_multi_match_for_fully_matched().await.unwrap();
         assert!(
-            test_support::multi_match_entry_exists(entry_id).await.unwrap(),
+            test_support::multi_match_entry_exists(entry_id)
+                .await
+                .unwrap(),
             "unmatched entry's multi_match row must be preserved"
         );
     }
@@ -485,12 +559,20 @@ mod tests {
         let inactive_catalog_id = test_support::seed_inactive_catalog().await.unwrap();
         // Use a synthetic entry_id that won't clash with seeded entries
         let synthetic_entry_id = inactive_catalog_id + 9_000_000;
-        test_support::seed_wd_match(synthetic_entry_id, inactive_catalog_id).await.unwrap();
-        assert!(test_support::wd_match_entry_exists(synthetic_entry_id).await.unwrap());
+        test_support::seed_wd_match(synthetic_entry_id, inactive_catalog_id)
+            .await
+            .unwrap();
+        assert!(
+            test_support::wd_match_entry_exists(synthetic_entry_id)
+                .await
+                .unwrap()
+        );
         let ms = Maintenance::new(Arc::new(app.clone()));
         ms.fixup_wd_matches().await.unwrap();
         assert!(
-            !test_support::wd_match_entry_exists(synthetic_entry_id).await.unwrap(),
+            !test_support::wd_match_entry_exists(synthetic_entry_id)
+                .await
+                .unwrap(),
             "wd_matches row for an inactive catalog must be deleted"
         );
     }
@@ -513,15 +595,5 @@ mod tests {
         let ms = Maintenance::new(Arc::new(app.clone()));
         ms.apply_description_aux(catalog_id).await.unwrap();
         // No assertion on side effects — success here is "no panic/error"
-    }
-
-    #[tokio::test]
-    #[ignore = "requires database / external services — run with `cargo test -- --ignored`"]
-    async fn test_update_auxiliary_fix_table() {
-        let app = get_test_app();
-        let ms = Maintenance::new(Arc::new(app.clone()));
-        let prop2type = ms.get_sparql_prop2type().await.unwrap();
-        assert!(prop2type.len() > 12000);
-        assert!(prop2type.iter().any(|(prop, _)| prop == "P31"));
     }
 }
