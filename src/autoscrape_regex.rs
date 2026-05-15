@@ -268,8 +268,8 @@ mod tests {
     #[test]
     fn truly_invalid_pattern_returns_error() {
         let err = AutoscrapeRegex::new(r"(unclosed").expect_err("unclosed paren is invalid in both engines");
-        assert!(err.fast_error.len() > 0);
-        assert!(err.fancy_error.len() > 0);
+        assert!(!err.fast_error.is_empty());
+        assert!(!err.fancy_error.is_empty());
         // Display should mention the pattern source so the catalog
         // author can identify which rx is broken.
         let display = format!("{err}");

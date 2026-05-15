@@ -146,7 +146,7 @@ mod tests {
     // only purpose is to satisfy the trait. We can't (and shouldn't) hit a
     // real database from a unit test, so we feed valid-shape configs that
     // never get used — the test pins the *missing-key* error paths only.
-    struct DummyPool {}
+    struct DummyPool;
     impl MySQLMisc for DummyPool {
         fn pool(&self) -> &mysql_async::Pool {
             unreachable!("test never acquires a connection")

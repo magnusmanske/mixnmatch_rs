@@ -1468,7 +1468,7 @@ location_texts[#location_texts+1] = {20, "Hamburg"}
         let result = run_desc_from_html(lua, &test_entry(), "").unwrap();
         assert_eq!(
             result.location_texts,
-            vec![(19usize, "Berlin".into()), (20usize, "Hamburg".into())]
+            vec![(19_usize, "Berlin".into()), (20_usize, "Hamburg".into())]
         );
     }
 

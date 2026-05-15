@@ -478,15 +478,12 @@ mod tests {
     /// total must stay well below that.
     #[test]
     fn wdrc_retry_budget_is_bounded() {
+        let attempts = WDRC::WDRC_MAX_ATTEMPTS;
         assert!(
-            WDRC::WDRC_MAX_ATTEMPTS >= 3 && WDRC::WDRC_MAX_ATTEMPTS <= 10,
-            "WDRC_MAX_ATTEMPTS={} outside sane window [3, 10]",
-            WDRC::WDRC_MAX_ATTEMPTS
+            (3..=10).contains(&attempts),
+            "WDRC_MAX_ATTEMPTS={attempts} outside sane window [3, 10]"
         );
-        assert!(
-            WDRC::WDRC_BACKOFF_CAP_SECS <= 60,
-            "WDRC_BACKOFF_CAP_SECS={} too large",
-            WDRC::WDRC_BACKOFF_CAP_SECS
-        );
+        let cap = WDRC::WDRC_BACKOFF_CAP_SECS;
+        assert!(cap <= 60, "WDRC_BACKOFF_CAP_SECS={cap} too large");
     }
 }

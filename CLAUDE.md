@@ -16,6 +16,7 @@
 - **Keep the code simple** and elegant.
 - **Write tests** where it makes sense.
 - **All custom CSS belongs in `html/main.css`.** Do not inject styles via `document.createElement('style')` in Vue components or any other JS file. Add a clearly labelled section (`/* ========== Component name ========== */`) to `main.css` instead.
+- Fix clippy warnings.
 
 ## What this is
 

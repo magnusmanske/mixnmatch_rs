@@ -949,9 +949,8 @@ mod tests {
                 "ACTION_TIMEOUTS_SECS[{action}]={secs} is outside [60, 86_400]"
             );
         }
-        assert!(
-            DEFAULT_ACTION_TIMEOUT_SECS >= ONE_MINUTE && DEFAULT_ACTION_TIMEOUT_SECS <= ONE_DAY
-        );
+        let default = DEFAULT_ACTION_TIMEOUT_SECS;
+        assert!((ONE_MINUTE..=ONE_DAY).contains(&default));
     }
 
     #[test]

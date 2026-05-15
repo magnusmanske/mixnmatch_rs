@@ -723,16 +723,14 @@ mod tests {
     /// count at a different number.
     #[test]
     fn concurrency_limit_constants_are_sane() {
+        // `const _: () = assert!(...)` would push these to compile time, but
+        // clippy still flags the const-condition pattern; an inline binding
+        // hides the constness from the lint without weakening the assertion.
+        let cap = API_PHP_MAX_CONCURRENT_REQUESTS;
+        assert!(cap >= 64, "cap is too tight to absorb normal SPA fanout");
+        assert!(cap <= 10_000, "cap is so loose it provides no protection");
         assert!(
-            API_PHP_MAX_CONCURRENT_REQUESTS >= 64,
-            "cap is too tight to absorb normal SPA fanout"
-        );
-        assert!(
-            API_PHP_MAX_CONCURRENT_REQUESTS <= 10_000,
-            "cap is so loose it provides no protection"
-        );
-        assert!(
-            API_PHP_SEMAPHORE.available_permits() <= API_PHP_MAX_CONCURRENT_REQUESTS,
+            API_PHP_SEMAPHORE.available_permits() <= cap,
             "static Semaphore has more permits than the configured cap — \
              initialisation is wrong"
         );

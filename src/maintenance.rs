@@ -166,7 +166,6 @@ mod tests {
     use super::*;
     use crate::match_state::MatchState;
     use crate::{
-        app_state::get_test_app,
         entry::{Entry, EntryWriter},
         test_support,
     };
