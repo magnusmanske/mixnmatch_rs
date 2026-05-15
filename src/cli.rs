@@ -395,10 +395,24 @@ impl ShellCommands {
         // (images, video). Wrapped outermost so it sees the final response
         // — including JSON from /api.php, the /metrics text dump, and
         // every static .js/.css/.html served from the in-memory cache.
+        //
+        // Security headers sit *outside* compression so they're added once
+        // the response body is final. HSTS is gated on the TLS listener:
+        // serving `Strict-Transport-Security` from a plain-HTTP response
+        // would either be ignored by browsers (HSTS over HTTP is invalid)
+        // or, if the proxy strips TLS in front of us, would tell the
+        // browser to refuse the very plain-HTTP fallback that local dev
+        // relies on. Audit reference: M-2 in
+        // `audits/comprehensive_security_report.md`.
         let router: Router = api_router
             .fallback(static_handler)
             .layer(axum::middleware::from_fn(collapse_slashes_in_path))
             .layer(tower_http::compression::CompressionLayer::new());
+        let router: Router = if tls {
+            router.layer(axum::middleware::from_fn(security_headers_with_hsts))
+        } else {
+            router.layer(axum::middleware::from_fn(security_headers_no_hsts))
+        };
 
         let scheme = if tls { "https" } else { "http" };
         let addr: std::net::SocketAddr = format!("0.0.0.0:{port}").parse()?;
@@ -705,4 +719,109 @@ async fn collapse_slashes_in_path(
         }
     }
     next.run(req).await
+}
+
+/// Mutates `headers` to add the security response headers we apply uniformly
+/// to every response (api + static + metrics). HSTS is included only when
+/// the listener is actually TLS — sending `Strict-Transport-Security` over
+/// plain HTTP is either ignored by browsers or counter-productive.
+///
+/// Pure helper so the middleware functions stay one-liners and the unit
+/// tests don't have to drive a full axum request/response cycle. Audit
+/// reference: M-2 in `audits/comprehensive_security_report.md`.
+fn apply_security_headers(headers: &mut axum::http::HeaderMap, include_hsts: bool) {
+    use axum::http::{HeaderValue, header};
+    // `nosniff` — disables browser content-type sniffing on JSON / static
+    // responses so a user-uploaded HTML-shaped file can't be rendered as
+    // HTML if it ever leaks back through a download path.
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    // `DENY` — no part of the site is meant to be framed.
+    headers.insert(
+        header::X_FRAME_OPTIONS,
+        HeaderValue::from_static("DENY"),
+    );
+    // Cross-origin link clicks don't leak the catalog / entry id the user
+    // was on; same-origin keeps the full URL so internal navigation
+    // analytics still work.
+    headers.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("strict-origin-when-cross-origin"),
+    );
+    if include_hsts {
+        // 2 years + includeSubDomains — matches the preload-list policy.
+        // Not adding `preload`: that requires owner intent and a manual
+        // submission, which is a deployment decision rather than code.
+        headers.insert(
+            header::STRICT_TRANSPORT_SECURITY,
+            HeaderValue::from_static("max-age=63072000; includeSubDomains"),
+        );
+    }
+}
+
+async fn security_headers_no_hsts(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let mut resp = next.run(req).await;
+    apply_security_headers(resp.headers_mut(), false);
+    resp
+}
+
+async fn security_headers_with_hsts(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let mut resp = next.run(req).await;
+    apply_security_headers(resp.headers_mut(), true);
+    resp
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::HeaderMap;
+
+    #[test]
+    fn security_headers_set_the_three_unconditional_ones() {
+        let mut h = HeaderMap::new();
+        apply_security_headers(&mut h, false);
+        assert_eq!(h.get("X-Content-Type-Options").unwrap(), "nosniff");
+        assert_eq!(h.get("X-Frame-Options").unwrap(), "DENY");
+        assert_eq!(
+            h.get("Referrer-Policy").unwrap(),
+            "strict-origin-when-cross-origin"
+        );
+    }
+
+    #[test]
+    fn security_headers_omit_hsts_when_not_tls() {
+        let mut h = HeaderMap::new();
+        apply_security_headers(&mut h, false);
+        assert!(
+            h.get("Strict-Transport-Security").is_none(),
+            "HSTS must not be sent over plain HTTP"
+        );
+    }
+
+    #[test]
+    fn security_headers_include_hsts_when_tls() {
+        let mut h = HeaderMap::new();
+        apply_security_headers(&mut h, true);
+        let hsts = h
+            .get("Strict-Transport-Security")
+            .expect("HSTS must be set on TLS listener")
+            .to_str()
+            .unwrap();
+        assert!(
+            hsts.contains("max-age=63072000"),
+            "HSTS must use a long max-age, got: {hsts}"
+        );
+        assert!(
+            hsts.contains("includeSubDomains"),
+            "HSTS must cover subdomains, got: {hsts}"
+        );
+    }
 }
