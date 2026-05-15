@@ -1,0 +1,38 @@
+
+{ "type": "FeatureCollection",
+  "features": [
+
+
+		{
+        "type": "Feature",
+        "properties": {
+                "name": " Panagia Eleousa/Παναγία Ἐλεοῦσα (Moutoulla)",
+                "id":  "525",
+		"popupContent": "&lt;h4&gt; Panagia Eleousa/Παναγία Ἐλεοῦσα (Moutoulla)&lt;/h4&gt;&lt;p&gt;&lt;a href=&#x27;/146277/525&#x27;&gt;Full record&lt;/a&gt;&lt;/p&gt;&lt;p&gt;&lt;em class=&#x27;popup-em&#x27;&gt;Lat: 34.9846, Lng:32.8234&lt;/em&gt;&lt;/p&gt;&lt;h5&gt;Moutoullas/Μουτουλλᾶς/Mutula, Lefkosia district&lt;h5&gt;&lt;p&gt;Moutoullas/Μουτουλλᾶς/Mutula, Lefkosia district&lt;/p&gt;&lt;h6&gt;Alternative spellings&lt;/h6&gt;&lt;p&gt;&lt;em&gt;Panagia Eleousa/Παναγία Ἐλεοῦσα, Church of Panagia (Our Lady) tou Moutoulla /Ἐκκλησία τῆς Παναγίας τοῦ Μουτουλλᾶ, B.V.M. Eleousa, &lt;/em&gt;&lt;/p&gt;"
+        },"geometry":{ "type": "Point", "coordinates": [ 32.823427319400011, 34.984563621099973 ] }
+},
+
+
+
+		{
+        "type": "Feature",
+        "properties": {
+                "name": "Acheleia/ Ἁχέλεια/ Aşelya",
+                "id":  "281",
+		"popupContent": "&lt;h4&gt;Acheleia/ Ἁχέλεια/ Aşelya&lt;/h4&gt;&lt;p&gt;&lt;a href=&#x27;/hu/281/&#x27;&gt;Historical Unit Full record&lt;/a&gt;&lt;/p&gt;&lt;p&gt;&lt;em class=&#x27;popup-em&#x27;&gt;Centrepoint Lat: 34.7384, Lng:32.4866&lt;/em&gt;&lt;/p&gt;&lt;h5&gt;Acheleia/Άχέλεια/Aşelya, Pafos district&lt;h5&gt;&lt;p&gt;Associated archaeological entities&lt;/p&gt;&lt;ul&gt;&lt;li&gt;&lt;a href=&#x27;/146844/614&#x27;&gt;Testing&lt;/a&gt;&lt;/li&gt;&lt;/ul&gt;&lt;h6&gt;Alternative spellings&lt;/h6&gt;&lt;p&gt;&lt;em&gt;Acheleia/ Ἁχέλεια/ Aşelya, Aschelia, Eschele, Achelia, Baliazo de Achieglia, &lt;/em&gt;&lt;/p&gt;"
+        },"geometry":{ "type": "Polygon", "coordinates": [ [ [ 32.485055476427064, 34.740179852215185 ], [ 32.483338862657554, 34.73813443060962 ], [ 32.487973719835281, 34.736371095481651 ], [ 32.489776164293268, 34.739051350004814 ], [ 32.485055476427064, 34.740179852215185 ] ] ] }
+},
+
+
+
+		{
+        "type": "Feature",
+        "properties": {
+                "name": "Acheras/Ἀχερᾶς, monastery (Agrokipia)",
+                "id":  "551",
+		"popupContent": "&lt;h4&gt;Acheras/Ἀχερᾶς, monastery (Agrokipia)&lt;/h4&gt;&lt;p&gt;&lt;a href=&#x27;/146853/551&#x27;&gt;Full record&lt;/a&gt;&lt;/p&gt;&lt;p&gt;&lt;em class=&#x27;popup-em&#x27;&gt;Lat: 35.0538, Lng:33.1401&lt;/em&gt;&lt;/p&gt;&lt;h5&gt;Agrokipia/Ἀγροκηπιά/Ağrocipya, Lefkosia district&lt;h5&gt;&lt;p&gt;Agrokipia/Ἀγροκηπιά/Ağrocipya, Lefkosia district&lt;/p&gt;&lt;h6&gt;Alternative spellings&lt;/h6&gt;&lt;p&gt;&lt;em&gt;Acheras/Ἀχερᾶς, monastery, Ἀχερᾶ, Achiera, &lt;/em&gt;&lt;/p&gt;"
+        },"geometry":{ "type": "Point", "coordinates": [ 33.140137195200012, 35.053801132099949 ] }
+},
+
+
+]}

@@ -5,13 +5,18 @@ use crate::{
     entry::Entry,
     extended_entry::ExtendedEntry,
 };
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use std::sync::LazyLock;
 use rand::RngExt;
 use regex::Regex;
 
 use super::BespokeScraper;
+
+/// Bytes of the upstream body to include in diagnostic errors. Big
+/// enough to identify HTML error pages / login redirects at a glance,
+/// small enough to keep job-failure notes readable.
+const RESPONSE_SNIPPET_BYTES: usize = 200;
 
 // ______________________________________________________
 // Cyprus Gazetteer
@@ -29,9 +34,28 @@ impl BespokeScraper for BespokeScraper2670 {
     async fn run(&self) -> Result<()> {
         let url = "http://www.cyprusgazetteer.org/map/?&mime_type=application/json&selected_facets=*";
         let client = self.http_client();
-        let text = client.get(url).send().await?.text().await?;
+        let response = client.get(url).send().await?;
+        let status = response.status();
+        let text = response.text().await?;
+        if !status.is_success() {
+            return Err(anyhow!(
+                "Cyprus Gazetteer returned HTTP {status}; first {RESPONSE_SNIPPET_BYTES} bytes: {:?}",
+                Self::body_snippet(&text)
+            ));
+        }
+        // Refuse responses that obviously aren't JSON — typically an HTML
+        // error page / login redirect. Without this, `extract_json_object`
+        // happily grabs the first stray `{` (e.g. inside an embedded
+        // `<style>body { … }`) and serde_json fails with a cryptic
+        // "key must be a string at line 1 column 3".
+        Self::ensure_json_shaped(&text)?;
         let cleaned = Self::clean_json(&text);
-        let json: serde_json::Value = serde_json::from_str(&cleaned)?;
+        let json: serde_json::Value = serde_json::from_str(&cleaned).map_err(|e| {
+            anyhow!(
+                "Cyprus Gazetteer JSON parse failed ({e}); first {RESPONSE_SNIPPET_BYTES} bytes of cleaned input: {:?}",
+                Self::body_snippet(&cleaned)
+            )
+        })?;
         let entries = Self::parse_features(self.catalog_id(), &json);
         let mut entry_cache = vec![];
         for ee in entries {
@@ -44,6 +68,33 @@ impl BespokeScraper for BespokeScraper2670 {
 }
 
 impl BespokeScraper2670 {
+    /// Char-bounded prefix of `body` for use in diagnostic error
+    /// messages. Truncates on a char boundary (not a byte boundary) so
+    /// UTF-8 surrogate pairs in Greek / Cyrillic names can't split mid-
+    /// codepoint and corrupt the eventual log line.
+    pub(crate) fn body_snippet(body: &str) -> String {
+        body.chars().take(RESPONSE_SNIPPET_BYTES).collect()
+    }
+
+    /// Validate that `body` looks like JSON (first non-whitespace char
+    /// is `{` or `[`). Returns an error including the body snippet for
+    /// anything else — typically an HTML error page from upstream.
+    ///
+    /// We deliberately don't try to *recover* from non-JSON bodies. The
+    /// only safe assumption is that the upstream is in a degraded state;
+    /// the job system will retry the scrape on its next dispatch.
+    pub(crate) fn ensure_json_shaped(body: &str) -> Result<()> {
+        match body.chars().find(|c| !c.is_whitespace()) {
+            Some('{' | '[') => Ok(()),
+            Some(other) => Err(anyhow!(
+                "Cyprus Gazetteer response is not JSON (first non-whitespace char {other:?}); \
+                 first {RESPONSE_SNIPPET_BYTES} bytes: {:?}",
+                Self::body_snippet(body)
+            )),
+            None => Err(anyhow!("Cyprus Gazetteer response is empty")),
+        }
+    }
+
     /// Clean the broken JSON response from the Cyprus Gazetteer.
     ///
     /// The raw response contains:
@@ -350,6 +401,81 @@ mod tests {
         let json = serde_json::json!({ "type": "FeatureCollection" });
         let entries = BespokeScraper2670::parse_features(2670, &json);
         assert!(entries.is_empty());
+    }
+
+    /// Pins the cleaner against a real (trimmed) upstream response.
+    /// `test_data/cy_2670_sample.json` is the first 3 features of a
+    /// captured live response, preserving the original tabs / newlines /
+    /// trailing-comma quirks the cleaner exists to paper over. Catches
+    /// any regression in `clean_json` that breaks the happy path.
+    #[test]
+    fn test_2670_clean_json_on_live_fixture_parses() {
+        let raw = std::fs::read_to_string("test_data/cy_2670_sample.json")
+            .expect("missing test_data/cy_2670_sample.json");
+        let cleaned = BespokeScraper2670::clean_json(&raw);
+        let json: serde_json::Value = serde_json::from_str(&cleaned)
+            .unwrap_or_else(|e| panic!("cleaned fixture must parse: {e}; cleaned snippet: {:?}", &cleaned[..cleaned.len().min(200)]));
+        let n = json
+            .get("features")
+            .and_then(|f| f.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0);
+        assert_eq!(n, 3, "trimmed fixture has 3 features");
+    }
+
+    // -----------------------------------------------------------------
+    // ensure_json_shaped: the fast-path validator for "is this an HTML
+    // error page sneaking through?". The historical failure mode was
+    // upstream returning HTML; `extract_json_object` would grab the
+    // first stray `{` (inside e.g. an embedded CSS rule) and serde_json
+    // then complained "key must be a string at line 1 column 3", which
+    // is opaque. The validator surfaces a useful error instead.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn test_2670_ensure_json_shaped_accepts_object() {
+        assert!(BespokeScraper2670::ensure_json_shaped(r#"{"a":1}"#).is_ok());
+    }
+
+    #[test]
+    fn test_2670_ensure_json_shaped_accepts_array() {
+        assert!(BespokeScraper2670::ensure_json_shaped(r#"[1, 2, 3]"#).is_ok());
+    }
+
+    #[test]
+    fn test_2670_ensure_json_shaped_ignores_leading_whitespace() {
+        assert!(BespokeScraper2670::ensure_json_shaped("\n\t  { \"a\": 1 }").is_ok());
+    }
+
+    #[test]
+    fn test_2670_ensure_json_shaped_rejects_html() {
+        let err = BespokeScraper2670::ensure_json_shaped(
+            "<!DOCTYPE html><html><body><style>body { color: red; }</style></body></html>",
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("not JSON"), "got {msg}");
+        // Snippet of upstream body should be visible for diagnosis.
+        assert!(msg.contains("DOCTYPE"), "got {msg}");
+    }
+
+    #[test]
+    fn test_2670_ensure_json_shaped_rejects_empty() {
+        let err = BespokeScraper2670::ensure_json_shaped("   \n\t  ").unwrap_err();
+        assert!(err.to_string().contains("empty"));
+    }
+
+    #[test]
+    fn test_2670_body_snippet_respects_char_boundaries() {
+        // Greek / Cyrillic strings are common in Cyprus Gazetteer data.
+        // `body_snippet` must not split a multi-byte codepoint mid-byte —
+        // a byte-bounded truncation would corrupt the eventual log
+        // message and could itself panic.
+        let body = "Παναγία Ἐλεοῦσα".repeat(50);
+        let snippet = BespokeScraper2670::body_snippet(&body);
+        assert!(snippet.chars().count() <= RESPONSE_SNIPPET_BYTES);
+        // Sanity check: result is valid UTF-8 (would have panicked otherwise).
+        assert!(snippet.starts_with("Π"));
     }
 
     #[test]
