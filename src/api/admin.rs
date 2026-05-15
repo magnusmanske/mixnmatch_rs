@@ -68,7 +68,13 @@ pub async fn query_add_aliases(
     session: &Session,
     params: &Params,
 ) -> Result<Response, ApiError> {
-    let uid = common::require_user_id(app, session, params).await?;
+    // Catalog admin only — bulk alias edits rewrite a catalog's name index
+    // and are not appropriate for any logged-in user. Mirrors the gate on
+    // `update_ext_urls` above. Audit reference: M-1 in
+    // `audits/comprehensive_security_report.md`.
+    let uid = auth::guard::require_catalog_admin_from_params(app, session, params)
+        .await?
+        .mnm_user_id;
     let text = common::get_param(params, "text", "").trim().to_string();
     let cid = common::get_param_int(params, "catalog", 0) as usize;
     if cid == 0 || text.is_empty() {
