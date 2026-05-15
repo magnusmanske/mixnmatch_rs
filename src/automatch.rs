@@ -203,6 +203,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_purge_automatches_multi_batch() {
+        // Exercises the LIMIT :batch_size loop in
+        // `StorageMySQL::purge_automatches`. The test build sets
+        // PURGE_BATCH_SIZE=2, so five automatches require three
+        // entry-table iterations (2+2+1) and three multi_match
+        // iterations (2+2+0; the trailing 0-row chunk happens because
+        // exactly batch_size matched on the second-to-last). Anything
+        // less than a full wipe means the loop exited early.
+        use mysql_async::params;
+        use mysql_async::prelude::Queryable;
+        let app = test_support::test_app().await;
+        let (catalog_id, first_entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();
+        let mut entry_ids = vec![first_entry_id];
+        for n in 0..4 {
+            let id = test_support::seed_entry_in_catalog(catalog_id, &format!("pm_{n}"))
+                .await
+                .unwrap();
+            entry_ids.push(id);
+        }
+        for id in &entry_ids {
+            let mut entry = Entry::from_id(*id, &app).await.unwrap();
+            EntryWriter::new(&app, &mut entry)
+                .set_match("Q42", 0)
+                .await
+                .unwrap();
+            test_support::seed_multi_match(*id, catalog_id).await.unwrap();
+        }
+        // Sanity-check the fixture: every entry now has an automatch.
+        for id in &entry_ids {
+            assert!(Entry::from_id(*id, &app).await.unwrap().is_partially_matched());
+        }
+
+        AutoMatch::new(Arc::new(app.clone()))
+            .purge_automatches(catalog_id)
+            .await
+            .unwrap();
+
+        for id in &entry_ids {
+            assert!(
+                Entry::from_id(*id, &app).await.unwrap().is_unmatched(),
+                "entry {id} should have been wiped by purge"
+            );
+        }
+        let (pool, mut conn) = test_support::raw_conn().await.unwrap();
+        let remaining: u64 = conn
+            .exec_first(
+                "SELECT COUNT(*) FROM multi_match WHERE catalog = :catalog",
+                params! { "catalog" => catalog_id },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        drop(conn);
+        pool.disconnect().await.ok();
+        assert_eq!(remaining, 0, "multi_match rows should be fully drained");
+    }
+
+    #[tokio::test]
     async fn test_purge_automatches() {
         let app = test_support::test_app().await;
         let (catalog_id, entry_id) = test_support::seed_minimal_entry(&app).await.unwrap();

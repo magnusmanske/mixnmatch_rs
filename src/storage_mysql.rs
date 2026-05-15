@@ -1926,14 +1926,65 @@ impl Storage for StorageMySQL {
         Ok(results_in_other_catalogs)
     }
 
+    /// Wipe automatch rows for `catalog_id`: clears `q`/`user`/`timestamp`
+    /// on `entry` rows where `user=0` (the auto-match sentinel) and drops
+    /// every `multi_match` row for the catalog.
+    ///
+    /// Batched to avoid the maintenance reaper. A single unbatched
+    /// `UPDATE entry ... WHERE catalog=? AND user=0` over ~500 k matching
+    /// rows holds row locks and writes redo log for the entire set in one
+    /// transaction; on a busy Toolforge cluster that routinely runs past
+    /// `REAPER_THRESHOLD_SECS` (300 s, see `job_runner::reaper`) and the
+    /// kill-long-running-queries reaper terminates the statement. The
+    /// `LIMIT :batch_size` loop splits the work into per-batch
+    /// transactions: each chunk completes well under a minute, partial
+    /// progress survives interruption, and concurrent writers against
+    /// other rows in the same catalog get fair lock turns between
+    /// batches. The `(catalog,user)` composite index covers the entry
+    /// WHERE clause, and `multi_match.KEY catalog` covers the delete.
     async fn purge_automatches(&self, catalog_id: usize) -> Result<()> {
+        // 5k matches the bulk-write batch size used widely in this
+        // crate (taxon_matcher, microsync, automatch/dates, …): large
+        // enough to amortize per-statement overhead, small enough to
+        // stay well below the reaper threshold even on a contended
+        // cluster. The test build overrides to 2 so the loop runs
+        // multiple iterations against a small seeded dataset.
+        #[cfg(not(test))]
+        const PURGE_BATCH_SIZE: usize = 5000;
+        #[cfg(test)]
+        const PURGE_BATCH_SIZE: usize = 2;
+        let batch_size = PURGE_BATCH_SIZE;
         let mut conn = self.get_conn().await?;
-        conn.exec_drop("UPDATE entry SET q=NULL,user=NULL,`timestamp`=NULL WHERE catalog=:catalog_id AND user=0", params! {catalog_id}).await?;
-        conn.exec_drop(
-            "DELETE FROM multi_match WHERE catalog=:catalog_id",
-            params! {catalog_id},
-        )
-        .await?;
+
+        // Clear automatches on the `entry` table. Loop exit condition:
+        // `affected_rows() < batch_size` means the last chunk wasn't
+        // full, so no more rows match. (Using `== 0` would always cost
+        // one trailing empty UPDATE.)
+        loop {
+            conn.exec_drop(
+                "UPDATE entry SET q=NULL,user=NULL,`timestamp`=NULL \
+                 WHERE catalog=:catalog_id AND user=0 LIMIT :batch_size",
+                params! {catalog_id, batch_size},
+            )
+            .await?;
+            if (conn.affected_rows() as usize) < batch_size {
+                break;
+            }
+        }
+
+        // Drop multi_match rows for the catalog under the same
+        // batching contract.
+        loop {
+            conn.exec_drop(
+                "DELETE FROM multi_match WHERE catalog=:catalog_id LIMIT :batch_size",
+                params! {catalog_id, batch_size},
+            )
+            .await?;
+            if (conn.affected_rows() as usize) < batch_size {
+                break;
+            }
+        }
+
         Ok(())
     }
 
