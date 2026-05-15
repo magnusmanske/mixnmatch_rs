@@ -743,9 +743,8 @@ impl Autoscrape {
 
     fn initialize_with_options(json: Value, ret: &mut Autoscrape) -> Result<()> {
         // Options can live either at the document root or one level
-        // down under "scraper"; check both with a single pointer per
-        // location.
-        if let Some(options) = json.pointer("/options") {
+        // down under "scraper".
+        if let Some(options) = json.get("options") {
             ret.options_from_json(options);
         } else if let Some(options) = json.pointer("/scraper/options") {
             ret.options_from_json(options);
