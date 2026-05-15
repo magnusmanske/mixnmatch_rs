@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use std::sync::LazyLock;
 use regex::Regex;
+use scraper::{ElementRef, Html, Selector};
 
 use super::BespokeScraper;
 
@@ -42,45 +43,38 @@ impl BespokeScraper for BespokeScraper6976 {
     }
 }
 
+/// Maps the German relation header (text inside `<h3>` within a `<dd>`)
+/// to the Wikidata-style property number this scraper writes as aux.
+const H3_TEXT_TO_PROP: &[(&str, usize)] = &[
+    ("Vater:", 22),
+    ("Mutter:", 25),
+    ("Partner:", 26),
+    ("Verwandte:", 1038),
+];
+
 impl BespokeScraper6976 {
     /// Scraper-specific `add_missing_aux` that walks the Hessian biography HTML
     /// and attaches GND, family-relation aux values, and MnM relations.
     pub(crate) async fn add_missing_aux_6976(&self, entry_id: usize) -> Result<()> {
-        const KEYS2PROP: &[(&str, usize)] = &[
-            ("<h3>Vater:</h3>", 22),
-            ("<h3>Mutter:</h3>", 25),
-            ("<h3>Partner:</h3>", 26),
-            ("<h3>Verwandte:</h3>", 1038),
-        ];
-        static RE_DD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"<dd>(.+?)</dd>"#).unwrap());
-        static RE_SUBJECT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"<a href="/[a-z]+/subjects/idrec/sn/bio/id/(\d+)""#).unwrap());
         let mut entry = Entry::from_id(entry_id, self.app()).await?;
         let existing_aux = EntryWriter::new(self.app(), &mut entry).get_aux().await?;
         let url = entry.ext_url.clone();
         let text = self.load_single_line_text_from_url(&url).await?;
 
-        if !existing_aux.iter().any(|aux| aux.prop_numeric() == 227) {
-            if let Some(gnd) = Self::get_main_gnd_from_text(&text) {
-                EntryWriter::new(self.app(), &mut entry).set_auxiliary(227, Some(gnd)).await?;
-            }
+        // Extract everything from the DOM up-front into owned data — `Html`
+        // and `ElementRef` are !Send (html5ever's tendril is not Sync), so
+        // we cannot hold them across the `.await`s below.
+        let (gnd_opt, relations) = extract_page_data(&text);
+
+        if !existing_aux.iter().any(|aux| aux.prop_numeric() == 227)
+            && let Some(gnd) = gnd_opt {
+            EntryWriter::new(self.app(), &mut entry).set_auxiliary(227, Some(gnd)).await?;
         }
 
-        for cap_dd_group in RE_DD.captures_iter(&text) {
-            let cap_dd = cap_dd_group.get(1).unwrap().as_str();
-            let subject_ids = RE_SUBJECT
-                .captures_iter(cap_dd)
-                .filter_map(|cap| cap.get(1).map(|m| m.as_str().to_string()))
-                .collect::<Vec<String>>();
-            if subject_ids.is_empty() {
-                continue;
-            }
-            for (key, prop_numeric) in KEYS2PROP {
-                if cap_dd.contains(key) {
-                    let _ = self
-                        .attach_subjects_as_aux(*prop_numeric, &subject_ids, &mut entry)
-                        .await;
-                }
-            }
+        for (prop_numeric, subject_ids) in relations {
+            let _ = self
+                .attach_subjects_as_aux(prop_numeric, &subject_ids, &mut entry)
+                .await;
         }
         Ok(())
     }
@@ -122,10 +116,92 @@ impl BespokeScraper6976 {
     }
 
     pub(crate) fn get_main_gnd_from_text(text: &str) -> Option<String> {
-        static RE_GND: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"<h2>GND-Nummer</h2>\s*<p>(.+?)</p>"#).unwrap());
-        let captures = RE_GND.captures(text)?;
-        Some(captures[1].to_string())
+        extract_page_data(text).0
     }
+}
+
+/// Parse the HTML once and pull out everything `add_missing_aux_6976`
+/// needs as owned data: the primary GND (if any), and a list of
+/// `(prop_numeric, subject_ids)` relation pairs ready to be written.
+///
+/// Combining both extractions here keeps the DOM types scoped to a
+/// single synchronous function so the caller's future stays `Send`.
+fn extract_page_data(text: &str) -> (Option<String>, Vec<(usize, Vec<String>)>) {
+    let doc = Html::parse_fragment(text);
+    let gnd = find_main_gnd(&doc);
+    let mut relations: Vec<(usize, Vec<String>)> = Vec::new();
+    for dd in doc.select(dd_selector()) {
+        let subject_ids = collect_subject_ids(dd);
+        if subject_ids.is_empty() {
+            continue;
+        }
+        let h3_texts: Vec<String> = dd
+            .select(h3_selector())
+            .map(|h3| h3.text().collect::<String>().trim().to_string())
+            .collect();
+        for (key, prop_numeric) in H3_TEXT_TO_PROP {
+            if h3_texts.iter().any(|t| t == *key) {
+                relations.push((*prop_numeric, subject_ids.clone()));
+            }
+        }
+    }
+    (gnd, relations)
+}
+
+/// Find the GND number that appears in the `<p>` immediately following
+/// `<h2>GND-Nummer</h2>`. Whitespace-only text nodes between the heading
+/// and the `<p>` are skipped transparently by walking sibling elements.
+fn find_main_gnd(doc: &Html) -> Option<String> {
+    for h2 in doc.select(h2_selector()) {
+        if h2.text().collect::<String>().trim() != "GND-Nummer" {
+            continue;
+        }
+        let p = h2
+            .next_siblings()
+            .filter_map(ElementRef::wrap)
+            .find(|e| e.value().name() == "p")?;
+        let gnd = p.text().collect::<String>().trim().to_string();
+        if !gnd.is_empty() {
+            return Some(gnd);
+        }
+    }
+    None
+}
+
+/// `/de/subjects/idrec/sn/bio/id/{digits}` — applied to a single `href`
+/// attribute value, so the regex surface is bounded to the URL path
+/// rather than the whole HTML document.
+static RE_SUBJECT_ID: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^/[a-z]+/subjects/idrec/sn/bio/id/(\d+)").unwrap()
+});
+
+fn dd_selector() -> &'static Selector {
+    static S: LazyLock<Selector> = LazyLock::new(|| Selector::parse("dd").unwrap());
+    &S
+}
+fn h2_selector() -> &'static Selector {
+    static S: LazyLock<Selector> = LazyLock::new(|| Selector::parse("h2").unwrap());
+    &S
+}
+fn h3_selector() -> &'static Selector {
+    static S: LazyLock<Selector> = LazyLock::new(|| Selector::parse("h3").unwrap());
+    &S
+}
+fn a_selector() -> &'static Selector {
+    static S: LazyLock<Selector> = LazyLock::new(|| Selector::parse("a[href]").unwrap());
+    &S
+}
+
+fn collect_subject_ids(dd: ElementRef<'_>) -> Vec<String> {
+    dd.select(a_selector())
+        .filter_map(|a| {
+            let href = a.value().attr("href")?;
+            RE_SUBJECT_ID
+                .captures(href)
+                .and_then(|c| c.get(1))
+                .map(|m| m.as_str().to_string())
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -169,7 +245,8 @@ mod tests {
 
     #[test]
     fn test_6976_get_main_gnd_from_text_with_whitespace() {
-        // The regex uses \s* between the two tags, so whitespace is allowed
+        // Whitespace text nodes between the <h2> and <p> are skipped by the
+        // sibling-element walk.
         let html = "<h2>GND-Nummer</h2>   <p>10234567X</p>";
         assert_eq!(
             BespokeScraper6976::get_main_gnd_from_text(html),
@@ -189,8 +266,7 @@ mod tests {
     }
 
     #[test]
-    fn test_6976_get_main_gnd_from_text_stops_at_closing_p() {
-        // Should not greedily consume beyond the first </p>
+    fn test_6976_get_main_gnd_from_text_stops_at_first_p() {
         let html = r#"<h2>GND-Nummer</h2><p>118522426</p><p>other content</p>"#;
         assert_eq!(
             BespokeScraper6976::get_main_gnd_from_text(html),
@@ -207,84 +283,59 @@ mod tests {
         );
     }
 
-    // ---- RE_DD / RE_SUBJECT regex logic ----
-
     #[test]
-    fn test_6976_re_dd_captures_dd_content() {
-        let re_dd = Regex::new(r#"<dd>(.+?)</dd>"#).unwrap();
-        let html = r#"<dd>some content here</dd>"#;
-        let caps = re_dd.captures(html).unwrap();
-        assert_eq!(caps.get(1).unwrap().as_str(), "some content here");
-    }
-
-    #[test]
-    fn test_6976_re_dd_captures_multiple() {
-        let re_dd = Regex::new(r#"<dd>(.+?)</dd>"#).unwrap();
-        let html = r#"<dd>first</dd><dd>second</dd>"#;
-        let results: Vec<&str> = re_dd
-            .captures_iter(html)
-            .filter_map(|c| c.get(1).map(|m| m.as_str()))
-            .collect();
-        assert_eq!(results, vec!["first", "second"]);
-    }
-
-    #[test]
-    fn test_6976_re_subject_captures_id() {
-        let re_subject = Regex::new(r#"<a href="/[a-z]+/subjects/idrec/sn/bio/id/(\d+)""#).unwrap();
-        let html = r#"<a href="/de/subjects/idrec/sn/bio/id/42""#;
-        let caps = re_subject.captures(html).unwrap();
-        assert_eq!(caps.get(1).unwrap().as_str(), "42");
-    }
-
-    #[test]
-    fn test_6976_re_subject_captures_multiple_ids() {
-        let re_subject = Regex::new(r#"<a href="/[a-z]+/subjects/idrec/sn/bio/id/(\d+)""#).unwrap();
-        let html =
-            r#"<a href="/de/subjects/idrec/sn/bio/id/10"<a href="/en/subjects/idrec/sn/bio/id/20""#;
-        let ids: Vec<&str> = re_subject
-            .captures_iter(html)
-            .filter_map(|c| c.get(1).map(|m| m.as_str()))
-            .collect();
-        assert_eq!(ids, vec!["10", "20"]);
-    }
-
-    #[test]
-    fn test_6976_re_subject_does_not_match_non_bio() {
-        let re_subject = Regex::new(r#"<a href="/[a-z]+/subjects/idrec/sn/bio/id/(\d+)""#).unwrap();
-        // Different path segment
-        let html = r#"<a href="/de/subjects/idrec/sn/art/id/99""#;
-        assert!(re_subject.captures(html).is_none());
-    }
-
-    // ---- KEYS2PROP lookup logic (unit-tested as plain data) ----
-
-    #[test]
-    fn test_6976_keys2prop_contains_expected_relations() {
-        const KEYS2PROP: &[(&str, usize)] = &[
-            ("<h3>Vater:</h3>", 22),
-            ("<h3>Mutter:</h3>", 25),
-            ("<h3>Partner:</h3>", 26),
-            ("<h3>Verwandte:</h3>", 1038),
-        ];
-        assert!(
-            KEYS2PROP
-                .iter()
-                .any(|(k, p)| *k == "<h3>Vater:</h3>" && *p == 22)
+    fn test_6976_get_main_gnd_tolerates_attributes_on_p() {
+        // Robustness gain over the previous regex, which required the
+        // literal `<p>` open tag and would miss a styled paragraph.
+        let html = r#"<h2>GND-Nummer</h2><p class="meta">118522426</p>"#;
+        assert_eq!(
+            BespokeScraper6976::get_main_gnd_from_text(html),
+            Some("118522426".to_string())
         );
-        assert!(
-            KEYS2PROP
-                .iter()
-                .any(|(k, p)| *k == "<h3>Mutter:</h3>" && *p == 25)
+    }
+
+    // ---- collect_subject_ids ----
+
+    #[test]
+    fn test_6976_collect_subject_ids_single() {
+        let html = r#"<dd><a href="/de/subjects/idrec/sn/bio/id/42">x</a></dd>"#;
+        let doc = Html::parse_fragment(html);
+        let dd = doc.select(dd_selector()).next().unwrap();
+        assert_eq!(collect_subject_ids(dd), vec!["42".to_string()]);
+    }
+
+    #[test]
+    fn test_6976_collect_subject_ids_multiple() {
+        let html = r#"
+            <dd>
+                <a href="/de/subjects/idrec/sn/bio/id/10">a</a>
+                <a href="/en/subjects/idrec/sn/bio/id/20">b</a>
+            </dd>"#;
+        let doc = Html::parse_fragment(html);
+        let dd = doc.select(dd_selector()).next().unwrap();
+        assert_eq!(
+            collect_subject_ids(dd),
+            vec!["10".to_string(), "20".to_string()]
         );
-        assert!(
-            KEYS2PROP
-                .iter()
-                .any(|(k, p)| *k == "<h3>Partner:</h3>" && *p == 26)
-        );
-        assert!(
-            KEYS2PROP
-                .iter()
-                .any(|(k, p)| *k == "<h3>Verwandte:</h3>" && *p == 1038)
-        );
+    }
+
+    #[test]
+    fn test_6976_collect_subject_ids_skips_non_bio_paths() {
+        let html = r#"<dd><a href="/de/subjects/idrec/sn/art/id/99">x</a></dd>"#;
+        let doc = Html::parse_fragment(html);
+        let dd = doc.select(dd_selector()).next().unwrap();
+        assert!(collect_subject_ids(dd).is_empty());
+    }
+
+    // ---- H3_TEXT_TO_PROP ----
+
+    #[test]
+    fn test_6976_h3_text_to_prop_contains_expected_relations() {
+        let table: std::collections::HashMap<&str, usize> =
+            H3_TEXT_TO_PROP.iter().copied().collect();
+        assert_eq!(table.get("Vater:"), Some(&22));
+        assert_eq!(table.get("Mutter:"), Some(&25));
+        assert_eq!(table.get("Partner:"), Some(&26));
+        assert_eq!(table.get("Verwandte:"), Some(&1038));
     }
 }
