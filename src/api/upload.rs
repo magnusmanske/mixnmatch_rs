@@ -99,28 +99,73 @@ async fn collect_upload_fields(
         file_bytes_written: 0,
     };
     loop {
-        let field = match multipart.next_field().await {
+        let mut field = match multipart.next_field().await {
             Ok(Some(f)) => f,
             Ok(None) => break,
             Err(e) => return Err(ApiError::BadRequest(format!("multipart field error: {e}")).into_response()),
         };
         let name = field.name().unwrap_or("").to_string();
         match name.as_str() {
-            "query" => form.query = field.text().await.unwrap_or_default(),
-            "data_format" => form.data_format = field.text().await.unwrap_or_default(),
-            "username" => form.username = field.text().await.unwrap_or_default(),
+            "query" => form.query = bounded_field_text(&mut field, MAX_TEXT_FIELD_BYTES).await?,
+            "data_format" => form.data_format = bounded_field_text(&mut field, MAX_TEXT_FIELD_BYTES).await?,
+            "username" => form.username = bounded_field_text(&mut field, MAX_TEXT_FIELD_BYTES).await?,
             "import_file" => {
                 let (new_uuid, bytes) = stream_import_file(field, app).await?;
                 form.uuid = Some(new_uuid);
                 form.file_bytes_written = bytes;
             }
             _ => {
-                // Drain unknown fields so the stream advances.
-                let _ = field.text().await;
+                // Drain unknown fields with the same per-field cap so a
+                // malicious sender can't fill memory by stuffing the
+                // payload into an unrecognised field name. The contents
+                // are discarded.
+                let _ = bounded_field_text(&mut field, MAX_TEXT_FIELD_BYTES).await?;
             }
         }
     }
     Ok(form)
+}
+
+/// Per-field byte cap for short text fields in the multipart upload form.
+/// Each of `query`, `data_format`, `username` is a short identifier — a
+/// MediaWiki username tops out around 255 bytes (UTF-8), the others are
+/// 64-byte enum-like strings. 4 KiB leaves a generous margin without
+/// letting a malicious sender fill the 512 MB body limit on a non-file
+/// field. Audit reference: M-3 in
+/// `audits/comprehensive_security_report.md`.
+const MAX_TEXT_FIELD_BYTES: usize = 4 * 1024;
+
+/// Drain `field` into a String, refusing once `max` bytes have been seen.
+/// `Field::text()` is otherwise unbounded within the request body limit,
+/// so a single multipart field could hold ~512 MB of `username` data and
+/// pin a worker for the full timeout.
+async fn bounded_field_text(
+    field: &mut axum::extract::multipart::Field<'_>,
+    max: usize,
+) -> Result<String, Response> {
+    let mut buf: Vec<u8> = Vec::new();
+    loop {
+        match field.chunk().await {
+            Ok(Some(chunk)) => {
+                if buf.len() + chunk.len() > max {
+                    let field_name = field.name().unwrap_or("(anonymous)").to_string();
+                    return Err(ApiError::BadRequest(format!(
+                        "multipart field '{field_name}' exceeds {max}-byte limit"
+                    ))
+                    .into_response());
+                }
+                buf.extend_from_slice(&chunk);
+            }
+            Ok(None) => break,
+            Err(e) => {
+                return Err(ApiError::BadRequest(format!("multipart field chunk error: {e}"))
+                    .into_response());
+            }
+        }
+    }
+    String::from_utf8(buf).map_err(|_| {
+        ApiError::BadRequest("multipart text field is not valid UTF-8".into()).into_response()
+    })
 }
 
 /// Stream a single `import_file` multipart field to disk under a fresh UUID,
