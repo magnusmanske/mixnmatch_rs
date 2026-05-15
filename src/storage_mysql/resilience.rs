@@ -144,10 +144,7 @@ pub(crate) const ESCALATION_LADDER_SECS: &[u64] = &[240, 480, 900];
 /// for genuine timeouts.
 ///
 /// `context` is included in retry log messages.
-pub(crate) async fn with_escalating_timeout<'a, R, F>(
-    context: &str,
-    mut attempt: F,
-) -> Result<R>
+pub(crate) async fn with_escalating_timeout<'a, R, F>(context: &str, mut attempt: F) -> Result<R>
 where
     F: FnMut(u64) -> BoxFuture<'a, Result<R>> + Send + 'a,
 {
@@ -334,7 +331,7 @@ mod tests {
                 if s.len() > 2 {
                     Err(make_1969())
                 } else {
-                    Ok(s.iter().copied().collect())
+                    Ok(s.to_vec())
                 }
             }
             .boxed()
@@ -389,10 +386,7 @@ mod tests {
         let calls = AtomicUsize::new(0);
         let out: usize = fetch_with_adaptive_batch(1000, "test", |n| {
             calls.fetch_add(1, Ordering::SeqCst);
-            async move {
-                if n <= 100 { Ok(n) } else { Err(make_1969()) }
-            }
-            .boxed()
+            async move { if n <= 100 { Ok(n) } else { Err(make_1969()) } }.boxed()
         })
         .await
         .unwrap();
@@ -425,7 +419,10 @@ mod tests {
         .unwrap();
         assert_eq!(out, ESCALATION_LADDER_SECS[0]);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
-        assert_eq!(observed_budgets.lock().unwrap().clone(), vec![ESCALATION_LADDER_SECS[0]]);
+        assert_eq!(
+            observed_budgets.lock().unwrap().clone(),
+            vec![ESCALATION_LADDER_SECS[0]]
+        );
     }
 
     #[tokio::test]
@@ -454,7 +451,11 @@ mod tests {
         .await;
         assert!(result.is_err());
         assert!(!is_max_statement_time_err(&result.unwrap_err()));
-        assert_eq!(calls.load(Ordering::SeqCst), 1, "non-1969 must not escalate");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "non-1969 must not escalate"
+        );
     }
 
     #[tokio::test]
@@ -464,7 +465,11 @@ mod tests {
         let out: u64 = with_escalating_timeout("test", |secs| {
             let attempt = calls.fetch_add(1, Ordering::SeqCst);
             async move {
-                if attempt == 0 { Err(make_1969()) } else { Ok(secs) }
+                if attempt == 0 {
+                    Err(make_1969())
+                } else {
+                    Ok(secs)
+                }
             }
             .boxed()
         })
@@ -479,7 +484,10 @@ mod tests {
         let ladder = ESCALATION_LADDER_SECS;
         assert!(!ladder.is_empty());
         for w in ladder.windows(2) {
-            assert!(w[0] < w[1], "ladder must be strictly increasing: {ladder:?}");
+            assert!(
+                w[0] < w[1],
+                "ladder must be strictly increasing: {ladder:?}"
+            );
         }
         assert!(
             *ladder.last().unwrap() <= 900,
