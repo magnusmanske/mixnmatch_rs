@@ -4,7 +4,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use std::sync::LazyLock;
 use rand::RngExt;
-use regex::Regex;
+use scraper::{ElementRef, Html, Selector};
 
 use super::BespokeScraper;
 
@@ -12,6 +12,11 @@ use super::BespokeScraper;
 // Dreadnought Project - Naval Personnel (722)
 
 const START_URL: &str = "http://www.dreadnoughtproject.org/tfs/index.php?title=Category:People";
+
+const ENTRY_HREF_PREFIX: &str = "/tfs/index.php/";
+const PEOPLE_HEADING: &str = r#"Pages in category "People""#;
+const NEXT_PAGE_LABEL: &str = "next 200";
+const CATEGORY_TITLE: &str = "Category:People";
 
 #[derive(Debug)]
 pub struct BespokeScraper722 {
@@ -36,7 +41,6 @@ impl BespokeScraper for BespokeScraper722 {
                 },
                 Err(_) => break,
             };
-            let html = Self::collapse_whitespace(&html);
             let entries = Self::parse_entries(self.catalog_id(), &html);
             entry_cache.extend(entries);
             self.maybe_flush_cache(&mut entry_cache).await?;
@@ -47,110 +51,112 @@ impl BespokeScraper for BespokeScraper722 {
     }
 }
 
+fn a_selector() -> &'static Selector {
+    static S: LazyLock<Selector> = LazyLock::new(|| Selector::parse("a[href]").unwrap());
+    &S
+}
+fn li_a_selector() -> &'static Selector {
+    static S: LazyLock<Selector> = LazyLock::new(|| Selector::parse("li > a[href]").unwrap());
+    &S
+}
+fn h2_selector() -> &'static Selector {
+    static S: LazyLock<Selector> = LazyLock::new(|| Selector::parse("h2").unwrap());
+    &S
+}
+
 impl BespokeScraper722 {
-    /// Collapse all runs of whitespace (including newlines) to a single space.
-    pub(crate) fn collapse_whitespace(html: &str) -> String {
-        static RE_WS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+").unwrap());
-        RE_WS.replace_all(html, " ").to_string()
-    }
-
-    /// Find the "next 200" link for pagination.
-    /// Matches `<a href="(URL)" title="Category:People">next 200</a>` and replaces `&amp;` with `&`.
+    /// Find the "next 200" link for pagination. The DOM decodes `&amp;`
+    /// in attribute values automatically, so no manual replace is needed.
+    /// Returns an absolute URL (relative `/...` paths are prefixed with
+    /// the host; bare query-string paths are joined to the start URL).
     pub(crate) fn find_next_page_url(html: &str) -> Option<String> {
-        static RE_NEXT: LazyLock<Regex> = LazyLock::new(|| Regex::new(
-                r#"<a href="([^"]+)" title="Category:People">next 200</a>"#
-            )
-            .unwrap());
-        let raw_url = RE_NEXT.captures(html)?.get(1)?.as_str();
-        let url = raw_url.replace("&amp;", "&");
-        // If the URL is relative, make it absolute
-        if url.starts_with('/') {
-            Some(format!("http://www.dreadnoughtproject.org{}", url))
-        } else if url.starts_with("http") {
-            Some(url)
-        } else {
-            Some(format!(
-                "http://www.dreadnoughtproject.org/tfs/index.php?{}",
-                url
-            ))
+        let doc = Html::parse_fragment(html);
+        for a in doc.select(a_selector()) {
+            if a.text().collect::<String>().trim() != NEXT_PAGE_LABEL {
+                continue;
+            }
+            if a.value().attr("title") != Some(CATEGORY_TITLE) {
+                continue;
+            }
+            let href = a.value().attr("href")?;
+            return Some(absolutize(href));
         }
+        None
     }
 
-    /// Parse entries from the "Pages in category" block.
-    /// Finds the block between `<h2>Pages in category "People"</h2>` and `<div id="catlinks"`,
-    /// then matches all `<li><a href="/tfs/index.php/([^"]+)" title="([^"]+)">`.
+    /// Parse entries from the "Pages in category" block. The block
+    /// boundary (heading → `<div id="catlinks">`) is preserved by
+    /// walking the heading's following siblings.
     pub(crate) fn parse_entries(catalog_id: usize, html: &str) -> Vec<ExtendedEntry> {
-        let block = match Self::extract_people_block(html) {
-            Some(b) => b,
-            None => return vec![],
+        let doc = Html::parse_fragment(html);
+        let Some(heading) = doc.select(h2_selector()).find(|h2| {
+            h2.text().collect::<String>().trim() == PEOPLE_HEADING
+        }) else {
+            return vec![];
         };
-        Self::parse_entries_from_block(catalog_id, &block)
-    }
 
-    /// Extract the block between the "Pages in category" heading and catlinks div.
-    pub(crate) fn extract_people_block(html: &str) -> Option<String> {
-        static RE_BLOCK: LazyLock<Regex> = LazyLock::new(|| Regex::new(
-                r#"(?s)<h2>Pages in category "People"</h2>(.*?)<div id="catlinks""#
-            )
-            .unwrap());
-        Some(RE_BLOCK.captures(html)?.get(1)?.as_str().to_string())
-    }
-
-    /// Parse individual entries from the people block.
-    pub(crate) fn parse_entries_from_block(
-        catalog_id: usize,
-        block: &str,
-    ) -> Vec<ExtendedEntry> {
-        static RE_ENTRY: LazyLock<Regex> = LazyLock::new(|| Regex::new(
-                r#"<li><a href="/tfs/index\.php/([^"]+)" title="([^"]+)">"#
-            )
-            .unwrap());
-        RE_ENTRY
-            .captures_iter(block)
-            .filter_map(|caps| {
-                let id = caps.get(1)?.as_str().to_string();
-                let name = caps.get(2)?.as_str().trim().to_string();
-                if name.is_empty() || id.is_empty() {
-                    return None;
+        let mut entries = Vec::new();
+        for sib in heading.next_siblings() {
+            let Some(elem) = ElementRef::wrap(sib) else {
+                continue;
+            };
+            if is_catlinks_div(elem) {
+                break;
+            }
+            for a in elem.select(li_a_selector()) {
+                if let Some(ee) = entry_from_anchor(catalog_id, a) {
+                    entries.push(ee);
                 }
-                let ext_url = format!(
-                    "http://www.dreadnoughtproject.org/tfs/index.php?title={}",
-                    id
-                );
-                let entry = Entry {
-                    catalog: catalog_id,
-                    ext_id: id,
-                    ext_name: name,
-                    ext_desc: String::new(),
-                    ext_url,
-                    random: rand::rng().random(),
-                    type_name: Some("Q5".to_string()),
-                    ..Default::default()
-                };
-                Some(ExtendedEntry {
-                    entry,
-                    ..Default::default()
-                })
-            })
-            .collect()
+            }
+        }
+        entries
     }
+}
+
+fn is_catlinks_div(elem: ElementRef<'_>) -> bool {
+    elem.value().name() == "div" && elem.value().attr("id") == Some("catlinks")
+}
+
+fn absolutize(href: &str) -> String {
+    if href.starts_with('/') {
+        format!("http://www.dreadnoughtproject.org{href}")
+    } else if href.starts_with("http") {
+        href.to_string()
+    } else {
+        format!("http://www.dreadnoughtproject.org/tfs/index.php?{href}")
+    }
+}
+
+fn entry_from_anchor(catalog_id: usize, a: ElementRef<'_>) -> Option<ExtendedEntry> {
+    let href = a.value().attr("href")?;
+    let id = href.strip_prefix(ENTRY_HREF_PREFIX)?;
+    if id.is_empty() {
+        return None;
+    }
+    let name = a.value().attr("title").unwrap_or("").trim().to_string();
+    if name.is_empty() {
+        return None;
+    }
+    let ext_url = format!("http://www.dreadnoughtproject.org/tfs/index.php?title={id}");
+    let entry = Entry {
+        catalog: catalog_id,
+        ext_id: id.to_string(),
+        ext_name: name,
+        ext_desc: String::new(),
+        ext_url,
+        random: rand::rng().random(),
+        type_name: Some("Q5".to_string()),
+        ..Default::default()
+    };
+    Some(ExtendedEntry {
+        entry,
+        ..Default::default()
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_722_collapse_whitespace() {
-        assert_eq!(
-            BespokeScraper722::collapse_whitespace("hello  \n  world"),
-            "hello world"
-        );
-        assert_eq!(
-            BespokeScraper722::collapse_whitespace("a\t\tb"),
-            "a b"
-        );
-    }
 
     #[test]
     fn test_722_find_next_page_url_present() {
@@ -166,7 +172,8 @@ mod tests {
     }
 
     #[test]
-    fn test_722_find_next_page_url_absent() {
+    fn test_722_find_next_page_url_wrong_title() {
+        // Anchor text matches but title does not — must be skipped.
         let html = r#"<a href="/other" title="Other">next 200</a>"#;
         assert_eq!(BespokeScraper722::find_next_page_url(html), None);
     }
@@ -178,7 +185,7 @@ mod tests {
     }
 
     #[test]
-    fn test_722_find_next_page_url_amp_replaced() {
+    fn test_722_find_next_page_url_amp_decoded() {
         let html = r#"<a href="/tfs/index.php?title=Category:People&amp;pagefrom=X&amp;sort=name" title="Category:People">next 200</a>"#;
         let url = BespokeScraper722::find_next_page_url(html).unwrap();
         assert!(!url.contains("&amp;"));
@@ -186,29 +193,16 @@ mod tests {
     }
 
     #[test]
-    fn test_722_extract_people_block() {
+    fn test_722_parse_entries_basic() {
         let html = concat!(
             r#"<h2>Pages in category "People"</h2>"#,
-            r#"<ul><li>content here</li></ul>"#,
-            r#"<div id="catlinks""#,
-        );
-        let block = BespokeScraper722::extract_people_block(html).unwrap();
-        assert!(block.contains("content here"));
-    }
-
-    #[test]
-    fn test_722_extract_people_block_missing() {
-        let html = "<h2>Other heading</h2><div id=\"catlinks\"";
-        assert_eq!(BespokeScraper722::extract_people_block(html), None);
-    }
-
-    #[test]
-    fn test_722_parse_entries_from_block_basic() {
-        let block = concat!(
+            r#"<ul>"#,
             r#"<li><a href="/tfs/index.php/John_Smith" title="John Smith">John Smith</a></li>"#,
             r#"<li><a href="/tfs/index.php/Jane_Doe" title="Jane Doe">Jane Doe</a></li>"#,
+            r#"</ul>"#,
+            r#"<div id="catlinks"></div>"#,
         );
-        let entries = BespokeScraper722::parse_entries_from_block(722, block);
+        let entries = BespokeScraper722::parse_entries(722, html);
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].entry.ext_id, "John_Smith");
         assert_eq!(entries[0].entry.ext_name, "John Smith");
@@ -222,9 +216,32 @@ mod tests {
     }
 
     #[test]
-    fn test_722_parse_entries_from_block_empty() {
-        let entries = BespokeScraper722::parse_entries_from_block(722, "");
+    fn test_722_parse_entries_no_heading() {
+        let entries = BespokeScraper722::parse_entries(722, "<html><body>nothing</body></html>");
         assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn test_722_parse_entries_empty() {
+        let entries = BespokeScraper722::parse_entries(722, "");
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn test_722_parse_entries_stops_at_catlinks() {
+        // <li><a> elements inside #catlinks (post-content footer) must be ignored.
+        let html = concat!(
+            r#"<h2>Pages in category "People"</h2>"#,
+            r#"<ul>"#,
+            r#"<li><a href="/tfs/index.php/Real_Person" title="Real Person">Real Person</a></li>"#,
+            r#"</ul>"#,
+            r#"<div id="catlinks">"#,
+            r#"<ul><li><a href="/tfs/index.php/Footer_Link" title="Footer Link">Footer Link</a></li></ul>"#,
+            r#"</div>"#,
+        );
+        let entries = BespokeScraper722::parse_entries(722, html);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].entry.ext_id, "Real_Person");
     }
 
     #[test]
@@ -236,8 +253,7 @@ mod tests {
             r#"<li><a href="/tfs/index.php/Admiral_Nelson" title="Admiral Nelson">Admiral Nelson</a></li>"#,
             r#"<li><a href="/tfs/index.php/Captain_Cook" title="Captain Cook">Captain Cook</a></li>"#,
             r#"</ul>"#,
-            r#"<div id="catlinks""#,
-            r#" class="catlinks">other stuff</div>"#,
+            r#"<div id="catlinks" class="catlinks">other stuff</div>"#,
         );
         let entries = BespokeScraper722::parse_entries(722, html);
         assert_eq!(entries.len(), 2);
@@ -254,20 +270,53 @@ mod tests {
 
     #[test]
     fn test_722_parse_entries_desc_is_empty() {
-        let block = r#"<li><a href="/tfs/index.php/Test_Person" title="Test Person">Test Person</a></li>"#;
-        let entries = BespokeScraper722::parse_entries_from_block(722, block);
+        let html = concat!(
+            r#"<h2>Pages in category "People"</h2>"#,
+            r#"<ul>"#,
+            r#"<li><a href="/tfs/index.php/Test_Person" title="Test Person">Test Person</a></li>"#,
+            r#"</ul>"#,
+            r#"<div id="catlinks"></div>"#,
+        );
+        let entries = BespokeScraper722::parse_entries(722, html);
         assert_eq!(entries[0].entry.ext_desc, "");
     }
 
     #[test]
-    fn test_722_ext_url_format() {
-        let id = "John_Jellicoe%2C_1st_Earl_Jellicoe";
-        let url = format!(
-            "http://www.dreadnoughtproject.org/tfs/index.php?title={}",
-            id
+    fn test_722_parse_entries_tolerates_extra_attributes() {
+        let html = concat!(
+            r#"<h2>Pages in category "People"</h2>"#,
+            r#"<ul>"#,
+            r#"<li class="page"><a class="link" href="/tfs/index.php/X" title="X">X</a></li>"#,
+            r#"</ul>"#,
+            r#"<div id="catlinks"></div>"#,
         );
-        assert!(url.starts_with("http://www.dreadnoughtproject.org/tfs/index.php?title="));
-        assert!(url.ends_with(id));
+        let entries = BespokeScraper722::parse_entries(722, html);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].entry.ext_id, "X");
+    }
+
+    #[test]
+    fn test_722_absolutize_relative_path() {
+        assert_eq!(
+            absolutize("/tfs/foo"),
+            "http://www.dreadnoughtproject.org/tfs/foo"
+        );
+    }
+
+    #[test]
+    fn test_722_absolutize_absolute_url() {
+        assert_eq!(
+            absolutize("http://example.com/foo"),
+            "http://example.com/foo"
+        );
+    }
+
+    #[test]
+    fn test_722_absolutize_query_only() {
+        assert_eq!(
+            absolutize("title=Other"),
+            "http://www.dreadnoughtproject.org/tfs/index.php?title=Other"
+        );
     }
 
     #[test]

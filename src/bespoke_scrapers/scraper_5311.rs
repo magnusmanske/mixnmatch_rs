@@ -4,7 +4,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use std::sync::LazyLock;
 use rand::RngExt;
-use regex::Regex;
+use scraper::{ElementRef, Html, Selector};
 
 use super::BespokeScraper;
 
@@ -13,6 +13,11 @@ use super::BespokeScraper;
 
 const START_URL: &str =
     "https://wiki.ormianie.pl/index.php?title=Kategoria:Biografie_według_miejsc";
+
+const SUBCATEGORY_PREFIX: &str = "/index.php?title=Kategoria:Osoby_";
+const ENTRY_PREFIX: &str = "/index.php?title=";
+const NEXT_PAGE_LABEL: &str = "następne 200";
+const PAGES_HEADING_PREFIX: &str = "Strony w kategorii";
 
 #[derive(Debug)]
 pub struct BespokeScraper5311 {
@@ -30,7 +35,6 @@ impl BespokeScraper for BespokeScraper5311 {
 
         // Step 1: Fetch the top-level category page
         let top_html = client.get(START_URL).send().await?.text().await?;
-        let top_html = Self::collapse_whitespace(&top_html);
         let subcategory_urls = Self::parse_subcategory_links(&top_html);
 
         // Step 2: For each subcategory, fetch its page and follow pagination
@@ -45,10 +49,9 @@ impl BespokeScraper for BespokeScraper5311 {
                     },
                     Err(_) => break,
                 };
-                let html = Self::collapse_whitespace(&html);
                 let entries = Self::parse_entries(self.catalog_id(), &html);
                 entry_cache.extend(entries);
-            self.maybe_flush_cache(&mut entry_cache).await?;
+                self.maybe_flush_cache(&mut entry_cache).await?;
                 page_url = Self::find_next_page_url(&html);
             }
         }
@@ -57,96 +60,118 @@ impl BespokeScraper for BespokeScraper5311 {
     }
 }
 
+fn a_selector() -> &'static Selector {
+    static S: LazyLock<Selector> = LazyLock::new(|| Selector::parse("a[href]").unwrap());
+    &S
+}
+fn li_a_selector() -> &'static Selector {
+    static S: LazyLock<Selector> = LazyLock::new(|| Selector::parse("li > a[href]").unwrap());
+    &S
+}
+fn h2_selector() -> &'static Selector {
+    static S: LazyLock<Selector> = LazyLock::new(|| Selector::parse("h2").unwrap());
+    &S
+}
+
 impl BespokeScraper5311 {
-    /// Collapse all runs of whitespace (including newlines) to a single space.
-    pub(crate) fn collapse_whitespace(html: &str) -> String {
-        static RE_WS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+").unwrap());
-        RE_WS.replace_all(html, " ").to_string()
-    }
-
-    /// Parse subcategory links from the top-level category page.
-    /// Matches `<li><a href="(/index.php\?title=Kategoria:Osoby_[^"]*)"`.
+    /// Parse subcategory links (`/index.php?title=Kategoria:Osoby_*`) from
+    /// the top-level category page. Returns the *relative* hrefs as found
+    /// on the page; the caller prepends the host.
     pub(crate) fn parse_subcategory_links(html: &str) -> Vec<String> {
-        static RE_SUBCAT: LazyLock<Regex> = LazyLock::new(|| Regex::new(
-                r#"<li><a href="(/index\.php\?title=Kategoria:Osoby_[^"]*)""#
-            )
-            .unwrap());
-        RE_SUBCAT
-            .captures_iter(html)
-            .filter_map(|caps| Some(caps.get(1)?.as_str().to_string()))
-            .collect()
-    }
-
-    /// Find the "następne 200" (next 200) pagination link.
-    /// Returns the absolute URL if found.
-    pub(crate) fn find_next_page_url(html: &str) -> Option<String> {
-        static RE_NEXT: LazyLock<Regex> = LazyLock::new(|| Regex::new(
-                r#"<a href="(/index\.php\?[^"]*)"[^>]*>następne 200</a>"#
-            )
-            .unwrap());
-        let relative = RE_NEXT.captures(html)?.get(1)?.as_str();
-        let url = relative.replace("&amp;", "&");
-        Some(format!("https://wiki.ormianie.pl{}", url))
-    }
-
-    /// Parse person entries from a subcategory page.
-    /// Finds the block between "Strony w kategorii" heading and `<div id="catlinks"`,
-    /// then matches all person links.
-    pub(crate) fn parse_entries(catalog_id: usize, html: &str) -> Vec<ExtendedEntry> {
-        let block = match Self::extract_pages_block(html) {
-            Some(b) => b,
-            None => return vec![],
-        };
-        Self::parse_entries_from_block(catalog_id, &block)
-    }
-
-    /// Extract the block between "Strony w kategorii" heading and catlinks div.
-    pub(crate) fn extract_pages_block(html: &str) -> Option<String> {
-        static RE_BLOCK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?s)<h2>Strony w kategorii[^<]*</h2>(.*?)<div id="catlinks""#)
-                    .unwrap());
-        Some(RE_BLOCK.captures(html)?.get(1)?.as_str().to_string())
-    }
-
-    /// Parse individual entries from the pages block.
-    pub(crate) fn parse_entries_from_block(
-        catalog_id: usize,
-        block: &str,
-    ) -> Vec<ExtendedEntry> {
-        static RE_ENTRY: LazyLock<Regex> = LazyLock::new(|| Regex::new(
-                r#"<li><a href="/index\.php\?title=([^"]+)" title="([^"]+)">"#
-            )
-            .unwrap());
-        RE_ENTRY
-            .captures_iter(block)
-            .filter_map(|caps| {
-                let id = caps.get(1)?.as_str().to_string();
-                let name = caps.get(2)?.as_str().trim().to_string();
-                if name.is_empty() || id.is_empty() {
-                    return None;
-                }
-                // Skip category pages that might appear in the block
-                if id.starts_with("Kategoria:") {
-                    return None;
-                }
-                let ext_url =
-                    format!("https://wiki.ormianie.pl/index.php?title={}", id);
-                let entry = Entry {
-                    catalog: catalog_id,
-                    ext_id: id,
-                    ext_name: name,
-                    ext_desc: String::new(),
-                    ext_url,
-                    random: rand::rng().random(),
-                    type_name: Some("Q5".to_string()),
-                    ..Default::default()
-                };
-                Some(ExtendedEntry {
-                    entry,
-                    ..Default::default()
-                })
+        let doc = Html::parse_fragment(html);
+        doc.select(li_a_selector())
+            .filter_map(|a| {
+                let href = a.value().attr("href")?;
+                href.starts_with(SUBCATEGORY_PREFIX)
+                    .then(|| href.to_string())
             })
             .collect()
     }
+
+    /// Find the "następne 200" (next 200) pagination link. The DOM
+    /// returns the `href` value with HTML entities already decoded
+    /// (e.g. `&amp;` → `&`), so the manual replace from the old regex
+    /// path is no longer needed.
+    pub(crate) fn find_next_page_url(html: &str) -> Option<String> {
+        let doc = Html::parse_fragment(html);
+        for a in doc.select(a_selector()) {
+            if a.text().collect::<String>().trim() != NEXT_PAGE_LABEL {
+                continue;
+            }
+            let href = a.value().attr("href")?;
+            if href.starts_with("/index.php") {
+                return Some(format!("https://wiki.ormianie.pl{href}"));
+            }
+        }
+        None
+    }
+
+    /// Parse person entries from a subcategory page. The block boundary
+    /// (`<h2>Strony w kategorii …</h2>` → `<div id="catlinks">`) is
+    /// preserved by walking the heading's following siblings until the
+    /// catlinks div is reached; non-person `<li><a>` links elsewhere on
+    /// the page (sidebar, etc.) are ignored.
+    pub(crate) fn parse_entries(catalog_id: usize, html: &str) -> Vec<ExtendedEntry> {
+        let doc = Html::parse_fragment(html);
+        let Some(heading) = doc.select(h2_selector()).find(|h2| {
+            h2.text()
+                .collect::<String>()
+                .trim_start()
+                .starts_with(PAGES_HEADING_PREFIX)
+        }) else {
+            return vec![];
+        };
+
+        let mut entries = Vec::new();
+        for sib in heading.next_siblings() {
+            let Some(elem) = ElementRef::wrap(sib) else {
+                continue;
+            };
+            if is_catlinks_div(elem) {
+                break;
+            }
+            for a in elem.select(li_a_selector()) {
+                if let Some(ee) = entry_from_anchor(catalog_id, a) {
+                    entries.push(ee);
+                }
+            }
+        }
+        entries
+    }
+}
+
+fn is_catlinks_div(elem: ElementRef<'_>) -> bool {
+    elem.value().name() == "div" && elem.value().attr("id") == Some("catlinks")
+}
+
+fn entry_from_anchor(catalog_id: usize, a: ElementRef<'_>) -> Option<ExtendedEntry> {
+    let href = a.value().attr("href")?;
+    let id = href.strip_prefix(ENTRY_PREFIX)?;
+    if id.is_empty() || id.starts_with("Kategoria:") {
+        return None;
+    }
+    // The MediaWiki category-listing markup uses `title` for the
+    // human-readable page name; the link text matches it but is
+    // slightly less robust against trailing whitespace.
+    let name = a.value().attr("title").unwrap_or("").trim().to_string();
+    if name.is_empty() {
+        return None;
+    }
+    let ext_url = format!("https://wiki.ormianie.pl/index.php?title={id}");
+    let entry = Entry {
+        catalog: catalog_id,
+        ext_id: id.to_string(),
+        ext_name: name,
+        ext_desc: String::new(),
+        ext_url,
+        random: rand::rng().random(),
+        type_name: Some("Q5".to_string()),
+        ..Default::default()
+    };
+    Some(ExtendedEntry {
+        entry,
+        ..Default::default()
+    })
 }
 
 #[cfg(test)]
@@ -154,18 +179,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_5311_collapse_whitespace() {
-        assert_eq!(
-            BespokeScraper5311::collapse_whitespace("hello  \n  world"),
-            "hello world"
-        );
-    }
-
-    #[test]
     fn test_5311_parse_subcategory_links_basic() {
         let html = concat!(
+            r#"<ul>"#,
             r#"<li><a href="/index.php?title=Kategoria:Osoby_z_Krakowa" title="Osoby z Krakowa">Osoby z Krakowa</a></li>"#,
             r#"<li><a href="/index.php?title=Kategoria:Osoby_z_Warszawy" title="Osoby z Warszawy">Osoby z Warszawy</a></li>"#,
+            r#"</ul>"#,
         );
         let links = BespokeScraper5311::parse_subcategory_links(html);
         assert_eq!(links.len(), 2);
@@ -176,8 +195,10 @@ mod tests {
     #[test]
     fn test_5311_parse_subcategory_links_ignores_non_osoby() {
         let html = concat!(
+            r#"<ul>"#,
             r#"<li><a href="/index.php?title=Kategoria:Osoby_z_Krakowa" title="test">test</a></li>"#,
             r#"<li><a href="/index.php?title=Kategoria:Inne" title="other">other</a></li>"#,
+            r#"</ul>"#,
         );
         let links = BespokeScraper5311::parse_subcategory_links(html);
         assert_eq!(links.len(), 1);
@@ -207,7 +228,8 @@ mod tests {
     }
 
     #[test]
-    fn test_5311_find_next_page_url_amp_replaced() {
+    fn test_5311_find_next_page_url_amp_decoded() {
+        // scraper decodes `&amp;` in attribute values automatically
         let html = r#"<a href="/index.php?title=Kat&amp;from=A&amp;to=Z" class="next">następne 200</a>"#;
         let url = BespokeScraper5311::find_next_page_url(html).unwrap();
         assert!(!url.contains("&amp;"));
@@ -215,29 +237,25 @@ mod tests {
     }
 
     #[test]
-    fn test_5311_extract_pages_block() {
+    fn test_5311_find_next_page_url_ignores_other_links() {
+        // Anchor text must be exactly the pagination label.
+        let html = r#"<a href="/index.php?title=Other">previous 200</a>
+                      <a href="/index.php?title=Real&amp;p=2">następne 200</a>"#;
+        let url = BespokeScraper5311::find_next_page_url(html).unwrap();
+        assert!(url.contains("title=Real"));
+    }
+
+    #[test]
+    fn test_5311_parse_entries_basic() {
         let html = concat!(
-            r#"<h2>Strony w kategorii „Osoby z Krakowa"</h2>"#,
-            r#"<ul><li>person list</li></ul>"#,
-            r#"<div id="catlinks""#,
-        );
-        let block = BespokeScraper5311::extract_pages_block(html).unwrap();
-        assert!(block.contains("person list"));
-    }
-
-    #[test]
-    fn test_5311_extract_pages_block_missing() {
-        let html = "<h2>Other heading</h2><div id=\"catlinks\"";
-        assert_eq!(BespokeScraper5311::extract_pages_block(html), None);
-    }
-
-    #[test]
-    fn test_5311_parse_entries_from_block_basic() {
-        let block = concat!(
+            r#"<h2>Strony w kategorii „Osoby z Lwowa"</h2>"#,
+            r#"<ul>"#,
             r#"<li><a href="/index.php?title=Jan_Kowalski" title="Jan Kowalski">Jan Kowalski</a></li>"#,
             r#"<li><a href="/index.php?title=Anna_Nowak" title="Anna Nowak">Anna Nowak</a></li>"#,
+            r#"</ul>"#,
+            r#"<div id="catlinks">other</div>"#,
         );
-        let entries = BespokeScraper5311::parse_entries_from_block(5311, block);
+        let entries = BespokeScraper5311::parse_entries(5311, html);
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].entry.ext_id, "Jan_Kowalski");
         assert_eq!(entries[0].entry.ext_name, "Jan Kowalski");
@@ -252,19 +270,47 @@ mod tests {
     }
 
     #[test]
-    fn test_5311_parse_entries_from_block_skips_categories() {
-        let block = concat!(
+    fn test_5311_parse_entries_skips_categories() {
+        let html = concat!(
+            r#"<h2>Strony w kategorii „X"</h2>"#,
+            r#"<ul>"#,
             r#"<li><a href="/index.php?title=Jan_Kowalski" title="Jan Kowalski">Jan Kowalski</a></li>"#,
             r#"<li><a href="/index.php?title=Kategoria:Inne" title="Kategoria:Inne">Kategoria:Inne</a></li>"#,
+            r#"</ul>"#,
+            r#"<div id="catlinks"></div>"#,
         );
-        let entries = BespokeScraper5311::parse_entries_from_block(5311, block);
+        let entries = BespokeScraper5311::parse_entries(5311, html);
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].entry.ext_id, "Jan_Kowalski");
     }
 
     #[test]
-    fn test_5311_parse_entries_from_block_empty() {
-        let entries = BespokeScraper5311::parse_entries_from_block(5311, "");
+    fn test_5311_parse_entries_stops_at_catlinks() {
+        // Links inside #catlinks (the post-content footer) must be ignored,
+        // matching the original "block boundary" behaviour.
+        let html = concat!(
+            r#"<h2>Strony w kategorii „X"</h2>"#,
+            r#"<ul>"#,
+            r#"<li><a href="/index.php?title=Real_Person" title="Real Person">Real Person</a></li>"#,
+            r#"</ul>"#,
+            r#"<div id="catlinks">"#,
+            r#"<ul><li><a href="/index.php?title=Footer_Link" title="Footer Link">Footer Link</a></li></ul>"#,
+            r#"</div>"#,
+        );
+        let entries = BespokeScraper5311::parse_entries(5311, html);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].entry.ext_id, "Real_Person");
+    }
+
+    #[test]
+    fn test_5311_parse_entries_no_heading() {
+        let entries = BespokeScraper5311::parse_entries(5311, "<html><body>nothing</body></html>");
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn test_5311_parse_entries_empty() {
+        let entries = BespokeScraper5311::parse_entries(5311, "");
         assert!(entries.is_empty());
     }
 
@@ -277,8 +323,7 @@ mod tests {
             r#"<li><a href="/index.php?title=Piotr_Barącz" title="Piotr Barącz">Piotr Barącz</a></li>"#,
             r#"<li><a href="/index.php?title=Grzegorz_Piramowicz" title="Grzegorz Piramowicz">Grzegorz Piramowicz</a></li>"#,
             r#"</ul>"#,
-            r#"<div id="catlinks""#,
-            r#" class="catlinks">other</div>"#,
+            r#"<div id="catlinks" class="catlinks">other</div>"#,
         );
         let entries = BespokeScraper5311::parse_entries(5311, html);
         assert_eq!(entries.len(), 2);
@@ -287,20 +332,20 @@ mod tests {
     }
 
     #[test]
-    fn test_5311_parse_entries_no_block() {
-        let html = "<html><body>no people block</body></html>";
-        let entries = BespokeScraper5311::parse_entries(5311, html);
-        assert!(entries.is_empty());
-    }
-
-    #[test]
-    fn test_5311_ext_url_format() {
-        let id = "Test_Person";
-        let url = format!("https://wiki.ormianie.pl/index.php?title={}", id);
-        assert_eq!(
-            url,
-            "https://wiki.ormianie.pl/index.php?title=Test_Person"
+    fn test_5311_parse_entries_tolerates_extra_attributes() {
+        // A regression test for the previous regex's brittleness: extra
+        // attributes between `<li>` and `<a>` or on `<a>` should not
+        // break extraction.
+        let html = concat!(
+            r#"<h2>Strony w kategorii „X"</h2>"#,
+            r#"<ul>"#,
+            r#"<li class="x"><a class="y" href="/index.php?title=Test" title="Test">Test</a></li>"#,
+            r#"</ul>"#,
+            r#"<div id="catlinks"></div>"#,
         );
+        let entries = BespokeScraper5311::parse_entries(5311, html);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].entry.ext_id, "Test");
     }
 
     #[test]
