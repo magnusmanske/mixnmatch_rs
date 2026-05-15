@@ -6,6 +6,7 @@ mod cersei_queries;
 mod coordinate_matcher_queries;
 mod issue_queries;
 mod job_queries;
+mod resilience;
 mod row_mappers;
 mod taxon_queries;
 mod util;
@@ -54,44 +55,10 @@ use wikimisc::{timestamp::TimeStamp, wikibase::LocaleString};
 /// on large catalogs (Codeberg: catalog 7623).
 const AUTOMATCH_BIRTH_YEAR_BATCH_SIZE: usize = 1000;
 
-/// MariaDB server error code for "Query execution was interrupted
-/// (max_statement_time exceeded)" — raised when a SELECT runs past the
-/// per-statement budget configured by `mysql_misc::DEFAULT_MAX_STATEMENT_TIME_SECS`.
-const MARIADB_ERR_QUERY_INTERRUPTED: u16 = 1969;
-
-/// Returns true if `err`'s anyhow chain contains a `mysql_async::Error::Server`
-/// with code `1969` (max_statement_time exceeded). Walks the chain because
-/// real call sites surface this wrapped in `.context(...)`.
-fn is_max_statement_time_err(err: &anyhow::Error) -> bool {
-    err.chain().any(|cause| {
-        cause
-            .downcast_ref::<mysql_async::Error>()
-            .and_then(|me| match me {
-                mysql_async::Error::Server(se) => Some(se.code),
-                _ => None,
-            })
-            == Some(MARIADB_ERR_QUERY_INTERRUPTED)
-    })
-}
-
-/// Adaptive-retry batch sizing: halve, floored at 1 so we never retry
-/// with a no-op `LIMIT 0` that would stall a paginating loop.
-fn halve_batch_for_retry(batch_size: usize) -> usize {
-    (batch_size / 2).max(1)
-}
-
-/// Halve a slice length for a split-and-retry on 1969. Returns
-/// `(left_len, right_len)` with `left + right == n` and both halves
-/// non-empty, or `None` when `n <= 1` (the bottom-out signal: a
-/// single-id slice has nowhere smaller to go, so the caller must
-/// propagate the error instead of looping forever).
-fn split_for_retry(n: usize) -> Option<(usize, usize)> {
-    if n <= 1 {
-        return None;
-    }
-    let left = n / 2;
-    Some((left, n - left))
-}
+use resilience::{
+    ESCALATION_LADDER_SECS, fetch_with_adaptive_batch, process_slice_adaptive,
+    with_escalating_timeout,
+};
 
 /// Parsed shape of the `group` token consumed by `api_catalog_by_group`.
 /// Keeps classification (pure, easily testable) separate from SQL
@@ -199,6 +166,73 @@ impl StorageMySQL {
         P: Into<Params> + Send,
     {
         let rows: Vec<usize> = self.query_ro(sql, params).await?;
+        Ok(rows.into_iter().next().unwrap_or(0))
+    }
+
+    /// Resilient variant of [`Self::query_ro`]: on MariaDB error 1969
+    /// (`max_statement_time exceeded`) the call is retried with
+    /// progressively higher per-statement budgets, prepended via
+    /// `SET STATEMENT max_statement_time={secs} FOR <sql>`. See
+    /// [`ESCALATION_LADDER_SECS`] for the ladder.
+    ///
+    /// Use for "one-shot" SELECTs that occasionally graze the baseline
+    /// budget (catalog-wide counts, dashboard rollups, top-N reports) —
+    /// the kind of query where adaptive batching doesn't apply because
+    /// there is no batch knob to shrink.
+    ///
+    /// `context` is included in retry log messages so operators can
+    /// trace which caller escalated.
+    pub(super) async fn query_ro_resilient<P, T>(
+        &self,
+        sql: &str,
+        params: P,
+        context: &str,
+    ) -> Result<Vec<T>>
+    where
+        P: Into<Params> + Send,
+        T: mysql_async::prelude::FromRow + Send + 'static,
+    {
+        use futures::FutureExt;
+        let params: Params = params.into();
+        let base_sql: &str = sql;
+        let baseline = ESCALATION_LADDER_SECS[0];
+        with_escalating_timeout(context, |secs| {
+            let p = params.clone();
+            async move {
+                let prepared: String = if secs == baseline {
+                    base_sql.to_string()
+                } else {
+                    format!("SET STATEMENT max_statement_time={secs} FOR {base_sql}")
+                };
+                Ok(self
+                    .get_conn_ro()
+                    .await?
+                    .exec_iter(prepared, p)
+                    .await?
+                    .map_and_drop(from_row::<T>)
+                    .await?)
+            }
+            .boxed()
+        })
+        .await
+    }
+
+    /// Resilient counterpart of [`Self::query_count_ro`]: same one-shot
+    /// 1969 escalation as [`Self::query_ro_resilient`], but unwraps the
+    /// first `usize` (or 0 if no rows). Almost every `_count` helper in
+    /// this codebase aggregates across an entire catalog and is exactly
+    /// the kind of query that benefits from a higher per-statement
+    /// budget when the catalog is large.
+    pub(super) async fn query_count_ro_resilient<P>(
+        &self,
+        sql: &str,
+        params: P,
+        context: &str,
+    ) -> Result<usize>
+    where
+        P: Into<Params> + Send,
+    {
+        let rows: Vec<usize> = self.query_ro_resilient(sql, params, context).await?;
         Ok(rows.into_iter().next().unwrap_or(0))
     }
 
@@ -320,8 +354,17 @@ impl StorageMySQL {
               AND (pd.year_born != '' OR pd.year_died != '')
             ORDER BY e.id
             LIMIT :batch_size"#;
-        self.query_ro(sql, params! {catalog_id, after_id, batch_size})
-            .await
+        // Resilient: large catalogs occasionally have this keyset page
+        // graze the baseline budget (the `person_dates` join needs the
+        // index on `entry_id`, and `e.id > :after_id` still walks the
+        // PK). Caller compares `source_ids.len() < batch_size` so
+        // escalation preserves the contract.
+        self.query_ro_resilient(
+            sql,
+            params! {catalog_id, after_id, batch_size},
+            "birth_year_match_fetch_source_ids",
+        )
+        .await
     }
 
     /// For a bounded set of source entry ids, find Wikidata candidates
@@ -336,43 +379,21 @@ impl StorageMySQL {
     /// thousands of `e1` candidates before `HAVING count = 1`
     /// trims it), tripping the per-statement timeout even at the
     /// `AUTOMATCH_BIRTH_YEAR_BATCH_SIZE = 1000` keyset batch the
-    /// prior fix put in place. On 1969 we split the id slice in
-    /// half and retry both halves separately; the loop bottoms
-    /// out at slice length 1 (further split impossible) and
-    /// propagates the error there.
+    /// prior fix put in place. The shared
+    /// [`process_slice_adaptive`] helper handles the split-and-retry
+    /// loop; it bottoms out at slice length 1 and propagates the
+    /// error there.
     async fn birth_year_match_find_matches(
         &self,
         source_ids: &[usize],
     ) -> Result<Vec<(usize, usize)>> {
-        let mut out: Vec<(usize, usize)> = Vec::new();
-        let mut stack: Vec<&[usize]> = vec![source_ids];
-        while let Some(slice) = stack.pop() {
-            if slice.is_empty() {
-                continue;
-            }
-            match self.birth_year_match_find_matches_attempt(slice).await {
-                Ok(rows) => out.extend(rows),
-                Err(e) if is_max_statement_time_err(&e) => {
-                    let Some((left_len, _)) = split_for_retry(slice.len()) else {
-                        return Err(e);
-                    };
-                    let (a, b) = slice.split_at(left_len);
-                    log::warn!(
-                        "birth_year_match_find_matches: 1969 max_statement_time at {} ids; splitting into {} + {}",
-                        slice.len(),
-                        a.len(),
-                        b.len(),
-                    );
-                    // Push the right half first so the left half is
-                    // popped (and processed) before it — preserves
-                    // left-to-right order in `out` for easier tracing.
-                    stack.push(b);
-                    stack.push(a);
-                }
-                Err(e) => return Err(e),
-            }
-        }
-        Ok(out)
+        use futures::FutureExt;
+        process_slice_adaptive(
+            source_ids,
+            "birth_year_match_find_matches",
+            |slice| async move { self.birth_year_match_find_matches_attempt(slice).await }.boxed(),
+        )
+        .await
     }
 
     /// Single attempt at the cross-catalog same-name birth/death-year
@@ -1786,12 +1807,22 @@ impl Storage for StorageMySQL {
         offset: usize,
         batch_size: usize,
     ) -> Result<Vec<(usize, String)>> {
+        // Resilient because the OFFSET grows with progress through a large
+        // catalog and the cost of the index scan grows with it. The caller
+        // (`automatch_by_sitelink`) detects exhaustion via
+        // `entries.len() < batch_size`, so internally halving the LIMIT
+        // would terminate the loop early — escalation (which keeps the
+        // contract intact) is the right tool here.
         let sql = format!("SELECT `id`,`ext_name` FROM entry WHERE catalog=:catalog_id AND q IS NULL
 	            AND NOT EXISTS (SELECT * FROM `log` WHERE log.entry_id=entry.id AND log.action='remove_q')
 	            {}
 	            ORDER BY `id` LIMIT :batch_size OFFSET :offset",MatchState::not_fully_matched().get_sql());
-        self.query_ro(&sql, params! {catalog_id,offset,batch_size})
-            .await
+        self.query_ro_resilient(
+            &sql,
+            params! {catalog_id, offset, batch_size},
+            "automatch_by_sitelink_get_entries",
+        )
+        .await
     }
 
     async fn automatch_by_search_get_results(
@@ -1800,7 +1831,7 @@ impl Storage for StorageMySQL {
         after_id: usize,
         batch_size: usize,
     ) -> Result<Vec<AutomatchSearchRow>> {
-        // Two-stage page fetch + iterative split-and-retry on 1969. The
+        // Two-stage page fetch + iterative halve-and-retry on 1969. The
         // previous single-statement form correlated a `group_concat(...)`
         // sub-SELECT against `aliases` for every row in the page; on
         // catalogs whose not-fully-matched tail was sparse, MariaDB had
@@ -1811,30 +1842,23 @@ impl Storage for StorageMySQL {
         // SELECT for its aliases — each usually well inside the per-statement
         // budget (see `DEFAULT_MAX_STATEMENT_TIME_SECS`).
         //
-        // The 1969 loop keeps halving `batch_size` until either the
-        // fetch succeeds or `batch_size` hits 1. Catalogs whose tail is
-        // sparse enough that 500 also trips need to drop to 250 / 125
-        // / etc.; the loop bottoms out at 1 (matches
-        // [`halve_batch_descending_sequence_terminates_at_one`]) and
-        // propagates the error there. `after_id` is unchanged across
-        // retries, so we never skip rows — only the LIMIT shrinks.
-        let mut current_batch = batch_size;
-        loop {
-            match self
-                .automatch_by_search_fetch_page(catalog_id, after_id, current_batch)
-                .await
-            {
-                Ok(rows) => return Ok(rows),
-                Err(e) if is_max_statement_time_err(&e) && current_batch > 1 => {
-                    let smaller = halve_batch_for_retry(current_batch);
-                    log::warn!(
-                        "automatch_by_search_get_results: 1969 max_statement_time at batch_size={current_batch} (catalog={catalog_id}, after_id={after_id}); halving to {smaller}"
-                    );
-                    current_batch = smaller;
-                }
-                Err(e) => return Err(e),
+        // The shared [`fetch_with_adaptive_batch`] helper halves
+        // `batch_size` on each 1969 until either the fetch succeeds or
+        // `batch_size` hits 1, then propagates. `after_id` is unchanged
+        // across retries, so retries never skip rows — only the LIMIT
+        // shrinks.
+        use futures::FutureExt;
+        let context = format!(
+            "automatch_by_search_get_results(catalog={catalog_id}, after_id={after_id})"
+        );
+        fetch_with_adaptive_batch(batch_size, &context, |n| {
+            async move {
+                self.automatch_by_search_fetch_page(catalog_id, after_id, n)
+                    .await
             }
-        }
+            .boxed()
+        })
+        .await
     }
 
     async fn automatch_creations_get_results(
@@ -2068,7 +2092,12 @@ impl Storage for StorageMySQL {
             {}",
             MatchState::unmatched().get_sql()
         );
-        self.query_count_ro(&sql, params! {catalog_id}).await
+        self.query_count_ro_resilient(
+            &sql,
+            params! {catalog_id},
+            "automatch_complex_get_el_chunk_count",
+        )
+        .await
     }
 
     // Entry
@@ -6070,18 +6099,24 @@ impl crate::storage::AuxiliaryMatcherQueries for StorageMySQL {
             extid_props.join(","),
             blacklisted_catalogs.join(",")
         );
-        let results = self
-            .get_conn_ro()
-            .await?
-            .exec_iter(sql, params! {catalog_id,offset,batch_size})
-            .await?
-            .map_and_drop(|row| {
-                let (aux_id, entry_id, q_numeric, property, value) =
-                    from_row::<(usize, usize, usize, usize, String)>(row);
+        // Resilient: the auxiliary fan-out can scale super-linearly on
+        // catalogs with many aux rows per entry. The caller detects
+        // exhaustion via `results.len() < batch_size`, so escalation
+        // (not LIMIT halving) is the right tool — see
+        // `automatch_by_sitelink_get_entries` for the parallel comment.
+        let rows: Vec<(usize, usize, usize, usize, String)> = self
+            .query_ro_resilient(
+                &sql,
+                params! {catalog_id, offset, batch_size},
+                "auxiliary_matcher_match_via_aux",
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|(aux_id, entry_id, q_numeric, property, value)| {
                 AuxiliaryResults::new(aux_id, entry_id, q_numeric, property, value)
             })
-            .await?;
-        Ok(results)
+            .collect())
     }
 
     async fn auxiliary_matcher_match_via_aux_count(
@@ -6108,7 +6143,12 @@ impl crate::storage::AuxiliaryMatcherQueries for StorageMySQL {
             extid_props.join(","),
             blacklisted_catalogs.join(",")
         );
-        self.query_count_ro(&sql, params! {catalog_id}).await
+        self.query_count_ro_resilient(
+            &sql,
+            params! {catalog_id},
+            "auxiliary_matcher_match_via_aux_count",
+        )
+        .await
     }
 
     async fn auxiliary_matcher_add_auxiliary_to_wikidata(
@@ -6129,18 +6169,20 @@ impl crate::storage::AuxiliaryMatcherQueries for StorageMySQL {
             MatchState::fully_matched().get_sql(),
             blacklisted_properties.join(",")
         );
-        let results = self
-            .get_conn_ro()
-            .await?
-            .exec_iter(sql.clone(), params! {catalog_id,offset,batch_size})
-            .await?
-            .map_and_drop(|row| {
-                let (aux_id, entry_id, q_numeric, property, value) =
-                    from_row::<(usize, usize, usize, usize, String)>(row);
+        // Resilient: same rationale as `auxiliary_matcher_match_via_aux`.
+        let rows: Vec<(usize, usize, usize, usize, String)> = self
+            .query_ro_resilient(
+                &sql,
+                params! {catalog_id, offset, batch_size},
+                "auxiliary_matcher_add_auxiliary_to_wikidata",
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|(aux_id, entry_id, q_numeric, property, value)| {
                 AuxiliaryResults::new(aux_id, entry_id, q_numeric, property, value)
             })
-            .await?;
-        Ok(results)
+            .collect())
     }
 
     async fn auxiliary_matcher_add_auxiliary_to_wikidata_count(
@@ -6161,7 +6203,12 @@ impl crate::storage::AuxiliaryMatcherQueries for StorageMySQL {
             MatchState::fully_matched().get_sql(),
             blacklisted_properties.join(",")
         );
-        self.query_count_ro(&sql, params! {catalog_id}).await
+        self.query_count_ro_resilient(
+            &sql,
+            params! {catalog_id},
+            "auxiliary_matcher_add_auxiliary_to_wikidata_count",
+        )
+        .await
     }
 }
 
@@ -7401,44 +7448,6 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
-    // birth_year_match_find_matches split-and-retry arithmetic
-    // ---------------------------------------------------------------
-
-    #[test]
-    fn split_for_retry_returns_none_at_or_below_one() {
-        // Bottom-out condition: a single id has nowhere to split to,
-        // so the retry-loop must propagate the error instead of
-        // looping forever on the same input.
-        assert_eq!(split_for_retry(0), None);
-        assert_eq!(split_for_retry(1), None);
-    }
-
-    #[test]
-    fn split_for_retry_halves_even_lengths() {
-        assert_eq!(split_for_retry(2), Some((1, 1)));
-        assert_eq!(split_for_retry(1000), Some((500, 500)));
-    }
-
-    #[test]
-    fn split_for_retry_odd_length_gives_smaller_half_first() {
-        // Convention: left half is `len / 2`, right half is the rest.
-        // For odd lengths the right half is the larger one — pinned
-        // so a future "let's switch the sides" tweak doesn't silently
-        // change the stack-traversal order.
-        assert_eq!(split_for_retry(3), Some((1, 2)));
-        assert_eq!(split_for_retry(999), Some((499, 500)));
-    }
-
-    #[test]
-    fn split_for_retry_halves_sum_to_input() {
-        for n in [2_usize, 3, 7, 64, 999, 1000, 1_000_000] {
-            let (a, b) = split_for_retry(n).unwrap();
-            assert_eq!(a + b, n, "halves of {n} must sum to {n}");
-            assert!(a > 0 && b > 0, "neither half may be empty for n={n}");
-        }
-    }
-
-    // ---------------------------------------------------------------
     // CatalogGroup parser (api_catalog_by_group classification)
     // ---------------------------------------------------------------
 
@@ -7504,85 +7513,6 @@ mod tests {
     // ---------------------------------------------------------------
     // automatch_by_search page-fetch: aliases-split + 1969 retry
     // ---------------------------------------------------------------
-
-    #[test]
-    fn is_max_statement_time_err_recognises_1969() {
-        let me = mysql_async::Error::Server(mysql_async::ServerError {
-            code: 1969,
-            message: "Query execution was interrupted (max_statement_time exceeded)".into(),
-            state: "70100".into(),
-        });
-        let ae: anyhow::Error = me.into();
-        assert!(is_max_statement_time_err(&ae));
-    }
-
-    #[test]
-    fn is_max_statement_time_err_rejects_other_server_errors() {
-        let me = mysql_async::Error::Server(mysql_async::ServerError {
-            code: 1062,
-            message: "duplicate".into(),
-            state: "23000".into(),
-        });
-        let ae: anyhow::Error = me.into();
-        assert!(!is_max_statement_time_err(&ae));
-    }
-
-    #[test]
-    fn is_max_statement_time_err_rejects_non_mysql_error() {
-        let ae = anyhow::anyhow!("plain non-mysql error");
-        assert!(!is_max_statement_time_err(&ae));
-    }
-
-    #[test]
-    fn is_max_statement_time_err_finds_1969_through_anyhow_context() {
-        // Real call sites surface 1969 wrapped in additional anyhow
-        // context. The predicate must still find it by walking the
-        // error chain rather than only inspecting the head.
-        let me = mysql_async::Error::Server(mysql_async::ServerError {
-            code: 1969,
-            message: "Query execution was interrupted (max_statement_time exceeded)".into(),
-            state: "70100".into(),
-        });
-        let ae: anyhow::Error = anyhow::Error::from(me).context("automatch_by_search_fetch_page");
-        assert!(is_max_statement_time_err(&ae));
-    }
-
-    #[test]
-    fn halve_batch_for_retry_halves_normal_sizes() {
-        assert_eq!(halve_batch_for_retry(5000), 2500);
-        assert_eq!(halve_batch_for_retry(1000), 500);
-        assert_eq!(halve_batch_for_retry(2), 1);
-    }
-
-    #[test]
-    fn halve_batch_for_retry_floors_at_one() {
-        // batch_size=1 has nowhere smaller to go but must not collapse
-        // to zero (would produce a no-op query and stall the job).
-        assert_eq!(halve_batch_for_retry(1), 1);
-    }
-
-    #[test]
-    fn halve_batch_descending_sequence_terminates_at_one() {
-        // The iterative `automatch_by_search_get_results` retry repeatedly
-        // halves the batch size until either the page query succeeds or
-        // we hit 1. This pins the descent: every step strictly decreases
-        // until the floor, so the retry loop is guaranteed to terminate.
-        // Starting at 1000 the chain is roughly log2(1000) ≈ 10 steps;
-        // anything longer would indicate a regression in the halver.
-        let mut current = 1000_usize;
-        let mut steps = vec![current];
-        while current > 1 {
-            let next = halve_batch_for_retry(current);
-            assert!(next < current, "halver must strictly decrease above 1: {current} → {next}");
-            current = next;
-            steps.push(current);
-        }
-        assert_eq!(*steps.last().unwrap(), 1);
-        assert!(
-            steps.len() <= 12,
-            "log2(1000) ≈ 10; descent should be ≤ 12 steps, got {steps:?}"
-        );
-    }
 
     #[tokio::test]
     async fn automatch_by_search_get_results_pages_with_aliases() {
