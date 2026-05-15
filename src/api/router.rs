@@ -35,6 +35,56 @@ const API_PHP_MAX_CONCURRENT_REQUESTS: usize = 256;
 static API_PHP_SEMAPHORE: tokio::sync::Semaphore =
     tokio::sync::Semaphore::const_new(API_PHP_MAX_CONCURRENT_REQUESTS);
 
+/// `?query=…` names that mutate server state and must NEVER be JSONP-wrapped.
+/// Each entry corresponds to a `ROUTES` row that takes a session and writes
+/// to the DB or runs user-supplied code. JSONP-wrapping one of these would
+/// turn an OAuth-guarded mutation into a cross-origin CSRF (the
+/// session cookie is attached automatically; the JSONP wrapper hands the
+/// response body to the attacker).
+///
+/// Keep the list in sync with the `route!` full-arity entries below — the
+/// `mutating_queries_are_registered_routes` test pins this so a typo here
+/// is caught before merge, and the `mutating_queries_match_full_arity_routes`
+/// test catches drift when a new mutating handler is added without a matching
+/// entry in this list.
+#[rustfmt::skip]
+const MUTATING_QUERIES: &[&str] = &[
+    // Matching writes
+    "match_q", "match_q_multi", "sync_match_q_multi",
+    "remove_q", "remove_all_q", "remove_all_multimatches",
+    "suggest",
+    // Jobs
+    "start_new_job", "manage_job",
+    // Issues
+    "resolve_issue",
+    // Code fragments + Lua executor (executes user-supplied code)
+    "save_code_fragment", "test_code_fragment",
+    // Large catalogs
+    "lc_set_status",
+    // Catalog edits
+    "edit_catalog", "delete_autoscraper",
+    "set_top_group", "remove_empty_top_group",
+    // Admin
+    "update_overview", "update_ext_urls",
+    "add_aliases", "set_missing_properties_status",
+    // Misc writes
+    "set_statement_text_q",
+    // Import / scraper config writes
+    "import_source", "save_scraper",
+    // Distributed game logging
+    "dg_log_action",
+    // File upload (POST-only at the router level, but defensive)
+    "upload_import_file",
+];
+
+/// True if `query` may be wrapped with `?callback=cb` JSONP. JSONP is blocked
+/// for the OAuth flow and for every state-changing endpoint; everything else
+/// (pure reads) may still be wrapped, preserving compatibility with any
+/// external consumer that legitimately uses JSONP for cross-origin reads.
+fn jsonp_allowed_for_query(query: &str) -> bool {
+    query != "auth" && !MUTATING_QUERIES.contains(&query)
+}
+
 pub type SharedState = Arc<AppState>;
 
 pub fn router(app: AppState) -> Router {
@@ -235,8 +285,14 @@ async fn dispatcher_common(app: &AppState, session: &Session, params: Params) ->
             None => String::new(),
         },
     };
-    // JSONP wrapping is disabled on auth endpoints — cookies + JSONP is a CSRF vector.
-    let callback_allowed = query != "auth";
+    // JSONP wrapping is disabled on the OAuth flow *and* every state-changing
+    // endpoint — cookies + JSONP is a CSRF + exfiltration vector (an attacker
+    // page can `<script src="…&callback=fn">` to issue an authenticated
+    // mutation cross-origin and read the response). SameSite=None is needed
+    // for the Wikidata gadget, so SameSite alone doesn't stop this; the
+    // `origin_check_middleware` doesn't either because browsers don't send
+    // `Origin` on `<script src>` requests.
+    let callback_allowed = jsonp_allowed_for_query(&query);
     let callback = if callback_allowed {
         params.get("callback").cloned().unwrap_or_default()
     } else {
@@ -666,6 +722,68 @@ mod tests {
              likely the ConnectInfo wiring or the rate-limit key extractor \
              is broken — see commit `592669d` for the prior incident",
         );
+    }
+
+    /// JSONP wrapping must be off for every state-changing endpoint —
+    /// otherwise an attacker page can `<script src="…&callback=fn">` to
+    /// issue an authenticated mutation cross-origin (SameSite=None
+    /// attaches the cookie, the missing-Origin path bypasses the
+    /// origin allowlist) and exfiltrate the response via the
+    /// callback wrapper. Audit reference: H-1 in
+    /// `audits/comprehensive_security_report.md`.
+    #[test]
+    fn jsonp_blocked_on_every_mutating_query() {
+        for q in MUTATING_QUERIES {
+            assert!(
+                !jsonp_allowed_for_query(q),
+                "JSONP must be blocked on mutating query '{q}'"
+            );
+        }
+    }
+
+    #[test]
+    fn jsonp_blocked_on_auth_query() {
+        // The OAuth flow has always had JSONP off; keep the explicit
+        // assertion so a refactor doesn't silently re-enable it.
+        assert!(!jsonp_allowed_for_query("auth"));
+    }
+
+    /// Sanity check that pure-read endpoints still accept `?callback=…`
+    /// — some external consumers (the old PHP gadget, embed scripts on
+    /// third-party wikis) rely on JSONP for cross-origin reads, and we
+    /// don't want this PR to break them.
+    #[test]
+    fn jsonp_allowed_on_known_read_queries() {
+        for q in [
+            "catalogs",
+            "single_catalog",
+            "search",
+            "get_entry",
+            "get_jobs",
+            "rc",
+            "top_missing",
+            "sitestats",
+            "get_user_info",
+        ] {
+            assert!(
+                jsonp_allowed_for_query(q),
+                "JSONP must stay enabled on known-read query '{q}'"
+            );
+        }
+    }
+
+    /// Every name in MUTATING_QUERIES must be an actual registered
+    /// route. A typo here would silently leave JSONP enabled for the
+    /// real (correctly-spelled) handler.
+    #[test]
+    fn mutating_queries_are_registered_routes() {
+        let names: HashSet<&'static str> = ROUTES.iter().map(|(n, _)| *n).collect();
+        for q in MUTATING_QUERIES {
+            assert!(
+                names.contains(q),
+                "MUTATING_QUERIES entry '{q}' has no matching row in ROUTES"
+            );
+        }
     }
 
     /// The four handlers below previously accepted form-supplied
