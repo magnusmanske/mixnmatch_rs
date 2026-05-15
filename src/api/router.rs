@@ -85,6 +85,67 @@ fn jsonp_allowed_for_query(query: &str) -> bool {
     query != "auth" && !MUTATING_QUERIES.contains(&query)
 }
 
+// ─── Per-IP rate limit on POST /api.php ────────────────────────────────────
+//
+// Audit M-6. The previous tower_governor config tripped real users because
+// it metered GETs too — a single SPA page load fans out ~20 reads, and the
+// 60-burst limit ran out before the user clicked anything. This limiter
+// fires only on POST, which the SPA reserves for state changes; a typical
+// matcher does 1-2 POSTs/s, so the 30-burst leaves ~30 s of headroom.
+// Hand-rolled (token bucket via DashMap) rather than re-introducing
+// tower_governor with a different config — easier to revert, no key-extractor
+// dance.
+
+/// Token-bucket burst size per IP. A power-user matching at full speed
+/// (1-2 POSTs/sec) drains this in 15-30 s; abusive bots saturate in a
+/// few hundred ms.
+const MUTATION_BURST_CAPACITY: f32 = 30.0;
+/// Steady-state refill rate per IP, tokens per second.
+const MUTATION_REFILL_PER_SEC: f32 = 10.0;
+/// Buckets idle this long are evicted on the next opportunistic GC pass.
+/// Keeps the per-IP map from growing unboundedly under a botnet probe.
+const STALE_BUCKET_AGE_SECS: u64 = 300;
+/// GC the bucket map every Nth check. Cheap (one `retain` pass) and
+/// amortizes across many requests.
+const MUTATION_BUCKET_GC_INTERVAL: usize = 1024;
+
+#[derive(Debug, Clone, Copy)]
+struct IpBucket {
+    tokens: f32,
+    last_check: std::time::Instant,
+}
+
+impl IpBucket {
+    fn new(now: std::time::Instant) -> Self {
+        Self {
+            tokens: MUTATION_BURST_CAPACITY,
+            last_check: now,
+        }
+    }
+
+    /// Refill based on elapsed wall time since the last check, then try
+    /// to consume one token. Returns `true` when allowed. Capacity is
+    /// capped at [`MUTATION_BURST_CAPACITY`], so an idle IP doesn't
+    /// accumulate unbounded credit.
+    fn try_consume(&mut self, now: std::time::Instant) -> bool {
+        let elapsed = now.saturating_duration_since(self.last_check).as_secs_f32();
+        self.tokens = (self.tokens + elapsed * MUTATION_REFILL_PER_SEC).min(MUTATION_BURST_CAPACITY);
+        self.last_check = now;
+        if self.tokens >= 1.0 {
+            self.tokens -= 1.0;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+fn mutation_buckets() -> &'static dashmap::DashMap<std::net::IpAddr, IpBucket> {
+    static BUCKETS: std::sync::OnceLock<dashmap::DashMap<std::net::IpAddr, IpBucket>> =
+        std::sync::OnceLock::new();
+    BUCKETS.get_or_init(dashmap::DashMap::new)
+}
+
 pub type SharedState = Arc<AppState>;
 
 pub fn router(app: AppState) -> Router {
@@ -92,16 +153,15 @@ pub fn router(app: AppState) -> Router {
     // 512 MB: big enough for realistic catalog uploads, still bounded.
     const UPLOAD_MAX_BYTES: usize = 512 * 1024 * 1024;
 
-    // Per-IP rate limit on /api.php is currently DISABLED. The previous
-    // config (30 req/s steady, 60 burst, `SmartIpKeyExtractor` reading
-    // `X-Forwarded-For` / `X-Real-IP` / `Forwarded` with `ConnectInfo`
-    // fallback) was tripping real users on the code page because a
-    // single SPA load can fan out enough `/api.php` calls to chew
-    // through the burst before the user clicks anything. To re-enable,
-    // restore the `tower_governor` config + the
-    // `route_layer(GovernorLayer::new(...))` line below and the
-    // background `retain_recent` sweep. `tower_governor` is kept in
-    // `Cargo.toml` for that reason.
+    // Per-IP rate limit on /api.php is now POST-only — see audit M-6.
+    // The old tower_governor config (30/s steady + 60 burst on all
+    // methods) tripped real users because one SPA page load fans out
+    // ~20 GET reads and chewed through the burst before any click.
+    // The replacement (`rate_limit_post_mutations_middleware`) ignores
+    // GET entirely and applies a per-IP token bucket sized for the
+    // POST volume an actual matcher generates (30 burst, 10/s refill).
+    // tower_governor stays in Cargo.toml in case a future need calls
+    // for a more sophisticated key extractor.
 
     // /api.php is the user-supplied query path: it needs the origin
     // check (cross-origin browsers can still send simple GETs even
@@ -113,6 +173,7 @@ pub fn router(app: AppState) -> Router {
         .route("/api.php", get(api_dispatcher).post(api_dispatcher_form))
         .route_layer(axum::middleware::from_fn(panic_recovery_middleware))
         .route_layer(axum::middleware::from_fn(origin_check_middleware))
+        .route_layer(axum::middleware::from_fn(rate_limit_post_mutations_middleware))
         .route_layer(axum::middleware::from_fn(concurrency_limit_middleware));
 
     Router::new()
@@ -235,6 +296,61 @@ async fn panic_recovery_middleware(
             ApiError::Internal("internal error".to_string()).into_response()
         }
     }
+}
+
+/// Per-IP token-bucket rate limit, applied only to POST `/api.php`
+/// requests. Reads pass through untouched so a SPA page-load fan-out
+/// (~20 GETs) never trips the limiter — that was the failure mode of
+/// the previous tower_governor config. Audit reference: M-6 in
+/// `audits/comprehensive_security_report.md`.
+async fn rate_limit_post_mutations_middleware(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    // Only POSTs (mutations). GET reads pass through unmetered.
+    if req.method() != axum::http::Method::POST {
+        return next.run(req).await;
+    }
+    // ConnectInfo is set by `into_make_service_with_connect_info`; without
+    // it we can't bucket per-IP. Fall open rather than lock everyone out —
+    // some test harnesses skip the connect-info wiring, and production has
+    // it (pinned by `router_responds_through_real_listener`).
+    let ip = match req
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+    {
+        Some(ci) => ci.0.ip(),
+        None => return next.run(req).await,
+    };
+    let now = std::time::Instant::now();
+    let allowed = {
+        let buckets = mutation_buckets();
+        let mut entry = buckets.entry(ip).or_insert_with(|| IpBucket::new(now));
+        entry.try_consume(now)
+    };
+    if !allowed {
+        metrics::counter!("mnm_api_mutation_rate_limited_total").increment(1);
+        return (
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+            [(
+                axum::http::header::RETRY_AFTER,
+                axum::http::HeaderValue::from_static("1"),
+            )],
+            "rate limit exceeded; try again in 1s",
+        )
+            .into_response();
+    }
+    // Opportunistic GC: every Nth call, sweep stale buckets so a botnet
+    // probe can't grow the map unboundedly.
+    static GC_COUNTER: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+    let n = GC_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if n.is_multiple_of(MUTATION_BUCKET_GC_INTERVAL) {
+        let buckets = mutation_buckets();
+        let stale_age = std::time::Duration::from_secs(STALE_BUCKET_AGE_SECS);
+        buckets.retain(|_, b| now.saturating_duration_since(b.last_check) < stale_age);
+    }
+    next.run(req).await
 }
 
 /// Reject `/api.php` requests above [`API_PHP_MAX_CONCURRENT_REQUESTS`]
@@ -784,6 +900,70 @@ mod tests {
                 "MUTATING_QUERIES entry '{q}' has no matching row in ROUTES"
             );
         }
+    }
+
+    /// Token bucket admits the full burst in a single instant — that's the
+    /// whole point of the burst capacity. The exact number pins audit M-6's
+    /// configured threshold; lowering it would tighten the limit and
+    /// potentially trip real users.
+    #[test]
+    fn rate_limit_bucket_admits_full_burst() {
+        let t0 = std::time::Instant::now();
+        let mut b = IpBucket::new(t0);
+        for i in 0..(MUTATION_BURST_CAPACITY as usize) {
+            assert!(b.try_consume(t0), "burst request #{i} should be allowed");
+        }
+        assert!(
+            !b.try_consume(t0),
+            "request beyond burst capacity must be rejected"
+        );
+    }
+
+    #[test]
+    fn rate_limit_bucket_refills_at_configured_rate() {
+        let t0 = std::time::Instant::now();
+        let mut b = IpBucket::new(t0);
+        // Drain.
+        for _ in 0..(MUTATION_BURST_CAPACITY as usize) {
+            let _ = b.try_consume(t0);
+        }
+        // Wait 2 s — should refill ~20 tokens.
+        let t2 = t0 + std::time::Duration::from_secs(2);
+        let expected = (2.0 * MUTATION_REFILL_PER_SEC) as usize;
+        for i in 0..expected {
+            assert!(
+                b.try_consume(t2),
+                "post-refill request #{i} should be allowed (refill={MUTATION_REFILL_PER_SEC}/s)"
+            );
+        }
+        assert!(
+            !b.try_consume(t2),
+            "request beyond refilled tokens must be rejected"
+        );
+    }
+
+    /// Idle buckets must NOT accumulate infinite credit — long idle
+    /// followed by a burst should still cap at the configured capacity.
+    #[test]
+    fn rate_limit_bucket_caps_idle_credit() {
+        let t0 = std::time::Instant::now();
+        let mut b = IpBucket::new(t0);
+        for _ in 0..(MUTATION_BURST_CAPACITY as usize) {
+            let _ = b.try_consume(t0);
+        }
+        // Idle for an hour.
+        let t1h = t0 + std::time::Duration::from_secs(3600);
+        // Only BURST_CAPACITY more should be allowed, not 3600 * refill.
+        for i in 0..(MUTATION_BURST_CAPACITY as usize) {
+            assert!(
+                b.try_consume(t1h),
+                "post-long-idle burst request #{i} should be allowed"
+            );
+        }
+        assert!(
+            !b.try_consume(t1h),
+            "idle credit must cap at MUTATION_BURST_CAPACITY"
+        );
     }
 
     /// The four handlers below previously accepted form-supplied
