@@ -60,6 +60,27 @@ use resilience::{
     with_escalating_timeout,
 };
 
+/// Wrap `EntryError::EntryInsertFailed` with the offending
+/// `(catalog, ext_id)` for diagnostics.
+///
+/// Reached when `INSERT IGNORE` succeeded at the protocol level but
+/// didn't actually create a row — i.e. the OK packet carries
+/// `last_insert_id = 0`, which `mysql_common` maps to `None`. The
+/// dominant cause is a `(catalog, ext_id)` unique-key collision
+/// swallowed by the `IGNORE`, typically because MySQL's PAD SPACE
+/// collation treats trailing whitespace as equal (`"foo "` collides
+/// with an existing `"foo"`). Including the pair in the message lets
+/// operators see exactly what's colliding without having to reproduce
+/// the failing scrape. `{:?}` on `ext_id` keeps trailing / leading
+/// whitespace visible inside the quotes — the whole point of the
+/// diagnostic.
+fn entry_insert_failed_error(catalog: usize, ext_id: &str) -> anyhow::Error {
+    anyhow::Error::from(EntryError::EntryInsertFailed).context(format!(
+        "entry_insert_as_new: row not inserted (catalog={catalog}, ext_id={ext_id:?}); \
+         likely (catalog, ext_id) unique-key collision under PAD SPACE / case-insensitive collation"
+    ))
+}
+
 /// Parsed shape of the `group` token consumed by `api_catalog_by_group`.
 /// Keeps classification (pure, easily testable) separate from SQL
 /// assembly (impure, DB-touching) and from quote-escaping (which
@@ -2186,7 +2207,10 @@ impl Storage for StorageMySQL {
         };
         let mut conn = self.get_conn().await?;
         conn.exec_drop(sql, params).await?;
-        let id = conn.last_insert_id().ok_or(EntryError::EntryInsertFailed)? as usize;
+        let id = conn
+            .last_insert_id()
+            .ok_or_else(|| entry_insert_failed_error(entry.catalog, &entry.ext_id))?
+            as usize;
         Ok(Some(id))
     }
 
@@ -6567,6 +6591,53 @@ mod tests {
     fn normalize_wd_prop_zero_and_none_become_none() {
         assert_eq!(normalize_wd_prop(None), None);
         assert_eq!(normalize_wd_prop(Some(0)), None);
+    }
+
+    /// `entry_insert_as_new` previously surfaced `EntryError::EntryInsertFailed`
+    /// without any indication of *which* (catalog, ext_id) pair failed. That
+    /// made the dominant cause — `INSERT IGNORE` swallowing a unique-key
+    /// collision under PAD SPACE collation — almost impossible to diagnose
+    /// from job logs without reproducing the failing scrape. The helper now
+    /// attaches the pair as anyhow context; this test pins the format so a
+    /// future "let me clean up that error message" edit doesn't drop the
+    /// diagnostic.
+    #[test]
+    fn entry_insert_failed_error_contains_catalog_and_ext_id() {
+        let err = super::entry_insert_failed_error(3862, "Names ");
+        // `{:#}` flattens the anyhow chain so the context line is visible
+        // alongside the typed error. Verify both pieces survive.
+        let formatted = format!("{err:#}");
+        assert!(
+            formatted.contains("catalog=3862"),
+            "missing catalog id in error: {formatted}"
+        );
+        assert!(
+            formatted.contains("\"Names \""),
+            "missing quoted ext_id (with whitespace visible) in error: {formatted}"
+        );
+        assert!(
+            formatted.contains("EntryInsertFailed"),
+            "underlying typed error must still be present: {formatted}"
+        );
+        assert!(
+            formatted.contains("unique-key"),
+            "diagnostic hint must mention the likely cause: {formatted}"
+        );
+    }
+
+    /// The `Debug`-style quoting in the error message has a load-bearing
+    /// detail: trailing whitespace in `ext_id` becomes visible inside the
+    /// quotes (e.g. `"Names "`) where a plain `{}` formatter would print
+    /// it invisibly. The whole point of the diagnostic is to make
+    /// whitespace bugs obvious at a glance — pin that property.
+    #[test]
+    fn entry_insert_failed_error_makes_trailing_whitespace_visible() {
+        let err = super::entry_insert_failed_error(1, "trailing_space ");
+        let formatted = format!("{err:#}");
+        assert!(
+            formatted.contains("\"trailing_space \""),
+            "trailing space must be visible inside the quotes: {formatted}"
+        );
     }
 
     fn base_filter() -> CatalogEntryListFilter {
