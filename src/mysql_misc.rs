@@ -6,9 +6,11 @@ use serde_json::Value;
 
 /// Default per-statement timeout for read-only SELECTs, in seconds.
 /// MariaDB enforces this via the `max_statement_time` session variable.
-/// 120 s is well above any healthy query budget; legitimate long reports
-/// should be moved to a dedicated batch path rather than relaxing this.
-const DEFAULT_MAX_STATEMENT_TIME_SECS: u64 = 120;
+/// 240 s is comfortably above any healthy query budget; legitimate long
+/// reports should be moved to a dedicated batch path rather than relaxing
+/// this further. Raised from 120 → 240 after `purge_automatches` and other
+/// long-running maintenance jobs began tripping the previous limit.
+const DEFAULT_MAX_STATEMENT_TIME_SECS: u64 = 240;
 
 /// Maximum time we wait for a connection to be acquired from the pool.
 /// `mysql_async::Pool::get_conn` has no built-in acquisition timeout — under

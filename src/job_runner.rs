@@ -295,7 +295,10 @@ impl JobRunner {
         // killing its query unblocks the connection and its `set_status(Done)`
         // either fails or targets a row we've already re-queued — whichever
         // wins, the job isn't simultaneously running in two places.
-        const ORPHAN_QUERY_THRESHOLD_SECS: u64 = 120;
+        // Tracks `DEFAULT_MAX_STATEMENT_TIME_SECS` (240 s): a query within
+        // the per-statement budget is "expected" and must not be killed at
+        // startup.
+        const ORPHAN_QUERY_THRESHOLD_SECS: u64 = 240;
         match self
             .app
             .storage()

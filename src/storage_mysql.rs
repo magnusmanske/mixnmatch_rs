@@ -1808,8 +1808,8 @@ impl Storage for StorageMySQL {
         // fill the LIMIT, which compounded with the per-row sub-SELECT
         // and tripped `max_statement_time` (ERROR 1969). The split form
         // does one cheap keyset SELECT for the page, then one IN-list
-        // SELECT for its aliases — each usually well inside the 120 s
-        // budget.
+        // SELECT for its aliases — each usually well inside the per-statement
+        // budget (see `DEFAULT_MAX_STATEMENT_TIME_SECS`).
         //
         // The 1969 loop keeps halving `batch_size` until either the
         // fetch succeeds or `batch_size` hits 1. Catalogs whose tail is
