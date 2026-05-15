@@ -1,4 +1,4 @@
-import { mnm_api, mnm_loading, tt_update_interface, specific_catalogs_cache } from './store.js';
+import { mnm_api, tt_update_interface, specific_catalogs_cache } from './store.js';
 
 export default Vue.extend({
 	props: ["key", "order"],
@@ -21,21 +21,16 @@ export default Vue.extend({
 			});
 			// Load catalogs for this group
 			var group = me.key || 'all';
-			mnm_loading(true);
-			try {
-				var d = await mnm_api('catalog_by_group', { group: group });
-				me.all_data = d.data || {};
-				var numFields = ['total', 'manual', 'autoq', 'nowd', 'noq', 'na'];
-				Object.entries(me.all_data).forEach(function (entry) {
-					var id = entry[0], cat = entry[1];
-					numFields.forEach(function (f) { cat[f] = Number(cat[f]) || 0; });
-					cat.unmatched = cat.total - cat.manual - cat.autoq - cat.nowd - cat.na;
-					specific_catalogs_cache[id] = cat;
-				});
-				me.rebuildSlices();
-			} finally {
-				mnm_loading(false);
-			}
+			var d = await mnm_api('catalog_by_group', { group: group });
+			me.all_data = d.data || {};
+			var numFields = ['total', 'manual', 'autoq', 'nowd', 'noq', 'na'];
+			Object.entries(me.all_data).forEach(function (entry) {
+				var id = entry[0], cat = entry[1];
+				numFields.forEach(function (f) { cat[f] = Number(cat[f]) || 0; });
+				cat.unmatched = cat.total - cat.manual - cat.autoq - cat.nowd - cat.na;
+				specific_catalogs_cache[id] = cat;
+			});
+			me.rebuildSlices();
 		},
 		isItemGroup: function () {
 			return /^(country|ig)_/.test(this.key);
@@ -167,10 +162,8 @@ export default Vue.extend({
 			<hr />
 		</div>
 
-		<div v-if='filtering' class='text-center py-3'><i tt='loading'></i></div>
-		<div v-else-if='slices.length > 0'><catalog-slice v-for="slice in slices" :catalogs="slice.catalogs" :title="slice.title"
+		<div v-if='!filtering && slices.length > 0'><catalog-slice v-for="slice in slices" :catalogs="slice.catalogs" :title="slice.title"
 				:section='slice.section' :key="slice.key"></catalog-slice></div>
-		<div v-else><i tt='loading'></i></div>
 
 	</div>
 `

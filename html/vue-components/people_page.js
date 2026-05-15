@@ -67,10 +67,7 @@ export default Vue.extend({
 		</label>
 		<button style='float:right' class='btn btn-outline-primary' @click.prevent='load_entries()' tt='reload'></a>
 	</div>
-	<div v-if='loading'>
-		<i tt='loading'></i>
-	</div>
-	<div v-else>
+	<div v-if='!loading'>
 		<ol :start='1'>
 			<li v-for='e in entries' style='border-bottom:1px solid #AAA'>
 				<div v-if='e.name_count>1'>

@@ -142,8 +142,7 @@ export default Vue.extend({
 		<div class="tab-content mt-2">
 			<!-- Latest catalogs (default, loaded on init) -->
 			<div class="tab-pane fade show active" id="mp-latest" role="tabpanel">
-				<div v-if='latest_catalogs.length==0'><i tt='loading'></i></div>
-				<div v-else>
+				<div v-if='latest_catalogs.length>0'>
 					<catalog-preview v-for='c in latest_catalogs' :key='c.id' :catalog='c'
 						:link_to="'/catalog/'+c.id"></catalog-preview>
 				</div>
@@ -151,8 +150,7 @@ export default Vue.extend({
 
 			<!-- Catalog groups (lazy) -->
 			<div class="tab-pane fade" id="mp-groups" role="tabpanel">
-				<div v-if='type_counts.length==0'><i tt='loading'></i></div>
-				<table v-else class='table table-striped table-sm'>
+				<table v-if='type_counts.length>0' class='table table-striped table-sm'>
 					<thead><tr>
 						<th style='width:100%;cursor:pointer' @click='toggleSort("name")' tt='group'></th>
 						<th style='cursor:pointer' @click='toggleSort("count")' tt='catalogs'></th>
@@ -168,8 +166,7 @@ export default Vue.extend({
 
 			<!-- By property class (lazy) -->
 			<div class="tab-pane fade" id="mp-propclass" role="tabpanel">
-				<div v-if='!prop_groups_loaded'><i tt='loading'></i></div>
-				<table v-else class='table table-striped table-sm'>
+				<table v-if='prop_groups_loaded' class='table table-striped table-sm'>
 					<thead><tr>
 						<th style='width:100%;cursor:pointer' @click='toggleSort("name")' tt='group'></th>
 						<th style='cursor:pointer' @click='toggleSort("count")' tt='catalogs'></th>
@@ -185,8 +182,7 @@ export default Vue.extend({
 
 			<!-- By country (lazy) -->
 			<div class="tab-pane fade" id="mp-country" role="tabpanel">
-				<div v-if='!prop_groups_loaded'><i tt='loading'></i></div>
-				<table v-else class='table table-striped table-sm'>
+				<table v-if='prop_groups_loaded' class='table table-striped table-sm'>
 					<thead><tr>
 						<th style='width:100%;cursor:pointer' @click='toggleSort("name")' tt='group'></th>
 						<th style='cursor:pointer' @click='toggleSort("count")' tt='catalogs'></th>
@@ -206,8 +202,7 @@ export default Vue.extend({
 					<span tt='top_groups_blurb'></span>
 					<router-link to='/top_groups' tt='manage_groups'></router-link>
 				</p>
-				<div v-if='top_groups.length==0'><i tt='loading'></i></div>
-				<table v-else class='table table-striped table-sm'>
+				<table v-if='top_groups.length>0' class='table table-striped table-sm'>
 					<thead><tr>
 						<th style='width:100%;cursor:pointer' @click='toggleSort("name")' tt='group'></th>
 						<th style='cursor:pointer' @click='toggleSort("count")' tt='catalogs'></th>
@@ -223,8 +218,7 @@ export default Vue.extend({
 
 			<!-- Maps (lazy) -->
 			<div class="tab-pane fade" id="mp-maps" role="tabpanel">
-				<div v-if='!maps_loaded'><i tt='loading'></i></div>
-				<div v-else>
+				<div v-if='maps_loaded'>
 					<catalog-preview v-for='c in maps_catalogs' :key='c.id' :catalog='c'
 						:link_to="'/map/'+c.id"></catalog-preview>
 				</div>

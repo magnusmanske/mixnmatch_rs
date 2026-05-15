@@ -127,10 +127,7 @@ export default Vue.extend({
         <span v-if='loaded && !loading' class='text-muted ms-2' style='font-size:0.85rem'>
             {{total}} fragment<span v-if='total!==1'>s</span>
         </span>
-        <span v-if='loading' class='ms-2'><i tt='loading'></i></span>
     </div>
-
-    <div v-if='!loaded' tt='loading'></div>
 
     <template v-if='loaded'>
         <pagination v-if='total > per_page'

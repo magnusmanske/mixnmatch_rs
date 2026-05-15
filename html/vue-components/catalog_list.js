@@ -1,4 +1,4 @@
-import { mnm_api, mnm_notify, mnm_loading, ensure_catalog, get_specific_catalog, tt_update_interface, wd } from './store.js';
+import { mnm_api, mnm_notify, ensure_catalog, get_specific_catalog, tt_update_interface, wd } from './store.js';
 
 export default Vue.extend({
 	props: ['id', 'mode', 'start'],
@@ -32,7 +32,6 @@ export default Vue.extend({
 			me.keyword_filter = me.$route.query.filter || '';
 			if (me.$route.query.user_id) me.user_filter = me.$route.query.user_id;
 			me.loaded = false;
-			mnm_loading(true);
 			try {
 				if (typeof me.start == 'undefined') me.start = 0;
 				var meta = Object.assign({ offset: me.start * me.per_page, per_page: me.per_page }, me.modes[mode]);
@@ -56,10 +55,8 @@ export default Vue.extend({
 				wd.getItemBatch(qs).then(function () {
 					me.entries = d.data.entries;
 					me.loaded = true;
-					mnm_loading(false);
 				});
 			} catch (e) {
-				mnm_loading(false);
 				mnm_notify('Failed to load catalog list: ' + e.message, 'danger');
 				me.loaded = true;
 			}
@@ -163,9 +160,6 @@ export default Vue.extend({
 			</div>
 			<pagination v-if="nav_total > per_page" :offset="nav_offset" :items-per-page="per_page" :total="nav_total"
 				@go-to-page="goToPage"></pagination>
-		</div>
-		<div v-else>
-			<i tt="loading"></i>
 		</div>
 	</div>
 `

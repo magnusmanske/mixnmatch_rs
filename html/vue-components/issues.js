@@ -162,15 +162,11 @@ export default Vue.extend({
 		</li>
 	</ul>
 
-	<div v-if='loading' class='mnm-empty-state'>
-		<div class='mnm-empty-icon'>⏳</div>
-		<i tt='loading'></i>
-	</div>
-	<div v-else-if='num_issues==0' class='mnm-empty-state'>
+	<div v-if='!loading && num_issues==0' class='mnm-empty-state'>
 		<div class='mnm-empty-icon'>✓</div>
 		<i tt='no_results'></i>
 	</div>
-	<div v-else>
+	<div v-else-if='!loading'>
 		<pagination v-if='total > limit' :offset='start' :items-per-page='limit' :total='total'
 			:show-first-last='true' @go-to-page='goToPage'></pagination>
 

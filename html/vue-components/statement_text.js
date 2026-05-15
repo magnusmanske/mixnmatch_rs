@@ -249,13 +249,8 @@ export default Vue.extend({
 			</select>
 		</div>
 
-		<!-- Loading -->
-		<div v-if='loading' class='mt-3'>
-			<i tt='loading'></i>
-		</div>
-
 		<!-- All done -->
-		<div v-else-if='groups.length === 0' class='st-done-banner'>
+		<div v-if='!loading && groups.length === 0' class='st-done-banner'>
 			<div class='st-done-icon'>✓</div>
 			<p class='mb-1'><strong tt='done'></strong></p>
 			<p class='text-muted' tt='st_all_done_blurb'></p>
@@ -263,7 +258,7 @@ export default Vue.extend({
 		</div>
 
 		<!-- Main UI -->
-		<div v-else>
+		<div v-else-if='!loading'>
 
 			<!-- Progress bar and controls -->
 			<div class='d-flex align-items-center mb-2' style='gap:0.75rem'>

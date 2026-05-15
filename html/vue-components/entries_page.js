@@ -203,10 +203,7 @@ export default Vue.extend({
 			</div>
 		</div>
 	</div>
-	<div v-if='loading'>
-		<i tt='loading'></i>
-	</div>
-	<div v-else>
+	<div v-if='!loading'>
 
 		<div v-if='Object.keys(entries).length>0'>
 			<nav aria-label="Page navigation">

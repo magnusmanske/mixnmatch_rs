@@ -575,8 +575,5 @@ export default {
             &nbsp;
         </div>
     </div>
-    <div v-else>
-        <i tt='loading'></i>
-    </div>
 </div>`
 };

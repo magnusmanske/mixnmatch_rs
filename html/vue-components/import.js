@@ -871,10 +871,7 @@ export default Vue.extend({
 					</button>
 				</div>
 
-				<div v-if="!headers_loaded" class="text-center py-4">
-					<div class="spinner-border text-primary" role="status"></div>
-					<div class="mt-2 text-muted" tt='getting_headers'></div>
-				</div>
+				<div v-if="!headers_loaded" class="text-muted py-2" tt='getting_headers'></div>
 
 				<div v-else>
 					<!-- Validation alerts -->
@@ -960,10 +957,7 @@ export default Vue.extend({
 				<h5 class="card-title mb-3">Review &amp; import</h5>
 
 				<!-- Test results -->
-				<div v-if="test_running" class="text-center py-4">
-					<div class="spinner-border text-primary" role="status"></div>
-					<div class="mt-2">Running validation on up to 1,000 rows&hellip;</div>
-				</div>
+				<div v-if="test_running" class="text-muted py-2">Running validation on up to 1,000 rows&hellip;</div>
 
 				<div v-else-if="test_successful">
 					<!-- Summary cards -->

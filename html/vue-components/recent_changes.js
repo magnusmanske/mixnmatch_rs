@@ -131,17 +131,12 @@ export default Vue.extend({
 		<pagination v-if='total > per_page' :offset='offset' :items-per-page='per_page' :total='total'
 			:show-first-last='true' @go-to-page='goToPage'></pagination>
 
-		<!-- Loading / empty / list -->
-		<div v-if='loading && entries.length === 0' class='mnm-rc-empty'>
-			<div class='mnm-rc-empty-icon'>\u23f3</div>
-			<i tt='loading'></i>
-		</div>
-		<div v-else-if='entries.length === 0' class='mnm-rc-empty'>
+		<div v-if='!loading && entries.length === 0' class='mnm-rc-empty'>
 			<div class='mnm-rc-empty-icon'>\u{1F4ED}</div>
 			<div tt='no_results'></div>
 			<div class='small mt-1'>Try widening the time range.</div>
 		</div>
-		<rc-events-list v-else :events='entries' :show-catalog='!is_specific_catalog'></rc-events-list>
+		<rc-events-list v-else-if='entries.length > 0' :events='entries' :show-catalog='!is_specific_catalog'></rc-events-list>
 
 		<pagination v-if='total > per_page' :offset='offset' :items-per-page='per_page' :total='total'
 			:show-first-last='true' @go-to-page='goToPage'></pagination>

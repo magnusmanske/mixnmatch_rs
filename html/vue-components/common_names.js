@@ -1,4 +1,4 @@
-import { mnm_api, mnm_loading, ensure_catalog, get_specific_catalog, tt_update_interface } from './store.js';
+import { mnm_api, ensure_catalog, get_specific_catalog, tt_update_interface } from './store.js';
 
 export default Vue.extend({
     props : ['id'] ,
@@ -60,7 +60,6 @@ export default Vue.extend({
     		let me = this ;
 	    	me.loading = true ;
 	    	me.entries = [] ;
-			mnm_loading(true) ;
 			try {
 				let d = await mnm_api('get_common_names', {
 					catalog:me.id,
@@ -74,7 +73,6 @@ export default Vue.extend({
 				me.entries = Object.values(d.data.entries) ;
 			} finally {
 				me.loading = false ;
-				mnm_loading(false) ;
 			}
     	}
     },
@@ -108,14 +106,11 @@ export default Vue.extend({
 		</div>
 	</div>
 
-	<div v-if="loading" class="text-center py-4">
-		<i tt="loading"></i>
-	</div>
-	<div v-else-if="entries.length==0" class="mnm-empty-state">
+	<div v-if="!loading && entries.length==0" class="mnm-empty-state">
 		<div class="mnm-empty-icon">&#x1F50D;</div>
 		<p tt="no_results"></p>
 	</div>
-	<div v-else>
+	<div v-else-if="!loading">
 		<div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
 			<small class="text-muted">
 				Showing {{offset+1}}&ndash;{{offset+entries.length}} &middot; Page {{Math.floor(offset/limit)+1}}

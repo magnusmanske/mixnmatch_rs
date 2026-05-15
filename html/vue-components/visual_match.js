@@ -296,7 +296,6 @@ export default Vue.extend({
 			<a :href='catalog.url' target='_blank'>{{catalog.name}}</a>
 		</h1>
 		<div v-if='catalog' style='font-size:12pt'>{{catalog.desc}}</div>
-		<div v-else><i tt='loading'></i></div>
 	</div>
 
 	<!-- Entry bar -->
@@ -317,7 +316,6 @@ export default Vue.extend({
 			</h2>
 			<div>{{current_entry.ext_desc}}</div>
 		</div>
-		<div v-else-if='loading_entry'><i tt='loading'></i></div>
 	</div>
 
 	<!-- Left pane: external page -->

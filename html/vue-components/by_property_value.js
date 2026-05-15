@@ -69,12 +69,9 @@ export default Vue.extend({
 		</div>
 	</div>
 
-	<template v-if='property && value'>
-		<div v-if='loading'><i tt='loading'></i></div>
-		<div v-else>
-			<i v-if='Object.keys(entries).length === 0' tt='no_results'></i>
-			<entry-list-item v-else v-for='e in entries' :entry='e' :show_catalog='1' :show_permalink='1' :twoline='1' :key='e.id'></entry-list-item>
-		</div>
+	<template v-if='property && value && !loading'>
+		<i v-if='Object.keys(entries).length === 0' tt='no_results'></i>
+		<entry-list-item v-else v-for='e in entries' :entry='e' :show_catalog='1' :show_permalink='1' :twoline='1' :key='e.id'></entry-list-item>
 	</template>
 </div>
 `

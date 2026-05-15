@@ -63,33 +63,38 @@ export async function mnm_api(query, params, options) {
 	var method = (options.method || 'GET').toUpperCase();
 	var url = state.api;
 
-	if (method === 'GET') {
-		var qs = new URLSearchParams(Object.assign({ query: query }, params));
-		url += '?' + qs.toString();
-		var fetchOpts = options.signal ? { signal: options.signal } : {};
-		var resp = await fetch(url, fetchOpts);
-	} else {
-		var form = new URLSearchParams(Object.assign({ query: query }, params));
-		var fetchOpts = { method: method, body: form, headers: { 'Content-Type': 'application/x-www-form-urlencoded' } };
-		if (options.signal) fetchOpts.signal = options.signal;
-		var resp = await fetch(url, fetchOpts);
-	}
+	mnm_loading(true);
+	try {
+		if (method === 'GET') {
+			var qs = new URLSearchParams(Object.assign({ query: query }, params));
+			url += '?' + qs.toString();
+			var fetchOpts = options.signal ? { signal: options.signal } : {};
+			var resp = await fetch(url, fetchOpts);
+		} else {
+			var form = new URLSearchParams(Object.assign({ query: query }, params));
+			var fetchOpts = { method: method, body: form, headers: { 'Content-Type': 'application/x-www-form-urlencoded' } };
+			if (options.signal) fetchOpts.signal = options.signal;
+			var resp = await fetch(url, fetchOpts);
+		}
 
-	// Backend returns real HTTP status codes (400/401/403/404/500) with a
-	// `{"status":"<message>"}` JSON body. Surface the body's message to
-	// callers so the thrown Error includes the human-readable reason and
-	// not just the bare HTTP code.
-	if (!resp.ok) {
-		var detail = '';
-		try {
-			var body = await resp.json();
-			if (body && body.status) detail = ': ' + body.status;
-		} catch (_) { /* body wasn't JSON; ignore */ }
-		throw new Error('HTTP ' + resp.status + ' ' + resp.statusText + detail);
+		// Backend returns real HTTP status codes (400/401/403/404/500) with a
+		// `{"status":"<message>"}` JSON body. Surface the body's message to
+		// callers so the thrown Error includes the human-readable reason and
+		// not just the bare HTTP code.
+		if (!resp.ok) {
+			var detail = '';
+			try {
+				var body = await resp.json();
+				if (body && body.status) detail = ': ' + body.status;
+			} catch (_) { /* body wasn't JSON; ignore */ }
+			throw new Error('HTTP ' + resp.status + ' ' + resp.statusText + detail);
+		}
+		var json = await resp.json();
+		if (json.status && json.status !== 'OK') throw new Error(json.status);
+		return json;
+	} finally {
+		mnm_loading(false);
 	}
-	var json = await resp.json();
-	if (json.status && json.status !== 'OK') throw new Error(json.status);
-	return json;
 }
 
 export async function mnm_fetch_json(url, params) {
@@ -97,15 +102,20 @@ export async function mnm_fetch_json(url, params) {
 		var qs = new URLSearchParams(params);
 		url += (url.includes('?') ? '&' : '?') + qs.toString();
 	}
-	var resp = await fetch(url);
-	if (resp.status === 429) {
-		var retryAfter = Math.min(parseInt(resp.headers.get('Retry-After') || '10', 10), 60);
-		mnm_notify('Rate limited by Wikidata; retrying in ' + retryAfter + 's\u2026', 'warning', (retryAfter + 2) * 1000);
-		await new Promise(function (r) { setTimeout(r, retryAfter * 1000); });
-		resp = await fetch(url);
+	mnm_loading(true);
+	try {
+		var resp = await fetch(url);
+		if (resp.status === 429) {
+			var retryAfter = Math.min(parseInt(resp.headers.get('Retry-After') || '10', 10), 60);
+			mnm_notify('Rate limited by Wikidata; retrying in ' + retryAfter + 's\u2026', 'warning', (retryAfter + 2) * 1000);
+			await new Promise(function (r) { setTimeout(r, retryAfter * 1000); });
+			resp = await fetch(url);
+		}
+		if (!resp.ok) throw new Error('HTTP ' + resp.status);
+		return resp.json();
+	} finally {
+		mnm_loading(false);
 	}
-	if (!resp.ok) throw new Error('HTTP ' + resp.status);
-	return resp.json();
 }
 
 // ── Toast notifications ──────────────────────────────────────────────
@@ -175,14 +185,12 @@ var _catalogs_fetch_started = false;
 async function _start_catalogs_fetch() {
 	if (_catalogs_fetch_started) return;
 	_catalogs_fetch_started = true;
-	mnm_loading(true);
 	try {
 		var d = await mnm_api('catalogs');
 		state.all_catalogs_cache = format_all_catalogs(d);
 	} catch (e) {
 		console.error('Failed to load catalogs', e);
 	}
-	mnm_loading(false);
 	_catalogs_ready_resolve();
 }
 

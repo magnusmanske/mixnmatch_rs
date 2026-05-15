@@ -1,5 +1,5 @@
 import { editEntryMixin } from './mnm-mixins.js';
-import { mnm_api, mnm_fetch_json, mnm_notify, mnm_loading, ensure_catalogs, tt_update_interface, auth } from './store.js';
+import { mnm_api, mnm_fetch_json, mnm_notify, ensure_catalogs, tt_update_interface, auth } from './store.js';
 
 export default Vue.extend({
 	mixins: [editEntryMixin],
@@ -52,7 +52,6 @@ export default Vue.extend({
 			if (me.prop != '') params.prop = me.prop;
 			const controller = new AbortController();
 			const timeoutId = setTimeout(() => controller.abort(), 30000);
-			mnm_loading(true);
 			try {
 				var d = await mnm_api('creation_candidates', params, { signal: controller.signal });
 				Object.entries(d.data.entries).forEach(function ([k, v]) {
@@ -80,7 +79,6 @@ export default Vue.extend({
 			} finally {
 				clearTimeout(timeoutId);
 				me.loading = false;
-				mnm_loading(false);
 			}
 			me.loaded = true;
 			if (me.ext_name != '') {
@@ -349,12 +347,8 @@ export default Vue.extend({
 			</div>
 			<span tt='creation_candidates'></span>
 		</h2>
-		<div v-if="loading && entries.length==0" class="text-center py-4">
-			<span class="spinner-border spinner-border-sm me-2 text-secondary" role="status" aria-hidden="true"></span>
-			<i tt='loading'></i>
-		</div>
-		<div v-else-if="entries.length==0" class="text-muted py-3" tt="no_results"></div>
-		<div v-else>
+		<div v-if="!loading && entries.length==0" class="text-muted py-3" tt="no_results"></div>
+		<div v-else-if="entries.length>0">
 			<div v-if="can_group_by_birth_year" class="mb-2">
 				<label style="cursor:pointer;font-weight:normal">
 					<input type="checkbox" :checked="group_by_birth_year" @change="toggleBirthYearGrouping" />
@@ -418,7 +412,7 @@ export default Vue.extend({
 					<h4 class="card-title"><span tt='wikidata_search_results'></span><span v-if='loaded_wd'>
 							"{{entries[0].ext_name}}"</span></h4>
 					<div class="card-text">
-						<div v-if="loaded_wd">
+						<template v-if="loaded_wd">
 							<div v-if="wd_entries.length>0" class="results_overflow_box">
 								<table class="table table-sm table-striped">
 									<tbody>
@@ -439,8 +433,7 @@ export default Vue.extend({
 								</table>
 							</div>
 							<div v-else tt='no_matches'></div>
-						</div>
-						<div v-else tt='loading'></div>
+						</template>
 					</div>
 				</div>
 			</div>

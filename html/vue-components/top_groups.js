@@ -1,4 +1,4 @@
-import { mnm_api, mnm_notify, mnm_loading, ensure_catalogs, get_specific_catalog, tt_update_interface, auth } from './store.js';
+import { mnm_api, mnm_notify, ensure_catalogs, get_specific_catalog, tt_update_interface, auth } from './store.js';
 
 export default Vue.extend({
 	props: ['id'],
@@ -13,11 +13,9 @@ export default Vue.extend({
 	},
 	created: async function () {
 		let me = this;
-		mnm_loading(true);
 		let d = await mnm_api('get_top_groups');
 		me.groups = d.data || [];
 		me.loaded = true;
-		mnm_loading(false);
 		me.filtered_groups = me.groups;
 		if (me.id) me.selectGroupById(me.id * 1);
 	},
@@ -64,7 +62,6 @@ export default Vue.extend({
 			let path = '/top_groups/' + g.id;
 			if (me.$route.path !== path) me.$router.replace(path);
 
-			mnm_loading(true);
 			let catalog_ids = (g.catalogs || '').split(',').filter(function (c) { return c.trim() !== ''; });
 			await ensure_catalogs(catalog_ids);
 			let catalogs = [];
@@ -75,7 +72,6 @@ export default Vue.extend({
 			me.current_catalogs = catalogs;
 			me.original_catalog_ids = catalogs.map(function (c) { return String(c.id); });
 			me.loading_detail = false;
-			mnm_loading(false);
 		},
 		backToList: function () {
 			this.selected_group = null;
@@ -169,10 +165,8 @@ export default Vue.extend({
 	<h4 tt='top_groups'></h4>
 	<p class='text-muted small' tt='top_groups_blurb'></p>
 
-	<div v-if='!loaded' class='text-center py-4'><i tt='loading'></i></div>
-
 	<!-- Group detail view -->
-	<div v-else-if='selected_group'>
+	<div v-if='loaded && selected_group'>
 		<div class='d-flex align-items-center mb-3'>
 			<a href='#' class='me-2' @click.prevent='backToList'>&larr;</a>
 			<h5 class='mb-0'>{{selected_group.name}}</h5>
@@ -181,8 +175,7 @@ export default Vue.extend({
 			</small>
 		</div>
 
-		<div v-if='loading_detail' class='text-center py-3'><i tt='loading'></i></div>
-		<div v-else>
+		<div v-if='!loading_detail'>
 			<!-- Catalog list: editable picker for logged-in users, read-only tags otherwise -->
 			<div v-if='auth.is_logged_in' class='mb-3'>
 				<catalog-search-picker :multi='true' :linkable='true' :value='current_catalogs' @change='onCatalogsChange'
@@ -214,7 +207,7 @@ export default Vue.extend({
 	</div>
 
 	<!-- Group list view -->
-	<div v-else>
+	<div v-else-if='loaded'>
 		<div class='mb-3'>
 			<input type='text' class='form-control' v-model='search_query' @input='filterGroups'
 				placeholder='Search groups...' />

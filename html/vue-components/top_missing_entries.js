@@ -1,5 +1,5 @@
 import { editEntryMixin } from './mnm-mixins.js';
-import { mnm_api, mnm_notify, mnm_loading, ensure_catalogs, get_specific_catalog, tt_update_interface } from './store.js';
+import { mnm_api, mnm_notify, ensure_catalogs, get_specific_catalog, tt_update_interface } from './store.js';
 
 export default Vue.extend({
     mixins: [editEntryMixin],
@@ -63,7 +63,6 @@ export default Vue.extend({
             me.loading = true;
             me.visited = {};
             me.filter_text = '';
-            mnm_loading(true);
             try {
                 var d = await mnm_api('top_missing', { catalogs: me.require_catalogs_string });
                 me.data = d.data;
@@ -73,7 +72,6 @@ export default Vue.extend({
             }
             me.has_loaded = true;
             me.loading = false;
-            mnm_loading(false);
         },
         onCatalogsChange: function (list) {
             const me = this;
@@ -157,13 +155,12 @@ export default Vue.extend({
 				<span>Catalog selection changed since the last search. Click <strong>Re-run search</strong> to refresh these results.</span>
 			</div>
 
-			<div v-if='loading' class='text-center py-3'><i tt='loading'></i></div>
-			<div v-else-if='has_loaded && data.length === 0 && has_enough_catalogs'
+			<div v-if='!loading && has_loaded && data.length === 0 && has_enough_catalogs'
 				class='text-center py-3 text-muted'>
 				<div tt='no_results'></div>
 				<div class='small mt-1'>No shared names are unmatched across the selected catalogs. Try a different combination.</div>
 			</div>
-			<div v-else-if='data.length > 0'>
+			<div v-else-if='!loading && data.length > 0'>
 				<div class='d-flex flex-wrap align-items-center gap-2 mb-2'>
 					<div class='d-flex align-items-center gap-1'>
 						<input type='text' class='form-control form-control-sm' style='width:14em'

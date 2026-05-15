@@ -73,9 +73,6 @@ export default Vue.extend({
 				:show_catalog='typeof id=="undefined"'></entry-details>
 			<match-entry :entry='entry' :key='entry.id'></match-entry>
 		</div>
-		<div v-else>
-			<i tt="loading"></i>
-		</div>
 
 	</div>
 `

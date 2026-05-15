@@ -70,9 +70,6 @@ export const MissingArticles = Vue.extend({
 		<pagination v-if="total > 50" :offset="page*50" :items-per-page="50" :total="total"
 			@go-to-page="goToPage"></pagination>
 	</div>
-	<div v-else>
-		<i tt="loading"></i>
-	</div>
 </div>`
 });
 
@@ -119,6 +116,5 @@ export default Vue.extend({
 			</tbody>
 		</table>
 	</div>
-	<div v-else><i tt='loading'></i></div>
 </div>`
 });

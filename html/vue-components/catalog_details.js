@@ -1,4 +1,4 @@
-import { mnm_api, mnm_notify, mnm_loading, ensure_catalog, get_specific_catalog, tt_update_interface } from './store.js';
+import { mnm_api, mnm_notify, ensure_catalog, get_specific_catalog, tt_update_interface } from './store.js';
 
 // Actions that indicate a catalog is being scraped from an external source.
 const SCRAPING_ACTIONS = new Set(['autoscrape']);
@@ -54,7 +54,6 @@ export default Vue.extend({
 		doLoadCatalog: async function (id, _retries) {
 			const me = this;
 			_retries = _retries || 0;
-			mnm_loading(true);
 			try {
 				var d = await mnm_api('catalog_details', { catalog: id });
 				me.loaded = true;
@@ -66,7 +65,6 @@ export default Vue.extend({
 				}
 			} catch (e) {
 				if (_retries < 3) {
-					mnm_loading(false);
 					setTimeout(function () { me.doLoadCatalog(id, _retries + 1) }, 1000 * (_retries + 1));
 					return;
 				} else {
@@ -74,7 +72,6 @@ export default Vue.extend({
 					me.loaded = true;
 				}
 			}
-			mnm_loading(false);
 		},
 		updateStats: async function () {
 			const me = this;
@@ -282,9 +279,7 @@ export default Vue.extend({
 					</small>
 				</div>
 			</div>
-			<div v-else><i tt="loading"></i></div>
 		</div>
-		<div v-else-if='!loaded'><i tt="loading"></i></div>
 	</div> <!-- wrapper -->
 `
 });

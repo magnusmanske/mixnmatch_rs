@@ -85,9 +85,6 @@ export default Vue.extend({
 		<div v-else-if='loaded'>
 			<i tt='no_results'></i>
 		</div>
-		<div v-if='loading'>
-			<i tt="loading"></i>
-		</div>
 	</div>
 `
 });

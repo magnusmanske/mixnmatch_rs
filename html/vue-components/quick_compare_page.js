@@ -128,10 +128,8 @@ export default Vue.extend({
 		<input type='checkbox' v-model='require_image' @change='clear_and_next_entry()' /> <span tt='require_image'></span>
 	</label>
 </div>
-<div v-if='loading'>
-	<i tt='loading'></i>
-</div>
-<div v-else-if="typeof catalog_id=='undefined'">
+<template v-if='!loading'>
+<div v-if="typeof catalog_id=='undefined'">
 	<table class="table">
 		<tr>
 			<th tt='catalog_name'></th>
@@ -210,5 +208,6 @@ export default Vue.extend({
 		</table>
 	</div>
 </div>
+</template>
 </div>`
 });

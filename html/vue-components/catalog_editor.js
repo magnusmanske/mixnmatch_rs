@@ -310,9 +310,7 @@ export default Vue.extend({
 	]"></mnm-breadcrumb>
 	<catalog-header :catalog="catalog"></catalog-header>
 
-	<div v-if='!loaded'><i tt='loading'></i></div>
-
-	<template v-else>
+	<template v-if='loaded'>
 		<h2 class='mb-3'>
 			<span tt='catalog_editor'></span>
 			<a href='https://meta.wikimedia.org/wiki/Mix%27n%27match/Manual/Catalog_editor'

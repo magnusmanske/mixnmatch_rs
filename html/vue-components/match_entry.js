@@ -356,7 +356,6 @@ export default {
 								</div>
 								<div v-else tt='no_matches'></div>
 							</div>
-							<div v-else tt='loading'></div>
 						</div>
 					</div>
 				</div>
@@ -382,8 +381,7 @@ export default {
 												<td class='wp_search_result_summary'>
 													{{e.snippet|decodeEntities|removeTags|miscFixes}}</td>
 												<td nowrap>
-													<span v-if="!loaded_wp"><i tt='loading'></i></span>
-													<span v-else-if="wp_q_by_title[normaliseTitle(e.title)]">
+													<span v-if="wp_q_by_title[normaliseTitle(e.title)]">
 														<a target='_blank' class='wikidata'
 															:href="'https://www.wikidata.org/wiki/' + wp_q_by_title[normaliseTitle(e.title)]">{{wp_q_by_title[normaliseTitle(e.title)]}}</a>
 														[<a href='#' @click.prevent="setQFromWP(wp_q_by_title[normaliseTitle(e.title)])" tt_title='manually_set_q'>&uarr;</a>]
@@ -396,7 +394,6 @@ export default {
 								</div>
 								<div v-else tt='no_matches'></div>
 							</div>
-							<div v-else tt='loading'></div>
 						</div>
 					</div>
 				</div>
@@ -421,7 +418,6 @@ export default {
 							</div>
 							<div v-else tt='no_matches'></div>
 						</div>
-						<div v-else tt='loading'></div>
 					</div>
 				</div>
 			</div>

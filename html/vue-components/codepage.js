@@ -131,9 +131,6 @@ export default Vue.extend({
     <div v-else-if="error!=''" class="alert alert-danger" role="alert">
         {{error}}
     </div>
-    <div v-else>
-        <i tt='loading'></i>
-    </div>
 </div>
 `
 });

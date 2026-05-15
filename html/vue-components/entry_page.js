@@ -1,4 +1,4 @@
-import { mnm_api, mnm_notify, mnm_loading, ensure_catalog, get_specific_catalog, tt_update_interface } from './store.js';
+import { mnm_api, mnm_notify, ensure_catalog, get_specific_catalog, tt_update_interface } from './store.js';
 
 export default Vue.extend({
 	props: ['id'],
@@ -13,7 +13,6 @@ export default Vue.extend({
 			const me = this;
 			me.loaded = false;
 			me.error = '';
-			mnm_loading(true);
 			try {
 				let d = await mnm_api('get_entry', { entry: id });
 				if (typeof d.data.entries[id] == 'undefined') {
@@ -30,8 +29,6 @@ export default Vue.extend({
 				me.loaded = true;
 			} catch (e) {
 				me.error = 'Failed to load entry #' + id + ': ' + (e.message || e);
-			} finally {
-				mnm_loading(false);
 			}
 		}
 	},
@@ -52,9 +49,6 @@ export default Vue.extend({
 			<match-entry :entry='entry'></match-entry>
 		</div>
 		<div v-else-if="error" class="alert alert-danger mt-3">{{error}}</div>
-		<div v-else>
-			<i tt="loading"></i>
-		</div>
 	</div>
 `
 });

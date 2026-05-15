@@ -1,4 +1,4 @@
-import { mnm_api, mnm_loading, mnm_notify, tt_update_interface, auth } from './store.js';
+import { mnm_api, mnm_notify, tt_update_interface, auth } from './store.js';
 
 const TYPE_LABELS = {
 	'MISMATCH': 'Value mismatch',
@@ -32,7 +32,6 @@ var LcCatalogList = Vue.extend({
 	methods: {
 		load: async function () {
 			var me = this;
-			mnm_loading(true);
 			try {
 				var d = await mnm_api('lc_catalogs');
 				me.catalogs = d.data.catalogs || [];
@@ -41,7 +40,6 @@ var LcCatalogList = Vue.extend({
 				me.error = e.message || 'Failed to load large catalogs';
 			} finally {
 				me.loaded = true;
-				mnm_loading(false);
 			}
 		},
 		issueCount: function (id) {
@@ -55,10 +53,7 @@ var LcCatalogList = Vue.extend({
 	<h1>Large catalogs</h1>
 	<p class='text-muted'>External datasets too large to import into the standard Mix'n'match catalog table — managed in their own DB with periodic Wikidata syncs.</p>
 
-	<div v-if='!loaded' class='mnm-empty-state'>
-		<div class='mnm-empty-icon'>⏳</div>
-		<i tt='loading'></i>
-	</div>
+	<div v-if='!loaded'></div>
 	<div v-else-if='error' class='alert alert-danger'>{{error}}</div>
 	<div v-else>
 		<div class='mb-3 d-flex flex-wrap gap-2 align-items-center'>
@@ -129,7 +124,6 @@ var LcReport = Vue.extend({
 		load: async function () {
 			var me = this;
 			me.loaded = false;
-			mnm_loading(true);
 			try {
 				var d = await mnm_api('lc_report', { catalog: me.catalog_id });
 				me.catalog = d.data.catalog;
@@ -138,7 +132,6 @@ var LcReport = Vue.extend({
 				me.error = e.message || 'Failed to load report';
 			} finally {
 				me.loaded = true;
-				mnm_loading(false);
 			}
 		},
 		getTypeLabel: getTypeLabel,
@@ -165,10 +158,7 @@ var LcReport = Vue.extend({
 	</h1>
 	<p v-if='catalog && catalog.desc' class='text-muted'>{{catalog.desc}}</p>
 
-	<div v-if='!loaded' class='mnm-empty-state'>
-		<div class='mnm-empty-icon'>⏳</div>
-		<i tt='loading'></i>
-	</div>
+	<div v-if='!loaded'></div>
 	<div v-else-if='error' class='alert alert-danger'>{{error}}</div>
 	<div v-else-if='matrix.length==0' class='mnm-empty-state'>
 		<div class='mnm-empty-icon'>✓</div>
@@ -256,7 +246,6 @@ var LcReportList = Vue.extend({
 			var me = this;
 			me.loaded = false;
 			me.error = '';
-			mnm_loading(true);
 			try {
 				var d = await mnm_api('lc_report_list', {
 					catalog: me.catalog_id, status: me.status, type: me.type,
@@ -269,7 +258,6 @@ var LcReportList = Vue.extend({
 				me.error = e.message || 'Failed to load report list';
 			} finally {
 				me.loaded = true;
-				mnm_loading(false);
 			}
 		},
 		buildQuery: function () {
@@ -340,10 +328,7 @@ var LcReportList = Vue.extend({
 		<span class='ms-auto small text-muted' v-if='loaded'>{{total.toLocaleString()}} matching reports</span>
 	</div>
 
-	<div v-if='!loaded' class='mnm-empty-state'>
-		<div class='mnm-empty-icon'>⏳</div>
-		<i tt='loading'></i>
-	</div>
+	<div v-if='!loaded'></div>
 	<div v-else-if='error' class='alert alert-danger'>{{error}}</div>
 	<div v-else-if='rows.length==0' class='mnm-empty-state'>
 		<div class='mnm-empty-icon'>✓</div>
@@ -434,7 +419,6 @@ var LcRecentChanges = Vue.extend({
 			var me = this;
 			me.loaded = false;
 			me.error = '';
-			mnm_loading(true);
 			try {
 				var d = await mnm_api('lc_rc', { limit: me.limit, offset: me.offset, users: me.users });
 				me.rows = d.data.rows || [];
@@ -443,7 +427,6 @@ var LcRecentChanges = Vue.extend({
 				me.error = e.message || 'Failed to load recent changes';
 			} finally {
 				me.loaded = true;
-				mnm_loading(false);
 			}
 		},
 		pushQuery: function () {
@@ -502,10 +485,7 @@ var LcRecentChanges = Vue.extend({
 		<span class='ms-auto small text-muted' v-if='loaded'>{{total.toLocaleString()}} entries</span>
 	</div>
 
-	<div v-if='!loaded' class='mnm-empty-state'>
-		<div class='mnm-empty-icon'>⏳</div>
-		<i tt='loading'></i>
-	</div>
+	<div v-if='!loaded'></div>
 	<div v-else-if='error' class='alert alert-danger'>{{error}}</div>
 	<div v-else-if='rows.length==0' class='mnm-empty-state'>
 		<div class='mnm-empty-icon'>∅</div>

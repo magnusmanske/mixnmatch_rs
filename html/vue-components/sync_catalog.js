@@ -1,4 +1,4 @@
-import { mnm_api, mnm_fetch_json, mnm_loading, mnm_notify, ensure_catalog, get_specific_catalog, tt_update_interface, wd, auth } from './store.js';
+import { mnm_api, mnm_fetch_json, mnm_notify, ensure_catalog, get_specific_catalog, tt_update_interface, wd, auth } from './store.js';
 
 export default Vue.extend({
 	props: ["id"],
@@ -66,7 +66,6 @@ export default Vue.extend({
 			const me = this;
 			me.loaded = false;
 			me.load_error = '';
-			mnm_loading(true);
 			// Updated before each await / synchronous-block boundary so that
 			// when something throws we can identify the step in the error
 			// message and the console log — without this, "Sync failed:
@@ -80,7 +79,6 @@ export default Vue.extend({
 				if (!me.catalog || !me.catalog.wd_prop) {
 					me.load_error = 'This catalog has no Wikidata property and cannot be synced.';
 					me.loaded = true;
-					mnm_loading(false);
 					return;
 				}
 				me.entries = {};
@@ -166,7 +164,6 @@ export default Vue.extend({
 				me.load_error = 'Sync failed at "' + current_step + '": ' + (e && e.message ? e.message : e);
 				me.loaded = true;
 			}
-			mnm_loading(false);
 		}
 	},
 	template: `
@@ -176,10 +173,7 @@ export default Vue.extend({
 			{text: 'Sync'}
 		]"></mnm-breadcrumb>
 		<catalog-header v-if='typeof catalog != "undefined" && catalog && catalog.id' :catalog="catalog"></catalog-header>
-		<div v-if='!loaded && !load_error' class='text-center py-4 mt-3'>
-			<div class='spinner-border text-primary' role='status'></div>
-			<p class='mt-2 text-muted'>Syncing with Wikidata&hellip; this may take a few minutes.</p>
-		</div>
+		<p v-if='!loaded && !load_error' class='text-muted mt-3'>Syncing with Wikidata&hellip; this may take a few minutes.</p>
 		<div v-if='load_error' class='alert alert-danger mt-3'>{{load_error}}</div>
 		<div v-if='loaded && !load_error'>
 

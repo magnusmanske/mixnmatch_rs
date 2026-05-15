@@ -31,10 +31,7 @@ export default Vue.extend({
 	template: `
 <div class='mt-2' :key='"mnm_targets_"+use_property+":"+offset' >
 <mnm-breadcrumb :crumbs="[{text: 'MnM targets'}]"></mnm-breadcrumb>
-<div v-if='loading'>
-	<i tt='loading'></i>
-</div>
-<div v-else>
+<div v-if='!loading'>
 	<batch-navigator :key='"nav1_"+use_property+":"+offset' :batch_size='batch_size' total='1000' :current='offset/batch_size' @set-current='reload'></batch-navigator>
 	<div style="display: flex;">
 		<div style="min-width: 3rem;" tt="entries">

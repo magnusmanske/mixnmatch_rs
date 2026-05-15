@@ -1,4 +1,4 @@
-import { mnm_api, mnm_notify, mnm_loading, ensure_catalog, ensure_catalogs, get_specific_catalog, tt_update_interface } from './store.js';
+import { mnm_api, mnm_notify, ensure_catalog, ensure_catalogs, get_specific_catalog, tt_update_interface } from './store.js';
 
 const PER_PAGE = 50;
 
@@ -38,7 +38,6 @@ export default Vue.extend({
 			let me = this;
 			me.loaded = false;
 			me.loading = true;
-			mnm_loading(true);
 			try {
 				if (me.catalog_id) {
 					await ensure_catalog(me.catalog_id);
@@ -74,7 +73,6 @@ export default Vue.extend({
 				me.loaded = true;
 			}
 			me.loading = false;
-			mnm_loading(false);
 		},
 		goToPage: function (newOffset) {
 			this.offset = newOffset;
@@ -94,8 +92,7 @@ export default Vue.extend({
 	template: `
 <div class='mt-2'>
 	<mnm-breadcrumb :crumbs="[{text: 'User edits'}]"></mnm-breadcrumb>
-	<div v-if='!loaded' class='text-center py-4'><i tt='loading'></i></div>
-	<div v-else>
+	<div v-if='loaded'>
 		<!-- Header -->
 		<div class='mb-3'>
 			<h4 class='mb-1'>

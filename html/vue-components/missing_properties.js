@@ -144,14 +144,10 @@ export default Vue.extend({
 	<h1>Missing properties</h1>
 	<p class='text-muted'>Wikidata properties that don't yet have a Mix'n'match catalog. Pick a status to record progress.</p>
 
-	<div v-if='!loaded' class='mnm-empty-state'>
-		<div class='mnm-empty-icon'>⏳</div>
-		<i tt='loading'></i>
-	</div>
-	<div v-else-if='error' class='alert alert-danger'>
+	<div v-if='loaded && error' class='alert alert-danger'>
 		<b>Error:</b> {{error}}
 	</div>
-	<div v-else>
+	<div v-else-if='loaded'>
 		<div class='mnm-mp-toolbar'>
 			<div class='group'>
 				<span class='small text-muted'>Show:</span>
