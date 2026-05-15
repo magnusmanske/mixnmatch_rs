@@ -408,19 +408,10 @@ fn sign_request(
 
 /// rawurlencode-compatible encoding: unreserved characters per RFC 3986.
 /// `A-Z a-z 0-9 - _ . ~` are preserved, everything else is percent-encoded.
-/// Matches PHP `rawurlencode` byte-for-byte.
+/// The `urlencoding` crate's `encode` matches PHP `rawurlencode` byte-for-byte
+/// (same unreserved set, uppercase hex); the parity test below pins it.
 fn rfc3986_encode(s: &str) -> String {
-    const UNRESERVED: &[u8] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~";
-    let mut out = String::with_capacity(s.len());
-    for &byte in s.as_bytes() {
-        if UNRESERVED.contains(&byte) {
-            out.push(byte as char);
-        } else {
-            out.push_str(&format!("%{byte:02X}"));
-        }
-    }
-    out
+    urlencoding::encode(s).into_owned()
 }
 
 fn build_query_url(base: &str, params: &[(String, String)]) -> String {
