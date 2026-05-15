@@ -3,7 +3,7 @@
 ## Hard rules
 
 - **Do not add the Claude attribution to commit messages.** No `Co-Authored-By: Claude …` line.
-- **`git commit` is pre-authorized; `git push` is not.** When work is complete and the diff is reviewable, you may run `git add <specific files>` + `git commit` without asking — this is durable authorization. **Never `git push`, `git push --force`, or otherwise publish commits to a remote without an explicit per-action request from the user.** Same for any other remote-publishing action (PR creation, branch deletion on origin, etc.).
+- **`git commit` is pre-authorized; `git push` is not.** When work is complete and the diff is reviewable, you may run `git add <specific files>` + `git commit` without asking — this is durable authorization. **Never `git push`, `git push --force`, or otherwise publish commits to a remote without an explicit per-action request from the user.** Same for any other remote-publishing action (PR creation, branch deletion on origin, etc.). Use sensible commit groupings for larger changes.
 - **Never edit `/Users/magnusmanske/php/mixnmatch`.** That's the PHP companion repo. The frontend for this Rust tree lives at `html/` inside this repo.
 - **`audits/`, `CLAUDE.md`, `config.json`, `oauth.ini`, `flickr.key`, `.claude/` are all gitignored.** Don't try to git-add them; treat audit files as durable scratch.
 - **Never alter the production database**, no additions, alterations, deletions, unless specifically told to.
