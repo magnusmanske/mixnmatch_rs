@@ -121,7 +121,6 @@ impl StorageMySQL {
         "overview",
         "wd_matches",
         "update_info",
-        "catalog_default_statement",
     ];
 
     const TABLES_ENTRY_ID: &'static [&'static str] = &[
@@ -2000,10 +1999,7 @@ impl Storage for StorageMySQL {
         Ok(el_chunk)
     }
 
-    async fn automatch_complex_get_el_chunk_count(
-        &self,
-        catalog_id: usize,
-    ) -> Result<usize> {
+    async fn automatch_complex_get_el_chunk_count(&self, catalog_id: usize) -> Result<usize> {
         let sql = format!(
             "SELECT count(*) AS cnt FROM entry WHERE catalog=:catalog_id AND q IS NULL
             AND NOT EXISTS (SELECT * FROM `log` WHERE log.entry_id=entry.id AND log.action='remove_q')

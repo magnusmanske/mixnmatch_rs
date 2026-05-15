@@ -167,19 +167,6 @@ CREATE TABLE `catalog` (
 /*!40101 SET character_set_client = @saved_cs_client */;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8mb4 */;
-CREATE TABLE `catalog_default_statement` (
-  `id` int(11) unsigned NOT NULL AUTO_INCREMENT,
-  `catalog` int(11) unsigned NOT NULL,
-  `property` int(10) unsigned NOT NULL,
-  `value` varchar(32) NOT NULL DEFAULT '',
-  `type` int(11) unsigned NOT NULL DEFAULT 0 COMMENT '0 unless specific type required (QID)',
-  `property_type` set('item','text') NOT NULL DEFAULT '',
-  PRIMARY KEY (`id`),
-  KEY `catalog` (`catalog`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci COMMENT='This table stores statements that apply to entries of a catalog, either all or those of a specified type.';
-/*!40101 SET character_set_client = @saved_cs_client */;
-/*!40101 SET @saved_cs_client     = @@character_set_client */;
-/*!40101 SET character_set_client = utf8mb4 */;
 CREATE TABLE `cersei` (
   `cersei_scraper_id` int(11) unsigned NOT NULL AUTO_INCREMENT,
   `catalog_id` int(11) NOT NULL,
@@ -1616,4 +1603,3 @@ CREATE TABLE IF NOT EXISTS `wbt_item_terms` (
   `wbit_term_in_lang_id` bigint(20) unsigned NOT NULL,
   PRIMARY KEY (`wbit_id`)
 );
-
