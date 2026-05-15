@@ -22,6 +22,15 @@ const MAX_WIKI_ROWS: usize = 400;
 const BLACKLISTED_CATALOGS: &[usize] = &[506];
 const MNM_SITE_URL: &str = "https://mix-n-match.toolforge.org";
 
+/// Concurrent in-flight chunks during `get_differences_mnm_wd`. The
+/// CSV stream is read sequentially (one mutable reader); chunk
+/// processing — a DB IN-clause SELECT plus optional per-row writes —
+/// is I/O-bound, so a small fan-out gives big wall-clock wins without
+/// stressing the connection pool. Each chunk holds at most one DB
+/// connection at a time, so this needs to stay well under
+/// `max_connections`.
+const DIFF_CHUNK_CONCURRENCY: usize = 4;
+
 #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
 struct MatchDiffers {
     ext_id: String,
@@ -460,28 +469,130 @@ impl Microsync {
         let sparql = format!("SELECT ?item ?value {{ ?item wdt:P{property} ?value }}"); // "ORDER BY ?item" unnecessary?
         let mut reader = self.app.wikidata().load_sparql_csv(&sparql).await?;
         let mut extid_not_in_mnm: Vec<ExtIdNoMnM> = vec![];
-        let mut match_differs = vec![];
+        let mut match_differs: Vec<MatchDiffers> = vec![];
         let batch_size: usize = 5000;
+
+        // Read CSV chunks sequentially (single &mut reader); process up to
+        // DIFF_CHUNK_CONCURRENCY chunks in parallel. The CSV stream is
+        // bounded by what the reader yields — at most one chunk is
+        // queued for reading at a time. Per-chunk results are merged
+        // back into the global accumulators in completion order; sorts
+        // at the end normalise the result, so non-deterministic merge
+        // order is safe.
+        let mut handles: tokio::task::JoinSet<
+            Result<(Vec<MatchDiffers>, Vec<ExtIdNoMnM>)>,
+        > = tokio::task::JoinSet::new();
         loop {
-            let chunk = self
-                .get_differences_mnm_wd_process_chunk(
-                    &mut reader,
-                    case_insensitive,
-                    batch_size,
-                    catalog_id,
-                    property,
+            // Throttle: drain one completion before spawning if at cap.
+            while handles.len() >= DIFF_CHUNK_CONCURRENCY {
+                let Some(joined) = handles.join_next().await else {
+                    break;
+                };
+                Self::merge_chunk_results(
+                    joined?.map_err(|e| anyhow::anyhow!("microsync chunk failed: {e:#}"))?,
                     &mut match_differs,
                     &mut extid_not_in_mnm,
-                )
+                );
+            }
+            let chunk = self
+                .get_q2ext_id_chunk(&mut reader, case_insensitive, batch_size)
                 .await?;
-            if chunk.len() < batch_size {
+            if chunk.is_empty() {
+                break;
+            }
+            let done = chunk.len() < batch_size;
+            let app = Arc::clone(&self.app);
+            handles.spawn(Self::process_chunk_for_diffs(
+                app, chunk, catalog_id, property,
+            ));
+            if done {
                 break;
             }
         }
+        // Drain remaining in-flight chunks.
+        while let Some(joined) = handles.join_next().await {
+            Self::merge_chunk_results(
+                joined?.map_err(|e| anyhow::anyhow!("microsync chunk failed: {e:#}"))?,
+                &mut match_differs,
+                &mut extid_not_in_mnm,
+            );
+        }
+
         match_differs = self.resolve_redirect_mismatches(match_differs).await;
         extid_not_in_mnm.sort();
         match_differs.sort();
         Ok((extid_not_in_mnm, match_differs))
+    }
+
+    /// Merge a single chunk's `(match_differs, extid_not_in_mnm)` results
+    /// into the global accumulators, preserving the `MAX_WIKI_ROWS + 1`
+    /// soft cap that the wikitext renderer uses to decide between
+    /// "show details" and "show summary". We keep one element of
+    /// headroom past the cap (matching the original sequential code,
+    /// which used `<= MAX_WIKI_ROWS` to push).
+    fn merge_chunk_results(
+        chunk: (Vec<MatchDiffers>, Vec<ExtIdNoMnM>),
+        match_differs: &mut Vec<MatchDiffers>,
+        extid_not_in_mnm: &mut Vec<ExtIdNoMnM>,
+    ) {
+        let (md, nm) = chunk;
+        for item in md {
+            if match_differs.len() <= MAX_WIKI_ROWS {
+                match_differs.push(item);
+            } else {
+                break;
+            }
+        }
+        for item in nm {
+            if extid_not_in_mnm.len() <= MAX_WIKI_ROWS {
+                extid_not_in_mnm.push(item);
+            } else {
+                break;
+            }
+        }
+    }
+
+    /// Static counterpart to the chunk-processing pipeline so each
+    /// in-flight chunk can run as an independent `tokio::spawn` future
+    /// holding only an `Arc<dyn AppContext>` — no shared `&mut` state.
+    ///
+    /// Returns `(match_differs, extid_not_in_mnm)` capped at
+    /// `MAX_WIKI_ROWS + 1` locally; the merger applies the global cap.
+    async fn process_chunk_for_diffs(
+        app: Arc<dyn AppContext>,
+        chunk: Vec<(isize, String)>,
+        catalog_id: usize,
+        property: usize,
+    ) -> Result<(Vec<MatchDiffers>, Vec<ExtIdNoMnM>)> {
+        let ext_ids: Vec<&String> = chunk.iter().map(|x| &x.1).collect();
+        let ext_id2entry =
+            Self::get_entries_for_ext_ids_with_app(app.as_ref(), catalog_id, property, &ext_ids)
+                .await?;
+        let mut match_differs: Vec<MatchDiffers> = Vec::new();
+        let mut extid_not_in_mnm: Vec<ExtIdNoMnM> = Vec::new();
+        for (q, ext_id) in &chunk {
+            match ext_id2entry.get(ext_id) {
+                Some(entry) => {
+                    Self::process_entry_with_app(
+                        app.as_ref(),
+                        entry,
+                        q,
+                        ext_id,
+                        &mut match_differs,
+                    )
+                    .await?;
+                }
+                None => {
+                    if extid_not_in_mnm.len() <= MAX_WIKI_ROWS {
+                        extid_not_in_mnm.push(ExtIdNoMnM {
+                            q: *q,
+                            ext_id: ext_id.to_owned(),
+                        });
+                    }
+                }
+            }
+        }
+        Ok((match_differs, extid_not_in_mnm))
     }
 
     /// Filters `match_differs` by resolving cases where MnM's stored Q is a Wikidata redirect
@@ -524,45 +635,8 @@ impl Microsync {
         remaining
     }
 
-    #[allow(clippy::too_many_arguments)]
-    async fn get_differences_mnm_wd_process_chunk(
-        &self,
-        reader: &mut csv::Reader<File>,
-        case_insensitive: bool,
-        batch_size: usize,
-        catalog_id: usize,
-        property: usize,
-        match_differs: &mut Vec<MatchDiffers>,
-        extid_not_in_mnm: &mut Vec<ExtIdNoMnM>,
-    ) -> Result<Vec<(isize, String)>> {
-        let chunk = self
-            .get_q2ext_id_chunk(reader, case_insensitive, batch_size)
-            .await?;
-        let ext_ids: Vec<&String> = chunk.iter().map(|x| &x.1).collect();
-        let ext_id2entry = self
-            .get_entries_for_ext_ids(catalog_id, property, &ext_ids)
-            .await?;
-        for (q, ext_id) in &chunk {
-            match ext_id2entry.get(ext_id) {
-                Some(entry) => {
-                    self.get_differences_mnm_wd_process_entry(entry, q, ext_id, match_differs)
-                        .await?;
-                }
-                None => {
-                    if extid_not_in_mnm.len() <= MAX_WIKI_ROWS {
-                        extid_not_in_mnm.push(ExtIdNoMnM {
-                            q: *q,
-                            ext_id: ext_id.to_owned(),
-                        });
-                    }
-                }
-            }
-        }
-        Ok(chunk)
-    }
-
-    async fn get_differences_mnm_wd_process_entry(
-        &self,
+    async fn process_entry_with_app(
+        app: &dyn AppContext,
         entry: &SmallEntry,
         q: &isize,
         ext_id: &String,
@@ -570,13 +644,16 @@ impl Microsync {
     ) -> Result<()> {
         if entry.user.is_none() || entry.user == Some(0) || entry.q.is_none() {
             // Found a match but not in app yet
-            let mut e = Entry::from_id(entry.id, self.app.as_ref()).await?;
-            EntryWriter::new(self.app.as_ref(), &mut e).set_match(&format!("Q{q}"), 4).await?;
+            let mut e = Entry::from_id(entry.id, app).await?;
+            EntryWriter::new(app, &mut e)
+                .set_match(&format!("Q{q}"), 4)
+                .await?;
         } else if Some(*q) != entry.q {
             // Fully matched but to different item
             if let Some(entry_q) = entry.q {
                 // Entry has N/A or Not In Wikidata, overwrite
-                self.get_differences_mnm_wd_process_entry_overwrite(
+                Self::process_entry_overwrite_with_app(
+                    app,
                     entry_q,
                     entry,
                     q,
@@ -589,8 +666,8 @@ impl Microsync {
         Ok(())
     }
 
-    async fn get_differences_mnm_wd_process_entry_overwrite(
-        &self,
+    async fn process_entry_overwrite_with_app(
+        app: &dyn AppContext,
         entry_q: isize,
         entry: &SmallEntry,
         q: &isize,
@@ -598,8 +675,10 @@ impl Microsync {
         match_differs: &mut Vec<MatchDiffers>,
     ) -> Result<()> {
         if entry_q <= 0 {
-            let mut e = Entry::from_id(entry.id, self.app.as_ref()).await?;
-            EntryWriter::new(self.app.as_ref(), &mut e).set_match(&format!("Q{q}"), 4).await?;
+            let mut e = Entry::from_id(entry.id, app).await?;
+            EntryWriter::new(app, &mut e)
+                .set_match(&format!("Q{q}"), 4)
+                .await?;
         } else {
             let md = MatchDiffers {
                 ext_id: ext_id.to_owned(),
@@ -615,8 +694,8 @@ impl Microsync {
         Ok(())
     }
 
-    async fn get_entries_for_ext_ids(
-        &self,
+    async fn get_entries_for_ext_ids_with_app(
+        app: &dyn AppContext,
         catalog_id: usize,
         property: usize,
         ext_ids: &[&String],
@@ -624,8 +703,7 @@ impl Microsync {
         if ext_ids.is_empty() {
             return Ok(HashMap::new());
         }
-        let results = self
-            .app
+        let results = app
             .storage()
             .microsync_get_entries_for_ext_ids(catalog_id, ext_ids)
             .await?;
@@ -853,6 +931,93 @@ mod tests {
         }];
         let remaining = ms.resolve_redirect_mismatches(match_differs).await;
         assert_eq!(remaining.len(), 1, "genuine mismatch should be preserved");
+    }
+
+    // -----------------------------------------------------------------
+    // merge_chunk_results: the new soft-cap merge used after parallel
+    // chunk processing. The wikitext renderer treats len > MAX_WIKI_ROWS
+    // as "too many — show summary", so the cap is `MAX_WIKI_ROWS + 1`
+    // (one element of headroom; matches the sequential loop's
+    // `<= MAX_WIKI_ROWS` push guard).
+    // -----------------------------------------------------------------
+
+    fn sample_match_differs(n: usize) -> Vec<MatchDiffers> {
+        (0..n)
+            .map(|i| MatchDiffers {
+                ext_id: format!("ext-{i}"),
+                q_wd: i as isize,
+                q_mnm: (i + 1) as isize,
+                entry_id: i,
+                ext_url: String::new(),
+            })
+            .collect()
+    }
+
+    fn sample_extid_no_mnm(n: usize) -> Vec<ExtIdNoMnM> {
+        (0..n)
+            .map(|i| ExtIdNoMnM {
+                q: i as isize,
+                ext_id: format!("ext-{i}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn merge_chunk_results_appends_when_below_cap() {
+        let mut md: Vec<MatchDiffers> = Vec::new();
+        let mut nm: Vec<ExtIdNoMnM> = Vec::new();
+        Microsync::merge_chunk_results(
+            (sample_match_differs(3), sample_extid_no_mnm(2)),
+            &mut md,
+            &mut nm,
+        );
+        assert_eq!(md.len(), 3);
+        assert_eq!(nm.len(), 2);
+    }
+
+    #[test]
+    fn merge_chunk_results_caps_at_max_wiki_rows_plus_one() {
+        // First merge pushes us up to and just past the cap; second merge
+        // is fully discarded. The renderer sees `len > MAX_WIKI_ROWS` and
+        // emits the summary form, which is the only thing that matters
+        // downstream — the exact length above the cap is irrelevant.
+        let mut md: Vec<MatchDiffers> = Vec::new();
+        let mut nm: Vec<ExtIdNoMnM> = Vec::new();
+        Microsync::merge_chunk_results(
+            (
+                sample_match_differs(MAX_WIKI_ROWS + 5),
+                sample_extid_no_mnm(MAX_WIKI_ROWS + 5),
+            ),
+            &mut md,
+            &mut nm,
+        );
+        assert_eq!(md.len(), MAX_WIKI_ROWS + 1);
+        assert_eq!(nm.len(), MAX_WIKI_ROWS + 1);
+        // Second merge: cap is already reached; nothing more gets in.
+        Microsync::merge_chunk_results(
+            (sample_match_differs(10), sample_extid_no_mnm(10)),
+            &mut md,
+            &mut nm,
+        );
+        assert_eq!(md.len(), MAX_WIKI_ROWS + 1);
+        assert_eq!(nm.len(), MAX_WIKI_ROWS + 1);
+    }
+
+    #[test]
+    fn merge_chunk_results_partial_fill_at_boundary() {
+        // Accumulator already at cap-2 (i.e. MAX_WIKI_ROWS-1); a chunk
+        // with 5 items fills the remaining 2 slots and discards 3.
+        // This pins the "fills to exactly MAX_WIKI_ROWS+1 then stops"
+        // semantics — important because the renderer's "show details vs
+        // summary" branch hinges on this exact boundary.
+        let mut md: Vec<MatchDiffers> = sample_match_differs(MAX_WIKI_ROWS - 1);
+        let mut nm: Vec<ExtIdNoMnM> = Vec::new();
+        Microsync::merge_chunk_results(
+            (sample_match_differs(5), sample_extid_no_mnm(0)),
+            &mut md,
+            &mut nm,
+        );
+        assert_eq!(md.len(), MAX_WIKI_ROWS + 1);
     }
 
     #[tokio::test]

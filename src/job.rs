@@ -600,6 +600,7 @@ const ACTION_TIMEOUTS_SECS: &[(&str, u64)] = &[
     ("automatch_from_other_catalogs", 7_200),
     ("auxiliary_matcher",             7_200),
     ("aux2wd",                        7_200),
+    ("microsync",                    14_400), // 4 h: SPARQL covers every WD item with the catalog's property
     ("taxon_matcher",                 7_200),
     ("match_by_coordinates",          7_200),
     ("sync_from_cersei",              7_200),
@@ -913,6 +914,10 @@ mod tests {
     fn action_timeout_secs_returns_override_for_listed_action() {
         assert_eq!(action_timeout_secs("autoscrape"), 28_800);
         assert_eq!(action_timeout_secs("automatch"), 7_200);
+        // Pinned: large catalogs trip the 1-hour default — the SPARQL alone
+        // returns every WD item with the catalog's property and the chunked
+        // diff walk is then O(n_items).
+        assert_eq!(action_timeout_secs("microsync"), 14_400);
     }
 
     #[test]
