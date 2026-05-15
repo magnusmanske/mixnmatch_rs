@@ -1,5 +1,5 @@
 import { editEntryMixin } from './mnm-mixins.js';
-import { mnm_api, mnm_fetch_json, mnm_notify, ensure_catalogs, tt_update_interface, auth } from './store.js';
+import { mnm_api, mnm_fetch_json, mnm_notify, mnm_loading, ensure_catalogs, tt_update_interface, auth } from './store.js';
 
 export default Vue.extend({
 	mixins: [editEntryMixin],
@@ -52,6 +52,7 @@ export default Vue.extend({
 			if (me.prop != '') params.prop = me.prop;
 			const controller = new AbortController();
 			const timeoutId = setTimeout(() => controller.abort(), 30000);
+			mnm_loading(true);
 			try {
 				var d = await mnm_api('creation_candidates', params, { signal: controller.signal });
 				Object.entries(d.data.entries).forEach(function ([k, v]) {
@@ -79,6 +80,7 @@ export default Vue.extend({
 			} finally {
 				clearTimeout(timeoutId);
 				me.loading = false;
+				mnm_loading(false);
 			}
 			me.loaded = true;
 			if (me.ext_name != '') {
@@ -342,12 +344,12 @@ export default Vue.extend({
 		<mnm-breadcrumb :crumbs="[{tt: 'creation_candidates'}]"></mnm-breadcrumb>
 		<h2>
 			<div v-if="entries.length>0" style='float:right'>
-				<button class="btn btn-outline-primary" @click.prevent='entries=[];loadData();return false'
-					tt='next_set'></button>
+				<button class="btn btn-outline-primary" :disabled='loading'
+					@click.prevent='loadData();return false' tt='next_set'></button>
 			</div>
 			<span tt='creation_candidates'></span>
 		</h2>
-		<div v-if="loading" class="text-center py-4">
+		<div v-if="loading && entries.length==0" class="text-center py-4">
 			<span class="spinner-border spinner-border-sm me-2 text-secondary" role="status" aria-hidden="true"></span>
 			<i tt='loading'></i>
 		</div>
@@ -393,8 +395,8 @@ export default Vue.extend({
 			</div>
 
 			<div>
-				<button class="btn btn-outline-primary next_cc_set" @click.prevent='entries=[];loadData();return false'
-					tt='next_set'></button>
+				<button class="btn btn-outline-primary next_cc_set" :disabled='loading'
+					@click.prevent='loadData();return false' tt='next_set'></button>
 				<span v-if='auth.is_logged_in'>
 					<button v-if='edits_todo.length==0' class='btn btn-outline-success' @click.prevent='createNewItem'
 						tt_title='creation_warning'><span tt='create_new_item_for'></span>
