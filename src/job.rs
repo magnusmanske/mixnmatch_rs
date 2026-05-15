@@ -174,7 +174,14 @@ impl Job {
     pub async fn run(&mut self) -> Result<()> {
         let catalog_id = self.get_catalog().await?;
         let action = self.get_action().await?;
-        let budget = action_timeout_secs(&action);
+        // DB override (`job_sizes.max_seconds`) wins; the compiled
+        // `ACTION_TIMEOUTS_SECS` table is the fallback baseline.
+        // Operators can tune any individual action without a recompile
+        // by setting (or clearing) the column for that action.
+        let budget = match self.app.storage().jobs_get_action_timeout(&action).await {
+            Ok(Some(secs)) => secs,
+            _ => action_timeout_secs(&action),
+        };
         // Wall-clock cap on the handler future. On timeout the inner
         // future is dropped (cancelling at the next .await point); any
         // server-side DB query left behind is mopped up by
@@ -566,7 +573,7 @@ const DEFAULT_ACTION_TIMEOUT_SECS: u64 = 3_600;
 /// default.
 #[rustfmt::skip]
 const ACTION_TIMEOUTS_SECS: &[(&str, u64)] = &[
-    ("autoscrape",                   14_400), // 4 h: paginated external sites
+    ("autoscrape",                   28_800), // 8 h: paginated external sites
     ("bespoke_scraper",              14_400), // 4 h: per-catalog scrapers
     ("automatch",                     7_200), // 2 h: WDQS-heavy
     ("automatch_by_search",           7_200), // 2 h: one Wikidata search API call per unique (label, type) pair
@@ -577,6 +584,7 @@ const ACTION_TIMEOUTS_SECS: &[(&str, u64)] = &[
     ("taxon_matcher",                 7_200),
     ("match_by_coordinates",          7_200),
     ("sync_from_cersei",              7_200),
+    ("update_from_tabbed_file",      28_800), // 8 h: bulk import of large flat-file catalogs
     ("wdrc_sync",                     7_200),
     ("update_property_cache",         7_200),
 ];

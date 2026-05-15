@@ -447,6 +447,15 @@ pub trait AutoscrapeQueries: std::fmt::Debug + Send + Sync {
 #[async_trait]
 pub trait JobQueries: std::fmt::Debug + Send + Sync {
     async fn jobs_get_tasks(&self) -> Result<HashMap<String, TaskSize>>;
+
+    /// Per-action wall-clock budget override stored in
+    /// `job_sizes.max_seconds`. `Ok(Some(N))` → use `N` seconds;
+    /// `Ok(None)` (no row, or `max_seconds IS NULL`) → caller falls back
+    /// to the compiled `ACTION_TIMEOUTS_SECS` table. The compiled table
+    /// stays as the shipping baseline; the DB column is the
+    /// operator-tunable override that doesn't need a recompile.
+    async fn jobs_get_action_timeout(&self, action: &str) -> Result<Option<u64>>;
+
     async fn reset_running_jobs(&self) -> Result<()>;
     async fn reset_failed_jobs(&self) -> Result<()>;
     /// Send KILL QUERY to every connection under the current DB user whose

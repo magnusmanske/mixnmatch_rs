@@ -501,6 +501,7 @@ CREATE TABLE `job_sizes` (
   `id` int(11) unsigned NOT NULL AUTO_INCREMENT,
   `action` varchar(128) NOT NULL,
   `size` enum('tiny','small','medium','large','ginormous') NOT NULL,
+  `max_seconds` int(11) unsigned DEFAULT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `action` (`action`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;

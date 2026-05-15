@@ -28,6 +28,18 @@ impl crate::storage::JobQueries for StorageMySQL {
         Ok(ret)
     }
 
+    async fn jobs_get_action_timeout(&self, action: &str) -> Result<Option<u64>> {
+        let sql = "SELECT `max_seconds` FROM `job_sizes` WHERE `action`=:action";
+        let mut conn = self.get_conn_ro().await?;
+        // `max_seconds` is `INT UNSIGNED NULL`; `Option<u64>` round-trips
+        // both the "no row at all" and "row exists but value is NULL"
+        // cases as `None`, which is what the caller wants.
+        let row: Option<Option<u64>> = conn
+            .exec_first(sql, params! { "action" => action })
+            .await?;
+        Ok(row.flatten())
+    }
+
     /// Resets all RUNNING jobs of certain types to TODO. Used when bot restarts.
     async fn reset_running_jobs(&self) -> Result<()> {
         let sql = format!(
