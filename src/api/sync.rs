@@ -12,11 +12,11 @@ use crate::app_state::AppState;
 use crate::wdqs;
 use axum::response::Response;
 use futures::stream::{self, StreamExt};
+use moka::future::Cache;
 use serde_json::{Value, json};
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
-use std::time::{Duration, Instant};
-use tokio::sync::Mutex;
+use std::sync::{Arc, LazyLock, OnceLock};
+use std::time::Duration;
 
 /// In-memory TTL cache for `fetch_wd_ext2q` keyed by `wd_prop`.
 ///
@@ -31,12 +31,12 @@ use tokio::sync::Mutex;
 const WD_EXT2Q_CACHE_TTL: Duration = Duration::from_secs(300);
 
 type CachedMap = Arc<HashMap<String, String>>;
-type WdExt2qCache = Mutex<HashMap<usize, (Instant, CachedMap)>>;
 
-fn wd_ext2q_cache() -> &'static WdExt2qCache {
-    static CACHE: OnceLock<WdExt2qCache> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
-}
+static WD_EXT2Q_CACHE: LazyLock<Cache<usize, CachedMap>> = LazyLock::new(|| {
+    Cache::builder()
+        .time_to_live(WD_EXT2Q_CACHE_TTL)
+        .build()
+});
 
 /// Axum-shape entry point for `?query=get_sync&catalog=…`.
 pub async fn query_get_sync(app: &AppState, params: &Params) -> Result<Response, ApiError> {
@@ -122,25 +122,14 @@ pub async fn get(app: &AppState, catalog_id: usize) -> Result<Value, ApiError> {
 }
 
 /// Cache-fronted wrapper around `fetch_wd_ext2q`. Returns an `Arc` so
-/// callers don't pay a clone on hit.
-async fn fetch_wd_ext2q_cached(wd_prop: usize) -> Result<CachedMap, ApiError> {
-    {
-        let cache = wd_ext2q_cache().lock().await;
-        if let Some((stored_at, map)) = cache.get(&wd_prop)
-            && stored_at.elapsed() < WD_EXT2Q_CACHE_TTL
-        {
-            return Ok(Arc::clone(map));
-        }
-    }
-    let fresh = Arc::new(fetch_wd_ext2q(wd_prop).await?);
-    let mut cache = wd_ext2q_cache().lock().await;
-    // Trim any stale entries while we hold the lock — `get_sync` isn't
-    // a hot path, so this O(n) sweep is acceptable and keeps the cache
-    // bounded even if many properties are queried over time.
-    let cutoff = Instant::now() - WD_EXT2Q_CACHE_TTL;
-    cache.retain(|_, (stored_at, _)| *stored_at > cutoff);
-    cache.insert(wd_prop, (Instant::now(), Arc::clone(&fresh)));
-    Ok(fresh)
+/// callers don't pay a clone on hit. Concurrent misses for the same
+/// `wd_prop` collapse to a single SPARQL fetch (moka's `try_get_with`).
+async fn fetch_wd_ext2q_cached(wd_prop: usize) -> Result<CachedMap, Arc<ApiError>> {
+    WD_EXT2Q_CACHE
+        .try_get_with(wd_prop, async move {
+            fetch_wd_ext2q(wd_prop).await.map(Arc::new)
+        })
+        .await
 }
 
 /// Fetch Wikidata's view of P{wd_prop} as an `ext_id → Qid` map.
@@ -371,16 +360,12 @@ mod tests {
         let mut expected = HashMap::new();
         expected.insert("ext-cached".to_string(), "Q123".to_string());
         let arc = Arc::new(expected);
-        {
-            let mut cache = wd_ext2q_cache().lock().await;
-            cache.insert(key, (Instant::now(), Arc::clone(&arc)));
-        }
+        WD_EXT2Q_CACHE.insert(key, Arc::clone(&arc)).await;
         let got = fetch_wd_ext2q_cached(key).await.expect("cached read");
         assert!(Arc::ptr_eq(&arc, &got), "cache hit must return the same Arc");
         // Cleanup so we don't leak this synthetic key across the
         // process for other tests that might inspect the cache.
-        let mut cache = wd_ext2q_cache().lock().await;
-        cache.remove(&key);
+        WD_EXT2Q_CACHE.invalidate(&key).await;
     }
 
     #[test]
