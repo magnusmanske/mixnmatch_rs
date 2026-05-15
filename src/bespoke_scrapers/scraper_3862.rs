@@ -32,7 +32,10 @@ impl BespokeScraper for BespokeScraper3862 {
         };
         let mut entry_cache = vec![];
         for (id, v) in obj {
-            entry_cache.push(Self::parse_item(self.catalog_id(), id, v));
+            let Some(ee) = Self::parse_item(self.catalog_id(), id, v) else {
+                continue;
+            };
+            entry_cache.push(ee);
             self.maybe_flush_cache(&mut entry_cache).await?;
         }
         self.process_cache(&mut entry_cache).await?;
@@ -41,11 +44,31 @@ impl BespokeScraper for BespokeScraper3862 {
 }
 
 impl BespokeScraper3862 {
+    /// Build one `ExtendedEntry` from an upstream `(id, value)` pair.
+    /// Returns `None` when the id is empty after trimming.
+    ///
+    /// Upstream is known to ship keys with surrounding whitespace —
+    /// `"Names "`, `"OLU "`, `" data.odw.tw"`, etc. (~12 such keys at
+    /// last check). Carrying that whitespace into `ext_id` produced
+    /// invalid URLs (`/dataset/Names%20`) and, more critically, tripped
+    /// MySQL's `PAD SPACE` collation on the `(catalog, ext_id)` unique
+    /// index: `"Names "` collides with `"Names"`, the `INSERT IGNORE`
+    /// is silently ignored, `last_insert_id` becomes 0, mysql_common
+    /// maps that to `None`, and `entry_insert_as_new` errors with
+    /// `EntryError::EntryInsertFailed` — the exact failure operators
+    /// were seeing.
+    ///
+    /// Trim once at ingestion and treat ids that vanish entirely as
+    /// data-quality noise: nothing useful to scrape, skip silently.
     pub(crate) fn parse_item(
         catalog_id: usize,
         id: &str,
         v: &serde_json::Value,
-    ) -> ExtendedEntry {
+    ) -> Option<ExtendedEntry> {
+        let id = id.trim();
+        if id.is_empty() {
+            return None;
+        }
         let ext_name = v
             .get("title")
             .and_then(|t| t.as_str())
@@ -72,10 +95,10 @@ impl BespokeScraper3862 {
             ..Default::default()
         };
 
-        ExtendedEntry {
+        Some(ExtendedEntry {
             entry,
             ..Default::default()
-        }
+        })
     }
 }
 
@@ -89,7 +112,7 @@ mod tests {
             "title": "DBpedia",
             "description": {"en": "An English desc", "de": "Eine deutsche Beschreibung"}
         });
-        let ee = BespokeScraper3862::parse_item(3862, "dbpedia", &v);
+        let ee = BespokeScraper3862::parse_item(3862, "dbpedia", &v).expect("non-empty id");
         assert_eq!(ee.entry.ext_id, "dbpedia");
         assert_eq!(ee.entry.ext_name, "DBpedia");
         assert_eq!(ee.entry.ext_desc, "An English desc");
@@ -104,7 +127,7 @@ mod tests {
             "title": "Foo",
             "description": {"de": "Eine deutsche Beschreibung"}
         });
-        let ee = BespokeScraper3862::parse_item(3862, "foo", &v);
+        let ee = BespokeScraper3862::parse_item(3862, "foo", &v).expect("non-empty id");
         assert_eq!(ee.entry.ext_desc, "Eine deutsche Beschreibung");
     }
 
@@ -114,21 +137,21 @@ mod tests {
             "title": "Foo",
             "description": {"fr": "Une description française"}
         });
-        let ee = BespokeScraper3862::parse_item(3862, "foo", &v);
+        let ee = BespokeScraper3862::parse_item(3862, "foo", &v).expect("non-empty id");
         assert_eq!(ee.entry.ext_desc, "");
     }
 
     #[test]
     fn test_3862_parse_item_no_description_field() {
         let v = serde_json::json!({"title": "Foo"});
-        let ee = BespokeScraper3862::parse_item(3862, "foo", &v);
+        let ee = BespokeScraper3862::parse_item(3862, "foo", &v).expect("non-empty id");
         assert_eq!(ee.entry.ext_desc, "");
     }
 
     #[test]
     fn test_3862_parse_item_falls_back_to_id_when_no_title() {
         let v = serde_json::json!({"description": {"en": "x"}});
-        let ee = BespokeScraper3862::parse_item(3862, "the-id", &v);
+        let ee = BespokeScraper3862::parse_item(3862, "the-id", &v).expect("non-empty id");
         assert_eq!(ee.entry.ext_name, "the-id");
     }
 
@@ -139,7 +162,54 @@ mod tests {
         // missing here — there's no value in a blank ext_name and the
         // default fallback gives a usable label.
         let v = serde_json::json!({"title": "", "description": {"en": "x"}});
-        let ee = BespokeScraper3862::parse_item(3862, "the-id", &v);
+        let ee = BespokeScraper3862::parse_item(3862, "the-id", &v).expect("non-empty id");
         assert_eq!(ee.entry.ext_name, "the-id");
+    }
+
+    // -----------------------------------------------------------------
+    // Whitespace handling: upstream ships ids like "Names ", "OLU ",
+    // " data.odw.tw" etc. (verified live, ~12 such keys). Untrimmed,
+    // these tripped the (catalog, ext_id) unique index under MySQL's
+    // PAD SPACE collation, causing EntryError::EntryInsertFailed.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn test_3862_parse_item_trims_trailing_space_id() {
+        let v = serde_json::json!({"title": "Names dataset"});
+        let ee = BespokeScraper3862::parse_item(3862, "Names ", &v).expect("non-empty after trim");
+        assert_eq!(ee.entry.ext_id, "Names");
+        assert_eq!(ee.entry.ext_url, "https://lod-cloud.net/dataset/Names");
+    }
+
+    #[test]
+    fn test_3862_parse_item_trims_leading_space_id() {
+        let v = serde_json::json!({"title": "Some Data"});
+        let ee = BespokeScraper3862::parse_item(3862, " data.odw.tw", &v)
+            .expect("non-empty after trim");
+        assert_eq!(ee.entry.ext_id, "data.odw.tw");
+        assert_eq!(ee.entry.ext_url, "https://lod-cloud.net/dataset/data.odw.tw");
+    }
+
+    #[test]
+    fn test_3862_parse_item_skips_whitespace_only_id() {
+        let v = serde_json::json!({"title": "should not appear"});
+        assert!(BespokeScraper3862::parse_item(3862, "   ", &v).is_none());
+    }
+
+    #[test]
+    fn test_3862_parse_item_skips_empty_id() {
+        let v = serde_json::json!({"title": "should not appear"});
+        assert!(BespokeScraper3862::parse_item(3862, "", &v).is_none());
+    }
+
+    #[test]
+    fn test_3862_parse_item_id_fallback_uses_trimmed_id() {
+        // When title is absent, ext_name falls back to the *trimmed* id —
+        // not the raw whitespace-padded one. Otherwise the displayed name
+        // would carry the same trailing-space ugliness.
+        let v = serde_json::json!({});
+        let ee = BespokeScraper3862::parse_item(3862, "OLU ", &v).expect("non-empty after trim");
+        assert_eq!(ee.entry.ext_id, "OLU");
+        assert_eq!(ee.entry.ext_name, "OLU");
     }
 }
