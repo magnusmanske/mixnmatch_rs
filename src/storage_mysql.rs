@@ -175,6 +175,33 @@ impl StorageMySQL {
         mysql_misc::acquire_with_timeout(self.pool_ro.get_conn()).await
     }
 
+    /// Run `sql` against the RO pool with bound `params`, decoding every
+    /// row via `from_row::<T>`. Collapses the recurring 5-line
+    /// `get_conn_ro().exec_iter().map_and_drop(from_row::<T>)` shape.
+    pub(super) async fn query_ro<P, T>(&self, sql: &str, params: P) -> Result<Vec<T>>
+    where
+        P: Into<Params> + Send,
+        T: mysql_async::prelude::FromRow + Send + 'static,
+    {
+        Ok(self
+            .get_conn_ro()
+            .await?
+            .exec_iter(sql, params)
+            .await?
+            .map_and_drop(from_row::<T>)
+            .await?)
+    }
+
+    /// `SELECT COUNT(*) AS cnt`-style helper: run `sql` against the RO
+    /// pool, return the first `usize` (or 0 if no rows came back).
+    pub(super) async fn query_count_ro<P>(&self, sql: &str, params: P) -> Result<usize>
+    where
+        P: Into<Params> + Send,
+    {
+        let rows: Vec<usize> = self.query_ro(sql, params).await?;
+        Ok(rows.into_iter().next().unwrap_or(0))
+    }
+
     async fn entry_set_match_cleanup(
         &self,
         entry: &Entry,
@@ -268,14 +295,7 @@ impl StorageMySQL {
             	LIMIT {batch_size} OFFSET {offset}",
             ranks.join("','")
         );
-        let results = self
-            .get_conn_ro()
-            .await?
-            .exec_iter(sql, Empty)
-            .await?
-            .map_and_drop(from_row::<(usize, String, String)>)
-            .await?;
-        Ok(results)
+        self.query_ro(&sql, Empty).await
     }
 
     // --- automatch_people_with_birth_year helpers --------------------------
@@ -300,13 +320,8 @@ impl StorageMySQL {
               AND (pd.year_born != '' OR pd.year_died != '')
             ORDER BY e.id
             LIMIT :batch_size"#;
-        let mut conn = self.get_conn_ro().await?;
-        let ids = conn
-            .exec_iter(sql, params! {catalog_id, after_id, batch_size})
-            .await?
-            .map_and_drop(from_row::<usize>)
-            .await?;
-        Ok(ids)
+        self.query_ro(sql, params! {catalog_id, after_id, batch_size})
+            .await
     }
 
     /// For a bounded set of source entry ids, find Wikidata candidates
@@ -414,14 +429,9 @@ impl StorageMySQL {
         for id in source_ids.iter().chain(source_ids.iter()) {
             params.push(mysql_async::Value::from(*id));
         }
-        let mut conn = self.get_conn_ro().await?;
         // group_concat over a single DISTINCT q yields a string like "12345";
         // parse defensively in case MySQL returns it as bytes vs a number.
-        let rows = conn
-            .exec_iter(sql, params)
-            .await?
-            .map_and_drop(from_row::<(usize, String)>)
-            .await?;
+        let rows: Vec<(usize, String)> = self.query_ro(&sql, params).await?;
         let mut out = Vec::with_capacity(rows.len());
         for (entry_id, q_str) in rows {
             if let Ok(q) = q_str.trim().parse::<usize>() {
@@ -493,11 +503,8 @@ impl Storage for StorageMySQL {
         	UNION
          	SELECT DISTINCT entry.id FROM entry,catalog WHERE active=1 AND wd_prop=:prop_numeric AND wd_qual IS NULL
           	AND entry.catalog=catalog.id AND ext_id=:value";
-        let mut conn = self.get_conn_ro().await?;
-        let mut results = conn
-            .exec_iter(sql, params! {prop_numeric, value})
-            .await?
-            .map_and_drop(from_row::<usize>)
+        let mut results: Vec<usize> = self
+            .query_ro(sql, params! {prop_numeric, value})
             .await?;
         results.sort();
         results.dedup();
@@ -716,16 +723,8 @@ impl Storage for StorageMySQL {
         let eq = EntryQuery::default().with_catalog_id(catalog_id);
         let sql = "SELECT ext_id,id FROM entry WHERE".to_string();
         let (sql, parts) = Self::get_entry_query_sql_where(&eq, sql, vec![])?;
-        let ret = self
-            .get_conn_ro()
-            .await?
-            .exec_iter(sql, parts)
-            .await?
-            .map_and_drop(from_row::<(String, usize)>)
-            .await?
-            .into_iter()
-            .collect();
-        Ok(ret)
+        let rows: Vec<(String, usize)> = self.query_ro(&sql, parts).await?;
+        Ok(rows.into_iter().collect())
     }
 
     /// This deletes a catalog and all its associated entries.
@@ -762,11 +761,11 @@ impl Storage for StorageMySQL {
     }
 
     async fn number_of_entries_in_catalog(&self, catalog_id: usize) -> Result<usize> {
-        let results: Vec<usize> = "SELECT count(*) AS cnt FROM `entry` WHERE `catalog`=:catalog_id"
-            .with(params! {catalog_id})
-            .map(self.get_conn_ro().await?, |num| num)
-            .await?;
-        Ok(*results.first().unwrap_or(&0))
+        self.query_count_ro(
+            "SELECT count(*) AS cnt FROM `entry` WHERE `catalog`=:catalog_id",
+            params! {catalog_id},
+        )
+        .await
     }
 
     async fn number_of_entries_in_catalog_filtered(
@@ -782,11 +781,7 @@ impl Storage for StorageMySQL {
             "SELECT count(*) AS cnt FROM `entry` WHERE `catalog`=:catalog_id {}",
             match_state.get_sql()
         );
-        let results: Vec<usize> = sql
-            .with(params! {catalog_id})
-            .map(self.get_conn_ro().await?, |num| num)
-            .await?;
-        Ok(*results.first().unwrap_or(&0))
+        self.query_count_ro(&sql, params! {catalog_id}).await
     }
 
     async fn get_catalog_from_id(&self, catalog_id: usize) -> Result<Catalog> {
@@ -828,21 +823,9 @@ impl Storage for StorageMySQL {
         catalog_id: usize,
     ) -> Result<HashMap<String, String>> {
         let sql = r#"SELECT `kv_key`,`kv_value` FROM `kv_catalog` WHERE `catalog_id`=:catalog_id"#;
-        let mut conn = self.get_conn_ro().await?;
-        let results = conn
-            .exec_iter(sql, params! {catalog_id})
-            .await?
-            .map_and_drop(from_row::<(String, String)>)
-            .await?;
-        let ret: HashMap<String, String> = results.into_iter().collect();
-        Ok(ret)
+        let rows: Vec<(String, String)> = self.query_ro(sql, params! {catalog_id}).await?;
+        Ok(rows.into_iter().collect())
     }
-
-    // async fn remove_inactive_catalogs_from_overview(&self) -> Result<()> {
-    //     let sql = r#"DELETE FROM `overview` WHERE `catalog` IN (SELECT `id` FROM `catalog` WHERE `active`=0)"#;
-    //     self.get_conn().await?.exec_drop(sql, ()).await?;
-    //     Ok(())
-    // }
 
     async fn replace_nowd_with_noq(&self) -> Result<()> {
         let sql = r"UPDATE entry SET q=NULL,user=NULL,timestamp=NULL WHERE q=-1";
@@ -921,16 +904,8 @@ impl Storage for StorageMySQL {
     ) -> Result<HashMap<usize, String>> {
         let placeholders = Self::sql_placeholders(entry_ids.len());
         let sql = format!("SELECT `id`,`ext_name` FROM `entry` WHERE `id` IN ({placeholders})");
-        let mut conn = self.get_conn_ro().await?;
-        let results = conn
-            .exec_iter(sql, entry_ids.to_vec())
-            .await?
-            .map_and_drop(from_row::<(usize, String)>)
-            .await?
-            .iter()
-            .map(|(entry_id, ext_name)| (*entry_id, ext_name.to_owned()))
-            .collect();
-        Ok(results)
+        let rows: Vec<(usize, String)> = self.query_ro(&sql, entry_ids.to_vec()).await?;
+        Ok(rows.into_iter().collect())
     }
 
     async fn microsync_get_multiple_q_in_mnm(
@@ -940,13 +915,7 @@ impl Storage for StorageMySQL {
         let sql = format!(
             "SELECT q,group_concat(id) AS ids,group_concat(ext_id SEPARATOR '{EXT_URL_UNIQUE_SEPARATOR}') AS ext_ids FROM entry WHERE catalog=:catalog_id AND q IS NOT NULL and q>0 AND user>0 GROUP BY q HAVING count(id)>1 ORDER BY q"
         );
-        let mut conn = self.get_conn_ro().await?;
-        let results = conn
-            .exec_iter(sql, params! {catalog_id})
-            .await?
-            .map_and_drop(from_row::<(isize, String, String)>)
-            .await?;
-        Ok(results)
+        self.query_ro(&sql, params! {catalog_id}).await
     }
 
     async fn microsync_get_entries_for_ext_ids(
@@ -959,13 +928,7 @@ impl Storage for StorageMySQL {
         let sql = format!(
             "SELECT `id`,`q`,`user`,`ext_id`,`ext_url` FROM `entry` WHERE `catalog`={catalog_id} AND `ext_id` IN ({placeholders})"
         );
-        let mut conn = self.get_conn_ro().await?;
-        let results = conn
-            .exec_iter(sql, ext_ids.to_vec())
-            .await?
-            .map_and_drop(from_row::<(usize, Option<isize>, Option<usize>, String, String)>)
-            .await?;
-        Ok(results)
+        self.query_ro(&sql, ext_ids.to_vec()).await
     }
 
     // MixNMatch
@@ -1072,14 +1035,7 @@ impl Storage for StorageMySQL {
 
     async fn reference_fixer_pending(&self, limit: usize) -> Result<Vec<usize>> {
         let sql = "SELECT `q` FROM `reference_fixer` WHERE `done`=0 ORDER BY `q` DESC LIMIT :limit";
-        let qs: Vec<usize> = self
-            .get_conn_ro()
-            .await?
-            .exec_iter(sql, params! {limit})
-            .await?
-            .map_and_drop(from_row::<usize>)
-            .await?;
-        Ok(qs)
+        self.query_ro(sql, params! {limit}).await
     }
 
     async fn reference_fixer_mark_done(&self, q: usize) -> Result<()> {
@@ -1129,13 +1085,7 @@ impl Storage for StorageMySQL {
                      AND `wd_qual` IS NULL \
                      AND `active` = 1 \
                    LIMIT 2";
-        let rows: Vec<usize> = self
-            .get_conn_ro()
-            .await?
-            .exec_iter(sql, params! {wd_prop})
-            .await?
-            .map_and_drop(from_row::<usize>)
-            .await?;
+        let rows: Vec<usize> = self.query_ro(sql, params! {wd_prop}).await?;
         Ok(if rows.len() == 1 { Some(rows[0]) } else { None })
     }
 
@@ -1147,15 +1097,8 @@ impl Storage for StorageMySQL {
             sql += &format!(" AND (q IS NULL OR q={})", &q);
         }
         sql += " LIMIT 1";
-        let has_rows = !self
-            .get_conn_ro()
-            .await?
-            .exec_iter(sql, Empty)
-            .await?
-            .map_and_drop(from_row::<usize>)
-            .await?
-            .is_empty();
-        Ok(has_rows)
+        let rows: Vec<usize> = self.query_ro(&sql, Empty).await?;
+        Ok(!rows.is_empty())
     }
 
     async fn get_random_active_catalog_id_with_property(&self) -> Option<usize> {
@@ -1630,13 +1573,7 @@ impl Storage for StorageMySQL {
     // Return items are tuples of (catalog_id, wd_prop)
     async fn maintenance_get_prop2catalog_ids(&self) -> Result<Vec<(usize, usize)>> {
         let sql = r"SELECT `id`,`wd_prop` FROM `catalog` WHERE `wd_prop` IS NOT NULL AND `wd_qual` IS NULL AND `active`=1";
-        let mut conn = self.get_conn_ro().await?;
-        let results = conn
-            .exec_iter(sql, ())
-            .await?
-            .map_and_drop(from_row::<(usize, usize)>)
-            .await?;
-        Ok(results)
+        self.query_ro(sql, ()).await
     }
 
     async fn maintenance_sync_property(
@@ -1649,13 +1586,7 @@ impl Storage for StorageMySQL {
         let sql = format!(
             r"SELECT `id`,`ext_id`,`user` FROM `entry` WHERE `catalog` IN ({catalogs_str}) AND `ext_id` IN ({qm_propvals})"
         );
-        let mut conn = self.get_conn_ro().await?;
-        let results = conn
-            .exec_iter(sql, ext_ids)
-            .await?
-            .map_and_drop(from_row::<(usize, String, Option<usize>)>)
-            .await?;
-        Ok(results)
+        self.query_ro(&sql, ext_ids).await
     }
 
     async fn maintenance_fix_redirects(&self, from: isize, to: isize) -> Result<()> {
@@ -1782,27 +1713,15 @@ impl Storage for StorageMySQL {
             "SELECT DISTINCT `q` FROM `entry` WHERE `catalog`=:catalog_id {} LIMIT :batch_size OFFSET :offset",
             state.get_sql()
         );
-        let mut conn = self.get_conn_ro().await?;
-        let ret = conn
-            .exec_iter(sql.clone(), params! {catalog_id,offset,batch_size})
-            .await?
-            .map_and_drop(from_row::<usize>)
-            .await?
-            .iter()
-            .map(|q| format!("Q{q}"))
-            .collect();
-        Ok(ret)
+        let rows: Vec<usize> = self
+            .query_ro(&sql, params! {catalog_id,offset,batch_size})
+            .await?;
+        Ok(rows.iter().map(|q| format!("Q{q}")).collect())
     }
 
     async fn get_catalogs_with_person_dates_without_flag(&self) -> Result<Vec<usize>> {
         let sql = "SELECT DISTINCT catalog FROM vw_dates WHERE catalog IN (SELECT id FROM catalog WHERE has_person_date!='yes' AND has_person_date!='no' AND active=1)";
-        let mut conn = self.get_conn_ro().await?;
-        let ret = conn
-            .exec_iter(sql, ())
-            .await?
-            .map_and_drop(from_row::<usize>)
-            .await?;
-        Ok(ret)
+        self.query_ro(sql, ()).await
     }
 
     async fn add_mnm_relation(
@@ -1871,13 +1790,8 @@ impl Storage for StorageMySQL {
 	            AND NOT EXISTS (SELECT * FROM `log` WHERE log.entry_id=entry.id AND log.action='remove_q')
 	            {}
 	            ORDER BY `id` LIMIT :batch_size OFFSET :offset",MatchState::not_fully_matched().get_sql());
-        let mut conn = self.get_conn_ro().await?;
-        let entries = conn
-            .exec_iter(sql.clone(), params! {catalog_id,offset,batch_size})
-            .await?
-            .map_and_drop(from_row::<(usize, String)>)
-            .await?;
-        Ok(entries)
+        self.query_ro(&sql, params! {catalog_id,offset,batch_size})
+            .await
     }
 
     async fn automatch_by_search_get_results(
@@ -1930,13 +1844,7 @@ impl Storage for StorageMySQL {
         let sql = "SELECT object_title,object_entry_id,search_query FROM vw_object_creator WHERE object_catalog={} AND object_q IS NULL
                 UNION
                 SELECT object_title,object_entry_id,search_query FROM vw_object_creator_aux WHERE object_catalog={} AND object_q IS NULL";
-        let mut conn = self.get_conn_ro().await?;
-        let results = conn
-            .exec_iter(sql, params! {catalog_id})
-            .await?
-            .map_and_drop(from_row::<(String, usize, String)>)
-            .await?;
-        Ok(results)
+        self.query_ro(sql, params! {catalog_id}).await
     }
 
     async fn automatch_simple_get_results(
@@ -2098,13 +2006,8 @@ impl Storage for StorageMySQL {
             AND NOT EXISTS (SELECT * FROM `log` WHERE log.entry_id=entry.id AND log.action='remove_q')
             {}
             ORDER BY `id` LIMIT :batch_size OFFSET :offset",MatchState::unmatched().get_sql());
-        let mut conn = self.get_conn_ro().await?;
-        let el_chunk = conn
-            .exec_iter(sql.clone(), params! {catalog_id,offset,batch_size})
-            .await?
-            .map_and_drop(from_row::<(usize, String)>)
-            .await?;
-        Ok(el_chunk)
+        self.query_ro(&sql, params! {catalog_id,offset,batch_size})
+            .await
     }
 
     async fn automatch_complex_get_el_chunk_count(&self, catalog_id: usize) -> Result<usize> {
@@ -2114,11 +2017,7 @@ impl Storage for StorageMySQL {
             {}",
             MatchState::unmatched().get_sql()
         );
-        let results: Vec<usize> = sql
-            .with(params! {catalog_id})
-            .map(self.get_conn_ro().await?, |num| num)
-            .await?;
-        Ok(*results.first().unwrap_or(&0))
+        self.query_count_ro(&sql, params! {catalog_id}).await
     }
 
     // Entry
@@ -2311,14 +2210,11 @@ impl Storage for StorageMySQL {
         &self,
         entry_id: usize,
     ) -> Result<(Option<String>, Option<String>)> {
-        let mut conn = self.get_conn_ro().await?;
-        let mut rows: Vec<(String, String)> = conn
-            .exec_iter(
+        let mut rows: Vec<(String, String)> = self
+            .query_ro(
                 r"SELECT `born`,`died` FROM `person_dates` WHERE `entry_id`=:entry_id LIMIT 1",
                 params! {entry_id},
             )
-            .await?
-            .map_and_drop(from_row::<(String, String)>)
             .await?;
         match rows.pop() {
             Some(bd) => {
@@ -2356,17 +2252,13 @@ impl Storage for StorageMySQL {
 
     /// Returns a LocaleString Vec of all aliases of the entry
     async fn entry_get_aliases(&self, entry_id: usize) -> Result<Vec<LocaleString>> {
-        let mut conn = self.get_conn_ro().await?;
-        let rows: Vec<(String, String)> = conn
-            .exec_iter(
+        let rows: Vec<(String, String)> = self
+            .query_ro(
                 r"SELECT `language`,`label` FROM `aliases` WHERE `entry_id`=:entry_id",
                 params! {entry_id},
             )
-            .await?
-            .map_and_drop(from_row::<(String, String)>)
             .await?;
-        let ret = rows.iter().map(|(k, v)| LocaleString::new(k, v)).collect();
-        Ok(ret)
+        Ok(rows.iter().map(|(k, v)| LocaleString::new(k, v)).collect())
     }
 
     async fn entry_add_alias(&self, entry_id: usize, language: &str, label: &str) -> Result<()> {
@@ -2382,20 +2274,12 @@ impl Storage for StorageMySQL {
         entry_id: usize,
     ) -> Result<HashMap<String, String>> {
         let rows: Vec<(String, String)> = self
-            .get_conn_ro()
-            .await?
-            .exec_iter(
+            .query_ro(
                 r"SELECT /* storage:entry_get_language_descriptions */ `language`,`label` FROM `descriptions` WHERE `entry_id`=:entry_id",
                 params! {entry_id},
             )
-            .await?
-            .map_and_drop(from_row::<(String, String)>)
             .await?;
-        let mut map: HashMap<String, String> = HashMap::new();
-        rows.iter().for_each(|(k, v)| {
-            map.insert(k.to_string(), v.to_string());
-        });
-        Ok(map)
+        Ok(rows.into_iter().collect())
     }
 
     async fn entry_remove_auxiliary(&self, entry_id: usize, prop_numeric: usize) -> Result<()> {
@@ -2609,16 +2493,11 @@ impl Storage for StorageMySQL {
     }
 
     async fn entry_get_multi_matches(&self, entry_id: usize) -> Result<Vec<String>> {
-        Ok(self
-            .get_conn_ro()
-            .await?
-            .exec_iter(
-                r"SELECT candidates FROM multi_match WHERE entry_id=:entry_id",
-                params! {entry_id},
-            )
-            .await?
-            .map_and_drop(from_row::<String>)
-            .await?)
+        self.query_ro(
+            r"SELECT candidates FROM multi_match WHERE entry_id=:entry_id",
+            params! {entry_id},
+        )
+        .await
     }
 
     async fn entry_set_multi_match(
@@ -3291,13 +3170,7 @@ impl Storage for StorageMySQL {
         if !catalogs.is_empty() {
             sql += &format!(" AND `catalog` IN ({catalogs})");
         }
-        let mut conn = self.get_conn_ro().await?;
-        let rows = conn
-            .exec_iter(sql, ())
-            .await?
-            .map_and_drop(from_row::<usize>)
-            .await?;
-        Ok(*rows.first().unwrap_or(&0))
+        self.query_count_ro(&sql, ()).await
     }
 
     async fn api_get_issues(
@@ -3570,30 +3443,8 @@ impl Storage for StorageMySQL {
         let total = if run_counts {
             // Selective filter (time or catalog) — counts return quickly.
             let (count_entry_res, count_log_res) = tokio::join!(
-                async {
-                    let mut conn = self.get_conn_ro().await?;
-                    let cnt = conn
-                        .exec_iter(count_entry_sql, ())
-                        .await?
-                        .map_and_drop(from_row::<usize>)
-                        .await?
-                        .into_iter()
-                        .next()
-                        .unwrap_or(0);
-                    Ok::<usize, anyhow::Error>(cnt)
-                },
-                async {
-                    let mut conn = self.get_conn_ro().await?;
-                    let cnt = conn
-                        .exec_iter(count_log_sql, ())
-                        .await?
-                        .map_and_drop(from_row::<usize>)
-                        .await?
-                        .into_iter()
-                        .next()
-                        .unwrap_or(0);
-                    Ok::<usize, anyhow::Error>(cnt)
-                },
+                self.query_count_ro(&count_entry_sql, ()),
+                self.query_count_ro(&count_log_sql, ()),
             );
             count_entry_res.unwrap_or(0) + count_log_res.unwrap_or(0)
         } else {
@@ -3623,18 +3474,7 @@ impl Storage for StorageMySQL {
         // Independent SELECTs — run them in parallel. Count failures are lossy
         // (yield 0) to match the legacy behaviour; listing failures propagate.
         let (count_res, entries_res) = tokio::join!(
-            async {
-                let mut conn = self.get_conn_ro().await?;
-                let cnt = conn
-                    .exec_iter(count_sql, ())
-                    .await?
-                    .map_and_drop(from_row::<usize>)
-                    .await?
-                    .into_iter()
-                    .next()
-                    .unwrap_or(0);
-                Ok::<usize, anyhow::Error>(cnt)
-            },
+            self.query_count_ro(&count_sql, ()),
             async {
                 let mut conn = self.get_conn_ro().await?;
                 let rows: Vec<Entry> = conn
@@ -3656,13 +3496,7 @@ impl Storage for StorageMySQL {
     async fn api_get_existing_job_actions(&self) -> Result<Vec<String>> {
         let sql =
             "SELECT DISTINCT `action` FROM `jobs` UNION SELECT DISTINCT `action` FROM `job_sizes`";
-        let mut conn = self.get_conn_ro().await?;
-        let rows = conn
-            .exec_iter(sql, ())
-            .await?
-            .map_and_drop(from_row::<String>)
-            .await?;
-        Ok(rows)
+        self.query_ro(sql, ()).await
     }
 
     async fn api_get_random_entry(
@@ -3746,36 +3580,21 @@ impl Storage for StorageMySQL {
     }
 
     async fn api_get_active_catalog_ids(&self) -> Result<Vec<usize>> {
-        let sql = "SELECT `id` FROM `catalog` WHERE `active`=1";
-        let mut conn = self.get_conn_ro().await?;
-        let rows = conn
-            .exec_iter(sql, ())
-            .await?
-            .map_and_drop(from_row::<usize>)
-            .await?;
-        Ok(rows)
+        self.query_ro("SELECT `id` FROM `catalog` WHERE `active`=1", ())
+            .await
     }
 
     async fn api_get_inactive_catalog_ids(&self) -> Result<Vec<usize>> {
-        let sql = "SELECT `id` FROM `catalog` WHERE `active`!=1";
-        let mut conn = self.get_conn_ro().await?;
-        let rows = conn
-            .exec_iter(sql, ())
-            .await?
-            .map_and_drop(from_row::<usize>)
-            .await?;
-        Ok(rows)
+        self.query_ro("SELECT `id` FROM `catalog` WHERE `active`!=1", ())
+            .await
     }
 
     async fn api_get_wd_props(&self) -> Result<Vec<usize>> {
-        let sql = "SELECT DISTINCT wd_prop FROM catalog WHERE wd_prop!=0 AND wd_prop IS NOT NULL AND wd_qual IS NULL AND active=1 ORDER BY wd_prop";
-        let mut conn = self.get_conn_ro().await?;
-        let rows = conn
-            .exec_iter(sql, ())
-            .await?
-            .map_and_drop(from_row::<usize>)
-            .await?;
-        Ok(rows)
+        self.query_ro(
+            "SELECT DISTINCT wd_prop FROM catalog WHERE wd_prop!=0 AND wd_prop IS NOT NULL AND wd_qual IS NULL AND active=1 ORDER BY wd_prop",
+            (),
+        )
+        .await
     }
 
     async fn api_get_top_missing(&self, catalogs: &str) -> Result<Vec<serde_json::Value>> {
@@ -4110,12 +3929,7 @@ impl Storage for StorageMySQL {
 
     async fn api_get_cersei_catalog(&self, scraper_id: usize) -> Result<Option<usize>> {
         let sql = "SELECT catalog_id FROM cersei WHERE cersei_scraper_id=:scraper_id";
-        let mut conn = self.get_conn_ro().await?;
-        let rows = conn
-            .exec_iter(sql, params! { scraper_id })
-            .await?
-            .map_and_drop(from_row::<usize>)
-            .await?;
+        let rows: Vec<usize> = self.query_ro(sql, params! { scraper_id }).await?;
         Ok(rows.into_iter().next())
     }
 
@@ -4595,14 +4409,8 @@ impl Storage for StorageMySQL {
     }
 
     async fn get_all_code_fragment_functions(&self) -> Result<Vec<String>> {
-        let sql = "SELECT DISTINCT `function` FROM `code_fragments`";
-        let mut conn = self.get_conn_ro().await?;
-        let rows: Vec<String> = conn
-            .exec_iter(sql, ())
-            .await?
-            .map_and_drop(from_row::<String>)
-            .await?;
-        Ok(rows)
+        self.query_ro("SELECT DISTINCT `function` FROM `code_fragments`", ())
+            .await
     }
 
     async fn get_code_examples(
@@ -5088,12 +4896,9 @@ impl Storage for StorageMySQL {
     }
 
     async fn api_catalog_property_groups(&self) -> Result<Value> {
-        let mut conn = self.get_conn_ro().await?;
         // 1. Map active catalogs to their wd_prop (or "no property")
-        let rows: Vec<(usize, Option<usize>)> = conn
-            .exec_iter("SELECT id, wd_prop FROM catalog WHERE active = 1", ())
-            .await?
-            .map_and_drop(from_row::<(usize, Option<usize>)>)
+        let rows: Vec<(usize, Option<usize>)> = self
+            .query_ro("SELECT id, wd_prop FROM catalog WHERE active = 1", ())
             .await?;
         let mut prop2cats: HashMap<usize, Vec<usize>> = HashMap::new();
         let mut no_prop_ids: Vec<usize> = vec![];
@@ -5123,11 +4928,8 @@ impl Storage for StorageMySQL {
             // (31 = "instance of" meaning top-level group; anything else is a
             // country/subgroup). Stored as INT on the server; mysql_async
             // would panic if we asked for String.
-            let prop_rows: Vec<(usize, usize, usize, String)> = conn
-                .exec_iter(sql_groups, ())
-                .await?
-                .map_and_drop(from_row::<(usize, usize, usize, String)>)
-                .await?;
+            let prop_rows: Vec<(usize, usize, usize, String)> =
+                self.query_ro(&sql_groups, ()).await?;
             for (prop_group, property, item, label) in prop_rows {
                 let prefix = if prop_group == 31 { "ig_" } else { "country_" };
                 let key = format!(
@@ -5175,22 +4977,14 @@ impl Storage for StorageMySQL {
             sql.push_str(&format!(" AND id != {exclude_catalog}"));
         }
         sql.push_str(" LIMIT 1");
-        let mut conn = self.get_conn_ro().await?;
-        let row: Option<(usize, String)> = conn
-            .exec_iter(sql, params! { wd_prop })
-            .await?
-            .map_and_drop(from_row::<(usize, String)>)
-            .await?
-            .into_iter()
-            .next();
-        Ok(match row {
+        let rows: Vec<(usize, String)> = self.query_ro(&sql, params! { wd_prop }).await?;
+        Ok(match rows.into_iter().next() {
             Some((id, name)) => json!({"used": true, "catalog_id": id, "catalog_name": name}),
             None => json!({"used": false}),
         })
     }
 
     async fn api_catalog_by_group(&self, group: &str) -> Result<Value> {
-        let mut conn = self.get_conn_ro().await?;
         let where_clause: String = match CatalogGroup::parse(group) {
             CatalogGroup::All => "c.active = 1".into(),
             CatalogGroup::NoProperty => {
@@ -5201,11 +4995,7 @@ impl Storage for StorageMySQL {
                 let sql = format!(
                     "SELECT DISTINCT property FROM property_cache WHERE prop_group = {prop_group} AND LOWER(label) = LOWER('{label_safe}')"
                 );
-                let props: Vec<usize> = conn
-                    .exec_iter(sql, ())
-                    .await?
-                    .map_and_drop(from_row::<usize>)
-                    .await?;
+                let props: Vec<usize> = self.query_ro(&sql, ()).await?;
                 if props.is_empty() {
                     return Ok(json!({}));
                 }
@@ -5225,7 +5015,9 @@ impl Storage for StorageMySQL {
                 FROM catalog c LEFT JOIN overview o ON o.catalog = c.id LEFT JOIN user u ON u.id = c.owner
                 WHERE {where_clause} ORDER BY c.name"
         );
-        let rows: Vec<Value> = conn
+        let rows: Vec<Value> = self
+            .get_conn_ro()
+            .await?
             .exec_iter(sql, ())
             .await?
             .map_and_drop(row_to_json)
@@ -5252,11 +5044,7 @@ impl Storage for StorageMySQL {
             let sql_kv = format!(
                 "SELECT catalog_id, kv_key, kv_value FROM kv_catalog WHERE catalog_id IN ({in_list})"
             );
-            let kv_rows: Vec<(usize, String, String)> = conn
-                .exec_iter(sql_kv, ())
-                .await?
-                .map_and_drop(from_row::<(usize, String, String)>)
-                .await?;
+            let kv_rows: Vec<(usize, String, String)> = self.query_ro(&sql_kv, ()).await?;
             for (catalog_id, kv_key, kv_value) in kv_rows {
                 if kv_key.starts_with("wdrc_") {
                     continue;
@@ -5356,14 +5144,7 @@ impl Storage for StorageMySQL {
 
         // Total count
         let sql_total = format!("SELECT COUNT(*) AS cnt FROM entry WHERE user={user_id}{cat_cond}");
-        let total: usize = conn
-            .exec_iter(sql_total, ())
-            .await?
-            .map_and_drop(from_row::<usize>)
-            .await?
-            .into_iter()
-            .next()
-            .unwrap_or(0);
+        let total: usize = self.query_count_ro(&sql_total, ()).await.unwrap_or(0);
 
         // User info
         let sql_user = format!("SELECT * FROM user WHERE id={user_id} LIMIT 1");
@@ -5398,13 +5179,12 @@ impl Storage for StorageMySQL {
         limit: usize,
         offset: usize,
     ) -> Result<(Vec<Value>, Vec<Value>)> {
-        let mut conn = self.get_conn_ro().await?;
         // Unmatched entry IDs for this catalog
-        let sql_ids = "SELECT id FROM entry WHERE catalog=:catalog_id AND q IS NULL";
-        let entry_ids: Vec<usize> = conn
-            .exec_iter(sql_ids, params! { catalog_id })
-            .await?
-            .map_and_drop(from_row::<usize>)
+        let entry_ids: Vec<usize> = self
+            .query_ro(
+                "SELECT id FROM entry WHERE catalog=:catalog_id AND q IS NULL",
+                params! { catalog_id },
+            )
             .await?;
         if entry_ids.is_empty() {
             return Ok((vec![], vec![]));
@@ -5414,6 +5194,8 @@ impl Storage for StorageMySQL {
             .map(|i| i.to_string())
             .collect::<Vec<_>>()
             .join(",");
+
+        let mut conn = self.get_conn_ro().await?;
 
         // Available properties
         let sql_props = format!(
@@ -5822,13 +5604,7 @@ impl Storage for StorageMySQL {
             WHERE `catalog` = :catalog_id \
               AND `q` IS NOT NULL AND `q` > 0 \
               AND `user` > 0";
-        let rows: Vec<String> = self
-            .get_conn_ro()
-            .await?
-            .exec_iter(sql, params! { catalog_id })
-            .await?
-            .map_and_drop(from_row::<String>)
-            .await?;
+        let rows: Vec<String> = self.query_ro(sql, params! { catalog_id }).await?;
         Ok(rows.into_iter().collect())
     }
 
@@ -6027,14 +5803,7 @@ impl Storage for StorageMySQL {
 
     async fn auxiliary_select_for_prop(&self, prop: usize) -> Result<Vec<(usize, String)>> {
         let sql = "SELECT `id`, `aux_name` FROM `auxiliary` WHERE `aux_p` = :prop";
-        let rows = self
-            .get_conn_ro()
-            .await?
-            .exec_iter(sql, params! { prop })
-            .await?
-            .map_and_drop(from_row::<(usize, String)>)
-            .await?;
-        Ok(rows)
+        self.query_ro(sql, params! { prop }).await
     }
 
     async fn auxiliary_delete_row(&self, id: usize) -> Result<()> {
@@ -6057,26 +5826,15 @@ impl Storage for StorageMySQL {
         let sql = "SELECT `id`, `ext_name` FROM `entry` \
             WHERE `catalog` = :catalog_id \
               AND `ext_name` LIKE '%&%;%'";
-        let rows = self
-            .get_conn_ro()
-            .await?
-            .exec_iter(sql, params! { catalog_id })
-            .await?
-            .map_and_drop(from_row::<(usize, String)>)
-            .await?;
-        Ok(rows)
+        self.query_ro(sql, params! { catalog_id }).await
     }
 
     async fn auxiliary_distinct_props(&self) -> Result<Vec<usize>> {
-        let sql = "SELECT DISTINCT `aux_p` FROM `auxiliary` ORDER BY `aux_p`";
-        let rows = self
-            .get_conn_ro()
-            .await?
-            .exec_iter(sql, ())
-            .await?
-            .map_and_drop(from_row::<usize>)
-            .await?;
-        Ok(rows)
+        self.query_ro(
+            "SELECT DISTINCT `aux_p` FROM `auxiliary` ORDER BY `aux_p`",
+            (),
+        )
+        .await
     }
 
     async fn maintenance_update_aux_candidates(
@@ -6212,14 +5970,7 @@ impl Storage for StorageMySQL {
               AND `q` IS NOT NULL AND `q` > 0 \
             GROUP BY `q` \
             HAVING count(*) > 1";
-        let rows: Vec<isize> = self
-            .get_conn_ro()
-            .await?
-            .exec_iter(sql, params! { catalog_id })
-            .await?
-            .map_and_drop(from_row::<isize>)
-            .await?;
-        Ok(rows)
+        self.query_ro(sql, params! { catalog_id }).await
     }
 
     async fn overview_increment_noq(&self, catalog_id: usize, delta: usize) -> Result<()> {
@@ -6306,11 +6057,7 @@ impl crate::storage::AuxiliaryMatcherQueries for StorageMySQL {
             extid_props.join(","),
             blacklisted_catalogs.join(",")
         );
-        let results: Vec<usize> = sql
-            .with(params! {catalog_id})
-            .map(self.get_conn_ro().await?, |num| num)
-            .await?;
-        Ok(*results.first().unwrap_or(&0))
+        self.query_count_ro(&sql, params! {catalog_id}).await
     }
 
     async fn auxiliary_matcher_add_auxiliary_to_wikidata(
@@ -6363,11 +6110,7 @@ impl crate::storage::AuxiliaryMatcherQueries for StorageMySQL {
             MatchState::fully_matched().get_sql(),
             blacklisted_properties.join(",")
         );
-        let results: Vec<usize> = sql
-            .with(params! {catalog_id})
-            .map(self.get_conn_ro().await?, |num| num)
-            .await?;
-        Ok(*results.first().unwrap_or(&0))
+        self.query_count_ro(&sql, params! {catalog_id}).await
     }
 }
 
@@ -6679,11 +6422,8 @@ impl StorageMySQL {
              ORDER BY `id` LIMIT :batch_size",
             MatchState::not_fully_matched().get_sql()
         );
-        let mut conn = self.get_conn_ro().await?;
-        let entries: Vec<(usize, String, String)> = conn
-            .exec_iter(entry_sql, params! {catalog_id, after_id, batch_size})
-            .await?
-            .map_and_drop(from_row::<(usize, String, String)>)
+        let entries: Vec<(usize, String, String)> = self
+            .query_ro(&entry_sql, params! {catalog_id, after_id, batch_size})
             .await?;
 
         if entries.is_empty() {
@@ -6695,12 +6435,7 @@ impl StorageMySQL {
             "SELECT /* automatch_by_search_fetch_page_aliases */ `entry_id`,`label` \
              FROM `aliases` WHERE `entry_id` IN ({ids_str})"
         );
-        let alias_rows: Vec<(usize, String)> = conn
-            .exec_iter(alias_sql, ())
-            .await?
-            .map_and_drop(from_row::<(usize, String)>)
-            .await?;
-        drop(conn);
+        let alias_rows: Vec<(usize, String)> = self.query_ro(&alias_sql, ()).await?;
 
         // `BTreeSet` per entry: dedup + deterministic sort in one step.
         // The old `group_concat(DISTINCT ...)` deduped by label but did
@@ -7912,166 +7647,3 @@ mod tests {
         assert!(page3.is_empty());
     }
 }
-
-/* TODO
-
-#[tokio::test]
-async fn test_get_overview_column_name_for_user_and_q() {
-    let mnm = get_test_mnm();
-    assert_eq!(
-        mnm.get_storage()
-            .get_overview_column_name_for_user_and_q(&Some(0), None),
-        "autoq"
-    );
-    assert_eq!(
-        mnm.get_storage()
-            .get_overview_column_name_for_user_and_q(&Some(2), Some(1)),
-        "manual"
-    );
-    assert_eq!(
-        mnm.get_storage()
-            .get_overview_column_name_for_user_and_q(&Some(2), Some(0)),
-        "na"
-    );
-    assert_eq!(
-        mnm.get_storage()
-            .get_overview_column_name_for_user_and_q(&Some(2), Some(-1)),
-        "nowd"
-    );
-    assert_eq!(
-        mnm.get_storage()
-            .get_overview_column_name_for_user_and_q(&Some(2), None),
-        "noq"
-    );
-    assert_eq!(
-        mnm.get_storage()
-            .get_overview_column_name_for_user_and_q(&None, None),
-        "noq"
-    );
-    assert_eq!(
-        mnm.get_storage()
-            .get_overview_column_name_for_user_and_q(&None, Some(1)),
-        "noq"
-    );
-}
-
-#[tokio::test]
-async fn test_match_via_auxiliary() {
-    let _test_lock = TEST_MUTEX.lock();
-    let mnm = get_test_mnm();
-    let mut entry = Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
-    entry
-        .set_auxiliary(214, Some("30701597".to_string()))
-        .await
-        .unwrap();
-    entry.unmatch().await.unwrap();
-
-    // Run matcher
-    let mut am = AuxiliaryMatcher::new(Arc::new(mnm.clone()));
-    am.match_via_auxiliary(TEST_CATALOG_ID).await.unwrap();
-
-    // Check
-    let mut entry = Entry::from_id(TEST_ENTRY_ID, &mnm).await.unwrap();
-    assert_eq!(entry.q.unwrap(), 13520818);
-
-    // Cleanup
-    entry.set_auxiliary(214, None).await.unwrap();
-    entry.unmatch().await.unwrap();
-    let catalog_id = TEST_CATALOG_ID;
-    let mut conn = self.get_conn().await?;
-    conn.exec_drop(
-            "DELETE FROM `jobs` WHERE `action`='aux2wd' AND `catalog`=:catalog_id",
-            params! {catalog_id},
-        )
-        .await
-        .unwrap();
-}
-
-
-#[cfg(test)]
-mod tests {
-
-    use super::*;
-    use crate::issue::{Issue, IssueType};
-    use crate::job_status::JobStatus;
-    use mysql_async::from_row;
-    use serde_json::json;
-
-    const _TEST_CATALOG_ID: usize = 5526;
-    const TEST_ENTRY_ID: usize = 143962196;
-
-    #[tokio::test]
-    async fn test_issue_insert() {
-        let _test_lock = TEST_MUTEX.lock();
-        let mnm = get_test_mnm();
-        let entry_id = TEST_ENTRY_ID;
-
-        // Cleanup
-        mnm.app
-            .get_mnm_conn()
-            .await
-            .unwrap()
-            .exec_drop(
-                "DELETE FROM `issues` WHERE `entry_id`=:entry_id",
-                params! {entry_id},
-            )
-            .await
-            .unwrap();
-
-        let issues_for_entry = *mnm
-            .app
-            .get_mnm_conn()
-            .await
-            .unwrap()
-            .exec_iter(
-                "SELECT count(*) AS `cnt` FROM `issues` WHERE `entry_id`=:entry_id",
-                params! {entry_id},
-            )
-            .await
-            .unwrap()
-            .map_and_drop(from_row::<usize>)
-            .await
-            .unwrap()
-            .get(0)
-            .unwrap();
-        assert_eq!(issues_for_entry, 0);
-
-        let issue = Issue::new(entry_id, IssueType::Mismatch, json!("!"));
-        issue
-            .insert(mnm.app.storage().as_ref().as_ref())
-            .await
-            .unwrap();
-
-        let issues_for_entry = *mnm
-            .app
-            .get_mnm_conn()
-            .await
-            .unwrap()
-            .exec_iter(
-                "SELECT count(*) AS `cnt` FROM `issues` WHERE `entry_id`=:entry_id",
-                params! {entry_id},
-            )
-            .await
-            .unwrap()
-            .map_and_drop(from_row::<usize>)
-            .await
-            .unwrap()
-            .get(0)
-            .unwrap();
-        assert_eq!(issues_for_entry, 1);
-
-        // Cleanup
-        mnm.app
-            .get_mnm_conn()
-            .await
-            .unwrap()
-            .exec_drop(
-                "DELETE FROM `issues` WHERE `entry_id`=:entry_id",
-                params! {entry_id},
-            )
-            .await
-            .unwrap();
-    }
-}
-
-*/

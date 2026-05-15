@@ -227,21 +227,6 @@ impl Maintenance {
         Ok((properties, prop_names))
     }
 
-    pub(super) async fn get_sparql_prop2type(&self) -> Result<Vec<(String, String)>> {
-        let sparql = "SELECT ?p ?type { ?p a wikibase:Property; wikibase:propertyType ?type }";
-        let mut reader = self.app.wikidata().load_sparql_csv(sparql).await?;
-        let api = self.app.wikidata().get_mw_api().await?;
-        let mut prop2type = vec![];
-        for row in reader.records().filter_map(|r| r.ok()) {
-            let q = api.extract_entity_from_uri(&row[0])?;
-            let property_type = row[1].to_string();
-            if let Some(property_type) = property_type.split('#').next_back() {
-                prop2type.push((q, property_type.to_string()));
-            };
-        }
-        Ok(prop2type)
-    }
-
     /// Sweep every `multi_match` row whose entry has since been fully
     /// matched. Per-row cleanup happens inline in `Entry::set_match`
     /// already, but legacy data paths and ad-hoc fixes leave behind

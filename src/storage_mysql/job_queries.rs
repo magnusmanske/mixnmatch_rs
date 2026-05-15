@@ -15,17 +15,13 @@ use std::collections::HashMap;
 #[async_trait]
 impl crate::storage::JobQueries for StorageMySQL {
     async fn jobs_get_tasks(&self) -> Result<HashMap<String, TaskSize>> {
-        let sql = "SELECT `action`,`size` FROM `job_sizes`";
-        let mut conn = self.get_conn_ro().await?;
-        let ret = conn
-            .exec_iter(sql, ())
-            .await?
-            .map_and_drop(from_row::<(String, String)>)
-            .await?
+        let rows: Vec<(String, String)> = self
+            .query_ro("SELECT `action`,`size` FROM `job_sizes`", ())
+            .await?;
+        Ok(rows
             .into_iter()
             .filter_map(|(name, size)| TaskSize::new(&size).map(|s| (name, s)))
-            .collect();
-        Ok(ret)
+            .collect())
     }
 
     async fn jobs_get_action_timeout(&self, action: &str) -> Result<Option<u64>> {

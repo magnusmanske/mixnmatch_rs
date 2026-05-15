@@ -39,7 +39,7 @@ impl fmt::Display for AutoscrapeRegexError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "regex compile failed for {:?}\n  fast engine: {}\n  fancy engine: {}",
+            "regex compile failed for '{}'\n  fast engine: {}\n  fancy engine: {}",
             self.pattern, self.fast_error, self.fancy_error
         )
     }

@@ -6,7 +6,7 @@ use super::StorageMySQL;
 use crate::coordinates::LocationRow;
 use anyhow::Result;
 use async_trait::async_trait;
-use mysql_async::{from_row, prelude::*};
+use mysql_async::prelude::*;
 
 #[async_trait]
 impl crate::storage::CoordinateMatcherQueries for StorageMySQL {
@@ -30,14 +30,11 @@ impl crate::storage::CoordinateMatcherQueries for StorageMySQL {
     }
 
     async fn get_all_catalogs_key_value_pairs(&self) -> Result<Vec<(usize, String, String)>> {
-        let sql = r#"SELECT `catalog_id`,`kv_key`,`kv_value` FROM `kv_catalog`"#;
-        let mut conn = self.get_conn_ro().await?;
-        let results = conn
-            .exec_iter(sql, ())
-            .await?
-            .map_and_drop(from_row::<(usize, String, String)>)
-            .await?;
-        Ok(results)
+        self.query_ro(
+            r#"SELECT `catalog_id`,`kv_key`,`kv_value` FROM `kv_catalog`"#,
+            (),
+        )
+        .await
     }
 }
 

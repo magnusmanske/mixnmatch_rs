@@ -3,7 +3,6 @@ use crate::mysql_misc::MySQLMisc;
 use crate::storage::Storage;
 use crate::storage_mysql::StorageMySQL;
 use crate::wdrc::WDRC;
-// use crate::wikibase::WikiBase;
 use crate::wikidata::Wikidata;
 use anyhow::{Result, anyhow};
 use regex::Regex;

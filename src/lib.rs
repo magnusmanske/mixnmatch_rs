@@ -96,8 +96,6 @@ pub mod storage_mysql;
 pub mod task_size;
 #[cfg(test)]
 pub(crate) mod test_support;
-// pub mod wikibase;
-// pub mod storage_wikibase;
 pub mod taxon_matcher;
 pub mod update_catalog;
 pub mod util;
@@ -108,30 +106,3 @@ pub mod wikidata;
 pub mod wikidata_commands;
 pub mod wikidata_item_builder;
 pub mod wikidata_writer;
-
-/*
-ssh magnus@login.toolforge.org -L 3309:wikidatawiki.web.db.svc.eqiad.wmflabs:3306 -N &
-ssh magnus@login.toolforge.org -L 3308:tools-db:3306 -N &
-ssh magnus@login.toolforge.org -L 3317:termstore.wikidatawiki.analytics.db.svc.wikimedia.cloud:3306 -N &
-cargo test                                          # Run unit tests (DB tests are #[ignore]d)
-cargo test -- --ignored --test-threads=1            # Run DB tests only, single-threaded
-cargo test -- --include-ignored --test-threads=1    # Run all tests, single-threaded
-cargo test  -- --nocapture
-
-git pull && ./build.sh && \rm ~/rustbot.* ; toolforge jobs restart rustbot
-
-
-git pull && ./build.sh && toolforge jobs delete rustbot ; \rm ~/rustbot.* ; \
-toolforge jobs run --image tf-php74 --mem 5Gi --cpu 3 --continuous --command '/data/project/mix-n-match/mixnmatch_rs/run.sh' rustbot
-
-rm ~/build.err ; \
-toolforge jobs run build --command "bash -c 'source ~/.profile && cd ~/mixnmatch_rs && cargo build --release'" --image php7.4 --mem 2G --cpu 3 --wait ; \
-cat ~/build.err
-
-
-# WAS:
-toolforge jobs run --image tf-php74 --mem 1000Mi --continuous --command '/data/project/mix-n-match/mixnmatch_rs/run.sh' rustbot
-
-toolforge jobs delete rustbot2 ; \rm ~/rustbot2.* ; \
-toolforge jobs run --image tf-php74 --mem 1000Mi --continuous --command '/data/project/mix-n-match/mixnmatch_rs/run.sh second' rustbot2
-*/
