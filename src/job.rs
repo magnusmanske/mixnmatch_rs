@@ -893,7 +893,7 @@ mod tests {
 
     #[test]
     fn action_timeout_secs_returns_override_for_listed_action() {
-        assert_eq!(action_timeout_secs("autoscrape"), 14_400);
+        assert_eq!(action_timeout_secs("autoscrape"), 28_800);
         assert_eq!(action_timeout_secs("automatch"), 7_200);
     }
 
