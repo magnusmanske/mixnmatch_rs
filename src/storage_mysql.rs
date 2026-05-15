@@ -1886,32 +1886,40 @@ impl Storage for StorageMySQL {
         after_id: usize,
         batch_size: usize,
     ) -> Result<Vec<AutomatchSearchRow>> {
-        // Two-stage page fetch + adaptive retry on 1969. The previous
-        // single-statement form correlated a `group_concat(...)` sub-SELECT
-        // against `aliases` for every row in the page; on catalogs whose
-        // not-fully-matched tail was sparse, MariaDB had to scan a long
-        // stretch of `(catalog, id)` index entries to fill the LIMIT,
-        // which compounded with the per-row sub-SELECT and tripped
-        // `max_statement_time` (ERROR 1969). The split form does one
-        // cheap keyset SELECT for the page, then one IN-list SELECT for
-        // its aliases — each well inside the 120 s budget. The 1969
-        // retry halves the batch size once and retries: a defence in
-        // depth for catalogs whose density profile pushes even the
-        // split form past the budget.
-        match self
-            .automatch_by_search_fetch_page(catalog_id, after_id, batch_size)
-            .await
-        {
-            Ok(rows) => Ok(rows),
-            Err(e) if is_max_statement_time_err(&e) && batch_size > 1 => {
-                let smaller = halve_batch_for_retry(batch_size);
-                log::warn!(
-                    "automatch_by_search_get_results: 1969 max_statement_time at batch_size={batch_size} (catalog={catalog_id}, after_id={after_id}); retrying once with batch_size={smaller}"
-                );
-                self.automatch_by_search_fetch_page(catalog_id, after_id, smaller)
-                    .await
+        // Two-stage page fetch + iterative split-and-retry on 1969. The
+        // previous single-statement form correlated a `group_concat(...)`
+        // sub-SELECT against `aliases` for every row in the page; on
+        // catalogs whose not-fully-matched tail was sparse, MariaDB had
+        // to scan a long stretch of `(catalog, id)` index entries to
+        // fill the LIMIT, which compounded with the per-row sub-SELECT
+        // and tripped `max_statement_time` (ERROR 1969). The split form
+        // does one cheap keyset SELECT for the page, then one IN-list
+        // SELECT for its aliases — each usually well inside the 120 s
+        // budget.
+        //
+        // The 1969 loop keeps halving `batch_size` until either the
+        // fetch succeeds or `batch_size` hits 1. Catalogs whose tail is
+        // sparse enough that 500 also trips need to drop to 250 / 125
+        // / etc.; the loop bottoms out at 1 (matches
+        // [`halve_batch_descending_sequence_terminates_at_one`]) and
+        // propagates the error there. `after_id` is unchanged across
+        // retries, so we never skip rows — only the LIMIT shrinks.
+        let mut current_batch = batch_size;
+        loop {
+            match self
+                .automatch_by_search_fetch_page(catalog_id, after_id, current_batch)
+                .await
+            {
+                Ok(rows) => return Ok(rows),
+                Err(e) if is_max_statement_time_err(&e) && current_batch > 1 => {
+                    let smaller = halve_batch_for_retry(current_batch);
+                    log::warn!(
+                        "automatch_by_search_get_results: 1969 max_statement_time at batch_size={current_batch} (catalog={catalog_id}, after_id={after_id}); halving to {smaller}"
+                    );
+                    current_batch = smaller;
+                }
+                Err(e) => return Err(e),
             }
-            Err(e) => Err(e),
         }
     }
 
@@ -7765,6 +7773,29 @@ mod tests {
         // batch_size=1 has nowhere smaller to go but must not collapse
         // to zero (would produce a no-op query and stall the job).
         assert_eq!(halve_batch_for_retry(1), 1);
+    }
+
+    #[test]
+    fn halve_batch_descending_sequence_terminates_at_one() {
+        // The iterative `automatch_by_search_get_results` retry repeatedly
+        // halves the batch size until either the page query succeeds or
+        // we hit 1. This pins the descent: every step strictly decreases
+        // until the floor, so the retry loop is guaranteed to terminate.
+        // Starting at 1000 the chain is roughly log2(1000) ≈ 10 steps;
+        // anything longer would indicate a regression in the halver.
+        let mut current = 1000_usize;
+        let mut steps = vec![current];
+        while current > 1 {
+            let next = halve_batch_for_retry(current);
+            assert!(next < current, "halver must strictly decrease above 1: {current} → {next}");
+            current = next;
+            steps.push(current);
+        }
+        assert_eq!(*steps.last().unwrap(), 1);
+        assert!(
+            steps.len() <= 12,
+            "log2(1000) ≈ 10; descent should be ≤ 12 steps, got {steps:?}"
+        );
     }
 
     #[tokio::test]
