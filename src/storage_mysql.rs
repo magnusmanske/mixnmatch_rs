@@ -80,6 +80,19 @@ fn halve_batch_for_retry(batch_size: usize) -> usize {
     (batch_size / 2).max(1)
 }
 
+/// Halve a slice length for a split-and-retry on 1969. Returns
+/// `(left_len, right_len)` with `left + right == n` and both halves
+/// non-empty, or `None` when `n <= 1` (the bottom-out signal: a
+/// single-id slice has nowhere smaller to go, so the caller must
+/// propagate the error instead of looping forever).
+fn split_for_retry(n: usize) -> Option<(usize, usize)> {
+    if n <= 1 {
+        return None;
+    }
+    let left = n / 2;
+    Some((left, n - left))
+}
+
 /// Parsed shape of the `group` token consumed by `api_catalog_by_group`.
 /// Keeps classification (pure, easily testable) separate from SQL
 /// assembly (impure, DB-touching) and from quote-escaping (which
@@ -298,17 +311,66 @@ impl StorageMySQL {
 
     /// For a bounded set of source entry ids, find Wikidata candidates
     /// reachable by "same ext_name, matching birth-or-death year,
-    /// fully-matched entry in a different active catalog". Returns only
-    /// entries with exactly one candidate Q (HAVING count = 1) — the
-    /// `GROUP_CONCAT` is parsed as a plain integer because uniqueness is
-    /// already enforced.
+    /// fully-matched entry in a different active catalog".
+    ///
+    /// Wraps [`Self::birth_year_match_find_matches_attempt`] with an
+    /// iterative split-and-retry on MariaDB error 1969
+    /// (`max_statement_time exceeded`). The attempt body's
+    /// UNION+GROUP+HAVING can fan out catastrophically for
+    /// common-name catalogs ("John Smith" born 1850 fans out to
+    /// thousands of `e1` candidates before `HAVING count = 1`
+    /// trims it), tripping the per-statement timeout even at the
+    /// `AUTOMATCH_BIRTH_YEAR_BATCH_SIZE = 1000` keyset batch the
+    /// prior fix put in place. On 1969 we split the id slice in
+    /// half and retry both halves separately; the loop bottoms
+    /// out at slice length 1 (further split impossible) and
+    /// propagates the error there.
+    async fn birth_year_match_find_matches(
+        &self,
+        source_ids: &[usize],
+    ) -> Result<Vec<(usize, usize)>> {
+        let mut out: Vec<(usize, usize)> = Vec::new();
+        let mut stack: Vec<&[usize]> = vec![source_ids];
+        while let Some(slice) = stack.pop() {
+            if slice.is_empty() {
+                continue;
+            }
+            match self.birth_year_match_find_matches_attempt(slice).await {
+                Ok(rows) => out.extend(rows),
+                Err(e) if is_max_statement_time_err(&e) => {
+                    let Some((left_len, _)) = split_for_retry(slice.len()) else {
+                        return Err(e);
+                    };
+                    let (a, b) = slice.split_at(left_len);
+                    log::warn!(
+                        "birth_year_match_find_matches: 1969 max_statement_time at {} ids; splitting into {} + {}",
+                        slice.len(),
+                        a.len(),
+                        b.len(),
+                    );
+                    // Push the right half first so the left half is
+                    // popped (and processed) before it — preserves
+                    // left-to-right order in `out` for easier tracing.
+                    stack.push(b);
+                    stack.push(a);
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(out)
+    }
+
+    /// Single attempt at the cross-catalog same-name birth/death-year
+    /// candidate query. Returns only entries with exactly one
+    /// candidate Q (`HAVING count = 1`) — the `GROUP_CONCAT` is parsed
+    /// as a plain integer because uniqueness is already enforced.
     ///
     /// The two-branch UNION (year_born / year_died) is kept so each
-    /// branch hits a single composite index on `person_dates` instead of
-    /// forcing the optimiser to split an `OR`. The IN-clause replaces
-    /// the cross-table `e0.catalog = :catalog_id` filter — same row set,
-    /// bounded by what the caller already paged.
-    async fn birth_year_match_find_matches(
+    /// branch hits a single composite index on `person_dates` instead
+    /// of forcing the optimiser to split an `OR`. The IN-clause
+    /// replaces the cross-table `e0.catalog = :catalog_id` filter —
+    /// same row set, bounded by what the caller already paged.
+    async fn birth_year_match_find_matches_attempt(
         &self,
         source_ids: &[usize],
     ) -> Result<Vec<(usize, usize)>> {
@@ -7542,6 +7604,44 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(got, Some(active_id), "inactive sibling must be ignored");
+    }
+
+    // ---------------------------------------------------------------
+    // birth_year_match_find_matches split-and-retry arithmetic
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn split_for_retry_returns_none_at_or_below_one() {
+        // Bottom-out condition: a single id has nowhere to split to,
+        // so the retry-loop must propagate the error instead of
+        // looping forever on the same input.
+        assert_eq!(split_for_retry(0), None);
+        assert_eq!(split_for_retry(1), None);
+    }
+
+    #[test]
+    fn split_for_retry_halves_even_lengths() {
+        assert_eq!(split_for_retry(2), Some((1, 1)));
+        assert_eq!(split_for_retry(1000), Some((500, 500)));
+    }
+
+    #[test]
+    fn split_for_retry_odd_length_gives_smaller_half_first() {
+        // Convention: left half is `len / 2`, right half is the rest.
+        // For odd lengths the right half is the larger one — pinned
+        // so a future "let's switch the sides" tweak doesn't silently
+        // change the stack-traversal order.
+        assert_eq!(split_for_retry(3), Some((1, 2)));
+        assert_eq!(split_for_retry(999), Some((499, 500)));
+    }
+
+    #[test]
+    fn split_for_retry_halves_sum_to_input() {
+        for n in [2_usize, 3, 7, 64, 999, 1000, 1_000_000] {
+            let (a, b) = split_for_retry(n).unwrap();
+            assert_eq!(a + b, n, "halves of {n} must sum to {n}");
+            assert!(a > 0 && b > 0, "neither half may be empty for n={n}");
+        }
     }
 
     // ---------------------------------------------------------------
