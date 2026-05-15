@@ -501,6 +501,11 @@ impl Autoscrape {
     }
 
     pub fn reqwest_client_external() -> Result<reqwest::Client> {
+        // SSRF guard: the resolver drops loopback / private / link-local /
+        // reserved addresses before reqwest opens a connection. The filter
+        // applies on every connect, so redirects to a private IP are caught
+        // too (reqwest re-resolves on each hop). Audit reference: H-2 in
+        // `audits/comprehensive_security_report.md`.
         Ok(reqwest::Client::builder()
             .user_agent(AUTOSCRAPER_USER_AGENT)
             .timeout(core::time::Duration::from_secs(
@@ -511,6 +516,7 @@ impl Autoscrape {
             .gzip(true)
             .deflate(true)
             .brotli(true)
+            .dns_resolver(std::sync::Arc::new(crate::util::ssrf::PublicOnlyResolver))
             .build()?)
     }
 
