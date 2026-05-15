@@ -404,6 +404,45 @@ pub async fn seed_catalog_with_wd_qual(wd_prop: usize, wd_qual: usize) -> Result
     Ok(catalog_id)
 }
 
+/// Insert one or more `aliases` rows for `entry_id`. Each `(language, label)`
+/// pair becomes a row; the unique `(language, label, entry_id)` index will
+/// reject exact duplicates, so callers pass distinct pairs.
+pub async fn seed_aliases(entry_id: usize, aliases: &[(&str, &str)]) -> Result<()> {
+    let (pool, mut conn) = seed_conn().await?;
+    for (language, label) in aliases {
+        "INSERT INTO aliases (entry_id, language, label, added_by_user) \
+         VALUES (:entry_id, :language, :label, 0)"
+            .with(params! {
+                "entry_id" => entry_id,
+                "language" => *language,
+                "label"    => *label,
+            })
+            .ignore(&mut conn)
+            .await?;
+    }
+    drop(conn);
+    pool.disconnect().await.ok();
+    Ok(())
+}
+
+/// Set `q` (and optionally `user`) on an existing entry. Pass `q = None`
+/// to clear the match. Used to drive `MatchState` filters in storage tests
+/// without going through the full `EntryWriter` machinery.
+pub async fn set_entry_match(entry_id: usize, q: Option<isize>, user: Option<isize>) -> Result<()> {
+    let (pool, mut conn) = seed_conn().await?;
+    "UPDATE entry SET q=:q, user=:user WHERE id=:entry_id"
+        .with(params! {
+            "entry_id" => entry_id,
+            "q"        => q,
+            "user"     => user,
+        })
+        .ignore(&mut conn)
+        .await?;
+    drop(conn);
+    pool.disconnect().await.ok();
+    Ok(())
+}
+
 /// Insert a `multi_match` row for `entry_id` in `catalog`. The candidates
 /// field is set to a placeholder string; the count to 2.
 pub async fn seed_multi_match(entry_id: usize, catalog_id: usize) -> Result<()> {

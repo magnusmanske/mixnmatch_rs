@@ -54,6 +54,32 @@ use wikimisc::{timestamp::TimeStamp, wikibase::LocaleString};
 /// on large catalogs (Codeberg: catalog 7623).
 const AUTOMATCH_BIRTH_YEAR_BATCH_SIZE: usize = 1000;
 
+/// MariaDB server error code for "Query execution was interrupted
+/// (max_statement_time exceeded)" — raised when a SELECT runs past the
+/// per-statement budget configured by `mysql_misc::DEFAULT_MAX_STATEMENT_TIME_SECS`.
+const MARIADB_ERR_QUERY_INTERRUPTED: u16 = 1969;
+
+/// Returns true if `err`'s anyhow chain contains a `mysql_async::Error::Server`
+/// with code `1969` (max_statement_time exceeded). Walks the chain because
+/// real call sites surface this wrapped in `.context(...)`.
+fn is_max_statement_time_err(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .downcast_ref::<mysql_async::Error>()
+            .and_then(|me| match me {
+                mysql_async::Error::Server(se) => Some(se.code),
+                _ => None,
+            })
+            == Some(MARIADB_ERR_QUERY_INTERRUPTED)
+    })
+}
+
+/// Adaptive-retry batch sizing: halve, floored at 1 so we never retry
+/// with a no-op `LIMIT 0` that would stall a paginating loop.
+fn halve_batch_for_retry(batch_size: usize) -> usize {
+    (batch_size / 2).max(1)
+}
+
 #[derive(Debug)]
 pub struct StorageMySQL {
     pool: mysql_async::Pool,
@@ -1793,26 +1819,33 @@ impl Storage for StorageMySQL {
         after_id: usize,
         batch_size: usize,
     ) -> Result<Vec<AutomatchSearchRow>> {
-        // Keyset pagination on `entry.id`: the driver passes the
-        // largest id of the previous page; `ORDER BY id LIMIT N` then
-        // costs O(N) plus the correlated `aliases` lookup, regardless
-        // of how far in we are. See trait doc for the rationale.
-        let sql = format!("SELECT /* automatch_by_search_get_results */ `id`,`ext_name`,`type`,
-	            IFNULL((SELECT group_concat(DISTINCT `label` SEPARATOR '|') FROM aliases WHERE entry_id=entry.id),'') AS `aliases`
-	            FROM `entry` WHERE `catalog`=:catalog_id AND `id`>:after_id {}
-	            ORDER BY `id`
-	            LIMIT :batch_size",MatchState::not_fully_matched().get_sql());
-        let mut conn = self.get_conn_ro().await?;
-        let results = conn
-            .exec_iter(sql.clone(), params! {catalog_id,after_id,batch_size})
-            .await?
-            .map_and_drop(|row| {
-                let (id, name, type_name, aliases) =
-                    from_row::<(usize, String, String, String)>(row);
-                AutomatchSearchRow::new(id, name, type_name, aliases)
-            })
-            .await?;
-        Ok(results)
+        // Two-stage page fetch + adaptive retry on 1969. The previous
+        // single-statement form correlated a `group_concat(...)` sub-SELECT
+        // against `aliases` for every row in the page; on catalogs whose
+        // not-fully-matched tail was sparse, MariaDB had to scan a long
+        // stretch of `(catalog, id)` index entries to fill the LIMIT,
+        // which compounded with the per-row sub-SELECT and tripped
+        // `max_statement_time` (ERROR 1969). The split form does one
+        // cheap keyset SELECT for the page, then one IN-list SELECT for
+        // its aliases — each well inside the 120 s budget. The 1969
+        // retry halves the batch size once and retries: a defence in
+        // depth for catalogs whose density profile pushes even the
+        // split form past the budget.
+        match self
+            .automatch_by_search_fetch_page(catalog_id, after_id, batch_size)
+            .await
+        {
+            Ok(rows) => Ok(rows),
+            Err(e) if is_max_statement_time_err(&e) && batch_size > 1 => {
+                let smaller = halve_batch_for_retry(batch_size);
+                log::warn!(
+                    "automatch_by_search_get_results: 1969 max_statement_time at batch_size={batch_size} (catalog={catalog_id}, after_id={after_id}); retrying once with batch_size={smaller}"
+                );
+                self.automatch_by_search_fetch_page(catalog_id, after_id, smaller)
+                    .await
+            }
+            Err(e) => Err(e),
+        }
     }
 
     async fn automatch_creations_get_results(
@@ -6560,6 +6593,69 @@ impl StorageMySQL {
             .await?;
         Ok(rows)
     }
+
+    /// Single attempt of the `automatch_by_search` page fetch. Two SELECTs
+    /// share one RO connection (kept open across both queries so we don't
+    /// double the pool acquisition cost): (1) keyset page over `entry`,
+    /// no correlated subquery; (2) batched IN-list lookup against
+    /// `aliases` keyed by the page's ids. Aliases are grouped in Rust to
+    /// reproduce the old `group_concat(DISTINCT label SEPARATOR '|')`
+    /// shape — distinct labels joined by `|`, sorted for determinism.
+    async fn automatch_by_search_fetch_page(
+        &self,
+        catalog_id: usize,
+        after_id: usize,
+        batch_size: usize,
+    ) -> Result<Vec<AutomatchSearchRow>> {
+        let entry_sql = format!(
+            "SELECT /* automatch_by_search_fetch_page */ `id`,`ext_name`,`type` \
+             FROM `entry` WHERE `catalog`=:catalog_id AND `id`>:after_id {} \
+             ORDER BY `id` LIMIT :batch_size",
+            MatchState::not_fully_matched().get_sql()
+        );
+        let mut conn = self.get_conn_ro().await?;
+        let entries: Vec<(usize, String, String)> = conn
+            .exec_iter(entry_sql, params! {catalog_id, after_id, batch_size})
+            .await?
+            .map_and_drop(from_row::<(usize, String, String)>)
+            .await?;
+
+        if entries.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let ids_str = entries.iter().map(|(id, _, _)| id).join(",");
+        let alias_sql = format!(
+            "SELECT /* automatch_by_search_fetch_page_aliases */ `entry_id`,`label` \
+             FROM `aliases` WHERE `entry_id` IN ({ids_str})"
+        );
+        let alias_rows: Vec<(usize, String)> = conn
+            .exec_iter(alias_sql, ())
+            .await?
+            .map_and_drop(from_row::<(usize, String)>)
+            .await?;
+        drop(conn);
+
+        // `BTreeSet` per entry: dedup + deterministic sort in one step.
+        // The old `group_concat(DISTINCT ...)` deduped by label but did
+        // not guarantee an order; sorting here is a strict improvement
+        // for reproducibility and matches the test expectations.
+        let mut buckets: HashMap<usize, std::collections::BTreeSet<String>> = HashMap::new();
+        for (entry_id, label) in alias_rows {
+            buckets.entry(entry_id).or_default().insert(label);
+        }
+
+        Ok(entries
+            .into_iter()
+            .map(|(id, ext_name, type_name)| {
+                let aliases = buckets
+                    .remove(&id)
+                    .map(|set| set.into_iter().collect::<Vec<_>>().join("|"))
+                    .unwrap_or_default();
+                AutomatchSearchRow::new(id, ext_name, type_name, aliases)
+            })
+            .collect())
+    }
 }
 
 #[cfg(test)]
@@ -7450,6 +7546,182 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(got, Some(active_id), "inactive sibling must be ignored");
+    }
+
+    // ---------------------------------------------------------------
+    // automatch_by_search page-fetch: aliases-split + 1969 retry
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn is_max_statement_time_err_recognises_1969() {
+        let me = mysql_async::Error::Server(mysql_async::ServerError {
+            code: 1969,
+            message: "Query execution was interrupted (max_statement_time exceeded)".into(),
+            state: "70100".into(),
+        });
+        let ae: anyhow::Error = me.into();
+        assert!(is_max_statement_time_err(&ae));
+    }
+
+    #[test]
+    fn is_max_statement_time_err_rejects_other_server_errors() {
+        let me = mysql_async::Error::Server(mysql_async::ServerError {
+            code: 1062,
+            message: "duplicate".into(),
+            state: "23000".into(),
+        });
+        let ae: anyhow::Error = me.into();
+        assert!(!is_max_statement_time_err(&ae));
+    }
+
+    #[test]
+    fn is_max_statement_time_err_rejects_non_mysql_error() {
+        let ae = anyhow::anyhow!("plain non-mysql error");
+        assert!(!is_max_statement_time_err(&ae));
+    }
+
+    #[test]
+    fn is_max_statement_time_err_finds_1969_through_anyhow_context() {
+        // Real call sites surface 1969 wrapped in additional anyhow
+        // context. The predicate must still find it by walking the
+        // error chain rather than only inspecting the head.
+        let me = mysql_async::Error::Server(mysql_async::ServerError {
+            code: 1969,
+            message: "Query execution was interrupted (max_statement_time exceeded)".into(),
+            state: "70100".into(),
+        });
+        let ae: anyhow::Error =
+            anyhow::Error::from(me).context("automatch_by_search_fetch_page");
+        assert!(is_max_statement_time_err(&ae));
+    }
+
+    #[test]
+    fn halve_batch_for_retry_halves_normal_sizes() {
+        assert_eq!(halve_batch_for_retry(5000), 2500);
+        assert_eq!(halve_batch_for_retry(1000), 500);
+        assert_eq!(halve_batch_for_retry(2), 1);
+    }
+
+    #[test]
+    fn halve_batch_for_retry_floors_at_one() {
+        // batch_size=1 has nowhere smaller to go but must not collapse
+        // to zero (would produce a no-op query and stall the job).
+        assert_eq!(halve_batch_for_retry(1), 1);
+    }
+
+    #[tokio::test]
+    async fn automatch_by_search_get_results_pages_with_aliases() {
+        let app = test_support::test_app().await;
+        let (catalog_id, first_entry_id) =
+            test_support::seed_entry_with_name("Alpha").await.unwrap();
+        let beta_id = test_support::seed_entry_in_catalog(catalog_id, "Beta")
+            .await
+            .unwrap();
+        let gamma_id = test_support::seed_entry_in_catalog(catalog_id, "Gamma")
+            .await
+            .unwrap();
+        let delta_id = test_support::seed_entry_in_catalog(catalog_id, "Delta")
+            .await
+            .unwrap();
+
+        // Alpha: three rows but only two distinct labels — the (en, "Shared")
+        // and (de, "Shared") pair tests that label-level dedup (mirroring
+        // the old `group_concat(DISTINCT label …)`) survives the move to
+        // Rust-side grouping. The unique index is on (language, label,
+        // entry_id) so cross-language same-label rows are allowed.
+        // Beta gets one alias, Gamma none.
+        test_support::seed_aliases(
+            first_entry_id,
+            &[("en", "Alpha-EN"), ("en", "Shared"), ("de", "Shared")],
+        )
+        .await
+        .unwrap();
+        test_support::seed_aliases(beta_id, &[("en", "Beta-EN")])
+            .await
+            .unwrap();
+
+        // Make Delta fully matched so the `not_fully_matched` filter
+        // drops it from the result set.
+        test_support::set_entry_match(delta_id, Some(42), Some(7))
+            .await
+            .unwrap();
+
+        let rows = app
+            .storage()
+            .automatch_by_search_get_results(catalog_id, 0, 100)
+            .await
+            .unwrap();
+
+        // Delta excluded; Alpha/Beta/Gamma present in id order.
+        let ids: Vec<usize> = rows.iter().map(|r| r.entry_id).collect();
+        assert_eq!(
+            ids,
+            vec![first_entry_id, beta_id, gamma_id],
+            "fully-matched entry must be excluded and order must follow `id` ascending"
+        );
+
+        // Alpha's aliases joined by '|', distinct, in deterministic
+        // (sorted) order. Three seeded rows collapse to two labels —
+        // dedup must be observable in the output.
+        let alpha = rows.iter().find(|r| r.entry_id == first_entry_id).unwrap();
+        assert_eq!(
+            alpha.aliases, "Alpha-EN|Shared",
+            "label-level dedup + alphabetical sort"
+        );
+
+        // Beta has a single alias and no separator.
+        let beta = rows.iter().find(|r| r.entry_id == beta_id).unwrap();
+        assert_eq!(beta.aliases, "Beta-EN");
+
+        // Gamma has no aliases — empty string (mirrors the
+        // `IFNULL(..., '')` shape the old correlated subquery produced).
+        let gamma = rows.iter().find(|r| r.entry_id == gamma_id).unwrap();
+        assert_eq!(gamma.aliases, "");
+    }
+
+    #[tokio::test]
+    async fn automatch_by_search_get_results_respects_after_id_and_batch_size() {
+        let app = test_support::test_app().await;
+        let (catalog_id, first_id) =
+            test_support::seed_entry_with_name("E1").await.unwrap();
+        let second_id = test_support::seed_entry_in_catalog(catalog_id, "E2")
+            .await
+            .unwrap();
+        let third_id = test_support::seed_entry_in_catalog(catalog_id, "E3")
+            .await
+            .unwrap();
+
+        // batch_size=2 starting at after_id=0 must return exactly the
+        // first two rows in id order.
+        let page1 = app
+            .storage()
+            .automatch_by_search_get_results(catalog_id, 0, 2)
+            .await
+            .unwrap();
+        assert_eq!(
+            page1.iter().map(|r| r.entry_id).collect::<Vec<_>>(),
+            vec![first_id, second_id]
+        );
+
+        // Resume after the second row's id: only the third must come
+        // back, regardless of batch_size head-room.
+        let page2 = app
+            .storage()
+            .automatch_by_search_get_results(catalog_id, second_id, 10)
+            .await
+            .unwrap();
+        assert_eq!(
+            page2.iter().map(|r| r.entry_id).collect::<Vec<_>>(),
+            vec![third_id]
+        );
+
+        // Empty page is correctly empty (not Err).
+        let page3 = app
+            .storage()
+            .automatch_by_search_get_results(catalog_id, third_id, 10)
+            .await
+            .unwrap();
+        assert!(page3.is_empty());
     }
 }
 
