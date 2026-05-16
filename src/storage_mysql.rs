@@ -473,7 +473,15 @@ impl StorageMySQL {
         }
         // group_concat over a single DISTINCT q yields a string like "12345";
         // parse defensively in case MySQL returns it as bytes vs a number.
-        let rows: Vec<(usize, String)> = self.query_ro(&sql, params).await?;
+        //
+        // Resilient: the UNION/GROUP/HAVING fans out catastrophically on
+        // common-name source_ids (e.g. "John Smith" born 1850 against
+        // thousands of WD candidates), tripping 1969 even at the outer
+        // splitter's smallest slice. Escalation buys us up to 900s before
+        // the splitter has to bottom out at slice length 1 and propagate.
+        let rows: Vec<(usize, String)> = self
+            .query_ro_resilient(&sql, params, "birth_year_match_find_matches_attempt")
+            .await?;
         let mut out = Vec::with_capacity(rows.len());
         for (entry_id, q_str) in rows {
             if let Ok(q) = q_str.trim().parse::<usize>() {
@@ -6559,8 +6567,22 @@ impl StorageMySQL {
              ORDER BY `id` LIMIT :batch_size",
             MatchState::not_fully_matched().get_sql()
         );
+        // Resilient: on a sparse "not-fully-matched" tail the optimiser
+        // has to walk a long stretch of `(catalog, id)` index entries
+        // before LIMIT is satisfied, and that walk is independent of
+        // `batch_size` — so halving (the outer `fetch_with_adaptive_batch`)
+        // doesn't help. Escalating `max_statement_time` per-statement does.
+        // The two layers compose: escalation tries first, halving is the
+        // fallback when escalation also gives up. The production failures
+        // we observed (5x FAILED on this action with 1969 in the note)
+        // came from exactly this path bottoming out at batch_size=1 with
+        // the index walk still unfinished.
         let entries: Vec<(usize, String, String)> = self
-            .query_ro(&entry_sql, params! {catalog_id, after_id, batch_size})
+            .query_ro_resilient(
+                &entry_sql,
+                params! {catalog_id, after_id, batch_size},
+                "automatch_by_search_fetch_page",
+            )
             .await?;
 
         if entries.is_empty() {
