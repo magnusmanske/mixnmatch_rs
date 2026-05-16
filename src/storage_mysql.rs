@@ -3144,12 +3144,23 @@ impl Storage for StorageMySQL {
     ) -> Result<(Vec<serde_json::Value>, Vec<serde_json::Value>, usize)> {
         let mut conn = self.get_conn_ro().await?;
 
+        // Hide jobs for deactivated catalogs from the all-catalogs view —
+        // the dispatcher's job picker skips them with the same `NOT EXISTS`
+        // condition, so counting them as pending work is misleading
+        // (they'll sit in TODO forever). When the user explicitly opens a
+        // catalog's jobs page (`catalog_id > 0`), show everything so they
+        // can still manage jobs for catalogs that happen to be inactive.
+        const ACTIVE_CATALOG_ONLY: &str =
+            "NOT EXISTS (SELECT 1 FROM `catalog` WHERE `catalog`.`id`=`jobs`.`catalog` AND `catalog`.`active`!=1)";
+
         // Stats (only when catalog_id==0, as arrays [status, cnt] for the frontend)
         let job_stats = if catalog_id == 0 {
-            conn.exec_iter(
-                "SELECT `status`,count(*) AS `cnt` FROM `jobs` WHERE `status`!='BLOCKED' GROUP BY `status` ORDER BY `status`",
-                (),
-            )
+            let stats_sql = format!(
+                "SELECT `status`,count(*) AS `cnt` FROM `jobs` \
+                 WHERE `status`!='BLOCKED' AND {ACTIVE_CATALOG_ONLY} \
+                 GROUP BY `status` ORDER BY `status`"
+            );
+            conn.exec_iter(stats_sql, ())
             .await?
             .map_and_drop(|row: Row| {
                 let status: String = row.get::<Option<String>, _>("status").flatten().unwrap_or_default();
@@ -3165,6 +3176,8 @@ impl Storage for StorageMySQL {
         let mut filters = vec!["1=1".to_string(), "`status`!='BLOCKED'".to_string()];
         if catalog_id > 0 {
             filters.push(format!("`catalog`={catalog_id}"));
+        } else {
+            filters.push(ACTIVE_CATALOG_ONLY.to_string());
         }
         // `status_filter` is a comma-separated list of statuses to include.
         // Empty = no filter. Single value still works (one-element list).

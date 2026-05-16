@@ -216,6 +216,57 @@ mod tests {
         assert!(body.get("stats").is_some(), "stats key must be present when cid == 0");
     }
 
+    /// Jobs whose catalog has been deactivated must NOT count in the
+    /// all-catalogs view: the dispatcher skips them with the same
+    /// `NOT EXISTS … active != 1` filter, so showing them as pending
+    /// work is misleading (they sit in TODO forever). The catalog-scoped
+    /// view, however, must still surface them so admins can clean up.
+    #[tokio::test]
+    async fn query_get_jobs_all_catalogs_hides_jobs_for_inactive_catalogs() {
+        let app = test_support::test_app().await;
+        // Unique action keeps this test isolated from any other test's
+        // seeded jobs in the same process.
+        let action = format!(
+            "filter_test_action_{}",
+            test_support::unique_catalog_id()
+        );
+
+        let (active_cid, _) = test_support::seed_minimal_entry(&app).await.unwrap();
+        test_support::seed_job(&action, active_cid).await.unwrap();
+
+        let (inactive_cid, _) = test_support::seed_minimal_entry(&app).await.unwrap();
+        test_support::seed_job(&action, inactive_cid).await.unwrap();
+        app.storage()
+            .catalog_set_active(inactive_cid, false)
+            .await
+            .unwrap();
+
+        // All-catalogs view: only the active-catalog job must surface.
+        let params = params_from(&[("catalog", "0"), ("status_filter", "TODO")]);
+        let body = body_json(query_get_jobs(&app, &params).await.unwrap()).await;
+        let mine: Vec<u64> = body["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|j| j["action"].as_str() == Some(&action))
+            .map(|j| j["catalog"].as_u64().unwrap())
+            .collect();
+        assert_eq!(
+            mine,
+            vec![active_cid as u64],
+            "all-catalogs view must list only the active catalog's job"
+        );
+
+        // Catalog-scoped view of the inactive catalog: job must still be visible.
+        let params = params_from(&[("catalog", &inactive_cid.to_string())]);
+        let body = body_json(query_get_jobs(&app, &params).await.unwrap()).await;
+        assert_eq!(
+            body["total"].as_u64().unwrap(),
+            1,
+            "catalog-scoped view must still show its own job even if catalog is inactive"
+        );
+    }
+
     // ── query_start_new_job ───────────────────────────────────────────────
 
     #[tokio::test]
