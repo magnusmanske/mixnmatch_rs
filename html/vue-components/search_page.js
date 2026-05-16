@@ -36,10 +36,15 @@ export const SearchBox = {
 </form>`
 };
 
+// Allowed values for the match_status filter — must mirror the
+// `SearchMatchStatus` enum exposed by the Rust API. Keep in sync.
+const MATCH_STATUS_VALUES = ['any', 'matched', 'unmatched'];
+
 export default Vue.extend({
   props: ['query', 'excl'],
-  data: function () { return { results: [], exclude: [], include: [], exclude_catalogs: [], include_catalogs: [], running: true, show_exclude: false, show_include: false } },
+  data: function () { return { results: [], exclude: [], include: [], exclude_catalogs: [], include_catalogs: [], running: true, show_exclude: false, show_include: false, match_status: 'any' } },
   created: function () {
+    this.readMatchStatusFromRoute();
     this.updateResults();
   },
   updated: function () { tt_update_interface() },
@@ -49,6 +54,13 @@ export default Vue.extend({
     if (input) input.focus();
   },
   methods: {
+    readMatchStatusFromRoute: function () {
+      var raw = this.$route.query.match_status;
+      // Unknown / missing values fall back to "any" — matches the
+      // backend's `SearchMatchStatus::from_param` so the UI and API
+      // agree on degraded values from stale bookmarks.
+      this.match_status = MATCH_STATUS_VALUES.indexOf(raw) >= 0 ? raw : 'any';
+    },
     updateResults: async function () {
       const me = this;
       me.running = true;
@@ -74,7 +86,7 @@ export default Vue.extend({
       var input = document.querySelector('form.search_box_form input[type="text"]');
       if (input) input.value = me.query;
       try {
-        var d = await mnm_api('search', { what: me.query, exclude: me.exclude.join(','), include: me.include.join(',') }, { method: 'POST' });
+        var d = await mnm_api('search', { what: me.query, exclude: me.exclude.join(','), include: me.include.join(','), match_status: me.match_status }, { method: 'POST' });
         Object.values(d.data.entries).forEach(function (v) {
           if (d.data.users[v.user]) v.username = d.data.users[v.user].name;
         });
@@ -85,6 +97,15 @@ export default Vue.extend({
         console.error('Search failed', e);
       }
       me.running = false;
+    },
+    onMatchStatusChange: function () {
+      // Persist the choice in the URL so back/forward and bookmarks
+      // restore the same filter, then let the $route watcher trigger
+      // the re-search rather than calling updateResults twice.
+      var q = Object.assign({}, this.$route.query);
+      if (this.match_status === 'any') delete q.match_status;
+      else q.match_status = this.match_status;
+      this.$router.push({ path: this.$route.path, query: q });
     },
     onExcludeChange: function (list) {
       this.exclude_catalogs = list;
@@ -97,6 +118,7 @@ export default Vue.extend({
   },
   watch: {
     '$route'(to, from) {
+      this.readMatchStatusFromRoute();
       this.updateResults(to.params.query);
     }
   },
@@ -107,6 +129,13 @@ export default Vue.extend({
 <div style='display:inline-block'><button class='btn btn-outline-secondary' @click.prevent='show_include=!show_include' tt='include_catalogs'></button></div>
 <div style='display:inline-block'><button class='btn btn-outline-secondary' @click.prevent='show_exclude=!show_exclude' tt='exclude_catalogs'></button></div>
 <div style='display:inline-block; margin-left:0.5em'><router-link to='/by_property_value' class='btn btn-outline-secondary'>Search by property value</router-link></div>
+
+<div class='search-match-status'>
+	<span class='search-match-status-label'>Match:</span>
+	<label><input type='radio' v-model='match_status' value='any' @change='onMatchStatusChange' /><span tt='any'></span></label>
+	<label><input type='radio' v-model='match_status' value='matched' @change='onMatchStatusChange' />Matched</label>
+	<label><input type='radio' v-model='match_status' value='unmatched' @change='onMatchStatusChange' /><span tt='unmatched'></span></label>
+</div>
 
 <div v-if='show_exclude' class="card my-3">
 	<div class="card-body">

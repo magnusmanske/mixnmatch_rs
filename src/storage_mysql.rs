@@ -3361,10 +3361,12 @@ impl Storage for StorageMySQL {
     ) -> Result<Vec<Entry>> {
         let description_search = options.description_search;
         let no_label_search = options.no_label_search;
+        let match_status = options.match_status;
         let Some(sql) = Self::build_api_search_entries_sql(
             words,
             description_search,
             no_label_search,
+            match_status,
             exclude,
             include,
             max_results,
@@ -6585,6 +6587,7 @@ impl StorageMySQL {
 mod tests {
     use super::*;
     use crate::job_status::JobStatus;
+    use crate::storage::SearchMatchStatus;
     use crate::test_support;
 
     #[test]
@@ -6939,7 +6942,16 @@ mod tests {
     #[test]
     fn test_build_api_search_entries_sql_empty_words() {
         assert!(
-            StorageMySQL::build_api_search_entries_sql(&[], true, false, &[], &[], 10).is_none()
+            StorageMySQL::build_api_search_entries_sql(
+                &[],
+                true,
+                false,
+                SearchMatchStatus::Any,
+                &[],
+                &[],
+                10
+            )
+            .is_none()
         );
     }
 
@@ -6947,28 +6959,54 @@ mod tests {
     fn test_build_api_search_entries_sql_all_disabled() {
         let words = vec!["abc".to_string()];
         assert!(
-            StorageMySQL::build_api_search_entries_sql(&words, false, true, &[], &[], 10).is_none()
+            StorageMySQL::build_api_search_entries_sql(
+                &words,
+                false,
+                true,
+                SearchMatchStatus::Any,
+                &[],
+                &[],
+                10
+            )
+            .is_none()
         );
     }
 
     #[test]
     fn test_build_api_search_entries_sql_basic() {
         let words = vec!["foo".to_string(), "bar".to_string()];
-        let sql = StorageMySQL::build_api_search_entries_sql(&words, false, false, &[], &[], 25)
-            .expect("non-empty sql");
+        let sql = StorageMySQL::build_api_search_entries_sql(
+            &words,
+            false,
+            false,
+            SearchMatchStatus::Any,
+            &[],
+            &[],
+            25,
+        )
+        .expect("non-empty sql");
         assert!(sql.contains("MATCH(entry.`ext_name`) AGAINST('+foo +bar' IN BOOLEAN MODE)"));
         assert!(!sql.contains("MATCH(entry.`ext_desc`)"));
         assert!(sql.contains("STRAIGHT_JOIN `catalog`"));
         assert!(sql.contains("`catalog`.`active`=1"));
         assert!(sql.ends_with(" LIMIT 25"));
+        // SearchMatchStatus::Any must not introduce a `q` predicate.
+        assert!(!sql.contains("entry.`q`"));
     }
 
     #[test]
     fn test_build_api_search_entries_sql_with_description_and_filters() {
         let words = vec!["foo".to_string()];
-        let sql =
-            StorageMySQL::build_api_search_entries_sql(&words, true, false, &[3, 7], &[1, 2], 10)
-                .expect("non-empty sql");
+        let sql = StorageMySQL::build_api_search_entries_sql(
+            &words,
+            true,
+            false,
+            SearchMatchStatus::Any,
+            &[3, 7],
+            &[1, 2],
+            10,
+        )
+        .expect("non-empty sql");
         assert!(sql.contains("MATCH(entry.`ext_name`)"));
         assert!(sql.contains("MATCH(entry.`ext_desc`)"));
         assert!(sql.contains("entry.`catalog` NOT IN (3,7)"));
@@ -6976,12 +7014,60 @@ mod tests {
     }
 
     #[test]
+    fn test_build_api_search_entries_sql_match_status_matched() {
+        let words = vec!["foo".to_string()];
+        let sql = StorageMySQL::build_api_search_entries_sql(
+            &words,
+            false,
+            false,
+            SearchMatchStatus::Matched,
+            &[],
+            &[],
+            10,
+        )
+        .expect("non-empty sql");
+        assert!(
+            sql.contains("entry.`q`>0"),
+            "Matched filter must restrict to entries with q>0; got: {sql}"
+        );
+        assert!(!sql.contains("entry.`q` IS NULL"));
+    }
+
+    #[test]
+    fn test_build_api_search_entries_sql_match_status_unmatched() {
+        let words = vec!["foo".to_string()];
+        let sql = StorageMySQL::build_api_search_entries_sql(
+            &words,
+            false,
+            false,
+            SearchMatchStatus::Unmatched,
+            &[],
+            &[],
+            10,
+        )
+        .expect("non-empty sql");
+        assert!(
+            sql.contains("entry.`q` IS NULL"),
+            "Unmatched filter must restrict to entries with q IS NULL; got: {sql}"
+        );
+        assert!(!sql.contains("entry.`q`>0"));
+    }
+
+    #[test]
     fn test_build_api_search_entries_sql_escapes_quotes() {
         // A user-supplied word containing a single quote or backslash must not
         // be able to break out of the AGAINST() string literal.
         let words = vec!["ev'il".to_string(), r"b\d".to_string()];
-        let sql = StorageMySQL::build_api_search_entries_sql(&words, false, false, &[], &[], 10)
-            .expect("non-empty sql");
+        let sql = StorageMySQL::build_api_search_entries_sql(
+            &words,
+            false,
+            false,
+            SearchMatchStatus::Any,
+            &[],
+            &[],
+            10,
+        )
+        .expect("non-empty sql");
         // Count single quotes: should be exactly 2 (the outer delimiters of
         // the AGAINST literal); any user-contributed quote is doubled inside.
         let lone_quotes = sql
@@ -7073,7 +7159,16 @@ mod tests {
     #[test]
     fn search_entries_sql_none_for_empty_words() {
         assert!(
-            StorageMySQL::build_api_search_entries_sql(&[], false, false, &[], &[], 10).is_none()
+            StorageMySQL::build_api_search_entries_sql(
+                &[],
+                false,
+                false,
+                SearchMatchStatus::Any,
+                &[],
+                &[],
+                10
+            )
+            .is_none()
         );
     }
 
@@ -7085,6 +7180,7 @@ mod tests {
                 &["test".to_string()],
                 false,
                 true,
+                SearchMatchStatus::Any,
                 &[],
                 &[],
                 10
@@ -7099,6 +7195,7 @@ mod tests {
             &["caesar".to_string(), "rome".to_string()],
             false,
             false,
+            SearchMatchStatus::Any,
             &[],
             &[],
             20,
@@ -7118,6 +7215,7 @@ mod tests {
             &["roman".to_string()],
             true,
             false,
+            SearchMatchStatus::Any,
             &[],
             &[],
             10,
@@ -7132,6 +7230,7 @@ mod tests {
             &["roman".to_string()],
             true,
             true,
+            SearchMatchStatus::Any,
             &[],
             &[],
             10,
@@ -7160,6 +7259,7 @@ mod tests {
             &["foo".to_string()],
             false,
             false,
+            SearchMatchStatus::Any,
             &[],
             &[],
             10,
@@ -7181,6 +7281,7 @@ mod tests {
             &["test".to_string()],
             false,
             false,
+            SearchMatchStatus::Any,
             &[5, 6],
             &[],
             10,
@@ -7198,6 +7299,7 @@ mod tests {
             &["test".to_string()],
             false,
             false,
+            SearchMatchStatus::Any,
             &[],
             &[3, 4],
             10,

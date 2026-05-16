@@ -67,6 +67,8 @@ pub async fn query_search(app: &dyn ExternalServicesContext, params: &Params) ->
     let max_results = common::get_param_int(params, "max", 100) as usize;
     let desc_search = common::get_param_int(params, "description_search", 0) != 0;
     let no_label = common::get_param_int(params, "no_label_search", 0) != 0;
+    let match_status =
+        crate::storage::SearchMatchStatus::from_param(&common::get_param(params, "match_status", ""));
     let mut exclude: Vec<usize> = common::get_param(params, "exclude", "")
         .split(',')
         .filter_map(|s| s.trim().parse().ok())
@@ -86,7 +88,13 @@ pub async fn query_search(app: &dyn ExternalServicesContext, params: &Params) ->
         .captures(&what_clean)
         .map(|c| c[1].parse::<isize>().unwrap_or(0));
     let entries = if let Some(q) = q_match.filter(|q| *q > 0) {
-        app.storage().api_search_by_q(q, &exclude).await?
+        // A Q-number search only returns entries whose `q` matches the queried
+        // value, so `Unmatched` is intrinsically empty — skip the round-trip.
+        if match_status == crate::storage::SearchMatchStatus::Unmatched {
+            vec![]
+        } else {
+            app.storage().api_search_by_q(q, &exclude).await?
+        }
     } else {
         let words: Vec<String> = what_clean
             .split_whitespace()
@@ -104,6 +112,7 @@ pub async fn query_search(app: &dyn ExternalServicesContext, params: &Params) ->
                     crate::storage::EntrySearchOptions {
                         description_search: desc_search,
                         no_label_search: no_label,
+                        match_status,
                     },
                     &exclude,
                     &include,

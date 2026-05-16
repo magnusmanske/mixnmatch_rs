@@ -11,7 +11,7 @@ use crate::entry_query::EntryQuery;
 use crate::job_status::JobStatus;
 use crate::match_state::MatchState;
 use crate::mysql_misc::MySQLMisc;
-use crate::storage::{CatalogEntryListFilter, Download2Filter};
+use crate::storage::{CatalogEntryListFilter, Download2Filter, SearchMatchStatus};
 use anyhow::{Result, anyhow};
 use itertools::Itertools;
 use rand::prelude::*;
@@ -111,6 +111,7 @@ impl StorageMySQL {
         words: &[String],
         description_search: bool,
         no_label_search: bool,
+        match_status: SearchMatchStatus,
         exclude: &[usize],
         include: &[usize],
         max_results: usize,
@@ -144,6 +145,9 @@ impl StorageMySQL {
             "{} WHERE `catalog`.`active`=1 AND ({match_clause})",
             Self::entry_sql_select_join_active_catalog()
         );
+        if let Some(clause) = Self::match_status_sql_clause(match_status) {
+            sql += &clause;
+        }
         if !exclude.is_empty() {
             let excl = exclude.iter().join(",");
             sql += &format!(" AND entry.`catalog` NOT IN ({excl})");
@@ -154,6 +158,17 @@ impl StorageMySQL {
         }
         sql += &format!(" LIMIT {max_results}");
         Some(sql)
+    }
+
+    /// Render the `match_status` filter as an SQL fragment that can be
+    /// appended to an existing WHERE clause (it already starts with
+    /// ` AND `). Returns `None` for `Any`, which adds no constraint.
+    pub(super) fn match_status_sql_clause(status: SearchMatchStatus) -> Option<String> {
+        match status {
+            SearchMatchStatus::Any => None,
+            SearchMatchStatus::Matched => Some(" AND entry.`q`>0".into()),
+            SearchMatchStatus::Unmatched => Some(" AND entry.`q` IS NULL".into()),
+        }
     }
 
     /// `SELECT … FROM entry STRAIGHT_JOIN catalog ON catalog.id=entry.catalog`.

@@ -126,6 +126,31 @@ pub struct CurrentScraper {
 /// rather than in either consumer alone.
 pub const EXT_URL_UNIQUE_SEPARATOR: &str = "!@£$%^&|";
 
+/// Match-status filter for `api_search_entries` / `api_search_by_q`.
+///
+/// Lets the caller restrict results to entries that already have a Wikidata
+/// item (`Matched`, `q>0`) or to entries that don't (`Unmatched`, `q IS NULL`).
+/// `Any` (default) leaves the result set untouched.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SearchMatchStatus {
+    #[default]
+    Any,
+    Matched,
+    Unmatched,
+}
+
+impl SearchMatchStatus {
+    /// Parse a user-supplied query-string value. Unknown / empty values
+    /// fall back to `Any` so the existing endpoints stay backwards-compatible.
+    pub fn from_param(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "matched" => Self::Matched,
+            "unmatched" => Self::Unmatched,
+            _ => Self::Any,
+        }
+    }
+}
+
 /// Search options for `api_search_entries`.
 ///
 /// Grouping the two boolean flags prevents opaque `true/false` literals at
@@ -136,6 +161,8 @@ pub struct EntrySearchOptions {
     pub description_search: bool,
     /// Skip label columns and search only in description / aliases.
     pub no_label_search: bool,
+    /// Restrict results by Wikidata-match status (matched / unmatched / any).
+    pub match_status: SearchMatchStatus,
 }
 
 /// Filter flags for `qc_get_entries` (quick-compare micro-API).
@@ -1698,5 +1725,33 @@ mod tests {
     fn test_catalog_id_accessor() {
         let row = make_overview_row(0, 0, 0, 0, 0, 0, 0);
         assert_eq!(row.catalog_id(), 1);
+    }
+
+    // ── SearchMatchStatus ──────────────────────────────────────────────
+
+    #[test]
+    fn search_match_status_from_param_canonical_values() {
+        assert_eq!(SearchMatchStatus::from_param("matched"), SearchMatchStatus::Matched);
+        assert_eq!(SearchMatchStatus::from_param("unmatched"), SearchMatchStatus::Unmatched);
+        assert_eq!(SearchMatchStatus::from_param("any"), SearchMatchStatus::Any);
+    }
+
+    #[test]
+    fn search_match_status_from_param_is_case_and_whitespace_tolerant() {
+        assert_eq!(SearchMatchStatus::from_param(" Matched "), SearchMatchStatus::Matched);
+        assert_eq!(SearchMatchStatus::from_param("UNMATCHED"), SearchMatchStatus::Unmatched);
+    }
+
+    #[test]
+    fn search_match_status_from_param_unknown_falls_back_to_any() {
+        // Empty / unknown values must not be a 400 — the param is optional and
+        // must degrade gracefully for stale links or third-party callers.
+        assert_eq!(SearchMatchStatus::from_param(""), SearchMatchStatus::Any);
+        assert_eq!(SearchMatchStatus::from_param("nonsense"), SearchMatchStatus::Any);
+    }
+
+    #[test]
+    fn search_match_status_default_is_any() {
+        assert_eq!(SearchMatchStatus::default(), SearchMatchStatus::Any);
     }
 }

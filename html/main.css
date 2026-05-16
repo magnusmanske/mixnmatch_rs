@@ -2046,3 +2046,24 @@ span.wikidatamap_note:last-of-type {
 	0%, 100% { opacity: 0.55; }
 	50% { opacity: 0.35; }
 }
+
+/* ========== Search page: match-status filter ========== */
+
+.search-match-status {
+	display: inline-flex;
+	gap: 0.75em;
+	margin-left: 0.5em;
+	align-items: center;
+}
+
+.search-match-status label {
+	display: inline-flex;
+	gap: 0.25em;
+	align-items: center;
+	margin: 0;
+}
+
+.search-match-status-label {
+	font-weight: 600;
+	color: var(--mnm-fg-muted, #555);
+}
