@@ -129,48 +129,13 @@ impl ExtendedEntry {
         }
     }
 
-    /// Update an existing entry. The scraper update path historically used
-    /// **merge** semantics — empty `ext_name`/`ext_desc`/`ext_url` and a
-    /// `None` `type_name` on the incoming ExtendedEntry meant "leave the
-    /// DB value alone", because scrapers often produce partial records.
-    /// `MetaEntry::update_in_storage` uses **replace** semantics, so we
-    /// can't simply delegate the whole call — we apply the conditional
-    /// ext_* writes here through EntryWriter (same code path either way)
-    /// and then route associated-data + match through MetaEntry's
-    /// canonical writer.
+    /// Update an existing entry. Delegates entirely to
+    /// [`MetaEntry::update_merge_in_storage`], which is now the
+    /// canonical home for the scraper-style merge contract (empty
+    /// scalars are skipped, matches only assigned to unmatched entries,
+    /// aliases/aux/descriptions are add-only).
     pub async fn update_existing(&mut self, entry: &mut Entry, app: &dyn AppContext) -> Result<()> {
-        {
-            let mut ew = EntryWriter::new(app, entry);
-            if !self.entry.ext_name.is_empty() {
-                ew.set_ext_name(&self.entry.ext_name).await?;
-            }
-            if !self.entry.ext_desc.is_empty() {
-                ew.set_ext_desc(&self.entry.ext_desc).await?;
-            }
-            if self.entry.type_name.is_some() {
-                ew.set_type_name(self.entry.type_name.clone()).await?;
-            }
-            if !self.entry.ext_url.is_empty() {
-                ew.set_ext_url(&self.entry.ext_url).await?;
-            }
-            if ew.as_entry().q.is_none() {
-                if let Some(q) = self.entry.q {
-                    ew.set_match(&format!("Q{q}"), 4).await?;
-                }
-            }
-        }
-
-        // Build a MetaEntry that carries only the associated-data side
-        // (aux/aliases/descriptions/coordinate/person_dates). Clear q
-        // and ext_* on the snapshot so MetaEntry doesn't re-apply them —
-        // we just handled them above with the correct merge semantics.
-        let mut meta = self.to_meta();
-        meta.entry.id = entry.id;
-        meta.entry.q = None;
-        meta.entry.user = None;
-        meta.entry.timestamp = None;
-        meta.write_associated_data(entry, app).await?;
-        Ok(())
+        self.to_meta().update_merge_in_storage(entry, app).await
     }
 
     /// Insert a new entry. Delegates to `MetaEntry::create_in_storage`.

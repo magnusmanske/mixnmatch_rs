@@ -12,7 +12,7 @@ use wikimisc::wikibase::LocaleString;
 
 // ── Serializable sub-structures (only for tables without existing structs) ──
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct MetaPersonDates {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub born: Option<PersonDate>,
@@ -66,7 +66,7 @@ pub struct MetaStatementText {
 
 /// A fully-resolved snapshot of an entry and all its associated data, suitable
 /// for JSON serialization / deserialization.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MetaEntry {
     pub entry: Entry,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -94,6 +94,64 @@ pub struct MetaEntry {
 }
 
 impl MetaEntry {
+    // ── Builder API ──────────────────────────────────────────────────
+    //
+    // These methods exist so callers that produce records in code
+    // (CSV row parsing, scrapers) don't need to know about the
+    // wire-format wrapping (`person_dates`) or invent their own
+    // dedupe logic (`auxiliary` is a Vec; `add_aux` dedupes by content
+    // so the storage layer's REPLACE INTO doesn't get redundant
+    // round-trips).
+
+    /// Construct a new MetaEntry seeded with just `(catalog, ext_id)`
+    /// and empty defaults everywhere else.
+    pub fn new_for_catalog_ext_id(catalog: DbId, ext_id: &str) -> Self {
+        let mut me = Self::default();
+        me.entry.catalog = catalog;
+        me.entry.ext_id = ext_id.to_string();
+        me
+    }
+
+    /// Push an auxiliary value, deduping on `(prop_numeric, value)`.
+    /// Equivalent to ExtendedEntry's `aux.insert(AuxiliaryRow::new(...))`
+    /// but works on the canonical `auxiliary: Vec` shape.
+    pub fn add_aux(&mut self, prop_numeric: PropertyId, value: impl Into<String>) {
+        let value = value.into();
+        let exists = self
+            .auxiliary
+            .iter()
+            .any(|a| a.prop_numeric() == prop_numeric && a.value() == value);
+        if !exists {
+            self.auxiliary.push(AuxiliaryRow::new(prop_numeric, value));
+        }
+    }
+
+    /// Set the `born` date, lazily allocating the `person_dates` wrapper.
+    /// Preserves any previously-set `died`.
+    pub fn set_born(&mut self, date: PersonDate) {
+        self.person_dates.get_or_insert_with(Default::default).born = Some(date);
+    }
+
+    /// Set the `died` date, lazily allocating the `person_dates` wrapper.
+    /// Preserves any previously-set `born`.
+    pub fn set_died(&mut self, date: PersonDate) {
+        self.person_dates.get_or_insert_with(Default::default).died = Some(date);
+    }
+
+    /// Push an alias. The `aliases` table is `INSERT IGNORE`, so the
+    /// builder is intentionally lossless on duplicates here — callers
+    /// that care can deduplicate beforehand.
+    pub fn add_alias(&mut self, language: &str, label: &str) {
+        self.aliases.push(LocaleString::new(language, label));
+    }
+
+    /// Insert or overwrite a description for a given language.
+    pub fn set_description(&mut self, language: &str, text: &str) {
+        self.descriptions.insert(language.to_string(), text.to_string());
+    }
+
+    // ── Repository API (load from storage) ───────────────────────────
+
     /// Load a complete MetaEntry from storage for a given entry ID.
     pub async fn from_entry_id(entry_id: DbId, app: &dyn ExternalServicesContext) -> Result<Self> {
         let entry = Entry::from_id(entry_id, app).await?;
@@ -290,6 +348,58 @@ impl MetaEntry {
             }
         }
 
+        Ok(())
+    }
+
+    /// Update an existing entry using **merge** semantics — the scraper
+    /// contract. Empty scalar fields (`ext_name`, `ext_desc`, `ext_url`)
+    /// and a `None` `type_name` on the incoming MetaEntry mean "leave
+    /// the stored value alone"; matches are only assigned when the
+    /// entry is currently unmatched; aliases / auxiliary / descriptions
+    /// are add-only (the underlying storage primitives are
+    /// `REPLACE INTO` / `INSERT IGNORE` so no pre-fetch is needed).
+    ///
+    /// This is the canonical home for the merge contract that
+    /// `ExtendedEntry::update_existing` used to encode. The full-replace
+    /// contract still lives in [`update_in_storage`].
+    ///
+    /// `entry` is the previously-loaded record being updated; its
+    /// fields are mutated in place to reflect the writes.
+    pub async fn update_merge_in_storage(
+        &self,
+        entry: &mut Entry,
+        app: &dyn AppContext,
+    ) -> Result<()> {
+        // Scalar fields: skip-empty merge.
+        {
+            let mut ew = EntryWriter::new(app, entry);
+            if !self.entry.ext_name.is_empty() {
+                ew.set_ext_name(&self.entry.ext_name).await?;
+            }
+            if !self.entry.ext_desc.is_empty() {
+                ew.set_ext_desc(&self.entry.ext_desc).await?;
+            }
+            if self.entry.type_name.is_some() {
+                ew.set_type_name(self.entry.type_name.clone()).await?;
+            }
+            if !self.entry.ext_url.is_empty() {
+                ew.set_ext_url(&self.entry.ext_url).await?;
+            }
+            // Match is only assigned when the entry is currently
+            // unmatched — never override an existing match through
+            // the merge path. Uses USER_AUX_MATCH (4) to match the
+            // pre-existing ExtendedEntry behaviour for the
+            // scraper-style import.
+            if ew.as_entry().q.is_none() {
+                if let Some(q) = self.entry.q {
+                    ew.set_match(&format!("Q{q}"), crate::app_state::USER_AUX_MATCH)
+                        .await?;
+                }
+            }
+        }
+
+        // Associated data: add-only (REPLACE/INSERT IGNORE at storage).
+        self.write_associated_data(entry, app).await?;
         Ok(())
     }
 
@@ -634,5 +744,235 @@ mod tests {
         let back: MetaPersonDates = serde_json::from_str(&json).unwrap();
         assert_eq!(back.born.unwrap(), PersonDate::year_month_day(1950, 1, 1));
         assert!(back.died.is_none());
+    }
+
+    // ── Builder API ──────────────────────────────────────────────────
+    //
+    // These tests pin the contract for the new MetaEntry builder
+    // methods that replace ExtendedEntry's direct field access in
+    // scrapers. The builder methods exist so scrapers don't need to
+    // know about the wire-format wrapping (`person_dates`) or invent
+    // their own dedupe logic (`auxiliary` is a Vec; `add_aux` dedupes
+    // by content).
+
+    #[test]
+    fn default_meta_entry_is_empty() {
+        let me = MetaEntry::default();
+        assert_eq!(me.entry.catalog, 0);
+        assert!(me.entry.ext_id.is_empty());
+        assert!(me.auxiliary.is_empty());
+        assert!(me.coordinate.is_none());
+        assert!(me.person_dates.is_none());
+        assert!(me.aliases.is_empty());
+        assert!(me.descriptions.is_empty());
+        assert!(me.mnm_relations.is_empty());
+        assert!(me.kv_entries.is_empty());
+    }
+
+    #[test]
+    fn new_for_catalog_ext_id_seeds_entry_only() {
+        let me = MetaEntry::new_for_catalog_ext_id(42, "abc-123");
+        assert_eq!(me.entry.catalog, 42);
+        assert_eq!(me.entry.ext_id, "abc-123");
+        // Everything else is default.
+        assert!(me.auxiliary.is_empty());
+        assert!(me.person_dates.is_none());
+        assert!(me.coordinate.is_none());
+    }
+
+    #[test]
+    fn add_aux_dedupes_by_content() {
+        let mut me = MetaEntry::default();
+        me.add_aux(214, "12345");
+        me.add_aux(214, "12345");
+        assert_eq!(me.auxiliary.len(), 1);
+        assert_eq!(me.auxiliary[0].prop_numeric(), 214);
+        assert_eq!(me.auxiliary[0].value(), "12345");
+    }
+
+    #[test]
+    fn add_aux_keeps_distinct_values_on_same_prop() {
+        let mut me = MetaEntry::default();
+        me.add_aux(31, "Q5");
+        me.add_aux(31, "Q515");
+        assert_eq!(me.auxiliary.len(), 2);
+    }
+
+    #[test]
+    fn add_aux_keeps_same_value_on_different_props() {
+        let mut me = MetaEntry::default();
+        me.add_aux(214, "12345");
+        me.add_aux(213, "12345");
+        assert_eq!(me.auxiliary.len(), 2);
+    }
+
+    #[test]
+    fn set_born_on_empty_creates_wrapper() {
+        let mut me = MetaEntry::default();
+        me.set_born(PersonDate::year_only(1950));
+        let pd = me.person_dates.as_ref().expect("person_dates set");
+        assert_eq!(pd.born, Some(PersonDate::year_only(1950)));
+        assert!(pd.died.is_none());
+    }
+
+    #[test]
+    fn set_died_on_empty_creates_wrapper() {
+        let mut me = MetaEntry::default();
+        me.set_died(PersonDate::year_only(2020));
+        let pd = me.person_dates.as_ref().expect("person_dates set");
+        assert!(pd.born.is_none());
+        assert_eq!(pd.died, Some(PersonDate::year_only(2020)));
+    }
+
+    #[test]
+    fn set_born_preserves_existing_died() {
+        let mut me = MetaEntry::default();
+        me.set_died(PersonDate::year_only(2020));
+        me.set_born(PersonDate::year_only(1950));
+        let pd = me.person_dates.as_ref().unwrap();
+        assert_eq!(pd.born, Some(PersonDate::year_only(1950)));
+        assert_eq!(pd.died, Some(PersonDate::year_only(2020)));
+    }
+
+    #[test]
+    fn set_born_overwrites_previous_born() {
+        let mut me = MetaEntry::default();
+        me.set_born(PersonDate::year_only(1950));
+        me.set_born(PersonDate::year_only(1951));
+        assert_eq!(
+            me.person_dates.as_ref().unwrap().born,
+            Some(PersonDate::year_only(1951))
+        );
+    }
+
+    #[test]
+    fn add_alias_stores_locale_string() {
+        let mut me = MetaEntry::default();
+        me.add_alias("en", "John");
+        assert_eq!(me.aliases.len(), 1);
+        assert_eq!(me.aliases[0], LocaleString::new("en", "John"));
+    }
+
+    #[test]
+    fn add_alias_accepts_duplicates_in_vec() {
+        // No dedupe — aliases table is INSERT IGNORE so the DB layer
+        // is authoritative. The builder is intentionally lossless on
+        // the in-memory side so a caller can spot duplicates if it
+        // matters.
+        let mut me = MetaEntry::default();
+        me.add_alias("en", "John");
+        me.add_alias("en", "John");
+        assert_eq!(me.aliases.len(), 2);
+    }
+
+    #[test]
+    fn set_description_inserts_and_overwrites_by_language() {
+        let mut me = MetaEntry::default();
+        me.set_description("en", "first");
+        assert_eq!(me.descriptions.get("en"), Some(&"first".to_string()));
+        me.set_description("en", "second");
+        assert_eq!(me.descriptions.get("en"), Some(&"second".to_string()));
+        assert_eq!(me.descriptions.len(), 1);
+    }
+
+    #[test]
+    fn set_description_keeps_independent_languages() {
+        let mut me = MetaEntry::default();
+        me.set_description("en", "painter");
+        me.set_description("de", "Maler");
+        assert_eq!(me.descriptions.len(), 2);
+    }
+
+    // ── update_merge_in_storage: DB integration ──────────────────────
+    //
+    // Pins the scraper-style merge contract end-to-end. Headline rule
+    // the test is built to enforce: empty incoming scalar fields MUST
+    // NOT clobber the stored values. The old ExtendedEntry::update_existing
+    // upheld this with hand-rolled conditionals; this test pins it so
+    // the contract survives the migration of all callers to MetaEntry.
+
+    #[tokio::test]
+    #[ignore = "requires database / external services — run with cargo test -- --ignored"]
+    async fn update_merge_skips_empty_ext_name() {
+        let app = crate::test_support::test_app().await;
+        let (_catalog_id, entry_id) =
+            crate::test_support::seed_entry_with_name("Original Name").await.unwrap();
+
+        let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
+
+        // Incoming MetaEntry has empty ext_name — must NOT overwrite.
+        let me = MetaEntry::default();
+        me.update_merge_in_storage(&mut entry, &app).await.unwrap();
+
+        let reloaded = Entry::from_id(entry_id, &app).await.unwrap();
+        assert_eq!(
+            reloaded.ext_name, "Original Name",
+            "empty incoming ext_name must not clobber stored value"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires database / external services — run with cargo test -- --ignored"]
+    async fn update_merge_overwrites_nonempty_ext_name() {
+        let app = crate::test_support::test_app().await;
+        let (_catalog_id, entry_id) =
+            crate::test_support::seed_entry_with_name("Original Name").await.unwrap();
+
+        let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
+
+        let mut me = MetaEntry::default();
+        me.entry.ext_name = "New Name".to_string();
+        me.update_merge_in_storage(&mut entry, &app).await.unwrap();
+
+        let reloaded = Entry::from_id(entry_id, &app).await.unwrap();
+        assert_eq!(reloaded.ext_name, "New Name");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires database / external services — run with cargo test -- --ignored"]
+    async fn update_merge_skips_match_when_entry_already_matched() {
+        // If the existing entry already has a `q`, an incoming `q` is
+        // ignored — the merge path must never reassign existing matches.
+        let app = crate::test_support::test_app().await;
+        let (_catalog_id, entry_id) =
+            crate::test_support::seed_entry_with_name("Already matched").await.unwrap();
+
+        // Seed an existing match (user 4 = USER_AUX_MATCH).
+        let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
+        EntryWriter::new(&app, &mut entry)
+            .set_match("Q42", crate::app_state::USER_AUX_MATCH)
+            .await
+            .unwrap();
+
+        // Incoming claims a different q. Should be ignored.
+        let mut me = MetaEntry::default();
+        me.entry.q = Some(999);
+        me.update_merge_in_storage(&mut entry, &app).await.unwrap();
+
+        let reloaded = Entry::from_id(entry_id, &app).await.unwrap();
+        assert_eq!(
+            reloaded.q,
+            Some(42),
+            "existing match must be preserved when incoming has a different q"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires database / external services — run with cargo test -- --ignored"]
+    async fn update_merge_sets_match_when_entry_unmatched() {
+        let app = crate::test_support::test_app().await;
+        let (_catalog_id, entry_id) =
+            crate::test_support::seed_entry_with_name("Unmatched").await.unwrap();
+
+        let mut entry = Entry::from_id(entry_id, &app).await.unwrap();
+        assert!(entry.q.is_none(), "seed entry must start unmatched");
+
+        let mut me = MetaEntry::default();
+        me.entry.q = Some(42);
+        me.update_merge_in_storage(&mut entry, &app).await.unwrap();
+
+        let reloaded = Entry::from_id(entry_id, &app).await.unwrap();
+        assert_eq!(reloaded.q, Some(42));
+        assert_eq!(reloaded.user, Some(crate::app_state::USER_AUX_MATCH));
     }
 }
