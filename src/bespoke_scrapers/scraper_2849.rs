@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use crate::{
-    app_state::AppContext, auxiliary_data::AuxiliaryRow, entry::Entry, extended_entry::ExtendedEntry,
+    app_state::AppContext, auxiliary_data::AuxiliaryRow, entry::Entry, meta_entry::MetaEntry,
     person_date::PersonDate,
 };
 use anyhow::Result;
@@ -8,7 +8,6 @@ use async_trait::async_trait;
 use std::sync::LazyLock;
 use rand::RngExt;
 use regex::Regex;
-use std::collections::HashSet;
 
 use super::BespokeScraper;
 
@@ -20,7 +19,7 @@ use super::BespokeScraper;
 // (writer) to every row at scrape time. The PHP version achieved this
 // with two post-hoc INSERT IGNOREs against the auxiliary table; doing it
 // per-entry here keeps the scraper self-contained and lets the standard
-// `process_cache` path persist aux alongside the entry.
+// `process_cache` path persist auxiliary alongside the entry.
 
 #[derive(Debug)]
 pub struct BespokeScraper2849 {
@@ -54,7 +53,7 @@ impl BespokeScraper2849 {
     pub(crate) fn parse_item(
         catalog_id: usize,
         writer: &serde_json::Value,
-    ) -> Option<ExtendedEntry> {
+    ) -> Option<MetaEntry> {
         let profile_url = writer["profile_url"].as_str()?;
         let ext_id = Self::extract_id_from_url(profile_url)?;
         let raw_name = writer["name"].as_str().unwrap_or_default();
@@ -78,11 +77,12 @@ impl BespokeScraper2849 {
             ..Default::default()
         };
 
-        let mut aux: HashSet<AuxiliaryRow> = HashSet::new();
-        // P21 = sex or gender; Q6581072 = female. Catalog is female-only by definition.
-        aux.insert(AuxiliaryRow::new(21, "Q6581072".to_string()));
-        // P106 = occupation; Q36180 = writer. Catalog is writers-only by definition.
-        aux.insert(AuxiliaryRow::new(106, "Q36180".to_string()));
+        let auxiliary: Vec<AuxiliaryRow> = vec![
+            // P21 = sex or gender; Q6581072 = female. Catalog is female-only by definition.
+            AuxiliaryRow::new(21, "Q6581072".to_string()),
+            // P106 = occupation; Q36180 = writer. Catalog is writers-only by definition.
+            AuxiliaryRow::new(106, "Q36180".to_string()),
+        ];
 
         let born = writer["born"]
             .as_str()
@@ -93,11 +93,10 @@ impl BespokeScraper2849 {
             .filter(|s| !s.is_empty())
             .and_then(PersonDate::from_db_string);
 
-        Some(ExtendedEntry {
+        Some(MetaEntry {
             entry,
-            aux,
-            born,
-            died,
+            auxiliary,
+            person_dates: crate::meta_entry::MetaPersonDates::new_or_none(born, died),
             ..Default::default()
         })
     }
@@ -181,11 +180,11 @@ mod tests {
         );
         assert_eq!(ee.entry.catalog, 2849);
         assert_eq!(ee.entry.type_name, Some("Q5".to_string()));
-        assert_eq!(ee.born, Some(PersonDate::year_month_day(1900, 10, 26)));
-        assert_eq!(ee.died, Some(PersonDate::year_month_day(1941, 4, 24)));
-        assert!(ee.aux.contains(&AuxiliaryRow::new(21, "Q6581072".to_string())));
-        assert!(ee.aux.contains(&AuxiliaryRow::new(106, "Q36180".to_string())));
-        assert_eq!(ee.aux.len(), 2);
+        assert_eq!(ee.born(), Some(PersonDate::year_month_day(1900, 10, 26)));
+        assert_eq!(ee.died(), Some(PersonDate::year_month_day(1941, 4, 24)));
+        assert!(ee.auxiliary.contains(&AuxiliaryRow::new(21, "Q6581072".to_string())));
+        assert!(ee.auxiliary.contains(&AuxiliaryRow::new(106, "Q36180".to_string())));
+        assert_eq!(ee.auxiliary.len(), 2);
     }
 
     #[test]
@@ -208,8 +207,8 @@ mod tests {
             "country": "Norway"
         });
         let ee = BespokeScraper2849::parse_item(2849, &item).unwrap();
-        assert!(ee.born.is_none());
-        assert!(ee.died.is_none());
+        assert!(ee.born().is_none());
+        assert!(ee.died().is_none());
     }
 
     #[test]
@@ -221,8 +220,8 @@ mod tests {
             "dead": ""
         });
         let ee = BespokeScraper2849::parse_item(2849, &item).unwrap();
-        assert!(ee.born.is_none());
-        assert!(ee.died.is_none());
+        assert!(ee.born().is_none());
+        assert!(ee.died().is_none());
     }
 
     #[test]
@@ -241,7 +240,7 @@ mod tests {
 
     #[test]
     fn test_2849_parse_item_aux_attached_to_dateless_entry() {
-        // Even when person dates are missing, the female + writer aux must
+        // Even when person dates are missing, the female + writer auxiliary must
         // still be attached — that's the whole point of the post-hoc SQL
         // INSERT IGNOREs in the original PHP.
         let item = serde_json::json!({
@@ -249,6 +248,6 @@ mod tests {
             "name": "Doe, Jane"
         });
         let ee = BespokeScraper2849::parse_item(2849, &item).unwrap();
-        assert_eq!(ee.aux.len(), 2);
+        assert_eq!(ee.auxiliary.len(), 2);
     }
 }

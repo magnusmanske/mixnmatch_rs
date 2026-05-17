@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use crate::{app_state::AppContext, entry::Entry, extended_entry::ExtendedEntry, person_date::PersonDate};
+use crate::{app_state::AppContext, entry::Entry, meta_entry::MetaEntry, person_date::PersonDate};
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use std::sync::LazyLock;
@@ -44,7 +44,7 @@ impl BespokeScraper for BespokeScraper6975 {
 }
 
 impl BespokeScraper6975 {
-    pub(crate) fn record2ext_entry(&self, record: &serde_json::Value) -> Option<ExtendedEntry> {
+    pub(crate) fn record2ext_entry(&self, record: &serde_json::Value) -> Option<MetaEntry> {
         let last_name = record[0].as_str().unwrap_or_default();
         let first_name = record[1].as_str().unwrap_or_default();
         let born = record[3].as_str().unwrap_or_default();
@@ -60,7 +60,7 @@ impl BespokeScraper6975 {
         let ext_url =
             format!("https://www.wahlen.zh.ch/krdaten_staatsarchiv/abfrage.php?id={ext_id}");
 
-        let ext_entry = ExtendedEntry {
+        let ext_entry = MetaEntry {
             entry: Entry {
                 catalog: self.catalog_id(),
                 ext_id: ext_id.to_string(),
@@ -71,7 +71,10 @@ impl BespokeScraper6975 {
                 type_name: Some("Q5".to_string()),
                 ..Default::default()
             },
-            born: Self::fix_date(born),
+            person_dates: crate::meta_entry::MetaPersonDates::new_or_none(
+                Self::fix_date(born),
+                None,
+            ),
             ..Default::default()
         };
         Some(ext_entry)
@@ -175,7 +178,7 @@ mod tests {
             "https://www.wahlen.zh.ch/krdaten_staatsarchiv/abfrage.php?id=12345"
         );
         assert_eq!(ee.entry.type_name, Some("Q5".to_string()));
-        assert_eq!(ee.born, Some(PersonDate::year_month_day(1970, 6, 16)));
+        assert_eq!(ee.born(), Some(PersonDate::year_month_day(1970, 6, 16)));
         assert_eq!(ee.entry.catalog, 6975);
     }
 
@@ -213,7 +216,7 @@ mod tests {
         let ee = scraper.record2ext_entry(&record).unwrap();
         // Entry is still created, but born is None
         assert_eq!(ee.entry.ext_id, "99");
-        assert!(ee.born.is_none());
+        assert!(ee.born().is_none());
     }
 
     #[test]

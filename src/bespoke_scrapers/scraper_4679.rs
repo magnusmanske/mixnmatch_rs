@@ -1,13 +1,12 @@
 use std::sync::Arc;
 use crate::{
-    app_state::AppContext, auxiliary_data::AuxiliaryRow, entry::Entry, extended_entry::ExtendedEntry,
+    app_state::AppContext, auxiliary_data::AuxiliaryRow, entry::Entry, meta_entry::MetaEntry,
 };
 use anyhow::Result;
 use async_trait::async_trait;
 use std::sync::LazyLock;
 use rand::RngExt;
 use regex::Regex;
-use std::collections::HashSet;
 
 use super::BespokeScraper;
 
@@ -67,7 +66,7 @@ impl BespokeScraper4679 {
     pub(crate) fn parse_item(
         catalog_id: usize,
         c: &serde_json::Value,
-    ) -> Option<ExtendedEntry> {
+    ) -> Option<MetaEntry> {
         let fields = c.get("fields")?;
         let search_api_url = fields.get("search_api_url")?.as_str()?;
         let id = Self::trailing_path_segment(search_api_url);
@@ -90,11 +89,12 @@ impl BespokeScraper4679 {
             .unwrap_or_default();
         let ext_desc = Self::strip_tags(body_value);
 
-        let mut aux: HashSet<AuxiliaryRow> = HashSet::new();
-        // P31 = instance of; Q1114461 = comics character.
-        aux.insert(AuxiliaryRow::new(31, "Q1114461".to_string()));
-        // P1080 = from narrative universe; Q1152150 = DC Universe.
-        aux.insert(AuxiliaryRow::new(1080, "Q1152150".to_string()));
+        let auxiliary: Vec<AuxiliaryRow> = vec![
+            // P31 = instance of; Q1114461 = comics character.
+            AuxiliaryRow::new(31, "Q1114461".to_string()),
+            // P1080 = from narrative universe; Q1152150 = DC Universe.
+            AuxiliaryRow::new(1080, "Q1152150".to_string()),
+        ];
 
         let entry = Entry {
             catalog: catalog_id,
@@ -107,9 +107,9 @@ impl BespokeScraper4679 {
             type_name: Some("Q15632617".to_string()),
             ..Default::default()
         };
-        Some(ExtendedEntry {
+        Some(MetaEntry {
             entry,
-            aux,
+            auxiliary,
             ..Default::default()
         })
     }
@@ -181,9 +181,9 @@ mod tests {
             "https://www.dccomics.com/characters/superman"
         );
         assert_eq!(ee.entry.type_name, Some("Q15632617".to_string()));
-        assert!(ee.aux.contains(&AuxiliaryRow::new(31, "Q1114461".to_string())));
-        assert!(ee.aux.contains(&AuxiliaryRow::new(1080, "Q1152150".to_string())));
-        assert_eq!(ee.aux.len(), 2);
+        assert!(ee.auxiliary.contains(&AuxiliaryRow::new(31, "Q1114461".to_string())));
+        assert!(ee.auxiliary.contains(&AuxiliaryRow::new(1080, "Q1152150".to_string())));
+        assert_eq!(ee.auxiliary.len(), 2);
     }
 
     #[test]

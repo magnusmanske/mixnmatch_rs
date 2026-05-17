@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use crate::{app_state::AppContext, entry::{Entry, EntryWriter}, extended_entry::ExtendedEntry};
+use crate::{app_state::AppContext, entry::{Entry, EntryWriter}, meta_entry::MetaEntry};
 use anyhow::Result;
 use async_trait::async_trait;
 use std::sync::LazyLock;
@@ -72,7 +72,8 @@ impl BespokeScraper for BespokeScraper3387 {
             }
 
             let mut ee = parsed.ee;
-            ee.insert_new(self.app()).await?;
+            let new_id = ee.create_in_storage(self.app()).await?;
+            ee.entry.id = Some(new_id);
 
             if let Some(author_ext_id) = parsed.author_ext_id {
                 if let Some(author_entry_id) = author2entry.get(&author_ext_id) {
@@ -91,7 +92,7 @@ impl BespokeScraper for BespokeScraper3387 {
 /// the autor catalog after insertion.
 #[derive(Debug)]
 pub(crate) struct ParsedWerk {
-    pub(crate) ee: ExtendedEntry,
+    pub(crate) ee: MetaEntry,
     pub(crate) author_ext_id: Option<String>,
 }
 
@@ -149,7 +150,7 @@ impl BespokeScraper3387 {
         };
 
         Some(ParsedWerk {
-            ee: ExtendedEntry {
+            ee: MetaEntry {
                 entry,
                 ..Default::default()
             },

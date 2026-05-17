@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use crate::{app_state::AppContext, entry::Entry, extended_entry::ExtendedEntry};
+use crate::{app_state::AppContext, entry::Entry, meta_entry::MetaEntry};
 use anyhow::Result;
 use async_trait::async_trait;
 use std::sync::LazyLock;
@@ -55,7 +55,7 @@ impl BespokeScraper5959 {
         catalog_id: usize,
         text: &str,
         existing: &std::collections::HashMap<String, usize>,
-    ) -> Vec<ExtendedEntry> {
+    ) -> Vec<MetaEntry> {
         static RE_ABOUT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"rdf:about="concept/(\d+)""#).unwrap());
         static RE_LABEL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"<skos:prefLabel>(.+?)</skos:prefLabel>"#).unwrap());
         static RE_DEF: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"<skos:definition>(.+?)</skos:definition>"#).unwrap());
@@ -76,7 +76,7 @@ impl BespokeScraper5959 {
                 desc = caps[1].to_string();
             } else if line.contains("</rdf:Description>") {
                 if !id.is_empty() && !label.is_empty() && !existing.contains_key(&id) {
-                    entries.push(ExtendedEntry {
+                    entries.push(MetaEntry {
                         entry: Entry {
                             catalog: catalog_id,
                             ext_id: id.clone(),

@@ -3,7 +3,7 @@ use crate::{
     app_state::{AppContext, USER_AUX_MATCH, item2numeric},
     auxiliary_data::AuxiliaryRow,
     entry::Entry,
-    extended_entry::ExtendedEntry,
+    meta_entry::MetaEntry,
 };
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
@@ -60,7 +60,7 @@ impl BespokeScraper7697 {
     pub(crate) fn binding_to_entry(
         catalog_id: usize,
         binding: &serde_json::Value,
-    ) -> Option<ExtendedEntry> {
+    ) -> Option<MetaEntry> {
         let fb_id = binding["id"]["value"].as_str()?;
         let ext_name = Self::featherbase_id_to_name(fb_id)?;
         if ext_name.is_empty() {
@@ -91,11 +91,11 @@ impl BespokeScraper7697 {
             type_name: Some("Q16521".to_string()),
             ..Default::default()
         };
-        let mut ee = ExtendedEntry {
+        let mut ee = MetaEntry {
             entry,
             ..Default::default()
         };
-        ee.aux.insert(AuxiliaryRow::new(12589, fb_id.to_string()));
+        ee.auxiliary.push(AuxiliaryRow::new(12589, fb_id.to_string()));
         Some(ee)
     }
 
@@ -270,7 +270,7 @@ mod tests {
         assert_eq!(ee.entry.user, Some(USER_AUX_MATCH));
         assert!(ee.entry.timestamp.is_some());
         assert_eq!(ee.entry.type_name, Some("Q16521".to_string()));
-        assert!(ee.aux.contains(&AuxiliaryRow::new(12589, "species/buteo/buteo".to_string())));
+        assert!(ee.auxiliary.contains(&AuxiliaryRow::new(12589, "species/buteo/buteo".to_string())));
     }
 
     #[test]
@@ -282,7 +282,7 @@ mod tests {
         let ee = BespokeScraper7697::binding_to_entry(7697, &binding).unwrap();
         assert_eq!(ee.entry.ext_name, "Amazilis");
         assert_eq!(ee.entry.ext_desc, "Genus");
-        assert!(ee.aux.contains(&AuxiliaryRow::new(12589, "genus/amazilis".to_string())));
+        assert!(ee.auxiliary.contains(&AuxiliaryRow::new(12589, "genus/amazilis".to_string())));
     }
 
     #[test]
@@ -346,8 +346,8 @@ mod tests {
         });
         let ee = BespokeScraper7697::binding_to_entry(7697, &binding).unwrap();
         assert!(
-            ee.aux.contains(&AuxiliaryRow::new(12589, "order/passeriformes".to_string())),
-            "Expected P12589 aux to be present"
+            ee.auxiliary.contains(&AuxiliaryRow::new(12589, "order/passeriformes".to_string())),
+            "Expected P12589 auxiliary to be present"
         );
     }
 

@@ -20,6 +20,19 @@ pub struct MetaPersonDates {
     pub died: Option<PersonDate>,
 }
 
+impl MetaPersonDates {
+    /// Builder helper for the common case "wrap if any date is set,
+    /// otherwise None." Avoids the verbose `if x.is_some() || y.is_some()`
+    /// boilerplate at every scraper construction site.
+    pub fn new_or_none(born: Option<PersonDate>, died: Option<PersonDate>) -> Option<Self> {
+        if born.is_some() || died.is_some() {
+            Some(Self { born, died })
+        } else {
+            None
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetaMnmRelation {
     pub property: PropertyId,

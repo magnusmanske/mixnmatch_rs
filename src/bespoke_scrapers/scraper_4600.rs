@@ -1,12 +1,11 @@
 use std::sync::Arc;
 use crate::{
-    app_state::AppContext, auxiliary_data::AuxiliaryRow, entry::Entry, extended_entry::ExtendedEntry,
+    app_state::AppContext, auxiliary_data::AuxiliaryRow, entry::Entry, meta_entry::MetaEntry,
     person_date::PersonDate,
 };
 use anyhow::Result;
 use async_trait::async_trait;
 use rand::RngExt;
-use std::collections::HashSet;
 
 use super::BespokeScraper;
 
@@ -23,7 +22,7 @@ use super::BespokeScraper;
 //    flag=0 → full geburtsdatum string, flag=1 → year-only (first 4
 //    chars). Date strings starting with `'0'` ("0000-…") are treated
 //    as placeholders and skipped. PHP also replaces the default
-//    P106=Q33231 (photographer) aux with P227=GND when `pnd` is
+//    P106=Q33231 (photographer) auxiliary with P227=GND when `pnd` is
 //    present — preserving that "replace, not append" behaviour here.
 
 #[derive(Debug)]
@@ -78,7 +77,7 @@ impl BespokeScraper4600 {
     pub(crate) fn parse_item(
         catalog_id: usize,
         v: &serde_json::Value,
-    ) -> Option<ExtendedEntry> {
+    ) -> Option<MetaEntry> {
         let id = Self::stringify(v.get("id")?)?;
         if id.is_empty() {
             return None;
@@ -104,20 +103,20 @@ impl BespokeScraper4600 {
         }
         let ext_desc = desc_parts.join(" | ");
 
-        // PHP starts with `aux = [['P106', 'Q33231']]` and then *replaces*
+        // PHP starts with `auxiliary = [['P106', 'Q33231']]` and then *replaces*
         // the whole array with `['P227', $pnd]` when pnd is non-empty.
         // We preserve that replace semantic (not append) so behaviour is
         // 1:1 with the source script.
-        let mut aux: HashSet<AuxiliaryRow> = HashSet::new();
+        let mut auxiliary: Vec<AuxiliaryRow> = Vec::new();
         let pnd = v.get("pnd").and_then(|x| x.as_str()).filter(|s| !s.is_empty());
         match pnd {
             Some(g) => {
                 // P227 = GND identifier
-                aux.insert(AuxiliaryRow::new(227, g.to_string()));
+                auxiliary.push(AuxiliaryRow::new(227, g.to_string()));
             }
             None => {
                 // P106 = occupation; Q33231 = photographer
-                aux.insert(AuxiliaryRow::new(106, "Q33231".to_string()));
+                auxiliary.push(AuxiliaryRow::new(106, "Q33231".to_string()));
             }
         }
 
@@ -133,11 +132,13 @@ impl BespokeScraper4600 {
             type_name: Some("Q5".to_string()),
             ..Default::default()
         };
-        Some(ExtendedEntry {
+        Some(MetaEntry {
             entry,
-            aux,
-            born: PersonDate::from_db_string(&born),
-            died: PersonDate::from_db_string(&died),
+            auxiliary,
+            person_dates: crate::meta_entry::MetaPersonDates::new_or_none(
+                PersonDate::from_db_string(&born),
+                PersonDate::from_db_string(&died),
+            ),
             ..Default::default()
         })
     }
@@ -246,9 +247,9 @@ mod tests {
             "pnd": "12345"
         });
         let ee = BespokeScraper4600::parse_item(4600, &v).unwrap();
-        // PHP behaviour: pnd replaces the default photographer aux entirely.
-        assert!(ee.aux.contains(&AuxiliaryRow::new(227, "12345".to_string())));
-        assert!(!ee.aux.iter().any(|a| a.prop_numeric() == 106));
+        // PHP behaviour: pnd replaces the default photographer auxiliary entirely.
+        assert!(ee.auxiliary.contains(&AuxiliaryRow::new(227, "12345".to_string())));
+        assert!(!ee.auxiliary.iter().any(|a| a.prop_numeric() == 106));
     }
 
     #[test]
@@ -259,8 +260,8 @@ mod tests {
             "nachname": "Bühler"
         });
         let ee = BespokeScraper4600::parse_item(4600, &v).unwrap();
-        assert!(ee.aux.contains(&AuxiliaryRow::new(106, "Q33231".to_string())));
-        assert!(!ee.aux.iter().any(|a| a.prop_numeric() == 227));
+        assert!(ee.auxiliary.contains(&AuxiliaryRow::new(106, "Q33231".to_string())));
+        assert!(!ee.auxiliary.iter().any(|a| a.prop_numeric() == 227));
     }
 
     #[test]
@@ -286,10 +287,10 @@ mod tests {
             "1850-03-15 - 1920 | namenszusatz: Sr. | titel: Dr. | fotografengattungen_set: Portrait | arbeitsorte: Bern, Zürich"
         );
         assert_eq!(
-            ee.born,
+            ee.born(),
             Some(PersonDate::year_month_day(1850, 3, 15))
         );
-        assert_eq!(ee.died, Some(PersonDate::year_only(1920)));
+        assert_eq!(ee.died(), Some(PersonDate::year_only(1920)));
     }
 
     #[test]

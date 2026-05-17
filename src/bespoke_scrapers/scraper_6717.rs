@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use crate::{app_state::AppContext, entry::Entry, extended_entry::ExtendedEntry};
+use crate::{app_state::AppContext, entry::Entry, meta_entry::MetaEntry};
 use anyhow::Result;
 use async_trait::async_trait;
 use std::sync::LazyLock;
@@ -50,7 +50,7 @@ impl BespokeScraper6717 {
     pub(crate) fn parse_item(
         catalog_id: usize,
         r: &serde_json::Value,
-    ) -> Option<ExtendedEntry> {
+    ) -> Option<MetaEntry> {
         let isbn_raw = Self::stringify(r.get("ISBN")?)?;
         let isbn = Self::format_isbn10(&isbn_raw)?;
         let title = r
@@ -83,7 +83,7 @@ impl BespokeScraper6717 {
             type_name: Some("Q106833".to_string()),
             ..Default::default()
         };
-        Some(ExtendedEntry {
+        Some(MetaEntry {
             entry,
             ..Default::default()
         })

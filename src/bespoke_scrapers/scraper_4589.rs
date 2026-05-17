@@ -1,13 +1,12 @@
 use std::sync::Arc;
 use crate::{
-    app_state::AppContext, auxiliary_data::AuxiliaryRow, entry::Entry, extended_entry::ExtendedEntry,
+    app_state::AppContext, auxiliary_data::AuxiliaryRow, entry::Entry, meta_entry::MetaEntry,
 };
 use anyhow::Result;
 use async_trait::async_trait;
 use std::sync::LazyLock;
 use rand::RngExt;
 use regex::Regex;
-use std::collections::HashSet;
 
 use super::BespokeScraper;
 
@@ -63,7 +62,7 @@ impl BespokeScraper4589 {
     pub(crate) fn parse_item(
         catalog_id: usize,
         v: &serde_json::Value,
-    ) -> Option<ExtendedEntry> {
+    ) -> Option<MetaEntry> {
         let id = Self::id_as_string(v.get("id")?)?;
         let raw_name = v.get("n")?.as_str()?;
         if raw_name.is_empty() {
@@ -80,9 +79,10 @@ impl BespokeScraper4589 {
         }
         let ext_desc = desc_parts.join(" | ");
 
-        let mut aux: HashSet<AuxiliaryRow> = HashSet::new();
-        // P106 = occupation; Q36834 = composer.
-        aux.insert(AuxiliaryRow::new(106, "Q36834".to_string()));
+        let auxiliary: Vec<AuxiliaryRow> = vec![
+            // P106 = occupation; Q36834 = composer.
+            AuxiliaryRow::new(106, "Q36834".to_string()),
+        ];
 
         let entry = Entry {
             catalog: catalog_id,
@@ -96,9 +96,9 @@ impl BespokeScraper4589 {
             type_name: Some("Q5".to_string()),
             ..Default::default()
         };
-        Some(ExtendedEntry {
+        Some(MetaEntry {
             entry,
-            aux,
+            auxiliary,
             ..Default::default()
         })
     }
@@ -161,7 +161,7 @@ mod tests {
             ee.entry.ext_url,
             "https://www.classicalarchives.com/newca/#!/Composer/bach-js"
         );
-        assert!(ee.aux.contains(&AuxiliaryRow::new(106, "Q36834".to_string())));
+        assert!(ee.auxiliary.contains(&AuxiliaryRow::new(106, "Q36834".to_string())));
     }
 
     #[test]
@@ -203,7 +203,7 @@ mod tests {
         // every row in this catalog is a composer by definition.
         let v = serde_json::json!({"id": "x", "n": "Foo, Bar"});
         let ee = BespokeScraper4589::parse_item(4589, &v).unwrap();
-        assert!(ee.aux.contains(&AuxiliaryRow::new(106, "Q36834".to_string())));
-        assert_eq!(ee.aux.len(), 1);
+        assert!(ee.auxiliary.contains(&AuxiliaryRow::new(106, "Q36834".to_string())));
+        assert_eq!(ee.auxiliary.len(), 1);
     }
 }

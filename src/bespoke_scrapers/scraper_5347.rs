@@ -1,12 +1,11 @@
 use std::sync::Arc;
 use crate::{
-    app_state::AppContext, auxiliary_data::AuxiliaryRow, entry::Entry, extended_entry::ExtendedEntry,
+    app_state::AppContext, auxiliary_data::AuxiliaryRow, entry::Entry, meta_entry::MetaEntry,
     person_date::PersonDate,
 };
 use anyhow::Result;
 use async_trait::async_trait;
 use rand::RngExt;
-use std::collections::HashSet;
 
 use super::BespokeScraper;
 
@@ -48,7 +47,7 @@ impl BespokeScraper for BespokeScraper5347 {
 }
 
 impl BespokeScraper5347 {
-    pub(crate) fn parse_item(catalog_id: usize, p: &serde_json::Value) -> Option<ExtendedEntry> {
+    pub(crate) fn parse_item(catalog_id: usize, p: &serde_json::Value) -> Option<MetaEntry> {
         let id = Self::stringify(p.get("id")?)?;
         if id.is_empty() {
             return None;
@@ -88,13 +87,13 @@ impl BespokeScraper5347 {
             "born {dob} in {pob} [{place_of_birth_country}]; died {dod} in {pod} [{place_of_death_country}]"
         );
 
-        let mut aux: HashSet<AuxiliaryRow> = HashSet::new();
+        let mut auxiliary: Vec<AuxiliaryRow> = Vec::new();
         match Self::gender_code(p.get("gender")) {
             Some(1) => {
-                aux.insert(AuxiliaryRow::new(21, "Q6581097".to_string()));
+                auxiliary.push(AuxiliaryRow::new(21, "Q6581097".to_string()));
             }
             Some(2) => {
-                aux.insert(AuxiliaryRow::new(21, "Q6581072".to_string()));
+                auxiliary.push(AuxiliaryRow::new(21, "Q6581072".to_string()));
             }
             _ => {}
         }
@@ -103,7 +102,7 @@ impl BespokeScraper5347 {
             .and_then(|x| x.as_str())
             .filter(|s| !s.is_empty())
         {
-            aux.insert(AuxiliaryRow::new(227, gnd.to_string()));
+            auxiliary.push(AuxiliaryRow::new(227, gnd.to_string()));
         }
 
         let entry = Entry {
@@ -119,11 +118,13 @@ impl BespokeScraper5347 {
             type_name: Some("Q5".to_string()),
             ..Default::default()
         };
-        Some(ExtendedEntry {
+        Some(MetaEntry {
             entry,
-            aux,
-            born: PersonDate::from_db_string(dob),
-            died: PersonDate::from_db_string(dod),
+            auxiliary,
+            person_dates: crate::meta_entry::MetaPersonDates::new_or_none(
+                PersonDate::from_db_string(dob),
+                PersonDate::from_db_string(dod),
+            ),
             ..Default::default()
         })
     }
@@ -175,15 +176,15 @@ mod tests {
         );
         assert_eq!(ee.entry.ext_url, "https://bauhaus.community/person/100");
         assert!(
-            ee.aux
+            ee.auxiliary
                 .contains(&AuxiliaryRow::new(21, "Q6581097".to_string()))
         );
         assert!(
-            ee.aux
+            ee.auxiliary
                 .contains(&AuxiliaryRow::new(227, "118542842".to_string()))
         );
-        assert_eq!(ee.born, Some(PersonDate::year_month_day(1883, 5, 18)));
-        assert_eq!(ee.died, Some(PersonDate::year_month_day(1969, 7, 5)));
+        assert_eq!(ee.born(), Some(PersonDate::year_month_day(1883, 5, 18)));
+        assert_eq!(ee.died(), Some(PersonDate::year_month_day(1969, 7, 5)));
     }
 
     #[test]
@@ -193,7 +194,7 @@ mod tests {
         });
         let ee = BespokeScraper5347::parse_item(5347, &p).unwrap();
         assert!(
-            ee.aux
+            ee.auxiliary
                 .contains(&AuxiliaryRow::new(21, "Q6581072".to_string()))
         );
     }
@@ -205,7 +206,7 @@ mod tests {
         });
         let ee = BespokeScraper5347::parse_item(5347, &p).unwrap();
         assert!(
-            ee.aux
+            ee.auxiliary
                 .contains(&AuxiliaryRow::new(21, "Q6581097".to_string()))
         );
     }
@@ -216,7 +217,7 @@ mod tests {
             "id": 1, "given_names": "X", "surname": "Y", "gender": 9
         });
         let ee = BespokeScraper5347::parse_item(5347, &p).unwrap();
-        assert!(!ee.aux.iter().any(|a| a.prop_numeric() == 21));
+        assert!(!ee.auxiliary.iter().any(|a| a.prop_numeric() == 21));
     }
 
     #[test]
@@ -225,7 +226,7 @@ mod tests {
             "id": 1, "given_names": "X", "surname": "Y", "gnd": ""
         });
         let ee = BespokeScraper5347::parse_item(5347, &p).unwrap();
-        assert!(!ee.aux.iter().any(|a| a.prop_numeric() == 227));
+        assert!(!ee.auxiliary.iter().any(|a| a.prop_numeric() == 227));
     }
 
     #[test]

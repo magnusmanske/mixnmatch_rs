@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use crate::{
     app_state::AppContext, auxiliary_data::AuxiliaryRow, entry::Entry,
-    extended_entry::ExtendedEntry,
+    meta_entry::MetaEntry,
 };
 use anyhow::Result;
 use async_trait::async_trait;
@@ -57,7 +57,7 @@ impl BespokeScraper1178 {
     pub(crate) fn parse_result(
         catalog_id: usize,
         result: &serde_json::Value,
-    ) -> Option<ExtendedEntry> {
+    ) -> Option<MetaEntry> {
         // Only accepted taxa
         if !result["accepted"].as_bool().unwrap_or(false) {
             return None;
@@ -76,10 +76,10 @@ impl BespokeScraper1178 {
 
         let ext_url = format!("http://www.plantsoftheworldonline.org/taxon/{}", id);
 
-        // Build aux data
-        let mut aux = std::collections::HashSet::new();
+        // Build auxiliary data
+        let mut auxiliary: Vec<AuxiliaryRow> = Vec::new();
         // P225 = taxon name
-        aux.insert(AuxiliaryRow::new(225, name.to_string()));
+        auxiliary.push(AuxiliaryRow::new(225, name.to_string()));
 
         // Build description parts
         let mut desc_parts = vec![];
@@ -95,13 +95,13 @@ impl BespokeScraper1178 {
                 // P105 = taxon rank
                 match rank_lower.as_str() {
                     "species" => {
-                        aux.insert(AuxiliaryRow::new(105, "Q7432".to_string()));
+                        auxiliary.push(AuxiliaryRow::new(105, "Q7432".to_string()));
                     }
                     "genus" => {
-                        aux.insert(AuxiliaryRow::new(105, "Q34740".to_string()));
+                        auxiliary.push(AuxiliaryRow::new(105, "Q34740".to_string()));
                     }
                     "family" => {
-                        aux.insert(AuxiliaryRow::new(105, "Q35409".to_string()));
+                        auxiliary.push(AuxiliaryRow::new(105, "Q35409".to_string()));
                     }
                     _ => {}
                 }
@@ -119,9 +119,9 @@ impl BespokeScraper1178 {
             type_name: Some("Q16521".to_string()), // taxon
             ..Default::default()
         };
-        Some(ExtendedEntry {
+        Some(MetaEntry {
             entry,
-            aux,
+            auxiliary,
             ..Default::default()
         })
     }
@@ -195,9 +195,9 @@ mod tests {
         );
         assert_eq!(ee.entry.catalog, 1178);
         assert_eq!(ee.entry.type_name, Some("Q16521".to_string()));
-        // Check aux: P225 (taxon name) and P105 (taxon rank = Q7432 for species)
-        assert!(ee.aux.contains(&AuxiliaryRow::new(225, "Rosa canina".to_string())));
-        assert!(ee.aux.contains(&AuxiliaryRow::new(105, "Q7432".to_string())));
+        // Check auxiliary: P225 (taxon name) and P105 (taxon rank = Q7432 for species)
+        assert!(ee.auxiliary.contains(&AuxiliaryRow::new(225, "Rosa canina".to_string())));
+        assert!(ee.auxiliary.contains(&AuxiliaryRow::new(105, "Q7432".to_string())));
     }
 
     #[test]
@@ -210,8 +210,8 @@ mod tests {
         });
         let ee = BespokeScraper1178::parse_result(1178, &result).unwrap();
         assert_eq!(ee.entry.ext_desc, "rank:genus");
-        assert!(ee.aux.contains(&AuxiliaryRow::new(225, "Rosa".to_string())));
-        assert!(ee.aux.contains(&AuxiliaryRow::new(105, "Q34740".to_string())));
+        assert!(ee.auxiliary.contains(&AuxiliaryRow::new(225, "Rosa".to_string())));
+        assert!(ee.auxiliary.contains(&AuxiliaryRow::new(105, "Q34740".to_string())));
     }
 
     #[test]
@@ -224,7 +224,7 @@ mod tests {
         });
         let ee = BespokeScraper1178::parse_result(1178, &result).unwrap();
         assert_eq!(ee.entry.ext_desc, "rank:family");
-        assert!(ee.aux.contains(&AuxiliaryRow::new(105, "Q35409".to_string())));
+        assert!(ee.auxiliary.contains(&AuxiliaryRow::new(105, "Q35409".to_string())));
     }
 
     #[test]
@@ -276,14 +276,14 @@ mod tests {
         });
         let ee = BespokeScraper1178::parse_result(1178, &result).unwrap();
         assert_eq!(ee.entry.ext_desc, "");
-        // Only P225 aux, no P105
-        assert!(ee.aux.contains(&AuxiliaryRow::new(225, "Minimal Plant".to_string())));
-        assert_eq!(ee.aux.len(), 1);
+        // Only P225 auxiliary, no P105
+        assert!(ee.auxiliary.contains(&AuxiliaryRow::new(225, "Minimal Plant".to_string())));
+        assert_eq!(ee.auxiliary.len(), 1);
     }
 
     #[test]
     fn test_1178_parse_result_unknown_rank() {
-        // A rank that is not species/genus/family should not add P105 aux
+        // A rank that is not species/genus/family should not add P105 auxiliary
         let result = serde_json::json!({
             "accepted": true,
             "url": "/taxon/id789",
@@ -293,8 +293,8 @@ mod tests {
         let ee = BespokeScraper1178::parse_result(1178, &result).unwrap();
         assert_eq!(ee.entry.ext_desc, "rank:order");
         // Only P225, no P105 for unknown ranks
-        assert!(ee.aux.contains(&AuxiliaryRow::new(225, "Some Order".to_string())));
-        assert!(!ee.aux.iter().any(|a| a.prop_numeric() == 105));
+        assert!(ee.auxiliary.contains(&AuxiliaryRow::new(225, "Some Order".to_string())));
+        assert!(!ee.auxiliary.iter().any(|a| a.prop_numeric() == 105));
     }
 
     #[test]
@@ -307,8 +307,8 @@ mod tests {
             "rank": "Species"
         });
         let ee = BespokeScraper1178::parse_result(1178, &result).unwrap();
-        // Should have P225 (taxon name) and P105 (taxon rank) = 2 aux entries
-        assert_eq!(ee.aux.len(), 2);
+        // Should have P225 (taxon name) and P105 (taxon rank) = 2 auxiliary entries
+        assert_eq!(ee.auxiliary.len(), 2);
     }
 
     #[test]

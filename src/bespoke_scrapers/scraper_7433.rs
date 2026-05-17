@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use crate::{app_state::AppContext, entry::Entry, extended_entry::ExtendedEntry, person_date::PersonDate};
+use crate::{app_state::AppContext, entry::Entry, meta_entry::MetaEntry, person_date::PersonDate};
 use anyhow::Result;
 use async_trait::async_trait;
 use rand::RngExt;
@@ -66,10 +66,9 @@ impl BespokeScraper for BespokeScraper7433 {
                     type_name: Some("Q5".to_string()),
                     ..Default::default()
                 };
-                let ee = ExtendedEntry {
+                let ee = MetaEntry {
                     entry,
-                    born: birth_date,
-                    died: death_date,
+                    person_dates: crate::meta_entry::MetaPersonDates::new_or_none(birth_date, death_date),
                     ..Default::default()
                 };
                 entry_cache.push(ee);
@@ -133,7 +132,7 @@ mod tests {
         }
     }
 
-    /// Simulate parsing a well-formed API result object into an ExtendedEntry.
+    /// Simulate parsing a well-formed API result object into an MetaEntry.
     #[test]
     fn test_7433_result_parsing_full() {
         // Replicate the per-result parsing logic from `run` as a pure function

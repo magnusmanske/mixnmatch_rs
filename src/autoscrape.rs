@@ -3,7 +3,7 @@ use crate::autoscrape_levels::{AutoscrapeLevel, sized_prefix_index};
 use crate::autoscrape_resolve::RE_SIMPLE_SPACE;
 use crate::autoscrape_scraper::AutoscrapeScraper;
 use crate::catalog::Catalog;
-use crate::extended_entry::ExtendedEntry;
+use crate::meta_entry::MetaEntry;
 use crate::job::{Job, Jobbable};
 use crate::job_progress::{JobProgress, merge_progress_into_json};
 use anyhow::Result;
@@ -189,7 +189,7 @@ pub struct Autoscrape {
     app: Option<Arc<dyn AppContext>>,
     job: Option<Job>,
     urls_loaded: usize,
-    entry_batch: Vec<ExtendedEntry>,
+    entry_batch: Vec<MetaEntry>,
 }
 
 impl Jobbable for Autoscrape {
@@ -333,15 +333,15 @@ impl Autoscrape {
             .get_entry_ids_for_ext_ids(self.catalog_id, &ext_ids)
             .await?;
         let existing_ext_ids: HashMap<String, usize> = existing_ext_ids.into_iter().collect();
-        for ex in &mut self.entry_batch {
-            match existing_ext_ids.get(&ex.entry.ext_id) {
+        for meta in &mut self.entry_batch {
+            match existing_ext_ids.get(&meta.entry.ext_id) {
                 Some(entry_id) => {
                     // Entry already exists
-                    ex.entry.id = Some(*entry_id);
+                    meta.entry.id = Some(*entry_id);
                     // TODO update?
                 }
                 None => {
-                    let _ = ex.insert_new(app.as_ref()).await;
+                    let _ = meta.create_in_storage(app.as_ref()).await;
                 }
             }
         }

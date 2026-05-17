@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use crate::{app_state::AppContext, entry::Entry, extended_entry::ExtendedEntry};
+use crate::{app_state::AppContext, entry::Entry, meta_entry::MetaEntry};
 use anyhow::Result;
 use async_trait::async_trait;
 use rand::RngExt;
@@ -63,7 +63,7 @@ impl BespokeScraper4361 {
     pub(crate) fn parse_item(
         catalog_id: usize,
         v: &serde_json::Value,
-    ) -> Option<ExtendedEntry> {
+    ) -> Option<MetaEntry> {
         let id = v.get("lemid")?.as_str()?.to_string();
         if id.is_empty() {
             return None;
@@ -78,7 +78,7 @@ impl BespokeScraper4361 {
             random: rand::rng().random(),
             ..Default::default()
         };
-        Some(ExtendedEntry {
+        Some(MetaEntry {
             entry,
             ..Default::default()
         })

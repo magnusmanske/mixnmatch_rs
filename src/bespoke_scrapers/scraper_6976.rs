@@ -44,7 +44,7 @@ impl BespokeScraper for BespokeScraper6976 {
 }
 
 /// Maps the German relation header (text inside `<h3>` within a `<dd>`)
-/// to the Wikidata-style property number this scraper writes as aux.
+/// to the Wikidata-style property number this scraper writes as auxiliary.
 const H3_TEXT_TO_PROP: &[(&str, usize)] = &[
     ("Vater:", 22),
     ("Mutter:", 25),
@@ -54,7 +54,7 @@ const H3_TEXT_TO_PROP: &[(&str, usize)] = &[
 
 impl BespokeScraper6976 {
     /// Scraper-specific `add_missing_aux` that walks the Hessian biography HTML
-    /// and attaches GND, family-relation aux values, and MnM relations.
+    /// and attaches GND, family-relation auxiliary values, and MnM relations.
     pub(crate) async fn add_missing_aux_6976(&self, entry_id: usize) -> Result<()> {
         let mut entry = Entry::from_id(entry_id, self.app()).await?;
         let existing_aux = EntryWriter::new(self.app(), &mut entry).get_aux().await?;
@@ -66,7 +66,7 @@ impl BespokeScraper6976 {
         // we cannot hold them across the `.await`s below.
         let (gnd_opt, relations) = extract_page_data(&text);
 
-        if !existing_aux.iter().any(|aux| aux.prop_numeric() == 227)
+        if !existing_aux.iter().any(|auxiliary| auxiliary.prop_numeric() == 227)
             && let Some(gnd) = gnd_opt {
             EntryWriter::new(self.app(), &mut entry).set_auxiliary(227, Some(gnd)).await?;
         }

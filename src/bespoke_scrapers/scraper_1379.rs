@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use crate::{app_state::AppContext, entry::Entry, extended_entry::ExtendedEntry};
+use crate::{app_state::AppContext, entry::Entry, meta_entry::MetaEntry};
 use anyhow::Result;
 use async_trait::async_trait;
 use std::sync::LazyLock;
@@ -95,7 +95,7 @@ impl BespokeScraper1379 {
 
     /// Parse all entries from a page of results.
     /// Matches: `<a href="./\?refbiogr=(\d+)"> <b>(NAME)</b> </a>\s*(DESC)\s*</td>`
-    pub(crate) fn parse_entries(catalog_id: usize, html: &str) -> Vec<ExtendedEntry> {
+    pub(crate) fn parse_entries(catalog_id: usize, html: &str) -> Vec<MetaEntry> {
         static RE_ENTRY: LazyLock<Regex> = LazyLock::new(|| Regex::new(
                 r#"<a href="\./\?refbiogr=(\d+)">\s*<b>([^<]+)</b>\s*</a>\s*([^<]*?)\s*</td>"#
             )
@@ -125,7 +125,7 @@ impl BespokeScraper1379 {
                     type_name: Some("Q5".to_string()),
                     ..Default::default()
                 };
-                Some(ExtendedEntry {
+                Some(MetaEntry {
                     entry,
                     ..Default::default()
                 })

@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use crate::{app_state::AppContext, entry::Entry, extended_entry::ExtendedEntry};
+use crate::{app_state::AppContext, entry::Entry, meta_entry::MetaEntry};
 use anyhow::Result;
 use async_trait::async_trait;
 use std::sync::LazyLock;
@@ -62,7 +62,7 @@ impl BespokeScraper4825 {
         id: u64,
         url: &str,
         html: &str,
-    ) -> Option<ExtendedEntry> {
+    ) -> Option<MetaEntry> {
         static RE_PERSON: LazyLock<Regex> = LazyLock::new(|| Regex::new(
                 r#"(?s)<h1>(.*?)</h1>\s*</div>\s*</div>\s*<p class="sottotitolo">\s*(.*?)\s*</p>"#
             )
@@ -89,7 +89,7 @@ impl BespokeScraper4825 {
             type_name: Some("Q5".to_string()),
             ..Default::default()
         };
-        Some(ExtendedEntry {
+        Some(MetaEntry {
             entry,
             ..Default::default()
         })

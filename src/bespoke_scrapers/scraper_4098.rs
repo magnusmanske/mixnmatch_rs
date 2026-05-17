@@ -14,7 +14,7 @@ use super::BespokeScraper;
 // new entries. It iterates over every entry in catalog 4098 whose
 // `ext_desc` is empty and fills the gap from the prosopography API.
 // In addition to the description string, it sets person dates (P569
-// born, P570 died) and an inferred P21 gender aux when the API
+// born, P570 died) and an inferred P21 gender auxiliary when the API
 // surfaces one.
 
 const ENTRY_BATCH_SIZE: usize = 5000;
@@ -78,7 +78,7 @@ impl BespokeScraper4098 {
         if parsed.born.is_some() || parsed.died.is_some() {
             EntryWriter::new(app, &mut entry).set_person_dates(&parsed.born, &parsed.died).await?;
         }
-        for (prop, value) in parsed.aux {
+        for (prop, value) in parsed.auxiliary {
             let _ = EntryWriter::new(app, &mut entry).set_auxiliary(prop, Some(value)).await;
         }
         Ok(())
@@ -91,7 +91,7 @@ impl BespokeScraper4098 {
         let mut desc_parts: Vec<String> = vec![];
         let mut born = String::new();
         let mut died = String::new();
-        let mut aux: Vec<(usize, String)> = vec![];
+        let mut auxiliary: Vec<(usize, String)> = vec![];
 
         for v in j["identity"]["shortDescription"].as_array().into_iter().flatten() {
             if let Some(s) = v.get("value").and_then(|x| x.as_str()) {
@@ -120,8 +120,8 @@ impl BespokeScraper4098 {
             if let Some(s) = v.get("value").and_then(|x| x.as_str()) {
                 desc_parts.push(format!("gender: {s}"));
                 match s {
-                    "male" => aux.push((21, "Q6581097".to_string())),
-                    "female" => aux.push((21, "Q6581072".to_string())),
+                    "male" => auxiliary.push((21, "Q6581097".to_string())),
+                    "female" => auxiliary.push((21, "Q6581072".to_string())),
                     _ => {}
                 }
             }
@@ -132,7 +132,7 @@ impl BespokeScraper4098 {
             desc,
             born: PersonDate::from_db_string(&born),
             died: PersonDate::from_db_string(&died),
-            aux,
+            auxiliary,
         }
     }
 
@@ -154,7 +154,7 @@ pub(crate) struct ParsedProsopography {
     pub(crate) desc: String,
     pub(crate) born: Option<PersonDate>,
     pub(crate) died: Option<PersonDate>,
-    pub(crate) aux: Vec<(usize, String)>,
+    pub(crate) auxiliary: Vec<(usize, String)>,
 }
 
 #[cfg(test)]
@@ -195,7 +195,7 @@ mod tests {
         );
         assert_eq!(p.born, Some(PersonDate::year_only(1100)));
         assert_eq!(p.died, Some(PersonDate::year_only(1180)));
-        assert_eq!(p.aux, vec![(21, "Q6581097".to_string())]);
+        assert_eq!(p.auxiliary, vec![(21, "Q6581097".to_string())]);
     }
 
     #[test]
@@ -204,7 +204,7 @@ mod tests {
             "identity": {"gender": [{"value": "female"}]}
         });
         let p = BespokeScraper4098::parse_response(&j);
-        assert_eq!(p.aux, vec![(21, "Q6581072".to_string())]);
+        assert_eq!(p.auxiliary, vec![(21, "Q6581072".to_string())]);
     }
 
     #[test]
@@ -213,7 +213,7 @@ mod tests {
             "identity": {"gender": [{"value": "other"}]}
         });
         let p = BespokeScraper4098::parse_response(&j);
-        assert!(p.aux.is_empty());
+        assert!(p.auxiliary.is_empty());
     }
 
     #[test]

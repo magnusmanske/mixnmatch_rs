@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use crate::{app_state::AppContext, entry::Entry, extended_entry::ExtendedEntry};
+use crate::{app_state::AppContext, entry::Entry, meta_entry::MetaEntry};
 use anyhow::Result;
 use async_trait::async_trait;
 use std::sync::LazyLock;
@@ -49,7 +49,7 @@ impl BespokeScraper7700 {
     ];
 
     /// Parse all band entries from an alphabetical listing page.
-    pub(crate) fn parse_entries(catalog_id: usize, html: &str) -> Vec<ExtendedEntry> {
+    pub(crate) fn parse_entries(catalog_id: usize, html: &str) -> Vec<MetaEntry> {
         static RE_ROW: LazyLock<Regex> = LazyLock::new(|| Regex::new(
                 r#"href="bio\.php\?band_id=(\d+)">([^<]+)</a></td>\s*<td>([^<]*)</td>\s*<td>([^<]*)</td>\s*<td>(\d*)</td>"#
             )
@@ -80,7 +80,7 @@ impl BespokeScraper7700 {
                     type_name: Some("Q215380".to_string()), // musical ensemble
                     ..Default::default()
                 };
-                Some(ExtendedEntry {
+                Some(MetaEntry {
                     entry,
                     ..Default::default()
                 })

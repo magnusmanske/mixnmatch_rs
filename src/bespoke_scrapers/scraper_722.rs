@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use crate::{app_state::AppContext, entry::Entry, extended_entry::ExtendedEntry};
+use crate::{app_state::AppContext, entry::Entry, meta_entry::MetaEntry};
 use anyhow::Result;
 use async_trait::async_trait;
 use std::sync::LazyLock;
@@ -87,7 +87,7 @@ impl BespokeScraper722 {
     /// Parse entries from the "Pages in category" block. The block
     /// boundary (heading → `<div id="catlinks">`) is preserved by
     /// walking the heading's following siblings.
-    pub(crate) fn parse_entries(catalog_id: usize, html: &str) -> Vec<ExtendedEntry> {
+    pub(crate) fn parse_entries(catalog_id: usize, html: &str) -> Vec<MetaEntry> {
         let doc = Html::parse_fragment(html);
         let Some(heading) = doc.select(h2_selector()).find(|h2| {
             h2.text().collect::<String>().trim() == PEOPLE_HEADING
@@ -127,7 +127,7 @@ fn absolutize(href: &str) -> String {
     }
 }
 
-fn entry_from_anchor(catalog_id: usize, a: ElementRef<'_>) -> Option<ExtendedEntry> {
+fn entry_from_anchor(catalog_id: usize, a: ElementRef<'_>) -> Option<MetaEntry> {
     let href = a.value().attr("href")?;
     let id = href.strip_prefix(ENTRY_HREF_PREFIX)?;
     if id.is_empty() {
@@ -148,7 +148,7 @@ fn entry_from_anchor(catalog_id: usize, a: ElementRef<'_>) -> Option<ExtendedEnt
         type_name: Some("Q5".to_string()),
         ..Default::default()
     };
-    Some(ExtendedEntry {
+    Some(MetaEntry {
         entry,
         ..Default::default()
     })

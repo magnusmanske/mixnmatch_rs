@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::catalog::Catalog;
 use crate::datasource::DataSource;
 use crate::entry::Entry;
-use crate::extended_entry::ExtendedEntry;
+use crate::meta_entry::MetaEntry;
 use crate::job::{Job, Jobbable};
 use anyhow::Result;
 use csv::StringRecord;
@@ -262,15 +262,14 @@ impl UpdateCatalog {
         match Entry::from_ext_id(datasource.catalog_id, ext_id, self.app.as_ref()).await {
             Ok(mut entry) => {
                 if !datasource.just_add {
-                    let mut extended_entry = ExtendedEntry::from_row(row, datasource)?;
-                    extended_entry
-                        .update_existing(&mut entry, self.app.as_ref())
+                    let meta = MetaEntry::from_csv_row(row, datasource)?;
+                    meta.update_merge_in_storage(&mut entry, self.app.as_ref())
                         .await?;
                 }
             }
             _ => {
-                let mut extended_entry = ExtendedEntry::from_row(row, datasource)?;
-                extended_entry.insert_new(self.app.as_ref()).await?;
+                let meta = MetaEntry::from_csv_row(row, datasource)?;
+                meta.create_in_storage(self.app.as_ref()).await?;
             }
         }
         Ok(())
@@ -317,7 +316,6 @@ mod tests {
     use crate::{
         datasource::DataSourceLocation,
         entry::EntryWriter,
-        extended_entry::ExtendedEntry,
         test_support,
     };
 
@@ -362,30 +360,6 @@ mod tests {
         let type_name = json.get("default_type").unwrap().as_str().unwrap();
         assert_eq!(info.user_id, 2);
         assert_eq!(type_name, "Q5");
-    }
-
-    #[test]
-    fn test_extended_entry() {
-        assert_eq!(
-            ExtendedEntry::parse_type("Q12345"),
-            Some("Q12345".to_string())
-        );
-        assert_eq!(ExtendedEntry::parse_type("12345"), None);
-        assert_eq!(ExtendedEntry::parse_type("foobar"), None);
-        assert_eq!(ExtendedEntry::parse_type(""), None);
-
-        assert_eq!(
-            ExtendedEntry::parse_date("2022-11-03"),
-            Some(crate::person_date::PersonDate::year_month_day(2022, 11, 3))
-        );
-        assert_eq!(
-            ExtendedEntry::parse_date("2022-11"),
-            Some(crate::person_date::PersonDate::year_month(2022, 11))
-        );
-        assert_eq!(ExtendedEntry::parse_date("2022"), Some(crate::person_date::PersonDate::year_only(2022)));
-        assert_eq!(ExtendedEntry::parse_date("2"), None);
-        assert_eq!(ExtendedEntry::parse_date("foobar"), None);
-        assert_eq!(ExtendedEntry::parse_date(""), None);
     }
 
     #[test]

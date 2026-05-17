@@ -1,11 +1,10 @@
 use std::sync::Arc;
 use crate::{
-    app_state::AppContext, auxiliary_data::AuxiliaryRow, entry::Entry, extended_entry::ExtendedEntry,
+    app_state::AppContext, auxiliary_data::AuxiliaryRow, entry::Entry, meta_entry::MetaEntry,
 };
 use anyhow::Result;
 use async_trait::async_trait;
 use rand::RngExt;
-use std::collections::HashSet;
 
 use super::BespokeScraper;
 
@@ -39,7 +38,7 @@ impl BespokeScraper for BespokeScraper3296 {
                 None => break,
             };
 
-            let mut cache: Vec<ExtendedEntry> = results
+            let mut cache: Vec<MetaEntry> = results
                 .iter()
                 .filter_map(|r| Self::parse_result(self.catalog_id(), r))
                 .collect();
@@ -53,7 +52,7 @@ impl BespokeScraper for BespokeScraper3296 {
 
 impl BespokeScraper3296 {
     /// Parse one GBIF species result; return `None` for synonyms and unaccepted names.
-    pub(crate) fn parse_result(catalog_id: usize, r: &serde_json::Value) -> Option<ExtendedEntry> {
+    pub(crate) fn parse_result(catalog_id: usize, r: &serde_json::Value) -> Option<MetaEntry> {
         // Mirror the PHP filter: skip synonyms and non-accepted records
         if r["synonym"].as_bool().unwrap_or(false) {
             return None;
@@ -78,13 +77,13 @@ impl BespokeScraper3296 {
 
         let rank_q = r["rank"].as_str().and_then(Self::rank_to_q);
 
-        let mut aux = HashSet::new();
-        aux.insert(AuxiliaryRow::new(225, scientific_name.to_string()));
+        let mut auxiliary: Vec<AuxiliaryRow> = Vec::new();
+        auxiliary.push(AuxiliaryRow::new(225, scientific_name.to_string()));
         if let Some(q) = rank_q {
-            aux.insert(AuxiliaryRow::new(105, q.to_string()));
+            auxiliary.push(AuxiliaryRow::new(105, q.to_string()));
         }
 
-        Some(ExtendedEntry {
+        Some(MetaEntry {
             entry: Entry {
                 catalog: catalog_id,
                 ext_id: key.to_string(),
@@ -95,7 +94,7 @@ impl BespokeScraper3296 {
                 random: rand::rng().random(),
                 ..Default::default()
             },
-            aux,
+            auxiliary,
             ..Default::default()
         })
     }
@@ -148,11 +147,11 @@ mod tests {
         assert_eq!(ee.entry.ext_name, "Animalia");
         assert_eq!(ee.entry.type_name, Some("Q16521".to_string()));
         assert!(
-            ee.aux
+            ee.auxiliary
                 .contains(&AuxiliaryRow::new(225, "Animalia".to_string()))
         );
         assert!(
-            ee.aux
+            ee.auxiliary
                 .contains(&AuxiliaryRow::new(105, "Q36732".to_string()))
         );
         // vernacular differs from scientific, so it's in desc
@@ -206,10 +205,10 @@ mod tests {
         let ee = BespokeScraper3296::parse_result(3296, &r).unwrap();
         // P225 present, P105 absent (unknown rank)
         assert!(
-            ee.aux
+            ee.auxiliary
                 .contains(&AuxiliaryRow::new(225, "Weirdus taxon".to_string()))
         );
-        assert!(!ee.aux.iter().any(|a| a.prop_numeric() == 105));
+        assert!(!ee.auxiliary.iter().any(|a| a.prop_numeric() == 105));
     }
 
     #[test]

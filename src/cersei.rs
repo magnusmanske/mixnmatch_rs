@@ -7,7 +7,7 @@ use std::time::Duration;
 use crate::app_state::AppContext;
 use crate::catalog::Catalog;
 use crate::entry::{Entry, EntryWriter};
-use crate::extended_entry::ExtendedEntry;
+use crate::meta_entry::{MetaEntry, MetaPersonDates};
 use crate::person_date::PersonDate;
 use std::sync::Arc;
 
@@ -278,10 +278,11 @@ impl CerseiSync {
             q: ce.q.as_ref().and_then(|q| q.parse::<isize>().ok()),
             ..Default::default()
         };
-        let mut ne = ExtendedEntry {
+        let born = Self::parse_time(ce.p569.as_ref());
+        let died = Self::parse_time(ce.p570.as_ref());
+        let mut ne = MetaEntry {
             entry: ne_entry,
-            born: Self::parse_time(ce.p569.as_ref()),
-            died: Self::parse_time(ce.p570.as_ref()),
+            person_dates: MetaPersonDates::new_or_none(born, died),
             ..Default::default()
         };
         if let Some(p31) = ce.p31 {
@@ -300,9 +301,9 @@ impl CerseiSync {
                     &ne.entry.ext_url,
                 )
                 .await?;
-            if ne.born.is_some() || ne.died.is_some() {
+            if born.is_some() || died.is_some() {
                 EntryWriter::new(self.app.as_ref(), &mut ne.entry)
-                    .set_person_dates(&ne.born, &ne.died)
+                    .set_person_dates(&born, &died)
                     .await?;
             }
             Ok(false)
@@ -310,9 +311,9 @@ impl CerseiSync {
             match self.add_new_entry(&mut ne.entry).await {
                 Ok(entry_id) => {
                     existing_ext_ids.insert(ne.entry.id.unwrap_or(0).to_string(), entry_id);
-                    if ne.born.is_some() || ne.died.is_some() {
+                    if born.is_some() || died.is_some() {
                         EntryWriter::new(self.app.as_ref(), &mut ne.entry)
-                            .set_person_dates(&ne.born, &ne.died)
+                            .set_person_dates(&born, &died)
                             .await?;
                     }
                     Ok(true)

@@ -1,4 +1,4 @@
-use crate::{app_state::AppContext, entry::Entry, extended_entry::ExtendedEntry};
+use crate::{app_state::AppContext, entry::Entry, meta_entry::MetaEntry};
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use rand::RngExt;
@@ -42,7 +42,7 @@ impl BespokeScraper for BespokeScraper7894 {
 
     async fn run(&self) -> Result<()> {
         let client = build_pase_client()?;
-        let mut entry_cache: Vec<ExtendedEntry> = vec![];
+        let mut entry_cache: Vec<MetaEntry> = vec![];
         let mut page: u32 = 1;
         let mut total_pages: u32 = 1;
         while page <= total_pages {
@@ -87,7 +87,7 @@ impl BespokeScraper7894 {
     pub(crate) fn parse_entry(
         catalog_id: usize,
         item: &serde_json::Value,
-    ) -> Option<ExtendedEntry> {
+    ) -> Option<MetaEntry> {
         let id = item.get("id").and_then(|v| v.as_u64())?;
         let name = item
             .get("name")
@@ -111,7 +111,7 @@ impl BespokeScraper7894 {
             type_name: Some("Q5".to_string()),
             ..Default::default()
         };
-        Some(ExtendedEntry {
+        Some(MetaEntry {
             entry,
             ..Default::default()
         })

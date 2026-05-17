@@ -1,13 +1,12 @@
 use std::sync::Arc;
 use crate::{
-    app_state::AppContext, auxiliary_data::AuxiliaryRow, entry::Entry, extended_entry::ExtendedEntry,
+    app_state::AppContext, auxiliary_data::AuxiliaryRow, entry::Entry, meta_entry::MetaEntry,
 };
 use anyhow::Result;
 use async_trait::async_trait;
 use std::sync::LazyLock;
 use rand::RngExt;
 use regex::Regex;
-use std::collections::HashSet;
 
 use super::BespokeScraper;
 
@@ -19,7 +18,7 @@ use super::BespokeScraper;
 // dates `Lastname, Firstname, 1900-1980`. The PHP uses two regex passes:
 // first to split a trailing 3+-digit suffix off into the description,
 // then to flip "Lastname, Firstname" → "Firstname Lastname". The `id`
-// field becomes a P6656 (NK ČR / Czech national authority) aux value.
+// field becomes a P6656 (NK ČR / Czech national authority) auxiliary value.
 
 #[derive(Debug)]
 pub struct BespokeScraper4097 {
@@ -80,7 +79,7 @@ impl BespokeScraper4097 {
     pub(crate) fn parse_item(
         catalog_id: usize,
         c: &serde_json::Value,
-    ) -> Option<ExtendedEntry> {
+    ) -> Option<MetaEntry> {
         let record_uuid = c.get("recordUuid")?.as_str()?;
         if record_uuid.is_empty() {
             return None;
@@ -90,10 +89,10 @@ impl BespokeScraper4097 {
         ext_name = Self::flip_lastname_first(&ext_name);
         ext_desc = ext_desc.trim().to_string();
 
-        let mut aux: HashSet<AuxiliaryRow> = HashSet::new();
+        let mut auxiliary: Vec<AuxiliaryRow> = Vec::new();
         if let Some(id) = c.get("id").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
             // P6656 = NK ČR / Czech national authority identifier
-            aux.insert(AuxiliaryRow::new(6656, id.to_string()));
+            auxiliary.push(AuxiliaryRow::new(6656, id.to_string()));
         }
 
         let entry = Entry {
@@ -106,9 +105,9 @@ impl BespokeScraper4097 {
             type_name: Some("Q5".to_string()),
             ..Default::default()
         };
-        Some(ExtendedEntry {
+        Some(MetaEntry {
             entry,
-            aux,
+            auxiliary,
             ..Default::default()
         })
     }
@@ -225,7 +224,7 @@ mod tests {
             "https://biblio.hiu.cas.cz/records/uuid-123"
         );
         assert_eq!(ee.entry.type_name, Some("Q5".to_string()));
-        assert!(ee.aux.contains(&AuxiliaryRow::new(6656, "jx20030822018".to_string())));
+        assert!(ee.auxiliary.contains(&AuxiliaryRow::new(6656, "jx20030822018".to_string())));
     }
 
     #[test]
@@ -235,7 +234,7 @@ mod tests {
             "name": "Anonymous"
         });
         let ee = BespokeScraper4097::parse_item(4097, &c).unwrap();
-        assert!(ee.aux.is_empty());
+        assert!(ee.auxiliary.is_empty());
     }
 
     #[test]
@@ -246,7 +245,7 @@ mod tests {
             "id": ""
         });
         let ee = BespokeScraper4097::parse_item(4097, &c).unwrap();
-        assert!(ee.aux.is_empty());
+        assert!(ee.auxiliary.is_empty());
     }
 
     #[test]

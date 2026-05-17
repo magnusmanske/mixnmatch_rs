@@ -1,4 +1,4 @@
-use crate::{app_state::AppContext, catalog::Catalog, entry::{Entry, EntryWriter}, extended_entry::ExtendedEntry};
+use crate::{app_state::AppContext, catalog::Catalog, entry::{Entry, EntryWriter}, meta_entry::MetaEntry};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use futures::future::BoxFuture;
@@ -250,7 +250,7 @@ pub trait BespokeScraper {
     /// Push-and-flush helper: if `cache` has reached `CACHE_FLUSH_THRESHOLD`
     /// entries, call `process_cache` and clear it. Call once per loop iteration,
     /// then call `process_cache` unconditionally after the loop for the remainder.
-    async fn maybe_flush_cache(&self, cache: &mut Vec<ExtendedEntry>) -> Result<()> {
+    async fn maybe_flush_cache(&self, cache: &mut Vec<MetaEntry>) -> Result<()> {
         if cache.len() >= CACHE_FLUSH_THRESHOLD {
             self.process_cache(cache).await?;
             cache.clear();
@@ -298,7 +298,7 @@ pub trait BespokeScraper {
         Ok(())
     }
 
-    async fn process_cache(&self, entry_cache: &mut Vec<ExtendedEntry>) -> Result<()> {
+    async fn process_cache(&self, entry_cache: &mut Vec<MetaEntry>) -> Result<()> {
         if entry_cache.is_empty() {
             return Ok(());
         }
@@ -322,35 +322,35 @@ pub trait BespokeScraper {
                 "process_cache: multiple_from_ids failed (catalog={catalog_id}, ids={})",
                 entry_ids.len(),
             ))?;
-        for ext_entry in entry_cache {
-            let ext_id = ext_entry.entry.ext_id.clone();
+        for meta in entry_cache {
+            let ext_id = meta.entry.ext_id.clone();
             let existing_entry = ext_id2id
                 .get(&ext_id)
                 .map_or_else(|| None, |id| existing_entries.get(id).cloned());
             match existing_entry {
                 Some(mut entry) => {
                     if self.keep_existing_names() {
-                        ext_entry.entry.ext_name = entry.ext_name.to_string();
+                        meta.entry.ext_name = entry.ext_name.to_string();
                     }
                     if self.testing() {
-                        info!("EXISTS: {ext_entry:?}");
+                        info!("EXISTS: {meta:?}");
                     } else {
                         let entry_id = entry.id;
-                        ext_entry.update_existing(&mut entry, self.app())
+                        meta.update_merge_in_storage(&mut entry, self.app())
                             .await
                             .with_context(|| format!(
-                                "process_cache: update_existing failed (catalog={catalog_id}, ext_id={ext_id:?}, entry_id={entry_id:?})"
+                                "process_cache: update_merge_in_storage failed (catalog={catalog_id}, ext_id={ext_id:?}, entry_id={entry_id:?})"
                             ))?;
                     }
                 }
                 None => {
                     if self.testing() {
-                        info!("CREATE: {ext_entry:?}");
+                        info!("CREATE: {meta:?}");
                     } else {
-                        ext_entry.insert_new(self.app())
+                        meta.create_in_storage(self.app())
                             .await
                             .with_context(|| format!(
-                                "process_cache: insert_new failed (catalog={catalog_id}, ext_id={ext_id:?})"
+                                "process_cache: create_in_storage failed (catalog={catalog_id}, ext_id={ext_id:?})"
                             ))?;
                     }
                 }

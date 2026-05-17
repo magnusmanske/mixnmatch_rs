@@ -4,7 +4,7 @@ use crate::autoscrape::{
 };
 use crate::autoscrape_resolve::{AutoscrapeResolve, AutoscrapeResolveAux};
 use crate::entry::Entry;
-use crate::extended_entry::ExtendedEntry;
+use crate::meta_entry::MetaEntry;
 use anyhow::Result;
 use rand::prelude::*;
 use serde_json::{Value, json};
@@ -90,7 +90,7 @@ impl AutoscrapeScraper {
         )
     }
 
-    pub fn process_html_page(&self, html: &str, autoscrape: &Autoscrape) -> Vec<ExtendedEntry> {
+    pub fn process_html_page(&self, html: &str, autoscrape: &Autoscrape) -> Vec<MetaEntry> {
         self.regex_block.as_ref().map_or_else(
             || self.process_html_block(html, autoscrape),
             |regex_block| {
@@ -122,7 +122,7 @@ impl AutoscrapeScraper {
         let regex_entry_sources: Vec<String> =
             self.regex_entry.iter().map(|r| r.as_str().to_string()).collect();
         let mut regex_entry_match_counts = vec![0_usize; self.regex_entry.len()];
-        let mut entries: Vec<ExtendedEntry> = vec![];
+        let mut entries: Vec<MetaEntry> = vec![];
 
         // If a block regex is defined, feed each captured block through
         // the per-block entry pass; otherwise treat the whole page as one
@@ -166,7 +166,7 @@ impl AutoscrapeScraper {
         &self.url
     }
 
-    fn process_html_block(&self, html: &str, autoscrape: &Autoscrape) -> Vec<ExtendedEntry> {
+    fn process_html_block(&self, html: &str, autoscrape: &Autoscrape) -> Vec<MetaEntry> {
         let mut ret = vec![];
         for regex_entry in &self.regex_entry {
             if !regex_entry.is_match(html) {
@@ -185,7 +185,7 @@ impl AutoscrapeScraper {
         &self,
         cap: &AutoscrapeCaptures,
         autoscrape: &Autoscrape,
-    ) -> ExtendedEntry {
+    ) -> MetaEntry {
         let mut map = Self::process_html_block_generate_map(cap, autoscrape);
         // Resolve the id first, then publish it as $RID so all the
         // other resolve fields (and aux) can reference the post-rx id —
@@ -199,7 +199,7 @@ impl AutoscrapeScraper {
         } else {
             Some(type_name)
         };
-        ExtendedEntry {
+        MetaEntry {
             entry: Entry {
                 catalog: autoscrape.catalog_id(),
                 ext_id,
@@ -210,16 +210,12 @@ impl AutoscrapeScraper {
                 type_name,
                 ..Default::default()
             },
-            aux: self
+            auxiliary: self
                 .resolve_aux
                 .iter()
                 .map(|aux| aux.replace_vars(&map))
                 .collect(),
-            born: None,
-            died: None,
-            aliases: vec![],
-            descriptions: HashMap::new(),
-            location: None,
+            ..MetaEntry::default()
         }
     }
 
@@ -287,5 +283,5 @@ pub struct AutoscrapeAnalysis {
     /// Per-entry-regex match counts, summed across all blocks.
     pub regex_entry_match_counts: Vec<usize>,
     /// Extracted entries (same shape as `process_html_page`).
-    pub entries: Vec<ExtendedEntry>,
+    pub entries: Vec<MetaEntry>,
 }

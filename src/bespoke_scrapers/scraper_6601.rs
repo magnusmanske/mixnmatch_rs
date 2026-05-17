@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use crate::{app_state::AppContext, entry::{Entry, EntryWriter}, extended_entry::ExtendedEntry};
+use crate::{app_state::AppContext, entry::{Entry, EntryWriter}, meta_entry::MetaEntry};
 use anyhow::Result;
 use async_trait::async_trait;
 use std::sync::LazyLock;
@@ -88,7 +88,8 @@ impl BespokeScraper for BespokeScraper6601 {
                         continue;
                     }
                     let mut ee = parsed.ee;
-                    ee.insert_new(self.app()).await?;
+                    let new_id = ee.create_in_storage(self.app()).await?;
+                    ee.entry.id = Some(new_id);
                     if let Some(artist_ext_id) = parsed.artist_ext_id {
                         if let Some(artist_entry_id) = artist2entry.get(&artist_ext_id) {
                             // P170 = creator
@@ -109,7 +110,7 @@ impl BespokeScraper for BespokeScraper6601 {
 /// link lookup.
 #[derive(Debug)]
 pub(crate) struct ParsedArtwork {
-    pub(crate) ee: ExtendedEntry,
+    pub(crate) ee: MetaEntry,
     pub(crate) artist_ext_id: Option<String>,
 }
 
@@ -146,7 +147,7 @@ impl BespokeScraper6601 {
             .and_then(|u| u.as_str())
             .and_then(artist_id_from_url);
         Some(ParsedArtwork {
-            ee: ExtendedEntry {
+            ee: MetaEntry {
                 entry,
                 ..Default::default()
             },

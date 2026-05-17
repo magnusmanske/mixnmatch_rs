@@ -3,6 +3,7 @@ use crate::{
     app_state::{AppContext, USER_AUX_MATCH, item2numeric},
     entry::Entry,
     extended_entry::ExtendedEntry,
+    meta_entry::MetaEntry,
     person_date::PersonDate,
 };
 use anyhow::Result;
@@ -63,12 +64,12 @@ impl BespokeScraper121 {
     pub(crate) fn record2ext_entry(
         &self,
         record: HashMap<String, String>,
-    ) -> Option<ExtendedEntry> {
+    ) -> Option<MetaEntry> {
         let q = match record.get("WIKIDATA_ID") {
             Some(q) => item2numeric(q),
             None => return None,
         };
-        let ext_entry = ExtendedEntry {
+        let ext_entry = MetaEntry {
             entry: Entry {
                 catalog: self.catalog_id(),
                 ext_id: record.get("HAUPTNR")?.to_string(),
@@ -94,8 +95,10 @@ impl BespokeScraper121 {
                 type_name: Some("Q5".to_string()),
                 ..Default::default()
             },
-            born: record.get("GEBURTSDATUM").and_then(|s| Self::parse_date(s)),
-            died: record.get("STERBEDATUM").and_then(|s| Self::parse_date(s)),
+            person_dates: crate::meta_entry::MetaPersonDates::new_or_none(
+                record.get("GEBURTSDATUM").and_then(|s| Self::parse_date(s)),
+                record.get("STERBEDATUM").and_then(|s| Self::parse_date(s)),
+            ),
             ..Default::default()
         };
         Some(ext_entry)

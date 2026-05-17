@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use crate::{app_state::AppContext, entry::Entry, extended_entry::ExtendedEntry};
+use crate::{app_state::AppContext, entry::Entry, meta_entry::MetaEntry};
 use anyhow::Result;
 use async_trait::async_trait;
 use std::sync::LazyLock;
@@ -48,7 +48,7 @@ impl BespokeScraper for BespokeScraper7696 {
                 type_name: Some("Q16521".to_string()),
                 ..Default::default()
             };
-            let ee = ExtendedEntry {
+            let ee = MetaEntry {
                 entry,
                 ..Default::default()
             };

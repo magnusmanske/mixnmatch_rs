@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use crate::{
-    app_state::AppContext, auxiliary_data::AuxiliaryRow, entry::Entry,
-    extended_entry::ExtendedEntry,
+    app_state::AppContext, entry::Entry,
+    meta_entry::MetaEntry,
 };
 use anyhow::Result;
 use async_trait::async_trait;
@@ -73,12 +73,11 @@ impl BespokeScraper for BespokeScraper1619 {
                 type_name: Some("Q5".to_string()),
                 ..Default::default()
             };
-            let mut ee = ExtendedEntry {
+            let mut ee = MetaEntry {
                 entry,
                 ..Default::default()
             };
-            ee.aux
-                .insert(AuxiliaryRow::new(227, gnd_id.clone()));
+            ee.add_aux(227, gnd_id.clone());
             entry_cache.push(ee);
             self.maybe_flush_cache(&mut entry_cache).await?;
         }

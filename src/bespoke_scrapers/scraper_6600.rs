@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use crate::{app_state::AppContext, entry::Entry, extended_entry::ExtendedEntry};
+use crate::{app_state::AppContext, entry::Entry, meta_entry::MetaEntry};
 use anyhow::Result;
 use async_trait::async_trait;
 use std::sync::LazyLock;
@@ -86,7 +86,7 @@ impl BespokeScraper6600 {
     pub(crate) fn parse_artist(
         catalog_id: usize,
         item: &serde_json::Value,
-    ) -> Option<ExtendedEntry> {
+    ) -> Option<MetaEntry> {
         let info = item.get("artistInfo")?;
         let url = info.get("url").and_then(|x| x.as_str()).unwrap_or("");
         let id = artist_id_from_url(url)?;
@@ -110,7 +110,7 @@ impl BespokeScraper6600 {
             type_name: Some("Q5".to_string()),
             ..Default::default()
         };
-        Some(ExtendedEntry {
+        Some(MetaEntry {
             entry,
             ..Default::default()
         })

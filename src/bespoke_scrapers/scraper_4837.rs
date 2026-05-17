@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use crate::{app_state::AppContext, entry::Entry, extended_entry::ExtendedEntry, person_date::PersonDate};
+use crate::{app_state::AppContext, entry::Entry, meta_entry::MetaEntry, person_date::PersonDate};
 use anyhow::Result;
 use async_trait::async_trait;
 use rand::RngExt;
@@ -57,8 +57,8 @@ impl BespokeScraper for BespokeScraper4837 {
 }
 
 impl BespokeScraper4837 {
-    /// Convert one Elasticsearch hit into an `ExtendedEntry`, or return `None` if it's unusable.
-    pub(crate) fn parse_hit(catalog_id: usize, hit: &serde_json::Value) -> Option<ExtendedEntry> {
+    /// Convert one Elasticsearch hit into an `MetaEntry`, or return `None` if it's unusable.
+    pub(crate) fn parse_hit(catalog_id: usize, hit: &serde_json::Value) -> Option<MetaEntry> {
         let id = hit["_id"].as_str()?;
         let src = &hit["_source"];
         let first = src["FirstName"].as_str().unwrap_or_default();
@@ -80,7 +80,7 @@ impl BespokeScraper4837 {
 
         let is_person = hit["_type"].as_str().map(|t| t == "Person").unwrap_or(false);
 
-        Some(ExtendedEntry {
+        Some(MetaEntry {
             entry: Entry {
                 catalog: catalog_id,
                 ext_id: id.to_string(),
@@ -91,8 +91,7 @@ impl BespokeScraper4837 {
                 random: rand::rng().random(),
                 ..Default::default()
             },
-            born,
-            died,
+            person_dates: crate::meta_entry::MetaPersonDates::new_or_none(born, died),
             ..Default::default()
         })
     }
@@ -145,8 +144,8 @@ mod tests {
         assert_eq!(ee.entry.ext_name, "Karl Månsson");
         assert_eq!(ee.entry.ext_url, "https://portrattarkiv.se/details/abc123");
         assert_eq!(ee.entry.type_name, Some("Q5".to_string()));
-        assert!(ee.born.is_some());
-        assert!(ee.died.is_some());
+        assert!(ee.born().is_some());
+        assert!(ee.died().is_some());
     }
 
     #[test]
@@ -162,8 +161,8 @@ mod tests {
         });
         let ee = BespokeScraper4837::parse_hit(4837, &hit).unwrap();
         assert_eq!(ee.entry.ext_name, "Anna Svensson");
-        assert!(ee.born.is_some());
-        assert!(ee.died.is_none());
+        assert!(ee.born().is_some());
+        assert!(ee.died().is_none());
     }
 
     #[test]

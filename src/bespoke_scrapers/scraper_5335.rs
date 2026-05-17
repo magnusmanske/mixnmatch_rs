@@ -3,7 +3,7 @@ use crate::{
     app_state::AppContext,
     coordinates::CoordinateLocation,
     entry::Entry,
-    extended_entry::ExtendedEntry,
+    meta_entry::MetaEntry,
 };
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
@@ -40,8 +40,8 @@ impl BespokeScraper for BespokeScraper5335 {
 }
 
 impl BespokeScraper5335 {
-    /// Extract the `var museums=[...]` JS array and convert it to `ExtendedEntry` records.
-    pub(crate) fn parse_page(catalog_id: usize, html: &str) -> Result<Vec<ExtendedEntry>> {
+    /// Extract the `var museums=[...]` JS array and convert it to `MetaEntry` records.
+    pub(crate) fn parse_page(catalog_id: usize, html: &str) -> Result<Vec<MetaEntry>> {
         static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)var museums=(\[.+?\]);").unwrap());
         let caps = RE
             .captures(html)
@@ -62,7 +62,7 @@ impl BespokeScraper5335 {
             let Some(lat) = row[3].as_f64() else { continue };
             let Some(lon) = row[4].as_f64() else { continue };
 
-            let mut ee = ExtendedEntry {
+            let mut ee = MetaEntry {
                 entry: Entry {
                     catalog: catalog_id,
                     ext_id: ext_id.to_string(),
@@ -75,7 +75,7 @@ impl BespokeScraper5335 {
                 },
                 ..Default::default()
             };
-            ee.location = Some(CoordinateLocation::new(lat, lon));
+            ee.coordinate = Some(CoordinateLocation::new(lat, lon));
             entries.push(ee);
         }
         Ok(entries)
@@ -117,7 +117,7 @@ mod tests {
             "https://museweb.dcs.bbk.ac.uk/Museum/mm.test.001"
         );
         assert_eq!(e.entry.type_name, Some("Q33506".to_string()));
-        let loc = e.location.unwrap();
+        let loc = e.coordinate.unwrap();
         assert!((loc.lat() - 51.5074).abs() < 0.0001);
         assert!((loc.lon() - (-0.1278)).abs() < 0.0001);
     }

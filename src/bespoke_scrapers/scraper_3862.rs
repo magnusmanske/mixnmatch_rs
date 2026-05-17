@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use crate::{app_state::AppContext, entry::Entry, extended_entry::ExtendedEntry};
+use crate::{app_state::AppContext, entry::Entry, meta_entry::MetaEntry};
 use anyhow::Result;
 use async_trait::async_trait;
 use rand::RngExt;
@@ -44,7 +44,7 @@ impl BespokeScraper for BespokeScraper3862 {
 }
 
 impl BespokeScraper3862 {
-    /// Build one `ExtendedEntry` from an upstream `(id, value)` pair.
+    /// Build one `MetaEntry` from an upstream `(id, value)` pair.
     /// Returns `None` when the id is empty after trimming.
     ///
     /// Upstream is known to ship keys with surrounding whitespace —
@@ -64,7 +64,7 @@ impl BespokeScraper3862 {
         catalog_id: usize,
         id: &str,
         v: &serde_json::Value,
-    ) -> Option<ExtendedEntry> {
+    ) -> Option<MetaEntry> {
         let id = id.trim();
         if id.is_empty() {
             return None;
@@ -95,7 +95,7 @@ impl BespokeScraper3862 {
             ..Default::default()
         };
 
-        Some(ExtendedEntry {
+        Some(MetaEntry {
             entry,
             ..Default::default()
         })

@@ -6,7 +6,7 @@ use std::time::Duration;
 use crate::{
     app_state::AppContext,
     entry::Entry,
-    extended_entry::ExtendedEntry,
+    meta_entry::MetaEntry,
     person_date::PersonDate,
 };
 use anyhow::{Context, Result, anyhow};
@@ -56,7 +56,7 @@ impl BespokeScraper for BespokeScraper7895 {
 
     async fn run(&self) -> Result<()> {
         let client = self.http_client();
-        let mut cache: Vec<ExtendedEntry> = vec![];
+        let mut cache: Vec<MetaEntry> = vec![];
         // Within a single run several sources can mention the same pfid
         // (Statskalender years overlap; a celebrity may also appear in
         // /examples). `process_cache` deduplicates against the DB but
@@ -113,9 +113,9 @@ impl BespokeScraper for BespokeScraper7895 {
 impl BespokeScraper7895 {
     /// Push every entry whose `ext_id` hasn't been seen yet in this run.
     fn extend_unique(
-        cache: &mut Vec<ExtendedEntry>,
+        cache: &mut Vec<MetaEntry>,
         seen: &mut HashSet<String>,
-        items: Vec<ExtendedEntry>,
+        items: Vec<MetaEntry>,
     ) {
         for ee in items {
             if seen.insert(ee.entry.ext_id.clone()) {
@@ -128,7 +128,7 @@ impl BespokeScraper7895 {
         client: &reqwest::Client,
         catalog_id: usize,
         path: &str,
-    ) -> Result<Vec<ExtendedEntry>> {
+    ) -> Result<Vec<MetaEntry>> {
         let html = client.get(format!("{BASE}{path}")).send().await?.text().await?;
         Ok(Self::parse_hbrid_listing(catalog_id, &html))
     }
@@ -136,7 +136,7 @@ impl BespokeScraper7895 {
     async fn fetch_registered(
         client: &reqwest::Client,
         catalog_id: usize,
-    ) -> Result<Vec<ExtendedEntry>> {
+    ) -> Result<Vec<MetaEntry>> {
         let html = client.get(format!("{BASE}/index.php/registered")).send().await?.text().await?;
         let tablejson = Self::extract_tablejson(&html)
             .ok_or_else(|| anyhow!("histreg.no /registered: tablejson input not found"))?;
@@ -148,7 +148,7 @@ impl BespokeScraper7895 {
     /// that uses the same link shape. The same person URL is also
     /// reachable as `/person/{id}` (the Wikidata P4574 formatter form),
     /// which we use for `ext_url`.
-    pub(crate) fn parse_hbrid_listing(catalog_id: usize, html: &str) -> Vec<ExtendedEntry> {
+    pub(crate) fn parse_hbrid_listing(catalog_id: usize, html: &str) -> Vec<MetaEntry> {
         static RE: LazyLock<Regex> = LazyLock::new(|| {
             Regex::new(r#"person/hbrid/([A-Za-z0-9]+)"[^>]*>\s*([^<]+?)\s*</a>"#).unwrap()
         });
@@ -175,12 +175,12 @@ impl BespokeScraper7895 {
         Some(html_escape::decode_html_entities(raw).into_owned())
     }
 
-    pub(crate) fn parse_registered(catalog_id: usize, tablejson: &str) -> Result<Vec<ExtendedEntry>> {
+    pub(crate) fn parse_registered(catalog_id: usize, tablejson: &str) -> Result<Vec<MetaEntry>> {
         let rows: Vec<serde_json::Value> = serde_json::from_str(tablejson)?;
         Ok(rows.iter().filter_map(|r| Self::parse_registered_row(catalog_id, r)).collect())
     }
 
-    pub(crate) fn parse_registered_row(catalog_id: usize, row: &serde_json::Value) -> Option<ExtendedEntry> {
+    pub(crate) fn parse_registered_row(catalog_id: usize, row: &serde_json::Value) -> Option<MetaEntry> {
         let id = row.get("pfid")?.as_str()?.trim();
         if id.is_empty() { return None; }
         let name = compose_registered_name(row);
@@ -214,7 +214,7 @@ impl BespokeScraper7895 {
         catalog_id: usize,
         slug: &str,
         csv_text: &str,
-    ) -> Result<Vec<ExtendedEntry>> {
+    ) -> Result<Vec<MetaEntry>> {
         let mut rdr = csv::ReaderBuilder::new()
             .delimiter(b';')
             .has_headers(true)
@@ -238,7 +238,7 @@ impl BespokeScraper7895 {
         catalog_id: usize,
         slug: &str,
         row: &HashMap<String, String>,
-    ) -> Option<ExtendedEntry> {
+    ) -> Option<MetaEntry> {
         let pfid = row.get("pfid").map(|s| s.trim()).unwrap_or("");
         if pfid.is_empty() { return None; }
         let fornavn = row.get("fornavn").map(|s| s.trim()).unwrap_or("");
@@ -264,7 +264,7 @@ fn make_entry(
     desc: String,
     born: Option<PersonDate>,
     died: Option<PersonDate>,
-) -> ExtendedEntry {
+) -> MetaEntry {
     let ext_url = format!("{BASE}/index.php/person/{id}");
     let entry = Entry {
         catalog: catalog_id,
@@ -276,7 +276,7 @@ fn make_entry(
         type_name: Some("Q5".to_string()),
         ..Default::default()
     };
-    ExtendedEntry { entry, born, died, ..Default::default() }
+    MetaEntry { entry, person_dates: crate::meta_entry::MetaPersonDates::new_or_none(born, died), ..Default::default() }
 }
 
 /// `"Aabel, Peder Per Pavels"` → `"Peder Per Pavels Aabel"`. Used for
@@ -504,8 +504,8 @@ mod tests {
         assert_eq!(e.entry.ext_id, "PFU0000008");
         assert_eq!(e.entry.ext_name, "Abelona Josephsdatter");
         assert_eq!(e.entry.type_name.as_deref(), Some("Q5"));
-        assert_eq!(e.born, Some(PersonDate::year_only(1746)));
-        assert_eq!(e.died, None);
+        assert_eq!(e.born(), Some(PersonDate::year_only(1746)));
+        assert_eq!(e.died(), None);
     }
 
     #[test]
@@ -514,7 +514,7 @@ mod tests {
         let e = &entries[1];
         assert_eq!(e.entry.ext_id, "PFU0000010");
         assert_eq!(e.entry.ext_name, "Anders Olai");
-        assert_eq!(e.born, Some(PersonDate::year_month_day(1867, 9, 13)));
+        assert_eq!(e.born(), Some(PersonDate::year_month_day(1867, 9, 13)));
         assert!(e.entry.ext_desc.contains("Kinn"));
         assert!(e.entry.ext_desc.contains("sokneprest"));
     }
@@ -669,7 +669,7 @@ mod tests {
         assert_eq!(e.entry.ext_id, "Bio0002000000001");
         assert_eq!(e.entry.ext_name, "Olav A. V. Aabel");
         assert_eq!(e.entry.type_name.as_deref(), Some("Q5"));
-        assert_eq!(e.born, Some(PersonDate::year_only(1872)));
+        assert_eq!(e.born(), Some(PersonDate::year_only(1872)));
         assert!(e.entry.ext_desc.contains("jernbaneingeniør"));
         assert!(e.entry.ext_desc.contains("Trondhjem"));
         assert!(e.entry.ext_desc.contains("[Ingeniorer-data2]"));
@@ -685,7 +685,7 @@ mod tests {
         let e = &entries[0];
         assert_eq!(e.entry.ext_id, "BioSK18850000001");
         assert_eq!(e.entry.ext_name, "Ferdinand Nicolai Roll");
-        assert_eq!(e.born, Some(PersonDate::year_only(1831)));
+        assert_eq!(e.born(), Some(PersonDate::year_only(1831)));
         // tittel + organ + bosted should all surface
         assert!(e.entry.ext_desc.contains("Boghandler"));
         assert!(e.entry.ext_desc.contains("Høyesterett"));
@@ -720,7 +720,7 @@ mod tests {
     fn test_7895_extend_unique_dedupes_within_run() {
         let mut cache = Vec::new();
         let mut seen = HashSet::new();
-        let make = |id: &str| ExtendedEntry {
+        let make = |id: &str| MetaEntry {
             entry: Entry { ext_id: id.to_string(), ..Default::default() }, ..Default::default()
         };
         BespokeScraper7895::extend_unique(&mut cache, &mut seen, vec![make("a"), make("b")]);

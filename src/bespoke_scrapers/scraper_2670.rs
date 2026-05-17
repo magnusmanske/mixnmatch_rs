@@ -3,7 +3,7 @@ use crate::{
     app_state::AppContext,
     coordinates::CoordinateLocation,
     entry::Entry,
-    extended_entry::ExtendedEntry,
+    meta_entry::MetaEntry,
 };
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
@@ -146,7 +146,7 @@ impl BespokeScraper2670 {
     pub(crate) fn parse_features(
         catalog_id: usize,
         json: &serde_json::Value,
-    ) -> Vec<ExtendedEntry> {
+    ) -> Vec<MetaEntry> {
         static RE_ID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<a href='/(\d+/\d+)'>Full record</a>").unwrap());
         static RE_LATLON: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"Lat:\s*([0-9.\-]+),\s*Lng:\s*([0-9.\-]+)").unwrap());
 
@@ -170,7 +170,7 @@ impl BespokeScraper2670 {
 
                 let ext_url = format!("http://www.cyprusgazetteer.org/{}", id);
 
-                let mut ee = ExtendedEntry {
+                let mut ee = MetaEntry {
                     entry: Entry {
                         catalog: catalog_id,
                         ext_id: id,
@@ -189,7 +189,7 @@ impl BespokeScraper2670 {
                         caps[1].parse::<f64>(),
                         caps[2].parse::<f64>(),
                     ) {
-                        ee.location = Some(CoordinateLocation::new(lat, lon));
+                        ee.coordinate = Some(CoordinateLocation::new(lat, lon));
                     }
                 }
 
@@ -335,7 +335,7 @@ mod tests {
         assert_eq!(e0.entry.ext_desc, "Capital city");
         assert_eq!(e0.entry.ext_url, "http://www.cyprusgazetteer.org/123/456");
         assert_eq!(e0.entry.catalog, 2670);
-        let loc = e0.location.unwrap();
+        let loc = e0.coordinate.unwrap();
         assert!((loc.lat() - 35.1856).abs() < 0.0001);
         assert!((loc.lon() - 33.3823).abs() < 0.0001);
 
@@ -386,7 +386,7 @@ mod tests {
         });
         let entries = BespokeScraper2670::parse_features(2670, &json);
         assert_eq!(entries.len(), 1);
-        assert!(entries[0].location.is_none());
+        assert!(entries[0].coordinate.is_none());
     }
 
     #[test]

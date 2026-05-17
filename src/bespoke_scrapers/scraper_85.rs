@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use crate::{
-    app_state::AppContext, entry::Entry, extended_entry::ExtendedEntry, person_date::PersonDate,
+    app_state::AppContext, entry::Entry, meta_entry::MetaEntry, person_date::PersonDate,
 };
 use anyhow::Result;
 use async_trait::async_trait;
@@ -60,7 +60,7 @@ impl BespokeScraper85 {
     pub(crate) fn parse_item(
         catalog_id: usize,
         item: &serde_json::Value,
-    ) -> Option<ExtendedEntry> {
+    ) -> Option<MetaEntry> {
         let id = item["hoogleraar_id"].as_str().or({
             // Could also be a number
             None
@@ -108,10 +108,9 @@ impl BespokeScraper85 {
             type_name: Some("Q5".to_string()),
             ..Default::default()
         };
-        Some(ExtendedEntry {
+        Some(MetaEntry {
             entry,
-            born,
-            died,
+            person_dates: crate::meta_entry::MetaPersonDates::new_or_none(born, died),
             ..Default::default()
         })
     }
@@ -237,8 +236,8 @@ mod tests {
         );
         assert_eq!(ee.entry.catalog, 85);
         assert_eq!(ee.entry.type_name, Some("Q5".to_string()));
-        assert_eq!(ee.born, Some(PersonDate::year_month_day(1850, 3, 15)));
-        assert_eq!(ee.died, Some(PersonDate::year_month_day(1920, 11, 1)));
+        assert_eq!(ee.born(), Some(PersonDate::year_month_day(1850, 3, 15)));
+        assert_eq!(ee.died(), Some(PersonDate::year_month_day(1920, 11, 1)));
     }
 
     #[test]
@@ -250,8 +249,8 @@ mod tests {
         });
         let ee = BespokeScraper85::parse_item(85, &item).unwrap();
         assert_eq!(ee.entry.ext_name, "Pieter Groot");
-        assert!(ee.born.is_none());
-        assert!(ee.died.is_none());
+        assert!(ee.born().is_none());
+        assert!(ee.died().is_none());
         assert_eq!(ee.entry.ext_desc, "");
     }
 
@@ -315,7 +314,7 @@ mod tests {
         ]);
         let arr = json.as_array().unwrap();
         assert_eq!(arr.len(), 2);
-        let entries: Vec<ExtendedEntry> = arr
+        let entries: Vec<MetaEntry> = arr
             .iter()
             .filter_map(|item| BespokeScraper85::parse_item(85, item))
             .collect();

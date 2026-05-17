@@ -3,7 +3,7 @@ use crate::{
     app_state::{AppContext, USER_AUX_MATCH},
     coordinates::CoordinateLocation,
     entry::Entry,
-    extended_entry::ExtendedEntry,
+    meta_entry::MetaEntry,
 };
 use anyhow::Result;
 use async_trait::async_trait;
@@ -87,7 +87,7 @@ impl BespokeScraper for BespokeScraper2964 {
 }
 
 impl BespokeScraper2964 {
-    /// Convert a single API row into an `ExtendedEntry`. `key` is the
+    /// Convert a single API row into an `MetaEntry`. `key` is the
     /// endpoint name (`"person"`, `"place"`, …); the slug field name
     /// the API returns is either plain `"slug"` or `"{key}_slug"`,
     /// and the human label is either `"name"` or the value at `key`.
@@ -96,7 +96,7 @@ impl BespokeScraper2964 {
         key: &str,
         default_type: &str,
         item: &serde_json::Value,
-    ) -> Option<ExtendedEntry> {
+    ) -> Option<MetaEntry> {
         let slug = Self::resolve_slug(key, item)?;
         let name = Self::resolve_name(key, item)?;
         let desc = Self::build_desc(item);
@@ -122,14 +122,14 @@ impl BespokeScraper2964 {
             ..Default::default()
         };
 
-        let location = match (item.get("lat").and_then(|v| v.as_f64()), item.get("lon").and_then(|v| v.as_f64())) {
+        let coordinate = match (item.get("lat").and_then(|v| v.as_f64()), item.get("lon").and_then(|v| v.as_f64())) {
             (Some(lat), Some(lon)) => Some(CoordinateLocation::new(lat, lon)),
             _ => None,
         };
 
-        Some(ExtendedEntry {
+        Some(MetaEntry {
             entry,
-            location,
+            coordinate,
             ..Default::default()
         })
     }
@@ -304,7 +304,7 @@ mod tests {
         assert_eq!(ee.entry.q, Some(937));
         assert_eq!(ee.entry.user, Some(USER_AUX_MATCH));
         assert!(ee.entry.timestamp.is_some());
-        let loc = ee.location.as_ref().expect("expected coords");
+        let loc = ee.coordinate.as_ref().expect("expected coords");
         assert!((loc.lat() - 48.4).abs() < f64::EPSILON);
         assert!((loc.lon() - 9.99).abs() < f64::EPSILON);
     }
@@ -342,7 +342,7 @@ mod tests {
     fn test_2964_parse_item_partial_coords_no_location() {
         let item = serde_json::json!({"slug": "x", "name": "X", "lat": 10.0});
         let ee = BespokeScraper2964::parse_item(2964, "place", "Q2221906", &item).unwrap();
-        assert!(ee.location.is_none());
+        assert!(ee.coordinate.is_none());
     }
 
     #[test]

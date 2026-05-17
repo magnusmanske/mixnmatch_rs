@@ -1,13 +1,12 @@
 use std::sync::Arc;
 use crate::{
-    app_state::AppContext, auxiliary_data::AuxiliaryRow, entry::Entry, extended_entry::ExtendedEntry,
+    app_state::AppContext, auxiliary_data::AuxiliaryRow, entry::Entry, meta_entry::MetaEntry,
 };
 use anyhow::Result;
 use async_trait::async_trait;
 use std::sync::LazyLock;
 use rand::RngExt;
 use regex::Regex;
-use std::collections::HashSet;
 use wikimisc::wikibase::LocaleString;
 
 use super::BespokeScraper;
@@ -22,7 +21,7 @@ use super::BespokeScraper;
 // the entry name with the original flipped HTML-link name moved to
 // `ext_desc` AND added as an alias (this matches PHP's `setAlias` call,
 // which defaults to language=""). Field "2" is an optional GND ID,
-// stored as P227 aux.
+// stored as P227 auxiliary.
 
 #[derive(Debug)]
 pub struct BespokeScraper3386 {
@@ -63,7 +62,7 @@ impl BespokeScraper3386 {
     pub(crate) fn parse_item(
         catalog_id: usize,
         row: &serde_json::Value,
-    ) -> Option<ExtendedEntry> {
+    ) -> Option<MetaEntry> {
         let zero_html = row.get("0")?.get("_")?.as_str()?;
         let (id, html_name) = Self::extract_id_and_name(zero_html)?;
         let html_name_flipped = Self::flip_lastname_first(&html_name);
@@ -86,11 +85,11 @@ impl BespokeScraper3386 {
             None => (html_name_flipped, String::new(), vec![]),
         };
 
-        let mut aux: HashSet<AuxiliaryRow> = HashSet::new();
+        let mut auxiliary: Vec<AuxiliaryRow> = Vec::new();
         if let Some(gnd) = row.get("2").and_then(Self::stringify_field) {
             if !gnd.is_empty() {
                 // P227 = GND ID
-                aux.insert(AuxiliaryRow::new(227, gnd));
+                auxiliary.push(AuxiliaryRow::new(227, gnd));
             }
         }
 
@@ -105,9 +104,9 @@ impl BespokeScraper3386 {
             ..Default::default()
         };
 
-        Some(ExtendedEntry {
+        Some(MetaEntry {
             entry,
-            aux,
+            auxiliary,
             aliases,
             ..Default::default()
         })
@@ -192,7 +191,7 @@ mod tests {
         assert_eq!(ee.entry.ext_desc, "");
         assert_eq!(ee.entry.ext_url, "https://www.geschichtsquellen.de/autor/100");
         assert_eq!(ee.entry.type_name, Some("Q5".to_string()));
-        assert!(ee.aux.is_empty());
+        assert!(ee.auxiliary.is_empty());
         assert!(ee.aliases.is_empty());
     }
 
@@ -217,7 +216,7 @@ mod tests {
             "2": "118505165"
         });
         let ee = BespokeScraper3386::parse_item(3386, &row).unwrap();
-        assert!(ee.aux.contains(&AuxiliaryRow::new(227, "118505165".to_string())));
+        assert!(ee.auxiliary.contains(&AuxiliaryRow::new(227, "118505165".to_string())));
     }
 
     #[test]
@@ -228,7 +227,7 @@ mod tests {
             "2": 118505165
         });
         let ee = BespokeScraper3386::parse_item(3386, &row).unwrap();
-        assert!(ee.aux.contains(&AuxiliaryRow::new(227, "118505165".to_string())));
+        assert!(ee.auxiliary.contains(&AuxiliaryRow::new(227, "118505165".to_string())));
     }
 
     #[test]
@@ -238,7 +237,7 @@ mod tests {
             "2": ""
         });
         let ee = BespokeScraper3386::parse_item(3386, &row).unwrap();
-        assert!(ee.aux.is_empty());
+        assert!(ee.auxiliary.is_empty());
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use crate::{
     app_state::AppContext, auxiliary_data::AuxiliaryRow, entry::Entry,
-    extended_entry::ExtendedEntry,
+    meta_entry::MetaEntry,
 };
 use anyhow::Result;
 use async_trait::async_trait;
@@ -46,7 +46,7 @@ impl BespokeScraper5103 {
     pub(crate) fn parse_record(
         catalog_id: usize,
         record: &serde_json::Value,
-    ) -> Option<ExtendedEntry> {
+    ) -> Option<MetaEntry> {
         let id = record["ID"].as_str().or({
             // Could be numeric
             None
@@ -101,13 +101,13 @@ impl BespokeScraper5103 {
         };
 
         // Aux: gender (P21)
-        let mut aux = std::collections::HashSet::new();
+        let mut auxiliary: Vec<AuxiliaryRow> = Vec::new();
         match gender {
             "male" => {
-                aux.insert(AuxiliaryRow::new(21, "Q6581097".to_string()));
+                auxiliary.push(AuxiliaryRow::new(21, "Q6581097".to_string()));
             }
             "female" => {
-                aux.insert(AuxiliaryRow::new(21, "Q6581072".to_string()));
+                auxiliary.push(AuxiliaryRow::new(21, "Q6581072".to_string()));
             }
             _ => {}
         }
@@ -122,9 +122,9 @@ impl BespokeScraper5103 {
             type_name: Some(type_name.to_string()),
             ..Default::default()
         };
-        Some(ExtendedEntry {
+        Some(MetaEntry {
             entry,
-            aux,
+            auxiliary,
             ..Default::default()
         })
     }
@@ -167,8 +167,8 @@ mod tests {
         );
         assert_eq!(ee.entry.catalog, 5103);
         assert_eq!(ee.entry.type_name, Some("Q5".to_string()));
-        // Gender aux: P21 = Q6581097 (male)
-        assert!(ee.aux.contains(&AuxiliaryRow::new(21, "Q6581097".to_string())));
+        // Gender auxiliary: P21 = Q6581097 (male)
+        assert!(ee.auxiliary.contains(&AuxiliaryRow::new(21, "Q6581097".to_string())));
         // Description should contain all parts
         assert!(ee.entry.ext_desc.contains("Greek philosopher"));
         assert!(ee.entry.ext_desc.contains("Period: Classical"));
@@ -190,7 +190,7 @@ mod tests {
         });
         let ee = BespokeScraper5103::parse_record(5103, &record).unwrap();
         assert_eq!(ee.entry.type_name, Some("Q22988604".to_string()));
-        assert!(ee.aux.contains(&AuxiliaryRow::new(21, "Q6581097".to_string())));
+        assert!(ee.auxiliary.contains(&AuxiliaryRow::new(21, "Q6581097".to_string())));
     }
 
     #[test]
@@ -206,7 +206,7 @@ mod tests {
             "searchname": "sappho"
         });
         let ee = BespokeScraper5103::parse_record(5103, &record).unwrap();
-        assert!(ee.aux.contains(&AuxiliaryRow::new(21, "Q6581072".to_string())));
+        assert!(ee.auxiliary.contains(&AuxiliaryRow::new(21, "Q6581072".to_string())));
         assert_eq!(ee.entry.type_name, Some("Q5".to_string()));
     }
 
@@ -223,7 +223,7 @@ mod tests {
             "searchname": "unknown"
         });
         let ee = BespokeScraper5103::parse_record(5103, &record).unwrap();
-        assert!(ee.aux.is_empty());
+        assert!(ee.auxiliary.is_empty());
     }
 
     #[test]
@@ -349,14 +349,14 @@ mod tests {
             ]
         });
         let records = json["records"].as_array().unwrap();
-        let entries: Vec<ExtendedEntry> = records
+        let entries: Vec<MetaEntry> = records
             .iter()
             .filter_map(|r| BespokeScraper5103::parse_record(5103, r))
             .collect();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].entry.type_name, Some("Q5".to_string()));
         assert_eq!(entries[1].entry.type_name, Some("Q22988604".to_string()));
-        assert!(entries[1].aux.contains(&AuxiliaryRow::new(21, "Q6581072".to_string())));
+        assert!(entries[1].auxiliary.contains(&AuxiliaryRow::new(21, "Q6581072".to_string())));
     }
 
     #[test]
