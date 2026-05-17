@@ -3,6 +3,7 @@ use crate::auxiliary_data::AuxiliaryRow;
 use crate::coordinates::CoordinateLocation;
 use crate::datasource::DataSource;
 use crate::entry::{Entry, EntryWriter};
+use crate::meta_entry::{MetaEntry, MetaPersonDates};
 use crate::person_date::PersonDate;
 use crate::update_catalog::UpdateCatalogError;
 use anyhow::{Result, anyhow};
@@ -99,116 +100,84 @@ impl ExtendedEntry {
         Ok(())
     }
 
+    /// View this ExtendedEntry as a MetaEntry. The two structs hold the
+    /// same writeable data in slightly different shapes (`aux: HashSet` vs
+    /// `auxiliary: Vec`, flat `born`/`died` vs `person_dates`, `location`
+    /// vs `coordinate`); the conversion is a flat field reshape with no
+    /// validation. Used by `insert_new` and `update_existing` to funnel
+    /// every write through `MetaEntry`'s canonical EntryWriter-based
+    /// path.
+    fn to_meta(&self) -> MetaEntry {
+        let person_dates = if self.born.is_some() || self.died.is_some() {
+            Some(MetaPersonDates { born: self.born, died: self.died })
+        } else {
+            None
+        };
+        MetaEntry {
+            entry: self.entry.clone(),
+            auxiliary: self.aux.iter().cloned().collect(),
+            coordinate: self.location,
+            person_dates,
+            mnm_relations: Vec::new(),
+            descriptions: self.descriptions.clone(),
+            aliases: self.aliases.clone(),
+            issues: Vec::new(),
+            kv_entries: Vec::new(),
+            log_entries: Vec::new(),
+            multi_match: Vec::new(),
+            statement_text: Vec::new(),
+        }
+    }
+
+    /// Update an existing entry. The scraper update path historically used
+    /// **merge** semantics — empty `ext_name`/`ext_desc`/`ext_url` and a
+    /// `None` `type_name` on the incoming ExtendedEntry meant "leave the
+    /// DB value alone", because scrapers often produce partial records.
+    /// `MetaEntry::update_in_storage` uses **replace** semantics, so we
+    /// can't simply delegate the whole call — we apply the conditional
+    /// ext_* writes here through EntryWriter (same code path either way)
+    /// and then route associated-data + match through MetaEntry's
+    /// canonical writer.
     pub async fn update_existing(&mut self, entry: &mut Entry, app: &dyn AppContext) -> Result<()> {
-        self.update_existing_basic_values(app, entry).await?;
-        if self.born.is_some() || self.died.is_some() {
-            EntryWriter::new(app, entry)
-                .set_person_dates(&self.born, &self.died)
-                .await?;
-        }
-        if self.location.is_some() {
-            EntryWriter::new(app, entry)
-                .set_coordinate_location(&self.location)
-                .await?;
-        }
-        self.sync_aliases(app, entry).await?;
-        self.sync_descriptions(app, entry).await?;
-        self.sync_auxiliary(app, entry).await?;
-        Ok(())
-    }
-
-    async fn update_existing_basic_values(
-        &mut self,
-        app: &dyn AppContext,
-        entry: &mut Entry,
-    ) -> Result<()> {
-        let mut ew = EntryWriter::new(app, entry);
-        if !self.entry.ext_name.is_empty() {
-            ew.set_ext_name(&self.entry.ext_name).await?;
-        }
-        if !self.entry.ext_desc.is_empty() {
-            ew.set_ext_desc(&self.entry.ext_desc).await?;
-        }
-        if self.entry.type_name.is_some() {
-            ew.set_type_name(self.entry.type_name.clone()).await?;
-        }
-        if !self.entry.ext_url.is_empty() {
-            ew.set_ext_url(&self.entry.ext_url).await?;
-        }
-        if ew.as_entry().q.is_none() {
-            if let Some(q) = self.entry.q {
-                ew.set_match(&format!("Q{q}"), 4).await?;
+        {
+            let mut ew = EntryWriter::new(app, entry);
+            if !self.entry.ext_name.is_empty() {
+                ew.set_ext_name(&self.entry.ext_name).await?;
+            }
+            if !self.entry.ext_desc.is_empty() {
+                ew.set_ext_desc(&self.entry.ext_desc).await?;
+            }
+            if self.entry.type_name.is_some() {
+                ew.set_type_name(self.entry.type_name.clone()).await?;
+            }
+            if !self.entry.ext_url.is_empty() {
+                ew.set_ext_url(&self.entry.ext_url).await?;
+            }
+            if ew.as_entry().q.is_none() {
+                if let Some(q) = self.entry.q {
+                    ew.set_match(&format!("Q{q}"), 4).await?;
+                }
             }
         }
+
+        // Build a MetaEntry that carries only the associated-data side
+        // (aux/aliases/descriptions/coordinate/person_dates). Clear q
+        // and ext_* on the snapshot so MetaEntry doesn't re-apply them —
+        // we just handled them above with the correct merge semantics.
+        let mut meta = self.to_meta();
+        meta.entry.id = entry.id;
+        meta.entry.q = None;
+        meta.entry.user = None;
+        meta.entry.timestamp = None;
+        meta.write_associated_data(entry, app).await?;
         Ok(())
     }
 
-    // Adds new aliases to the existing DB entry.
-    // Does NOT remove ones that don't exist anymore.
-
-    pub async fn sync_aliases(&self, app: &dyn AppContext, entry: &mut Entry) -> Result<()> {
-        let ew = EntryWriter::new(app, entry);
-        let existing = ew.get_aliases().await?;
-        for alias in &self.aliases {
-            if !existing.contains(alias) {
-                ew.add_alias(alias).await?;
-            }
-        }
-        Ok(())
-    }
-
-    // Adds/replaces new aux values on the existing DB entry.
-    // Does NOT remove ones that don't exist anymore.
-
-    pub async fn sync_auxiliary(&self, app: &dyn AppContext, entry: &mut Entry) -> Result<()> {
-        let mut ew = EntryWriter::new(app, entry);
-        let existing: HashSet<AuxiliaryRow> = ew.get_aux().await?.into_iter().collect();
-        for aux in &self.aux {
-            if !existing.contains(aux) {
-                ew.set_auxiliary(aux.prop_numeric(), Some(aux.value().to_owned()))
-                    .await?;
-            }
-        }
-        Ok(())
-    }
-
-    // Adds/replaces new language descriptions on the existing DB entry.
-    // Does NOT remove ones that don't exist anymore.
-
-    pub async fn sync_descriptions(&self, app: &dyn AppContext, entry: &mut Entry) -> Result<()> {
-        let ew = EntryWriter::new(app, entry);
-        let existing = ew.get_language_descriptions().await?;
-        for (language, value) in &self.descriptions {
-            if existing.get(language) != Some(value) {
-                ew.set_language_description(language, Some(value.to_owned()))
-                    .await?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Inserts a new entry and its associated data into the database
+    /// Insert a new entry. Delegates to `MetaEntry::create_in_storage`.
     pub async fn insert_new(&mut self, app: &dyn AppContext) -> Result<()> {
-        let mut ew = EntryWriter::new(app, &mut self.entry);
-        ew.insert_as_new().await?;
-
-        if self.born.is_some() || self.died.is_some() {
-            ew.set_person_dates(&self.born, &self.died).await?;
-        }
-        if self.location.is_some() {
-            ew.set_coordinate_location(&self.location).await?;
-        }
-        for alias in &self.aliases {
-            ew.add_alias(alias).await?;
-        }
-        for aux in &self.aux {
-            ew.set_auxiliary(aux.prop_numeric(), Some(aux.value().to_owned()))
-                .await?;
-        }
-        for (language, text) in &self.descriptions {
-            ew.set_language_description(language, Some(text.to_owned()))
-                .await?;
-        }
+        let meta = self.to_meta();
+        let new_id = meta.create_in_storage(app).await?;
+        self.entry.id = Some(new_id);
         Ok(())
     }
 

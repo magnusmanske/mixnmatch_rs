@@ -2,7 +2,7 @@ use crate::app_state::{AppContext, ExternalServicesContext};
 use crate::catalog::Catalog;
 use crate::entry::Entry;
 use crate::meta_entry::MetaEntry;
-use crate::DbId;
+use crate::{DbId, ItemId};
 use anyhow::{Result, anyhow};
 use rand::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -106,6 +106,52 @@ pub async fn import_from_import_file(
 /// When `importing_user_id` is `Some(uid)`, every entry's `user` field is
 /// validated: it must be `None`, `Some(0)` (auto-match), or `Some(uid)`.
 /// When `None` (CLI mode), the check is skipped.
+/// Authoritative match-state classification for an entry inside an
+/// import file. The three legitimate match shapes — and the one we
+/// always reject — are enumerated explicitly so the security contract
+/// is readable next to the data it protects.
+#[derive(Debug, PartialEq, Eq)]
+enum ImportMatchState {
+    /// `q` is absent or non-positive. Any `user` value is dropped.
+    Unmatched,
+    /// `q` set, `user` ∈ {None, 0}. Records a "user 0" match with
+    /// `TimeStamp::now()` — the standard "matched by an automated
+    /// importer" shape.
+    Preliminary(ItemId),
+    /// `q` set, `user == importing_user_id`. Records a full match
+    /// attributed to the actually-importing user, with `TimeStamp::now()`.
+    FullyMatched(ItemId, DbId),
+}
+
+/// Decide how to apply the (q, user) pair from an inbound MetaEntry.
+/// `importing_user_id == None` is the CLI / trusted-shell path: we let
+/// any user value through (still timestamp-clobbered downstream by
+/// `set_match`). On the API path (`Some(uid)`) we lock the only
+/// acceptable non-zero `user` to `uid` — preventing the "import a JSON
+/// that blames user X for a wrong match" attack.
+fn classify_import_match(
+    entry_q: Option<ItemId>,
+    entry_user: Option<DbId>,
+    importing_user_id: Option<DbId>,
+) -> Result<ImportMatchState, String> {
+    let Some(q) = entry_q else {
+        return Ok(ImportMatchState::Unmatched);
+    };
+    if q <= 0 {
+        return Ok(ImportMatchState::Unmatched);
+    }
+    match (entry_user, importing_user_id) {
+        (None | Some(0), _) => Ok(ImportMatchState::Preliminary(q)),
+        (Some(uid), Some(allowed)) if uid == allowed => {
+            Ok(ImportMatchState::FullyMatched(q, uid))
+        }
+        (Some(uid), None) => Ok(ImportMatchState::FullyMatched(q, uid)),
+        (Some(uid), Some(allowed)) => Err(format!(
+            "entry user {uid} does not match importing user {allowed}"
+        )),
+    }
+}
+
 pub async fn import_meta_entries(
     app: &dyn AppContext,
     catalog_id: DbId,
@@ -126,26 +172,47 @@ pub async fn import_meta_entries(
             continue;
         }
 
-        // Validate user field when importing via API/import_file
-        if let Some(allowed_uid) = importing_user_id {
-            if let Some(user) = meta.entry.user {
-                if user != 0 && user != allowed_uid {
-                    result.errors.push(format!(
-                        "ext_id '{}': entry user {} does not match importing user {allowed_uid}, skipping",
-                        meta.entry.ext_id, user
-                    ));
-                    continue;
-                }
+        let match_state = match classify_import_match(
+            meta.entry.q,
+            meta.entry.user,
+            importing_user_id,
+        ) {
+            Ok(s) => s,
+            Err(msg) => {
+                result.errors.push(format!(
+                    "ext_id '{}': {msg}, skipping",
+                    meta.entry.ext_id
+                ));
+                continue;
             }
-        }
+        };
 
         seen_ext_ids.insert(meta.entry.ext_id.clone());
 
-        // Sanitize: strip primary keys, timestamp, and set random
+        // Sanitize: strip primary keys and timestamp, normalise the
+        // match shape to whatever `classify_import_match` decided.
+        // (`id`/`timestamp`/`random` are also `skip_deserializing` on
+        // Entry, so these assignments are belt-and-braces — but they
+        // protect against callers that construct MetaEntry in code
+        // rather than via JSON parsing.)
         let mut sanitized = meta.clone();
         sanitized.entry.id = None;
         sanitized.entry.timestamp = None;
         sanitized.entry.random = 0.0; // will be set properly per path below
+        match match_state {
+            ImportMatchState::Unmatched => {
+                sanitized.entry.q = None;
+                sanitized.entry.user = None;
+            }
+            ImportMatchState::Preliminary(q) => {
+                sanitized.entry.q = Some(q);
+                sanitized.entry.user = Some(0);
+            }
+            ImportMatchState::FullyMatched(q, uid) => {
+                sanitized.entry.q = Some(q);
+                sanitized.entry.user = Some(uid);
+            }
+        }
         for aux in &mut sanitized.auxiliary {
             aux.clear_row_id();
         }
@@ -357,5 +424,106 @@ mod tests {
         assert!(me.person_dates.is_none());
         assert!(me.descriptions.is_empty());
         assert!(me.aliases.is_empty());
+    }
+
+    // ── Security: classify_import_match enumerates the four
+    // legitimate inbound match shapes and rejects everything else. The
+    // headline attack these tests pin: a malicious importer cannot
+    // attribute a wrong full match to another user.
+
+    #[test]
+    fn classify_no_q_is_unmatched() {
+        assert_eq!(
+            classify_import_match(None, Some(42), Some(7)).unwrap(),
+            ImportMatchState::Unmatched
+        );
+    }
+
+    #[test]
+    fn classify_zero_q_is_unmatched() {
+        assert_eq!(
+            classify_import_match(Some(0), Some(42), Some(7)).unwrap(),
+            ImportMatchState::Unmatched
+        );
+    }
+
+    #[test]
+    fn classify_negative_q_is_unmatched() {
+        assert_eq!(
+            classify_import_match(Some(-1), Some(42), Some(7)).unwrap(),
+            ImportMatchState::Unmatched
+        );
+    }
+
+    #[test]
+    fn classify_q_with_user_zero_is_preliminary() {
+        assert_eq!(
+            classify_import_match(Some(42), Some(0), Some(7)).unwrap(),
+            ImportMatchState::Preliminary(42)
+        );
+    }
+
+    #[test]
+    fn classify_q_with_no_user_is_preliminary() {
+        assert_eq!(
+            classify_import_match(Some(42), None, Some(7)).unwrap(),
+            ImportMatchState::Preliminary(42)
+        );
+    }
+
+    #[test]
+    fn classify_q_with_importing_user_is_full_match() {
+        assert_eq!(
+            classify_import_match(Some(42), Some(7), Some(7)).unwrap(),
+            ImportMatchState::FullyMatched(42, 7)
+        );
+    }
+
+    #[test]
+    fn classify_rejects_user_spoofing_attack() {
+        // Importer is user 7, JSON claims user 999 made this match.
+        // The whole point of the security model.
+        let err = classify_import_match(Some(42), Some(999), Some(7)).unwrap_err();
+        assert!(err.contains("999"));
+        assert!(err.contains('7'));
+    }
+
+    #[test]
+    fn classify_cli_path_trusts_user_field() {
+        // importing_user_id == None is the CLI path; any user value is
+        // accepted (the timestamp is still clobbered downstream).
+        assert_eq!(
+            classify_import_match(Some(42), Some(999), None).unwrap(),
+            ImportMatchState::FullyMatched(42, 999)
+        );
+    }
+
+    // ── Security: the wire format actively drops server-side fields.
+    // Belt-and-braces to the classify_import_match validation: even if
+    // a future code path forgets to normalise, the JSON parser will
+    // never populate these fields.
+
+    #[test]
+    fn json_dropping_id_timestamp_random_on_deserialize() {
+        let json = r#"[{"entry":{
+            "id": 17,
+            "catalog": 100,
+            "ext_id": "abc",
+            "ext_name": "X",
+            "timestamp": "20200101000000",
+            "random": 0.5
+        }}]"#;
+        let parsed = parse_meta_entries(json).unwrap();
+        assert_eq!(parsed.len(), 1);
+        // Even though the JSON explicitly set these, they MUST be the
+        // defaults — Entry has #[serde(skip_deserializing)] on them.
+        assert!(parsed[0].entry.id.is_none(), "id must be dropped on deserialize");
+        assert!(parsed[0].entry.timestamp.is_none(), "timestamp must be dropped on deserialize");
+        // `random` is f64 Default = 0.0; we want exact equality since
+        // skip_deserializing leaves the field at its Default value.
+        assert!(
+            parsed[0].entry.random.abs() < f64::EPSILON,
+            "random must be dropped on deserialize"
+        );
     }
 }

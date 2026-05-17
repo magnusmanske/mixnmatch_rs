@@ -214,18 +214,21 @@ impl MetaEntry {
         entry.type_name.clone_from(&self.entry.type_name);
         entry.random = self.entry.random;
 
-        let mut ew = EntryWriter::new(app, &mut entry);
-        let new_id = ew.insert_as_new().await?;
+        let new_id = EntryWriter::new(app, &mut entry).insert_as_new().await?;
         let entry_id = new_id.ok_or_else(|| anyhow!("Failed to insert new entry"))?;
 
-        self.write_associated_data(entry_id, app).await?;
+        self.write_associated_data(&mut entry, app).await?;
 
-        // Set match if present (after associated data so log/issues are in place)
+        // Set match if present (after associated data so log/issues are in place).
+        // set_match always stamps `TimeStamp::now()` and ignores any inbound
+        // timestamp — that is the canonical defense against import-time
+        // timestamp spoofing.
         if let Some(q) = self.entry.q {
             if q > 0 {
                 let user = self.entry.user.unwrap_or(0);
-                // insert_as_new already set ew.entry.id; set_match reads it.
-                ew.set_match(&format!("Q{q}"), user).await?;
+                EntryWriter::new(app, &mut entry)
+                    .set_match(&format!("Q{q}"), user)
+                    .await?;
             }
         }
 
@@ -240,23 +243,25 @@ impl MetaEntry {
             .id
             .ok_or_else(|| anyhow!("MetaEntry has no entry id for update"))?;
 
+        let mut entry = Entry::from_id(entry_id, app).await?;
+
+        // Update core entry fields through EntryWriter so the no-op guard
+        // (skip when unchanged) and field-level write helpers stay
+        // canonical. Sequential rather than the previous tokio::join!:
+        // each is a single small UPDATE, and the guard makes most calls
+        // no-ops when re-importing the same data.
+        {
+            let mut ew = EntryWriter::new(app, &mut entry);
+            ew.set_ext_name(&self.entry.ext_name).await?;
+            ew.set_ext_desc(&self.entry.ext_desc).await?;
+            ew.set_ext_id(&self.entry.ext_id).await?;
+            ew.set_ext_url(&self.entry.ext_url).await?;
+            ew.set_type_name(self.entry.type_name.clone()).await?;
+        }
+
+        // Clear existing associated data; these are bulk DELETEs without
+        // an EntryWriter equivalent, so they stay on the storage layer.
         let storage = app.storage();
-
-        // Update core entry fields
-        let (r1, r2, r3, r4, r5) = tokio::join!(
-            storage.entry_set_ext_name(&self.entry.ext_name, entry_id),
-            storage.entry_set_ext_desc(&self.entry.ext_desc, entry_id),
-            storage.entry_set_ext_id(&self.entry.ext_id, entry_id),
-            storage.entry_set_ext_url(&self.entry.ext_url, entry_id),
-            storage.entry_set_type_name(self.entry.type_name.clone(), entry_id),
-        );
-        r1?;
-        r2?;
-        r3?;
-        r4?;
-        r5?;
-
-        // Clear existing associated data and re-write
         let (r11, r12, r13, r14, r15, r16, r17) = tokio::join!(
             storage.meta_entry_delete_auxiliary(entry_id),
             storage.entry_remove_coordinate_location(entry_id),
@@ -274,13 +279,11 @@ impl MetaEntry {
         r16?;
         r17?;
 
-        self.write_associated_data(entry_id, app).await?;
+        self.write_associated_data(&mut entry, app).await?;
 
-        // Update match if needed
         if let Some(q) = self.entry.q {
             if q > 0 {
                 let user = self.entry.user.unwrap_or(0);
-                let mut entry = Entry::from_id(entry_id, app).await?;
                 EntryWriter::new(app, &mut entry)
                     .set_match(&format!("Q{q}"), user)
                     .await?;
@@ -290,65 +293,74 @@ impl MetaEntry {
         Ok(())
     }
 
-    /// Write all associated data for an entry (used by both create and update).
-    async fn write_associated_data(&self, entry_id: DbId, app: &dyn ExternalServicesContext) -> Result<()> {
-        let storage = app.storage();
-
+    /// Write all associated data for an entry through EntryWriter so every
+    /// import path (JSON, CSV via ExtendedEntry, scrapers) shares the same
+    /// overview-counter bumps, log entries, and per-field guards.
+    /// `entry` must already have an id (i.e. either freshly inserted or
+    /// loaded from storage).
+    ///
+    /// `pub(crate)` so `ExtendedEntry::update_existing` can re-use this
+    /// to preserve its historical "add-only / no-delete" merge semantics
+    /// (it calls this without the preceding bulk-delete step that the
+    /// JSON `update_in_storage` path runs).
+    pub(crate) async fn write_associated_data(
+        &self,
+        entry: &mut Entry,
+        app: &dyn AppContext,
+    ) -> Result<()> {
         // Auxiliary
         for aux in &self.auxiliary {
-            storage
-                .entry_set_auxiliary(entry_id, aux.prop_numeric(), aux.value().to_string())
+            EntryWriter::new(app, entry)
+                .set_auxiliary(aux.prop_numeric(), Some(aux.value().to_string()))
                 .await?;
         }
 
         // Coordinate
-        if let Some(coord) = &self.coordinate {
-            storage
-                .entry_set_coordinate_location(
-                    entry_id,
-                    coord.lat(),
-                    coord.lon(),
-                    coord.precision(),
-                )
+        if self.coordinate.is_some() {
+            EntryWriter::new(app, entry)
+                .set_coordinate_location(&self.coordinate)
                 .await?;
         }
 
         // Person dates
         if let Some(pd) = &self.person_dates {
-            let born = pd.born.map(|d| d.to_db_string()).unwrap_or_default();
-            let died = pd.died.map(|d| d.to_db_string()).unwrap_or_default();
-            if !born.is_empty() || !died.is_empty() {
-                storage.entry_set_person_dates(entry_id, born, died).await?;
+            if pd.born.is_some() || pd.died.is_some() {
+                EntryWriter::new(app, entry)
+                    .set_person_dates(&pd.born, &pd.died)
+                    .await?;
             }
         }
 
         // Descriptions
         for (lang, text) in &self.descriptions {
-            storage
-                .entry_set_language_description(entry_id, lang, text.clone())
+            EntryWriter::new(app, entry)
+                .set_language_description(lang, Some(text.clone()))
                 .await?;
         }
 
         // Aliases
         for alias in &self.aliases {
-            storage
-                .entry_add_alias(entry_id, alias.language(), alias.value())
-                .await?;
+            EntryWriter::new(app, entry).add_alias(alias).await?;
         }
 
         // MnM relations (only EntryId targets can be written)
         for rel in &self.mnm_relations {
             if let Some(target_id) = rel.target.resolve_entry_id(app).await? {
-                storage
-                    .add_mnm_relation(entry_id, rel.property, target_id)
+                EntryWriter::new(app, entry)
+                    .add_mnm_relation(rel.property, target_id)
                     .await?;
             }
         }
 
-        // KV entries
+        // KV entries — no EntryWriter helper exists for this table; the
+        // direct storage call is the only path.
         for kv in &self.kv_entries {
-            storage
-                .meta_entry_set_kv_entry(entry_id, &kv.key, &kv.value)
+            app.storage()
+                .meta_entry_set_kv_entry(
+                    entry.get_valid_id()?,
+                    &kv.key,
+                    &kv.value,
+                )
                 .await?;
         }
 
@@ -450,8 +462,18 @@ mod tests {
 
         let json = me.to_json().unwrap();
         let back = MetaEntry::from_json(&json).unwrap();
-        assert_eq!(back.entry.id, Some(1));
+        // `id`, `timestamp`, and `random` are skip_deserializing on Entry
+        // — the wire format carries them out (for export / debug) but
+        // refuses to read them back in. That's the canonical defense
+        // against an import file claiming a server-side PK or stamping
+        // a forged timestamp.
+        assert_eq!(back.entry.id, None);
+        assert_eq!(back.entry.timestamp, None);
+        assert!(back.entry.random.abs() < f64::EPSILON);
+        // Other fields round-trip normally.
         assert_eq!(back.entry.catalog, 100);
+        assert_eq!(back.entry.q, Some(42));
+        assert_eq!(back.entry.user, Some(1));
         assert_eq!(back.auxiliary.len(), 1);
         assert_eq!(back.auxiliary[0].prop_numeric(), 214);
         let within_tolerance = (back.coordinate.unwrap().lat() - 51.5).abs() < 0.0001;

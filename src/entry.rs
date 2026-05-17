@@ -68,7 +68,16 @@ pub type EntryId = Option<DbId>;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Entry {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    // `id`, `timestamp`, and `random` are server-side bookkeeping. We
+    // serialize them out (for export / debug / API responses) but never
+    // accept them on the way in — `skip_deserializing` means a hostile
+    // import file claiming `"id": 17, "timestamp": "20200101000000"`
+    // silently drops those values regardless of which import path
+    // parses the JSON. The data path already overrides id/random and
+    // funnels matches through `set_match` (which clobbers timestamp to
+    // `now()`); this is belt-and-braces so a future code path can't
+    // accidentally trust the input.
+    #[serde(default, skip_serializing_if = "Option::is_none", skip_deserializing)]
     pub id: EntryId,
     pub catalog: DbId,
     pub ext_id: String,
@@ -81,9 +90,9 @@ pub struct Entry {
     pub q: Option<ItemId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user: Option<DbId>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", skip_deserializing)]
     pub timestamp: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_deserializing)]
     pub random: f64,
     // `type` on the wire — matches the PHP API contract and every
     // frontend read site (`entry.type`, `entry_details.js:104`,

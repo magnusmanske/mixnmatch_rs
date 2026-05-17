@@ -16,6 +16,7 @@
 - **Keep the code simple** and elegant.
 - **Write tests** where it makes sense.
 - **Aim to keep code small** where possible.
+- **Warn me if you think what I ask of you is a bad idea.** Or just window dressing, with no improvement of functionality, UX, or code readability. Be honest.
 - **All custom CSS belongs in `html/main.css`.** Do not inject styles via `document.createElement('style')` in Vue components or any other JS file. Add a clearly labelled section (`/* ========== Component name ========== */`) to `main.css` instead.
 - Fix clippy warnings.
 
