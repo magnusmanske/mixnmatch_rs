@@ -30,6 +30,48 @@ pub struct ExtendedEntry {
     pub location: Option<CoordinateLocation>,
 }
 
+/// Bridge for the in-progress retirement of ExtendedEntry. Callers
+/// being migrated to MetaEntry can take `From<ExtendedEntry>` at the
+/// boundary; once every caller produces MetaEntry directly, both this
+/// impl and the struct it converts can be deleted.
+impl From<&ExtendedEntry> for MetaEntry {
+    fn from(ee: &ExtendedEntry) -> Self {
+        let person_dates = if ee.born.is_some() || ee.died.is_some() {
+            Some(MetaPersonDates { born: ee.born, died: ee.died })
+        } else {
+            None
+        };
+        MetaEntry {
+            entry: ee.entry.clone(),
+            auxiliary: ee.aux.iter().cloned().collect(),
+            coordinate: ee.location,
+            person_dates,
+            descriptions: ee.descriptions.clone(),
+            aliases: ee.aliases.clone(),
+            ..MetaEntry::default()
+        }
+    }
+}
+
+impl From<ExtendedEntry> for MetaEntry {
+    fn from(ee: ExtendedEntry) -> Self {
+        let person_dates = if ee.born.is_some() || ee.died.is_some() {
+            Some(MetaPersonDates { born: ee.born, died: ee.died })
+        } else {
+            None
+        };
+        MetaEntry {
+            entry: ee.entry,
+            auxiliary: ee.aux.into_iter().collect(),
+            coordinate: ee.location,
+            person_dates,
+            descriptions: ee.descriptions,
+            aliases: ee.aliases,
+            ..MetaEntry::default()
+        }
+    }
+}
+
 impl ExtendedEntry {
     pub async fn load_extended_data(&mut self, app: &dyn AppContext) -> Result<()> {
         let ew = EntryWriter::new(app, &mut self.entry);
@@ -100,33 +142,12 @@ impl ExtendedEntry {
         Ok(())
     }
 
-    /// View this ExtendedEntry as a MetaEntry. The two structs hold the
-    /// same writeable data in slightly different shapes (`aux: HashSet` vs
-    /// `auxiliary: Vec`, flat `born`/`died` vs `person_dates`, `location`
-    /// vs `coordinate`); the conversion is a flat field reshape with no
-    /// validation. Used by `insert_new` and `update_existing` to funnel
-    /// every write through `MetaEntry`'s canonical EntryWriter-based
-    /// path.
+    /// View this ExtendedEntry as a MetaEntry. Thin wrapper around
+    /// `From<&ExtendedEntry> for MetaEntry`; kept as a method so the
+    /// existing internal callers (`insert_new`, `update_existing`) read
+    /// naturally.
     fn to_meta(&self) -> MetaEntry {
-        let person_dates = if self.born.is_some() || self.died.is_some() {
-            Some(MetaPersonDates { born: self.born, died: self.died })
-        } else {
-            None
-        };
-        MetaEntry {
-            entry: self.entry.clone(),
-            auxiliary: self.aux.iter().cloned().collect(),
-            coordinate: self.location,
-            person_dates,
-            mnm_relations: Vec::new(),
-            descriptions: self.descriptions.clone(),
-            aliases: self.aliases.clone(),
-            issues: Vec::new(),
-            kv_entries: Vec::new(),
-            log_entries: Vec::new(),
-            multi_match: Vec::new(),
-            statement_text: Vec::new(),
-        }
+        self.into()
     }
 
     /// Update an existing entry. Delegates entirely to

@@ -150,6 +150,30 @@ impl MetaEntry {
         self.descriptions.insert(language.to_string(), text.to_string());
     }
 
+    /// `born` date, flattening the `person_dates` wrapper. Convenience
+    /// accessor for tests/callers that don't want to navigate the
+    /// `Option<MetaPersonDates>` two-step.
+    pub fn born(&self) -> Option<PersonDate> {
+        self.person_dates.and_then(|pd| pd.born)
+    }
+
+    /// `died` date, flattening the `person_dates` wrapper.
+    pub fn died(&self) -> Option<PersonDate> {
+        self.person_dates.and_then(|pd| pd.died)
+    }
+
+    /// Construct a MetaEntry from a CSV row using the same column /
+    /// pattern mapping that the legacy `ExtendedEntry::from_row` used.
+    /// Currently bridges through ExtendedEntry; once the CSV parser
+    /// helpers are relocated onto MetaEntry, this becomes the direct
+    /// implementation.
+    pub fn from_csv_row(
+        row: &csv::StringRecord,
+        datasource: &mut crate::datasource::DataSource,
+    ) -> Result<Self> {
+        Ok(crate::extended_entry::ExtendedEntry::from_row(row, datasource)?.into())
+    }
+
     // ── Repository API (load from storage) ───────────────────────────
 
     /// Load a complete MetaEntry from storage for a given entry ID.
@@ -881,6 +905,68 @@ mod tests {
         me.set_description("en", "painter");
         me.set_description("de", "Maler");
         assert_eq!(me.descriptions.len(), 2);
+    }
+
+    #[test]
+    fn born_died_accessors_flatten_wrapper() {
+        let mut me = MetaEntry::default();
+        assert!(me.born().is_none());
+        assert!(me.died().is_none());
+        me.set_born(PersonDate::year_only(1950));
+        me.set_died(PersonDate::year_only(2020));
+        assert_eq!(me.born(), Some(PersonDate::year_only(1950)));
+        assert_eq!(me.died(), Some(PersonDate::year_only(2020)));
+    }
+
+    #[test]
+    fn born_died_accessors_when_only_one_set() {
+        let mut me = MetaEntry::default();
+        me.set_born(PersonDate::year_only(1950));
+        assert_eq!(me.born(), Some(PersonDate::year_only(1950)));
+        assert!(me.died().is_none());
+    }
+
+    #[test]
+    fn from_extended_entry_preserves_all_fields() {
+        use crate::auxiliary_data::AuxiliaryRow;
+        use crate::extended_entry::ExtendedEntry;
+        use std::collections::HashSet;
+
+        let mut ee = ExtendedEntry::default();
+        ee.entry.catalog = 42;
+        ee.entry.ext_id = "x1".to_string();
+        ee.entry.ext_name = "Test".to_string();
+        ee.aux = HashSet::from([
+            AuxiliaryRow::new(214, "123".to_string()),
+            AuxiliaryRow::new(31, "Q5".to_string()),
+        ]);
+        ee.born = Some(PersonDate::year_only(1900));
+        ee.died = Some(PersonDate::year_only(1980));
+        ee.aliases.push(LocaleString::new("en", "Tester"));
+        ee.descriptions.insert("en".to_string(), "A test".to_string());
+
+        let me: MetaEntry = ee.into();
+        assert_eq!(me.entry.catalog, 42);
+        assert_eq!(me.entry.ext_id, "x1");
+        assert_eq!(me.entry.ext_name, "Test");
+        assert_eq!(me.auxiliary.len(), 2);
+        assert_eq!(me.born(), Some(PersonDate::year_only(1900)));
+        assert_eq!(me.died(), Some(PersonDate::year_only(1980)));
+        assert_eq!(me.aliases.len(), 1);
+        assert_eq!(me.descriptions.get("en"), Some(&"A test".to_string()));
+        // The new "out" fields stay empty — the source ExtendedEntry
+        // never had them and we don't invent data.
+        assert!(me.mnm_relations.is_empty());
+        assert!(me.kv_entries.is_empty());
+    }
+
+    #[test]
+    fn from_extended_entry_empty_yields_default_person_dates() {
+        use crate::extended_entry::ExtendedEntry;
+        let ee = ExtendedEntry::default();
+        let me: MetaEntry = ee.into();
+        // No born/died → wrapper stays None (smaller wire payload).
+        assert!(me.person_dates.is_none());
     }
 
     // ── update_merge_in_storage: DB integration ──────────────────────
