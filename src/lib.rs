@@ -66,7 +66,6 @@ pub mod coordinates;
 pub mod datasource;
 pub mod entry;
 pub mod entry_query;
-pub mod extended_entry;
 pub mod import_catalog;
 pub mod issue;
 pub mod item_creator;

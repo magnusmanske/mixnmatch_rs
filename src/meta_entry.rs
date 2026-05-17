@@ -1,14 +1,39 @@
-use crate::app_state::{AppContext, ExternalServicesContext};
+use crate::app_state::{AppContext, ExternalServicesContext, USER_AUX_MATCH};
 use crate::auxiliary_data::AuxiliaryRow;
 use crate::coordinates::CoordinateLocation;
+use crate::datasource::DataSource;
 use crate::entry::{Entry, EntryWriter};
 use crate::mnm_link::MnmLink;
 use crate::person_date::PersonDate;
+use crate::update_catalog::UpdateCatalogError;
 use crate::{DbId, ItemId, PropertyId};
 use anyhow::{Result, anyhow};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::LazyLock;
 use wikimisc::wikibase::LocaleString;
+
+// ── CSV-import label parsing regexes ────────────────────────────────────────
+//
+// These pin the column-label conventions used by the CSV / pattern
+// importer:
+//   - "type" cells must look like `Q\d+`
+//   - "born" / "died" cells use `YYYY` / `YYYY-MM` / `YYYY-MM-DD`
+//   - column labels of the form `P<digits>` carry auxiliary data
+//   - column labels of the form `A<lang>` carry an alias
+//   - column labels of the form `D<lang>` carry a language description
+static RE_TYPE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(Q\d+)$").expect("Regexp construction"));
+static RE_DATE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(\d{3,}|\d{3,4}-\d{2}|\d{3,4}-\d{2}-\d{2})$").expect("Regexp construction")
+});
+static RE_PROPERTY: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^P(\d+)$").expect("Regexp construction"));
+static RE_ALIAS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^A([a-z]+)$").expect("Regexp construction"));
+static RE_DESCRIPTION: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^D([a-z]+)$").expect("Regexp construction"));
 
 // ── Serializable sub-structures (only for tables without existing structs) ──
 
@@ -126,8 +151,9 @@ impl MetaEntry {
     }
 
     /// Push an auxiliary value, deduping on `(prop_numeric, value)`.
-    /// Equivalent to ExtendedEntry's `aux.insert(AuxiliaryRow::new(...))`
-    /// but works on the canonical `auxiliary: Vec` shape.
+    /// Storage layer uses `REPLACE INTO`, so an explicit dedup here just
+    /// trims redundant round-trips — duplicate `(prop, value)` pairs
+    /// from the same CSV row or scraper pass produce one DB write.
     pub fn add_aux(&mut self, prop_numeric: PropertyId, value: impl Into<String>) {
         let value = value.into();
         let exists = self
@@ -175,16 +201,168 @@ impl MetaEntry {
         self.person_dates.and_then(|pd| pd.died)
     }
 
-    /// Construct a MetaEntry from a CSV row using the same column /
-    /// pattern mapping that the legacy `ExtendedEntry::from_row` used.
-    /// Currently bridges through ExtendedEntry; once the CSV parser
-    /// helpers are relocated onto MetaEntry, this becomes the direct
-    /// implementation.
+    /// Construct a MetaEntry from a CSV row using the column / pattern
+    /// mapping declared by the catalog's `DataSource`. Each cell is
+    /// dispatched through [`MetaEntry::process_cell`] which decodes the
+    /// label conventions (`name`, `desc`, `url`, `q`, `type`, `born`,
+    /// `died`, `P<num>`, `A<lang>`, `D<lang>`). Missing `type_name` and
+    /// `ext_url` are filled from the datasource defaults.
     pub fn from_csv_row(
         row: &csv::StringRecord,
-        datasource: &mut crate::datasource::DataSource,
+        datasource: &mut DataSource,
     ) -> Result<Self> {
-        Ok(crate::extended_entry::ExtendedEntry::from_row(row, datasource)?.into())
+        let ext_id = row
+            .get(datasource.ext_id_column)
+            .ok_or(anyhow!("No external ID for entry"))?;
+        let mut me = Self {
+            entry: Entry::new_from_catalog_and_ext_id(datasource.catalog_id, ext_id),
+            ..Default::default()
+        };
+
+        for (label, col_num) in &datasource.colmap {
+            if let Some(cell) = row.get(*col_num) {
+                me.process_cell(label, cell)?;
+            }
+        }
+        for pattern in &datasource.patterns {
+            if let Some(cell) = row.get(pattern.column_number) {
+                if let Some(new_cell) = Self::regex_capture(&pattern.pattern, cell) {
+                    me.process_cell(&pattern.use_column_label, &new_cell)?;
+                }
+            }
+        }
+
+        if me.entry.type_name.is_none() {
+            me.entry.type_name.clone_from(&datasource.default_type);
+        }
+        if me.entry.ext_url.is_empty() {
+            if let Some(pattern) = &datasource.url_pattern {
+                me.entry.ext_url = pattern.replace("$1", &me.entry.ext_id);
+            }
+        }
+
+        Ok(me)
+    }
+
+    /// Dispatch a `(label, cell)` pair from a CSV row. Pattern-prefixed
+    /// labels (`A<lang>`, `D<lang>`, `P<num>`) are handled first; bare
+    /// labels (`name`, `desc`, `url`, `q`, `type`, `born`, `died`,
+    /// `id`) fall through to the explicit `match`. Unknown labels
+    /// return `UpdateCatalogError::UnknownColumnLabel`.
+    fn process_cell(&mut self, label: &str, cell: &str) -> Result<()> {
+        if self.parse_alias(label, cell)
+            || self.parse_description(label, cell)
+            || self.parse_property(label, cell)?
+        {
+            return Ok(());
+        }
+        match label {
+            "id" => { /* the ext_id was already set by from_csv_row */ }
+            "name" => self.entry.ext_name = cell.to_string(),
+            "desc" => self.entry.ext_desc = cell.to_string(),
+            "url" => self.entry.ext_url = cell.to_string(),
+            "q" | "autoq" => {
+                self.entry.q =
+                    cell.replace('Q', "").parse::<isize>().ok().filter(|&i| i > 0);
+                if self.entry.q.is_some() {
+                    // Matches the scraper-style import convention: a `q`
+                    // on a CSV row is attributed to the auxiliary-data
+                    // matcher (user 4). `set_match` stamps the timestamp
+                    // when the row eventually hits storage, so we don't
+                    // set it here.
+                    self.entry.user = Some(USER_AUX_MATCH);
+                }
+            }
+            "type" => self.entry.type_name = Self::parse_type(cell),
+            "born" => {
+                if let Some(d) = Self::parse_date(cell) {
+                    self.set_born(d);
+                }
+            }
+            "died" => {
+                if let Some(d) = Self::parse_date(cell) {
+                    self.set_died(d);
+                }
+            }
+            other => {
+                return Err(UpdateCatalogError::UnknownColumnLabel(format!(
+                    "Don't understand label '{other}'"
+                ))
+                .into());
+            }
+        }
+        Ok(())
+    }
+
+    /// Decode a `type` cell. Empty / non-Q values yield `None`.
+    pub fn parse_type(type_name: &str) -> Option<String> {
+        Self::regex_capture(&RE_TYPE, type_name)
+    }
+
+    /// Decode a `born` / `died` cell. Accepts `YYYY`, `YYYY-MM`,
+    /// `YYYY-MM-DD`; anything else yields `None`.
+    pub fn parse_date(date: &str) -> Option<PersonDate> {
+        let captured = Self::regex_capture(&RE_DATE, date)?;
+        PersonDate::from_db_string(&captured)
+    }
+
+    /// If `label` is `A<lang>`, push an alias and return true. Otherwise
+    /// the label is not an alias and `false` is returned so the dispatcher
+    /// can try the next handler.
+    fn parse_alias(&mut self, label: &str, cell: &str) -> bool {
+        match Self::regex_capture(&RE_ALIAS, label) {
+            Some(language) => {
+                self.aliases.push(LocaleString::new(language, cell.to_string()));
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// If `label` is `D<lang>`, insert a description and return true.
+    fn parse_description(&mut self, label: &str, cell: &str) -> bool {
+        match Self::regex_capture(&RE_DESCRIPTION, label) {
+            Some(language) => {
+                self.descriptions.insert(language, cell.to_string());
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// If `label` is `P<num>`, route the value (or `|`-separated values)
+    /// into auxiliary or — for P625 — into the coordinate field.
+    fn parse_property(&mut self, label: &str, cell: &str) -> Result<bool> {
+        let property_num = match Self::regex_capture(&RE_PROPERTY, label) {
+            Some(s) => s.parse::<usize>()?,
+            None => return Ok(false),
+        };
+
+        // P625 is treated specially: coordinates have their own
+        // dedicated table and the cell shape (`lat/lon` or
+        // `POINT(lat lon)`) doesn't fit the auxiliary row format.
+        // TODO: extend to other location properties; possibly also
+        // P569/P570 dates.
+        if property_num == 625 {
+            if let Some(coord) = CoordinateLocation::parse(cell) {
+                self.coordinate = Some(coord);
+            }
+        } else {
+            for part in cell.split('|') {
+                let part = part.trim();
+                if !part.is_empty() {
+                    self.add_aux(property_num, part);
+                }
+            }
+        }
+
+        Ok(true)
+    }
+
+    /// Extract capture group 1 of `regexp` against `text` as an owned
+    /// String. Returns `None` when the regex doesn't match.
+    fn regex_capture(regexp: &Regex, text: &str) -> Option<String> {
+        regexp.captures(text)?.get(1).map(|m| m.as_str().to_string())
     }
 
     // ── Repository API (load from storage) ───────────────────────────
@@ -396,9 +574,9 @@ impl MetaEntry {
     /// are add-only (the underlying storage primitives are
     /// `REPLACE INTO` / `INSERT IGNORE` so no pre-fetch is needed).
     ///
-    /// This is the canonical home for the merge contract that
-    /// `ExtendedEntry::update_existing` used to encode. The full-replace
-    /// contract still lives in [`update_in_storage`].
+    /// The full-replace contract is in [`update_in_storage`]; the JSON
+    /// import path uses that one because the user authoritatively
+    /// provides the new state.
     ///
     /// `entry` is the previously-loaded record being updated; its
     /// fields are mutated in place to reflect the writes.
@@ -424,9 +602,8 @@ impl MetaEntry {
             }
             // Match is only assigned when the entry is currently
             // unmatched — never override an existing match through
-            // the merge path. Uses USER_AUX_MATCH (4) to match the
-            // pre-existing ExtendedEntry behaviour for the
-            // scraper-style import.
+            // the merge path. Uses USER_AUX_MATCH (4) for the
+            // scraper-style import convention.
             if ew.as_entry().q.is_none() {
                 if let Some(q) = self.entry.q {
                     ew.set_match(&format!("Q{q}"), crate::app_state::USER_AUX_MATCH)
@@ -441,15 +618,13 @@ impl MetaEntry {
     }
 
     /// Write all associated data for an entry through EntryWriter so every
-    /// import path (JSON, CSV via ExtendedEntry, scrapers) shares the same
-    /// overview-counter bumps, log entries, and per-field guards.
-    /// `entry` must already have an id (i.e. either freshly inserted or
-    /// loaded from storage).
+    /// import path (JSON, CSV, scrapers) shares the same overview-counter
+    /// bumps, log entries, and per-field guards. `entry` must already
+    /// have an id (i.e. either freshly inserted or loaded from storage).
     ///
-    /// `pub(crate)` so `ExtendedEntry::update_existing` can re-use this
-    /// to preserve its historical "add-only / no-delete" merge semantics
-    /// (it calls this without the preceding bulk-delete step that the
-    /// JSON `update_in_storage` path runs).
+    /// `pub(crate)` because [`update_merge_in_storage`] calls it without
+    /// the preceding bulk-delete step that [`update_in_storage`] runs
+    /// for the JSON full-replace path.
     pub(crate) async fn write_associated_data(
         &self,
         entry: &mut Entry,
@@ -785,12 +960,10 @@ mod tests {
 
     // ── Builder API ──────────────────────────────────────────────────
     //
-    // These tests pin the contract for the new MetaEntry builder
-    // methods that replace ExtendedEntry's direct field access in
-    // scrapers. The builder methods exist so scrapers don't need to
-    // know about the wire-format wrapping (`person_dates`) or invent
-    // their own dedupe logic (`auxiliary` is a Vec; `add_aux` dedupes
-    // by content).
+    // Builder methods exist so callers (CSV row parsing, scrapers)
+    // don't need to know about the wire-format wrapping
+    // (`person_dates`) or invent their own dedupe logic (`auxiliary`
+    // is a Vec; `add_aux` dedupes by content).
 
     #[test]
     fn default_meta_entry_is_empty() {
@@ -939,56 +1112,238 @@ mod tests {
         assert!(me.died().is_none());
     }
 
+    // ── CSV row parsing ──────────────────────────────────────────────
+    //
+    // These tests cover the CSV column-label conventions: bare labels
+    // (`name`, `desc`, `url`, `q`, `type`, `born`, `died`), prefixed
+    // labels (`A<lang>` alias, `D<lang>` description, `P<num>`
+    // auxiliary / coordinate), and the regex constraints on `type` /
+    // `born` / `died` cells.
+
     #[test]
-    fn from_extended_entry_preserves_all_fields() {
-        use crate::auxiliary_data::AuxiliaryRow;
-        use crate::extended_entry::ExtendedEntry;
-        use std::collections::HashSet;
-
-        let mut ee = ExtendedEntry::default();
-        ee.entry.catalog = 42;
-        ee.entry.ext_id = "x1".to_string();
-        ee.entry.ext_name = "Test".to_string();
-        ee.aux = HashSet::from([
-            AuxiliaryRow::new(214, "123".to_string()),
-            AuxiliaryRow::new(31, "Q5".to_string()),
-        ]);
-        ee.born = Some(PersonDate::year_only(1900));
-        ee.died = Some(PersonDate::year_only(1980));
-        ee.aliases.push(LocaleString::new("en", "Tester"));
-        ee.descriptions.insert("en".to_string(), "A test".to_string());
-
-        let me: MetaEntry = ee.into();
-        assert_eq!(me.entry.catalog, 42);
-        assert_eq!(me.entry.ext_id, "x1");
-        assert_eq!(me.entry.ext_name, "Test");
-        assert_eq!(me.auxiliary.len(), 2);
-        assert_eq!(me.born(), Some(PersonDate::year_only(1900)));
-        assert_eq!(me.died(), Some(PersonDate::year_only(1980)));
-        assert_eq!(me.aliases.len(), 1);
-        assert_eq!(me.descriptions.get("en"), Some(&"A test".to_string()));
-        // The new "out" fields stay empty — the source ExtendedEntry
-        // never had them and we don't invent data.
-        assert!(me.mnm_relations.is_empty());
-        assert!(me.kv_entries.is_empty());
+    fn parse_type_accepts_q_only() {
+        assert_eq!(MetaEntry::parse_type("Q5"), Some("Q5".to_string()));
+        assert_eq!(MetaEntry::parse_type("Q12345"), Some("Q12345".to_string()));
     }
 
     #[test]
-    fn from_extended_entry_empty_yields_default_person_dates() {
-        use crate::extended_entry::ExtendedEntry;
-        let ee = ExtendedEntry::default();
-        let me: MetaEntry = ee.into();
-        // No born/died → wrapper stays None (smaller wire payload).
-        assert!(me.person_dates.is_none());
+    fn parse_type_rejects_non_q() {
+        assert_eq!(MetaEntry::parse_type(""), None);
+        assert_eq!(MetaEntry::parse_type("12345"), None);
+        assert_eq!(MetaEntry::parse_type("foobar"), None);
+        assert_eq!(MetaEntry::parse_type("P123"), None);
+    }
+
+    #[test]
+    fn parse_date_accepts_ymd_ym_y() {
+        assert_eq!(
+            MetaEntry::parse_date("2022-11-03"),
+            Some(PersonDate::year_month_day(2022, 11, 3))
+        );
+        assert_eq!(
+            MetaEntry::parse_date("2022-11"),
+            Some(PersonDate::year_month(2022, 11))
+        );
+        assert_eq!(MetaEntry::parse_date("2022"), Some(PersonDate::year_only(2022)));
+        assert_eq!(MetaEntry::parse_date("800"), Some(PersonDate::year_only(800)));
+    }
+
+    #[test]
+    fn parse_date_rejects_bad_input() {
+        assert_eq!(MetaEntry::parse_date(""), None);
+        // Two-digit year falls below the 3+ digit requirement.
+        assert_eq!(MetaEntry::parse_date("22"), None);
+        assert_eq!(MetaEntry::parse_date("foobar"), None);
+    }
+
+    #[test]
+    fn parse_alias_handles_a_prefix() {
+        let mut me = MetaEntry::default();
+        assert!(me.parse_alias("Aen", "John"));
+        assert_eq!(me.aliases.len(), 1);
+        assert_eq!(me.aliases[0], LocaleString::new("en", "John"));
+        assert!(me.parse_alias("Ade", "Johann"));
+        assert_eq!(me.aliases.len(), 2);
+    }
+
+    #[test]
+    fn parse_alias_ignores_non_a_labels() {
+        let mut me = MetaEntry::default();
+        assert!(!me.parse_alias("name", "John"));
+        assert!(!me.parse_alias("P123", "value"));
+        assert!(me.aliases.is_empty());
+    }
+
+    #[test]
+    fn parse_description_handles_d_prefix() {
+        let mut me = MetaEntry::default();
+        assert!(me.parse_description("Den", "A painter"));
+        assert_eq!(me.descriptions.get("en"), Some(&"A painter".to_string()));
+        assert!(me.parse_description("Dfr", "Un peintre"));
+        assert_eq!(me.descriptions.get("fr"), Some(&"Un peintre".to_string()));
+    }
+
+    #[test]
+    fn parse_description_ignores_non_d_labels() {
+        let mut me = MetaEntry::default();
+        assert!(!me.parse_description("name", "John"));
+        assert!(!me.parse_description("P123", "value"));
+        assert!(me.descriptions.is_empty());
+    }
+
+    #[test]
+    fn parse_property_routes_p_number_to_aux() {
+        let mut me = MetaEntry::default();
+        assert!(me.parse_property("P214", "12345").unwrap());
+        assert!(me.auxiliary.contains(&AuxiliaryRow::new(214, "12345".to_string())));
+    }
+
+    #[test]
+    fn parse_property_ignores_non_property_labels() {
+        let mut me = MetaEntry::default();
+        assert!(!me.parse_property("name", "value").unwrap());
+        assert!(!me.parse_property("Q5", "value").unwrap());
+        assert!(me.auxiliary.is_empty());
+    }
+
+    #[test]
+    fn parse_property_p625_routes_to_coordinate_not_aux() {
+        let mut me = MetaEntry::default();
+        assert!(me.parse_property("P625", "1.5/-2.5").unwrap());
+        // P625 must NOT also land in aux — it has its own table.
+        assert!(me.auxiliary.is_empty());
+        let loc = me.coordinate.unwrap();
+        assert!((loc.lat() - 1.5).abs() < f64::EPSILON);
+        assert!((loc.lon() - (-2.5)).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn parse_property_p625_accepts_point_format() {
+        let mut me = MetaEntry::default();
+        assert!(me.parse_property("P625", "POINT(1.5 -2.5)").unwrap());
+        let loc = me.coordinate.unwrap();
+        assert!((loc.lat() - 1.5).abs() < f64::EPSILON);
+        assert!((loc.lon() - (-2.5)).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn parse_property_splits_pipe_separated_values() {
+        let mut me = MetaEntry::default();
+        assert!(me.parse_property("P31", "Q5|Q515").unwrap());
+        assert_eq!(me.auxiliary.len(), 2);
+        assert!(me.auxiliary.contains(&AuxiliaryRow::new(31, "Q5".to_string())));
+        assert!(me.auxiliary.contains(&AuxiliaryRow::new(31, "Q515".to_string())));
+    }
+
+    #[test]
+    fn parse_property_trims_whitespace_around_pipe_values() {
+        let mut me = MetaEntry::default();
+        assert!(me.parse_property("P31", "Q5 | Q515 | Q123").unwrap());
+        assert_eq!(me.auxiliary.len(), 3);
+    }
+
+    #[test]
+    fn parse_property_skips_empty_pipe_segments() {
+        let mut me = MetaEntry::default();
+        assert!(me.parse_property("P31", "Q5||Q515|").unwrap());
+        assert_eq!(me.auxiliary.len(), 2);
+    }
+
+    #[test]
+    fn parse_property_dedupes_repeated_values_via_add_aux() {
+        let mut me = MetaEntry::default();
+        // `add_aux` (used by parse_property) dedupes by (prop, value),
+        // so a pipe-separated cell with a duplicate yields one row.
+        assert!(me.parse_property("P31", "Q5|Q5").unwrap());
+        assert_eq!(me.auxiliary.len(), 1);
+        assert!(me.auxiliary.contains(&AuxiliaryRow::new(31, "Q5".to_string())));
+    }
+
+    #[test]
+    fn process_cell_sets_bare_labels() {
+        let mut me = MetaEntry::default();
+        me.process_cell("name", "John Doe").unwrap();
+        assert_eq!(me.entry.ext_name, "John Doe");
+        me.process_cell("desc", "A painter").unwrap();
+        assert_eq!(me.entry.ext_desc, "A painter");
+        me.process_cell("url", "http://example.com").unwrap();
+        assert_eq!(me.entry.ext_url, "http://example.com");
+        me.process_cell("type", "Q5").unwrap();
+        assert_eq!(me.entry.type_name, Some("Q5".to_string()));
+    }
+
+    #[test]
+    fn process_cell_id_is_silently_ignored() {
+        // ext_id is set by from_csv_row, not by process_cell; the "id"
+        // column label is accepted but produces no field write.
+        let mut me = MetaEntry::default();
+        me.process_cell("id", "12345").unwrap();
+        assert!(me.entry.ext_id.is_empty());
+    }
+
+    #[test]
+    fn process_cell_born_died_route_through_person_dates_wrapper() {
+        let mut me = MetaEntry::default();
+        me.process_cell("born", "1900").unwrap();
+        assert_eq!(me.born(), Some(PersonDate::year_only(1900)));
+        me.process_cell("died", "2000-01-15").unwrap();
+        assert_eq!(me.died(), Some(PersonDate::year_month_day(2000, 1, 15)));
+    }
+
+    #[test]
+    fn process_cell_q_sets_user_aux_match() {
+        // A `q` on a CSV row is attributed to USER_AUX_MATCH so
+        // create_in_storage's set_match later records the right user.
+        let mut me = MetaEntry::default();
+        me.process_cell("q", "Q42").unwrap();
+        assert_eq!(me.entry.q, Some(42));
+        assert_eq!(me.entry.user, Some(crate::app_state::USER_AUX_MATCH));
+    }
+
+    #[test]
+    fn process_cell_q_zero_is_unmatched() {
+        let mut me = MetaEntry::default();
+        me.process_cell("q", "Q0").unwrap();
+        assert!(me.entry.q.is_none());
+        assert!(me.entry.user.is_none());
+    }
+
+    #[test]
+    fn process_cell_q_negative_is_unmatched() {
+        let mut me = MetaEntry::default();
+        me.process_cell("q", "Q-1").unwrap();
+        assert!(me.entry.q.is_none());
+    }
+
+    #[test]
+    fn process_cell_unknown_label_errors() {
+        let mut me = MetaEntry::default();
+        assert!(me.process_cell("foobar", "value").is_err());
+    }
+
+    #[test]
+    fn process_cell_dispatches_to_alias_description_property_handlers() {
+        let mut me = MetaEntry::default();
+        me.process_cell("Aen", "Johnny").unwrap();
+        assert_eq!(me.aliases.len(), 1);
+        me.process_cell("Den", "A scientist").unwrap();
+        assert_eq!(me.descriptions.get("en"), Some(&"A scientist".to_string()));
+        me.process_cell("P31", "Q5|Q515").unwrap();
+        assert_eq!(me.auxiliary.len(), 2);
+    }
+
+    #[test]
+    fn regex_capture_returns_group_1() {
+        let re = Regex::new(r"^Q(\d+)$").unwrap();
+        assert_eq!(MetaEntry::regex_capture(&re, "Q123"), Some("123".to_string()));
+        assert_eq!(MetaEntry::regex_capture(&re, "P123"), None);
+        assert_eq!(MetaEntry::regex_capture(&re, ""), None);
     }
 
     // ── update_merge_in_storage: DB integration ──────────────────────
     //
-    // Pins the scraper-style merge contract end-to-end. Headline rule
-    // the test is built to enforce: empty incoming scalar fields MUST
-    // NOT clobber the stored values. The old ExtendedEntry::update_existing
-    // upheld this with hand-rolled conditionals; this test pins it so
-    // the contract survives the migration of all callers to MetaEntry.
+    // Pins the scraper-style merge contract end-to-end. Headline rule:
+    // empty incoming scalar fields MUST NOT clobber the stored values.
 
     #[tokio::test]
     #[ignore = "requires database / external services — run with cargo test -- --ignored"]

@@ -2,7 +2,6 @@ use std::sync::Arc;
 use crate::{
     app_state::{AppContext, USER_AUX_MATCH, item2numeric},
     entry::Entry,
-    extended_entry::ExtendedEntry,
     meta_entry::MetaEntry,
     person_date::PersonDate,
 };
@@ -113,7 +112,7 @@ impl BespokeScraper121 {
         let d = RE_DM.replace(&d, |caps: &Captures| {
             format!("{:0>4}-{:0>2}", &caps[2], &caps[1])
         });
-        ExtendedEntry::parse_date(&d)
+        MetaEntry::parse_date(&d)
     }
 }
 
@@ -135,7 +134,7 @@ mod tests {
         );
         // Empty string
         assert_eq!(BespokeScraper121::parse_date(""), None);
-        // Just a year (no dots) — passed through to ExtendedEntry::parse_date
+        // Just a year (no dots) — passed through to MetaEntry::parse_date
         assert_eq!(
             BespokeScraper121::parse_date("1805"),
             Some(PersonDate::year_only(1805))
@@ -154,7 +153,7 @@ mod tests {
 
     #[test]
     fn test_121_parse_date_year_only_with_extra_text() {
-        // "1900 something" does not match any regex and ExtendedEntry::parse_date
+        // "1900 something" does not match any regex and MetaEntry::parse_date
         // cannot parse it, so None is returned.
         assert_eq!(BespokeScraper121::parse_date("1900 something"), None);
     }
