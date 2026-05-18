@@ -659,6 +659,8 @@ impl Storage for StorageMySQL {
         let id: Option<u64> = conn.last_insert_id();
         let id = id.unwrap_or(0) as usize;
         if id > 0 {
+            drop(conn);
+            self.mark_first_fill_pending(id).await?;
             return Ok(id);
         }
         // Already existed — look it up by name.
@@ -770,6 +772,8 @@ impl Storage for StorageMySQL {
             .last_insert_id()
             .map(|id| id as usize)
             .ok_or_else(|| anyhow!("Could not insert catalog"))?;
+        drop(conn);
+        self.mark_first_fill_pending(id).await?;
         Ok(id)
     }
 
@@ -1534,6 +1538,16 @@ impl Storage for StorageMySQL {
             .exec_drop(sql, params! {catalog_id, key})
             .await?;
         Ok(())
+    }
+
+    async fn try_consume_first_fill_pending(&self, catalog_id: usize) -> Result<bool> {
+        let sql = "UPDATE `kv_catalog` SET `kv_value`='done' \
+                   WHERE `catalog_id`=:catalog_id \
+                     AND `kv_key`='announce_first_fill' \
+                     AND `kv_value`='pending'";
+        let mut conn = self.get_conn().await?;
+        conn.exec_drop(sql, params! {catalog_id}).await?;
+        Ok(conn.affected_rows() == 1)
     }
 
     async fn maintenance_automatch_people_via_year_born(&self) -> Result<()> {
@@ -6491,6 +6505,18 @@ impl crate::storage::MetaEntryQueries for StorageMySQL {
 
 // Inherent helpers that are not part of the Storage trait.
 impl StorageMySQL {
+    /// Tag a freshly-inserted catalog with the `announce_first_fill = pending`
+    /// marker. The job runner consumes it via [`Storage::try_consume_first_fill_pending`]
+    /// the first time a job completes on the catalog with entries present.
+    /// Only fresh inserts call this — existing catalogs (pre-feature, or the
+    /// "found by name" branch in `create_catalog_from_meta`) must not be
+    /// marked, since the announcement is meant for new catalogs only.
+    async fn mark_first_fill_pending(&self, catalog_id: usize) -> Result<()> {
+        use crate::announce::{KV_KEY_ANNOUNCE_FIRST_FILL, KV_VALUE_PENDING};
+        self.set_catalog_kv(catalog_id, KV_KEY_ANNOUNCE_FIRST_FILL, KV_VALUE_PENDING)
+            .await
+    }
+
     /// Shared body for `api_get_catalog_overview`,
     /// `api_get_single_catalog_overview`, and `api_get_catalog_overview_for_ids`.
     ///
@@ -7839,5 +7865,98 @@ mod tests {
             .await
             .unwrap();
         assert!(page3.is_empty());
+    }
+
+    // ---------------------------------------------------------------
+    // First-fill announcement marker CAS
+    //
+    // The trigger fires exactly once per catalog, and only for catalogs
+    // explicitly marked `announce_first_fill=pending` at creation time
+    // (via `mark_first_fill_pending`, wired into `create_catalog` and
+    // `create_catalog_from_meta`). Pre-existing catalogs have no such row
+    // and must never trigger.
+    //
+    // Note: tests below avoid auto-id INSERTs (`create_catalog_from_meta`
+    // assigns a fresh AUTO_INCREMENT) because they'd collide with the
+    // `unique_catalog_id()` explicit-id sequence used elsewhere in the
+    // test session. Tests therefore pre-seed a catalog with an explicit
+    // id and set the marker by hand.
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    async fn try_consume_first_fill_pending_is_idempotent() {
+        let app = test_support::test_app().await;
+        let (catalog_id, _) = test_support::seed_minimal_entry(&app).await.unwrap();
+        app.storage()
+            .set_catalog_kv(catalog_id, "announce_first_fill", "pending")
+            .await
+            .unwrap();
+        // First consume flips pending → done.
+        assert!(
+            app.storage()
+                .try_consume_first_fill_pending(catalog_id)
+                .await
+                .unwrap(),
+            "first consume must report the flip"
+        );
+        // Subsequent consumes are no-ops — CAS guard prevents re-announce.
+        assert!(
+            !app.storage()
+                .try_consume_first_fill_pending(catalog_id)
+                .await
+                .unwrap(),
+            "second consume must not re-fire"
+        );
+        assert!(
+            !app.storage()
+                .try_consume_first_fill_pending(catalog_id)
+                .await
+                .unwrap(),
+            "third consume must not re-fire"
+        );
+        // Final state is "done", not "pending" — confirms the SQL UPDATE
+        // actually set the new value (not just deleted the row).
+        let kv = app
+            .storage()
+            .get_catalog_key_value_pairs(catalog_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            kv.get("announce_first_fill").map(String::as_str),
+            Some("done")
+        );
+    }
+
+    #[tokio::test]
+    async fn try_consume_first_fill_pending_returns_false_for_unmarked_catalog() {
+        // Pre-existing catalogs (or any catalog created via raw SQL outside
+        // the storage layer) have no `announce_first_fill` row; CAS must be
+        // a no-op so the trigger doesn't fire on them.
+        let app = test_support::test_app().await;
+        let (catalog_id, _) = test_support::seed_minimal_entry(&app).await.unwrap();
+        assert!(
+            !app.storage()
+                .try_consume_first_fill_pending(catalog_id)
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn try_consume_first_fill_pending_no_op_when_already_done() {
+        let app = test_support::test_app().await;
+        let (catalog_id, _) = test_support::seed_minimal_entry(&app).await.unwrap();
+        // Marker stuck at "done" — e.g. a previous announcement already fired.
+        // The CAS must not flip it (no value other than "pending" matches).
+        app.storage()
+            .set_catalog_kv(catalog_id, "announce_first_fill", "done")
+            .await
+            .unwrap();
+        assert!(
+            !app.storage()
+                .try_consume_first_fill_pending(catalog_id)
+                .await
+                .unwrap()
+        );
     }
 }

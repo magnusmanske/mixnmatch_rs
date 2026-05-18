@@ -43,6 +43,7 @@ pub type DbId = usize;
 pub type PropertyId = usize;
 pub type ItemId = isize;
 
+pub mod announce;
 pub mod api;
 pub mod app_state;
 pub mod auth;

@@ -352,7 +352,33 @@ impl Job {
             catalog_id,
             action
         );
+        if catalog_id > 0 {
+            // Best-effort: announcement failure must never fail the job
+            // (the job itself already succeeded). Swallow + log.
+            if let Err(e) = self.maybe_announce_first_fill(catalog_id).await {
+                info!(
+                    "Job catalog {catalog_id} first-fill check skipped: {e:#}"
+                );
+            }
+        }
         Ok(())
+    }
+
+    /// Fire the one-shot first-fill announcement iff (a) the catalog was
+    /// marked `announce_first_fill=pending` at creation time and (b) it now
+    /// has at least one entry. The CAS in
+    /// [`Storage::try_consume_first_fill_pending`] guarantees at most one
+    /// announcement per catalog under concurrent job completions.
+    async fn maybe_announce_first_fill(&self, catalog_id: usize) -> Result<()> {
+        let storage = self.app.storage();
+        let count = storage.number_of_entries_in_catalog(catalog_id).await?;
+        if count == 0 {
+            return Ok(());
+        }
+        if !storage.try_consume_first_fill_pending(catalog_id).await? {
+            return Ok(());
+        }
+        crate::announce::announce_first_fill(self.app.as_ref(), catalog_id, count).await
     }
 
     pub async fn set_status(&mut self, status: JobStatus) -> Result<()> {
@@ -1271,5 +1297,117 @@ mod tests {
             .await
             .unwrap();
         assert!(!job.handler_yielded_in_db().await);
+    }
+
+    // ---------------------------------------------------------------
+    // First-fill announcement orchestration in Job::run_ok
+    //
+    // `maybe_announce_first_fill` is the load-bearing predicate: it must
+    // consume the pending marker iff entries > 0, must be idempotent, and
+    // must be a no-op for catalogs created outside the storage layer
+    // (which have no marker — covers pre-existing production catalogs).
+    //
+    // Tests use `seed_minimal_entry` (which inserts an explicit-id catalog
+    // *with* one entry) plus a manual `set_catalog_kv` to install the
+    // marker. They deliberately avoid `create_catalog_from_meta` because
+    // its auto-id INSERT advances `catalog.AUTO_INCREMENT` into the same
+    // range as `test_support::unique_catalog_id()`, causing collisions in
+    // other tests sharing the MariaDB container.
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    async fn maybe_announce_first_fill_consumes_marker_on_first_call() {
+        let app = test_support::test_app().await;
+        let (catalog_id, _) = test_support::seed_minimal_entry(&app).await.unwrap();
+        app.storage()
+            .set_catalog_kv(catalog_id, "announce_first_fill", "pending")
+            .await
+            .unwrap();
+        let job = Job::new(&app);
+
+        job.maybe_announce_first_fill(catalog_id).await.unwrap();
+        let kv_after_first = app
+            .storage()
+            .get_catalog_key_value_pairs(catalog_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            kv_after_first.get("announce_first_fill").map(String::as_str),
+            Some("done"),
+            "marker must be consumed on the first job completion with entries present"
+        );
+
+        // Idempotent: second call must not change anything (no re-announce).
+        job.maybe_announce_first_fill(catalog_id).await.unwrap();
+        let kv_after_second = app
+            .storage()
+            .get_catalog_key_value_pairs(catalog_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            kv_after_second.get("announce_first_fill").map(String::as_str),
+            Some("done")
+        );
+    }
+
+    #[tokio::test]
+    async fn maybe_announce_first_fill_leaves_marker_pending_when_no_entries() {
+        // Catalog marked pending but zero entries — the announce must be
+        // deferred to a later successful job. The CAS is gated on
+        // entries > 0 *before* the flip, so the marker stays pending.
+        // Seed via raw_conn to get a catalog *without* any entries.
+        let app = test_support::test_app().await;
+        let (pool, mut conn) = test_support::raw_conn().await.unwrap();
+        let catalog_id = test_support::unique_catalog_id();
+        use mysql_async::prelude::*;
+        conn.exec_drop(
+            "INSERT INTO catalog \
+             (id, name, url, `desc`, type, search_wp, active, owner, note, has_person_date, taxon_run) \
+             VALUES (:id, :name, '', '', 'person', 'en', 1, 0, '', '', 0)",
+            mysql_async::params! {
+                "id"   => catalog_id,
+                "name" => format!("empty_first_fill_{catalog_id}"),
+            },
+        )
+        .await
+        .unwrap();
+        drop(conn);
+        pool.disconnect().await.ok();
+        app.storage()
+            .set_catalog_kv(catalog_id, "announce_first_fill", "pending")
+            .await
+            .unwrap();
+
+        let job = Job::new(&app);
+        job.maybe_announce_first_fill(catalog_id).await.unwrap();
+        let kv = app
+            .storage()
+            .get_catalog_key_value_pairs(catalog_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            kv.get("announce_first_fill").map(String::as_str),
+            Some("pending"),
+            "empty-catalog completion must not consume the marker — try again next job"
+        );
+    }
+
+    #[tokio::test]
+    async fn maybe_announce_first_fill_is_noop_for_unmarked_catalog() {
+        // A pre-existing catalog (no marker row) must never trigger the
+        // announcement, no matter how many entries it has.
+        let app = test_support::test_app().await;
+        let (catalog_id, _) = test_support::seed_minimal_entry(&app).await.unwrap();
+        let job = Job::new(&app);
+        job.maybe_announce_first_fill(catalog_id).await.unwrap();
+        let kv = app
+            .storage()
+            .get_catalog_key_value_pairs(catalog_id)
+            .await
+            .unwrap();
+        assert!(
+            !kv.contains_key("announce_first_fill"),
+            "unmarked catalog must not gain an announce_first_fill row"
+        );
     }
 }

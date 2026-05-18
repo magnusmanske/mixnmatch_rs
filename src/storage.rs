@@ -717,6 +717,12 @@ pub trait Storage:
     ) -> Result<HashMap<String, String>>;
     async fn set_catalog_kv(&self, catalog_id: usize, key: &str, value: &str) -> Result<()>;
     async fn delete_catalog_kv(&self, catalog_id: usize, key: &str) -> Result<()>;
+    /// Atomic compare-and-swap on the `announce_first_fill` flag in
+    /// `kv_catalog`: flips `"pending"` → `"done"` for `catalog_id` and
+    /// returns `true` iff that flip happened. Used by the job runner to
+    /// announce a catalog exactly once the first time a job completes
+    /// successfully on it. Concurrent callers see only one `true`.
+    async fn try_consume_first_fill_pending(&self, catalog_id: usize) -> Result<bool>;
     // async fn remove_inactive_catalogs_from_overview(&self) -> Result<()>;
     async fn replace_nowd_with_noq(&self) -> Result<()>;
     async fn catalog_refresh_overview_table(&self, catalog_id: usize) -> Result<()>;
