@@ -118,7 +118,12 @@ impl AutoscrapeResolveAux {
         let property = Self::json_as_str(json, "prop")?.replace('P', "");
         let property = match property.parse::<usize>() {
             Ok(property) => property,
-            _ => return Err(AutoscrapeError::BadType(json.to_owned())),
+            _ => {
+                return Err(AutoscrapeError::BadType {
+                    field: "prop",
+                    json: json.to_owned(),
+                });
+            }
         };
         let id = Self::json_as_str(json, "id")?;
         Ok(Self { property, id })

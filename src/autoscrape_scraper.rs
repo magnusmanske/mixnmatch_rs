@@ -27,9 +27,10 @@ impl JsonStuff for AutoscrapeScraper {}
 
 impl AutoscrapeScraper {
     pub fn from_json(json: &Value) -> Result<Self> {
-        let resolve = json
-            .get("resolve")
-            .ok_or_else(|| AutoscrapeError::BadType(json.to_owned()))?;
+        let resolve = json.get("resolve").ok_or_else(|| AutoscrapeError::BadType {
+            field: "resolve",
+            json: json.to_owned(),
+        })?;
         Ok(Self {
             url: Self::json_as_str(json, "url")?,
             regex_block: Self::regex_block_from_json(json)?,
@@ -57,9 +58,10 @@ impl AutoscrapeScraper {
     }
 
     fn regex_entry_from_json(json: &Value) -> Result<Vec<AutoscrapeRegex>> {
-        let rx_entry = json
-            .get("rx_entry")
-            .ok_or_else(|| AutoscrapeError::BadType(json.to_owned()))?;
+        let rx_entry = json.get("rx_entry").ok_or_else(|| AutoscrapeError::BadType {
+            field: "rx_entry",
+            json: json.to_owned(),
+        })?;
         if rx_entry.is_string() {
             Self::regex_entry_from_json_string(rx_entry, json)
         } else {
@@ -220,9 +222,10 @@ impl AutoscrapeScraper {
     }
 
     fn regex_entry_from_json_array(rx_entry: &Value, json: &Value) -> Result<Vec<AutoscrapeRegex>> {
-        let arr = rx_entry
-            .as_array()
-            .ok_or_else(|| AutoscrapeError::BadType(json.to_owned()))?;
+        let arr = rx_entry.as_array().ok_or_else(|| AutoscrapeError::BadType {
+            field: "rx_entry",
+            json: json.to_owned(),
+        })?;
         let mut ret = vec![];
         for x in arr {
             if let Some(s) = x.as_str() {
@@ -237,9 +240,10 @@ impl AutoscrapeScraper {
     }
 
     fn regex_entry_from_json_string(rx_entry: &Value, json: &Value) -> Result<Vec<AutoscrapeRegex>> {
-        let s = rx_entry
-            .as_str()
-            .ok_or_else(|| AutoscrapeError::BadType(json.to_owned()))?;
+        let s = rx_entry.as_str().ok_or_else(|| AutoscrapeError::BadType {
+            field: "rx_entry",
+            json: json.to_owned(),
+        })?;
         Ok(vec![
             AutoscrapeRegexBuilder::new(&Self::fix_regex(s))
                 .multi_line(true)

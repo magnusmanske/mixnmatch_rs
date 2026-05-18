@@ -75,9 +75,15 @@ impl AutoscrapeKeys {
     fn from_json(json: &Value) -> Result<Self, AutoscrapeError> {
         let keys = json
             .get("keys")
-            .ok_or_else(|| AutoscrapeError::BadType(json.to_owned()))?
+            .ok_or_else(|| AutoscrapeError::BadType {
+                field: "keys",
+                json: json.to_owned(),
+            })?
             .as_array()
-            .ok_or_else(|| AutoscrapeError::BadType(json.to_owned()))?
+            .ok_or_else(|| AutoscrapeError::BadType {
+                field: "keys",
+                json: json.to_owned(),
+            })?
             .iter()
             .filter_map(|s| s.as_str())
             .map(|s| s.to_string())

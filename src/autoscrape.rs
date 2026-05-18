@@ -110,7 +110,21 @@ enum FetchOutcome {
 pub enum AutoscrapeError {
     NoAutoscrapeForCatalog(usize),
     UnknownLevelType(String),
-    BadType(Value),
+    /// A required field in an autoscrape config object is missing or
+    /// has the wrong type. Both pieces are needed in the job note so
+    /// the catalog author can see which key broke things in a config
+    /// that may have several other fields — see the catalog-7665
+    /// regression where the note was the bare `{"mode":"mediawiki"}`
+    /// and operators couldn't tell the level was missing its `url`.
+    BadType {
+        /// Name of the field being looked up — always a `&'static`
+        /// because every production call site passes a literal.
+        field: &'static str,
+        /// The surrounding JSON object whose field was missing or
+        /// wrongly-typed. Included verbatim so the operator can see
+        /// what *was* present.
+        json: Value,
+    },
     MediawikiFailure(String),
     /// A `resolve` rx pattern failed to compile under both regex engines.
     /// Carries the underlying compile error so the job's `note` field
@@ -125,7 +139,10 @@ impl fmt::Display for AutoscrapeError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             AutoscrapeError::UnknownLevelType(s) => write!(f, "{s}"), // user-facing output
-            AutoscrapeError::BadType(v) => write!(f, "{v}"),
+            AutoscrapeError::BadType { field, json } => write!(
+                f,
+                "missing or wrong-typed field `{field}` in autoscrape config: {json}"
+            ),
             AutoscrapeError::MediawikiFailure(v) => write!(f, "{v}"),
             AutoscrapeError::NoAutoscrapeForCatalog(catalog_id) => {
                 write!(f, "No Autoscraper for catalog {catalog_id}")
@@ -142,29 +159,45 @@ impl From<AutoscrapeRegexError> for AutoscrapeError {
 }
 
 pub trait JsonStuff {
-    fn json_as_str(json: &Value, key: &str) -> Result<String, AutoscrapeError> {
+    fn json_as_str(json: &Value, key: &'static str) -> Result<String, AutoscrapeError> {
         Ok(json
             .get(key)
-            .ok_or_else(|| AutoscrapeError::BadType(json.to_owned()))?
+            .ok_or_else(|| AutoscrapeError::BadType {
+                field: key,
+                json: json.to_owned(),
+            })?
             .as_str()
-            .ok_or_else(|| AutoscrapeError::BadType(json.to_owned()))?
+            .ok_or_else(|| AutoscrapeError::BadType {
+                field: key,
+                json: json.to_owned(),
+            })?
             .to_string())
     }
 
-    fn json_as_u64(json: &Value, key: &str) -> Result<u64, AutoscrapeError> {
-        let value = json
-            .get(key)
-            .ok_or_else(|| AutoscrapeError::BadType(json.to_owned()))?;
+    fn json_as_u64(json: &Value, key: &'static str) -> Result<u64, AutoscrapeError> {
+        let value = json.get(key).ok_or_else(|| AutoscrapeError::BadType {
+            field: key,
+            json: json.to_owned(),
+        })?;
         if value.is_string() {
-            let s = value
-                .as_str()
-                .ok_or_else(|| AutoscrapeError::BadType(json.to_owned()))?;
-            s.parse::<u64>()
-                .map_or_else(|_| Err(AutoscrapeError::BadType(json.to_owned())), Ok)
+            let s = value.as_str().ok_or_else(|| AutoscrapeError::BadType {
+                field: key,
+                json: json.to_owned(),
+            })?;
+            s.parse::<u64>().map_or_else(
+                |_| {
+                    Err(AutoscrapeError::BadType {
+                        field: key,
+                        json: json.to_owned(),
+                    })
+                },
+                Ok,
+            )
         } else {
-            value
-                .as_u64()
-                .ok_or_else(|| AutoscrapeError::BadType(json.to_owned()))
+            value.as_u64().ok_or_else(|| AutoscrapeError::BadType {
+                field: key,
+                json: json.to_owned(),
+            })
         }
     }
 
@@ -897,6 +930,41 @@ fn json_flag(v: Option<&Value>) -> bool {
 mod tests {
     use super::*;
     use crate::autoscrape_levels::AutoscrapeRange;
+
+    // ── AutoscrapeError::BadType ───────────────────────────────────────────
+
+    /// Catalog 7665's autoscrape config had `{"mode":"mediawiki"}` with
+    /// the level's `url` missing — the resulting `jobs.note` was just
+    /// the raw `{"mode":"mediawiki"}` JSON, with no hint of which field
+    /// was broken. The error now names the field; this test pins that.
+    #[test]
+    fn bad_type_display_names_the_missing_field() {
+        let err = AutoscrapeError::BadType {
+            field: "url",
+            json: serde_json::json!({"mode": "mediawiki"}),
+        };
+        let s = format!("{err}");
+        assert!(s.contains("url"), "missing field name in: {s}");
+        assert!(
+            s.contains("mediawiki"),
+            "missing surrounding JSON in: {s}",
+        );
+    }
+
+    /// The mediawiki-level `from_json` was the exact path that produced
+    /// the catalog-7665 note. Drive it through the real code path so
+    /// the error message can't drift away from what operators see.
+    #[test]
+    fn mediawiki_level_missing_url_field_yields_helpful_error() {
+        let json = serde_json::json!({"mode": "mediawiki"});
+        let err = crate::autoscrape_levels::AutoscrapeLevel::from_json(&json)
+            .expect_err("missing url must error");
+        let s = format!("{err}");
+        assert!(
+            s.contains("`url`"),
+            "expected error to name the missing `url` field: {s}"
+        );
+    }
 
     // ── ConcurrencyController ─────────────────────────────────────────────
 
