@@ -77,6 +77,10 @@ impl AuxiliaryMatcher {
             }
             offset += results.len();
             let _ = self.report_progress(offset as u64, total).await;
+            if self.should_yield() {
+                let _ = self.mark_yielded().await;
+                return Ok(());
+            }
         }
         let _ = self.clear_offset().await;
         Ok(())

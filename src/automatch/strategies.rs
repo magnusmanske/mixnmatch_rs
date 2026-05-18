@@ -214,6 +214,10 @@ impl AutoMatch {
             }
             offset += entries.len();
             let _ = self.remember_offset(offset).await;
+            if self.should_yield() {
+                let _ = self.mark_yielded().await;
+                return Ok(());
+            }
         }
         let _ = self.clear_offset().await;
         Ok(())
@@ -388,6 +392,14 @@ impl AutoMatch {
             let _ = self
                 .report_progress_with_cursor(processed, total, after_id as u64)
                 .await;
+            if self.should_yield() {
+                // Cancel the prefetched next batch — we won't process it.
+                if let Some(handle) = next_fut {
+                    handle.abort();
+                }
+                let _ = self.mark_yielded().await;
+                return Ok(());
+            }
 
             current = match next_fut {
                 // `??`: outer unwraps the JoinError, inner the storage Result.
@@ -605,6 +617,10 @@ impl AutoMatch {
             }
             offset += results.len();
             let _ = self.report_progress(offset as u64, total).await;
+            if self.should_yield() {
+                let _ = self.mark_yielded().await;
+                return Ok(());
+            }
         }
         let _ = self.clear_offset().await;
         Ok(())
@@ -705,6 +721,10 @@ impl AutoMatch {
             // batch but the resume cursor is honest.
             let _ = self.report_progress(offset as u64, total).await;
             offset += results_in_original_catalog.len();
+            if self.should_yield() {
+                let _ = self.mark_yielded().await;
+                return Ok(());
+            }
         }
         let _ = self.clear_offset().await;
         Ok(())

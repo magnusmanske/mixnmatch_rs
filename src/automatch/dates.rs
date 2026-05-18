@@ -188,6 +188,10 @@ impl AutoMatch {
                 min_entry_id = last.entry_id;
             }
             let _ = self.remember_offset(min_entry_id).await;
+            if self.should_yield() {
+                let _ = self.mark_yielded().await;
+                return Ok(());
+            }
         }
         let _ = self.clear_offset().await;
         Ok(())
@@ -228,6 +232,10 @@ impl AutoMatch {
             }
             let _ = self.remember_offset(offset).await;
             offset += results.len();
+            if self.should_yield() {
+                let _ = self.mark_yielded().await;
+                return Ok(());
+            }
         }
         let _ = self.clear_offset().await;
         Ok(())
@@ -536,6 +544,10 @@ impl AutoMatch {
             }
             offset += el_chunk.len();
             let _ = self.report_progress(offset as u64, total).await;
+            if self.should_yield() {
+                let _ = self.mark_yielded().await;
+                return Ok(());
+            }
         }
         let _ = self.clear_offset().await;
         Ok(())

@@ -445,6 +445,16 @@ impl Autoscrape {
             if exhausted {
                 break;
             }
+            // Cooperative yield near the wall-clock budget. The window's
+            // progress is already persisted by `remember_state` above;
+            // marking `yielded` flips the runner from DONE → re-queue
+            // TODO so the next tick resumes the scrape. We skip
+            // `self.finish()` (which clears progress + queues follow-on
+            // jobs) because the catalog isn't done yet.
+            if self.should_yield() {
+                let _ = self.mark_yielded().await;
+                return Ok(());
+            }
         }
         let _ = self.finish().await;
         Ok(())

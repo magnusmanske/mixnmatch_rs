@@ -131,6 +131,10 @@ impl TaxonMatcher {
             }
             offset += results_len;
             let _ = self.remember_offset(offset).await;
+            if self.should_yield() {
+                let _ = self.mark_yielded().await;
+                return Ok(());
+            }
         }
         let _ = self.clear_offset().await;
 

@@ -5,7 +5,8 @@
 //! {
 //!   "offset":    1234,         // legacy resume cursor; kept in sync with `processed`
 //!   "progress": { "processed": 1234, "total": 5000, "percent": 24.68 },
-//!   "levels":   [ ... ]        // autoscrape only; opaque to the merge layer
+//!   "levels":   [ ... ],       // autoscrape only; opaque to the merge layer
+//!   "yielded":  true           // soft-deadline yield flag; transient (cleared by runner on requeue)
 //! }
 //! ```
 //!
@@ -146,6 +147,55 @@ pub fn merge_offset_into_json(existing: Option<&Value>, offset: u64) -> Value {
     // would be misleading.
     obj.remove("progress");
     Value::Object(obj)
+}
+
+/// Merge a `"yielded": true` sentinel into `jobs.json`, preserving every
+/// other key (offset, progress, levels). Used by long-running strategies
+/// to flag a cooperative yield near the wall-clock budget; the runner
+/// re-reads this flag after the handler returns to decide DONE vs
+/// re-queue-as-TODO.
+pub fn merge_yielded_into_json(existing: Option<&Value>) -> Value {
+    let mut obj = match existing {
+        Some(Value::Object(map)) => map.clone(),
+        Some(Value::Array(arr)) => {
+            let mut m = Map::new();
+            m.insert("levels".to_string(), Value::Array(arr.clone()));
+            m
+        }
+        _ => Map::new(),
+    };
+    obj.insert("yielded".to_string(), Value::Bool(true));
+    Value::Object(obj)
+}
+
+/// Remove a `"yielded"` flag from `jobs.json` while preserving every
+/// other key (offset, progress, levels). Returns `None` if the document
+/// would be empty after the strip, so the caller can NULL the column
+/// instead of writing `{}`.
+pub fn strip_yielded_from_json(existing: &Value) -> Option<Value> {
+    let mut obj = match existing {
+        Value::Object(map) => map.clone(),
+        Value::Array(arr) => {
+            let mut m = Map::new();
+            m.insert("levels".to_string(), Value::Array(arr.clone()));
+            m
+        }
+        _ => return None,
+    };
+    obj.remove("yielded");
+    if obj.is_empty() {
+        None
+    } else {
+        Some(Value::Object(obj))
+    }
+}
+
+/// True iff `jobs.json` carries a `"yielded": true` sentinel.
+pub fn is_yielded(json: &Value) -> bool {
+    json.as_object()
+        .and_then(|o| o.get("yielded"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -334,5 +384,66 @@ mod tests {
         assert_eq!(obj.get("levels"), Some(&json!([{"position": 3}])));
         assert_eq!(obj.get("offset"), Some(&json!(999)));
         assert!(obj.get("progress").is_some());
+    }
+
+    // yielded sentinel ──────────────────────────────────────────────────
+
+    #[test]
+    fn merge_yielded_into_empty_creates_object_with_flag() {
+        let merged = merge_yielded_into_json(None);
+        let obj = merged.as_object().unwrap();
+        assert_eq!(obj.get("yielded"), Some(&json!(true)));
+    }
+
+    #[test]
+    fn merge_yielded_preserves_offset_progress_and_levels() {
+        let existing = json!({
+            "offset": 42,
+            "progress": {"processed": 42, "total": 100, "percent": 42.0},
+            "levels": [{"position": 0}]
+        });
+        let merged = merge_yielded_into_json(Some(&existing));
+        let obj = merged.as_object().unwrap();
+        assert_eq!(obj.get("offset"), Some(&json!(42)));
+        assert!(obj.get("progress").is_some());
+        assert_eq!(obj.get("levels"), Some(&json!([{"position": 0}])));
+        assert_eq!(obj.get("yielded"), Some(&json!(true)));
+    }
+
+    #[test]
+    fn strip_yielded_keeps_other_keys() {
+        let existing = json!({
+            "offset": 99,
+            "yielded": true,
+            "progress": {"processed": 99, "total": 200, "percent": 49.5}
+        });
+        let stripped = strip_yielded_from_json(&existing).expect("non-empty");
+        let obj = stripped.as_object().unwrap();
+        assert!(obj.get("yielded").is_none());
+        assert_eq!(obj.get("offset"), Some(&json!(99)));
+        assert!(obj.get("progress").is_some());
+    }
+
+    #[test]
+    fn strip_yielded_returns_none_when_only_key() {
+        // If `yielded` was the only key, the strip should signal
+        // "write NULL" rather than store an empty object.
+        let existing = json!({"yielded": true});
+        let stripped = strip_yielded_from_json(&existing);
+        assert!(stripped.is_none());
+    }
+
+    #[test]
+    fn is_yielded_true_for_flag_set() {
+        assert!(is_yielded(&json!({"yielded": true})));
+        assert!(is_yielded(&json!({"offset": 7, "yielded": true})));
+    }
+
+    #[test]
+    fn is_yielded_false_otherwise() {
+        assert!(!is_yielded(&json!({"offset": 7})));
+        assert!(!is_yielded(&json!({"yielded": false})));
+        assert!(!is_yielded(&json!([])));
+        assert!(!is_yielded(&json!(null)));
     }
 }

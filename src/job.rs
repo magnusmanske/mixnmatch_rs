@@ -5,8 +5,8 @@ use crate::auxiliary_matcher::AuxiliaryMatcher;
 use crate::code_fragment;
 use crate::coordinate_matcher::CoordinateMatcher;
 use crate::job_progress::{
-    JobProgress, merge_offset_into_json, merge_progress_into_json,
-    merge_progress_with_cursor_into_json,
+    JobProgress, is_yielded, merge_offset_into_json, merge_progress_into_json,
+    merge_progress_with_cursor_into_json, merge_yielded_into_json, strip_yielded_from_json,
 };
 use crate::job_row::JobRow;
 use crate::job_status::JobStatus;
@@ -128,6 +128,35 @@ pub trait Jobbable {
             None => Ok(()),
         }
     }
+
+    /// True iff the current job's soft deadline (see [`Job::run`]) has
+    /// passed. Strategies poll this between batches; on `true` they
+    /// should persist their resume cursor (via [`Self::report_progress`],
+    /// [`Self::report_progress_with_cursor`], or [`Self::remember_offset`]),
+    /// then call [`Self::mark_yielded`] and `return Ok(())` — the job
+    /// runner re-queues as TODO from the saved cursor.
+    ///
+    /// Returns `false` when there is no current job (typical for unit
+    /// tests that construct strategies directly).
+    fn should_yield(&self) -> bool {
+        self.get_current_job()
+            .is_some_and(|j| j.soft_deadline_reached())
+    }
+
+    /// Flag a cooperative yield in `jobs.json` by writing `"yielded":
+    /// true`, preserving every other key. The runner reads this flag
+    /// after the handler returns to decide DONE vs re-queue-as-TODO.
+    /// No-op when there is no current job.
+    async fn mark_yielded(&mut self) -> Result<()> {
+        let job = match self.get_current_job_mut() {
+            Some(job) => job,
+            None => return Ok(()),
+        };
+        let existing = job.get_json_value().await;
+        let merged = merge_yielded_into_json(existing.as_ref());
+        job.set_json(Some(merged)).await?;
+        Ok(())
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -143,6 +172,13 @@ pub struct Job {
     pub data: JobRow,
     pub app: Arc<dyn AppContext>,
     pub skip_actions: Vec<String>,
+    /// Wall-clock instant after which long-running handlers should
+    /// cooperatively yield (persist progress, return Ok) so the next
+    /// scheduling tick can resume them. Set by [`Job::run`] for action
+    /// budgets above [`MIN_BUDGET_FOR_SOFT_YIELD_SECS`]; `None` outside
+    /// of an active run. The hard `tokio::time::timeout` budget is the
+    /// backstop for handlers that don't cooperate.
+    soft_deadline: Option<std::time::Instant>,
 }
 
 impl Job {
@@ -151,6 +187,19 @@ impl Job {
             data: JobRow::default(),
             app: Arc::new(app.clone()),
             skip_actions: vec![],
+            soft_deadline: None,
+        }
+    }
+
+    /// True iff a soft deadline is set and has been reached. Strategies
+    /// poll this between batches via [`Jobbable::should_yield`]; on a
+    /// `true` return they persist progress, call
+    /// [`Jobbable::mark_yielded`], and `return Ok(())` to let the job
+    /// runner re-queue the job from the saved offset.
+    pub fn soft_deadline_reached(&self) -> bool {
+        match self.soft_deadline {
+            Some(d) => std::time::Instant::now() >= d,
+            None => false,
         }
     }
 
@@ -182,6 +231,20 @@ impl Job {
             Ok(Some(secs)) => secs,
             _ => action_timeout_secs(&action),
         };
+        // Soft deadline = budget − grace. Long-running strategies poll
+        // `Jobbable::should_yield()` between batches and bail out cleanly
+        // before the hard `tokio::time::timeout` fires. The grace gives
+        // the strategy time to finish the in-flight batch and persist
+        // its resume cursor. Skipped for short-budget actions where the
+        // hard timeout is the only sensible cap.
+        self.soft_deadline = if budget >= MIN_BUDGET_FOR_SOFT_YIELD_SECS {
+            Some(
+                std::time::Instant::now()
+                    + std::time::Duration::from_secs(budget - SOFT_DEADLINE_GRACE_SECS),
+            )
+        } else {
+            None
+        };
         // Wall-clock cap on the handler future. On timeout the inner
         // future is dropped (cancelling at the next .await point); any
         // server-side DB query left behind is mopped up by
@@ -197,10 +260,71 @@ impl Job {
                 )),
             };
         match res {
-            Ok(_) => self.run_ok(catalog_id, action).await?,
+            Ok(_) => {
+                // Distinguish natural completion from cooperative yield:
+                // a yielding strategy writes `"yielded": true` into
+                // `jobs.json` and skips `clear_offset()`. The runner-side
+                // job row is stale (the strategy mutated its own clone),
+                // so re-read from the DB.
+                if self.handler_yielded_in_db().await {
+                    self.run_yielded(catalog_id, &action).await?;
+                } else {
+                    self.run_ok(catalog_id, action).await?;
+                }
+            }
             Err(e) => self.run_error(catalog_id, &action, &e).await?,
         }
         self.update_next_ts().await
+    }
+
+    /// Re-read `jobs.json` from the DB and check for the `"yielded": true`
+    /// sentinel a cooperative-yielding handler left behind. Returns false
+    /// on any read/parse error (treats unknown as natural completion —
+    /// the conservative choice; the worst case is one re-run).
+    async fn handler_yielded_in_db(&self) -> bool {
+        let job_id = match self.get_id().await {
+            Ok(id) => id,
+            Err(_) => return false,
+        };
+        let row = match self.app.storage().jobs_row_from_id(job_id).await {
+            Ok(r) => r,
+            Err(_) => return false,
+        };
+        let Some(s) = row.json.as_deref() else {
+            return false;
+        };
+        match serde_json::from_str::<serde_json::Value>(s) {
+            Ok(v) => is_yielded(&v),
+            Err(_) => false,
+        }
+    }
+
+    /// Cooperative yield path: strip the `"yielded"` sentinel from
+    /// `jobs.json` (preserving offset/progress/levels), re-set status to
+    /// TODO so the next scheduling tick resumes from the saved cursor.
+    /// Note (status, not failure) so the UI doesn't render it as a
+    /// failure.
+    async fn run_yielded(&mut self, catalog_id: usize, action: &str) -> Result<()> {
+        let job_id = self.get_id().await?;
+        // Refresh `self.data.json` from DB so we strip from the latest
+        // persisted JSON (the strategy mutated its own clone).
+        if let Ok(row) = self.app.storage().jobs_row_from_id(job_id).await {
+            self.data = row;
+        }
+        let current = self.get_json_value().await;
+        let stripped = current
+            .as_ref()
+            .and_then(strip_yielded_from_json);
+        self.set_json(stripped).await?;
+        self.set_status(JobStatus::Todo).await?;
+        self.set_note(Some(format!(
+            "yielded near {action} wall-clock budget; will resume from saved cursor"
+        )))
+        .await?;
+        info!(
+            "Job {job_id} catalog {catalog_id}:{action} YIELDED (re-queued as TODO)"
+        );
+        Ok(())
     }
 
     async fn run_error(
@@ -585,6 +709,18 @@ macro_rules! maintenance_with_cat {
 /// expected to run longer should be listed in [`ACTION_TIMEOUTS_SECS`].
 const DEFAULT_ACTION_TIMEOUT_SECS: u64 = 3_600;
 
+/// Headroom subtracted from the wall-clock budget to compute the soft
+/// deadline. Sized to comfortably cover one in-flight batch + a
+/// `set_json` round-trip, so a strategy that polls `should_yield()`
+/// between batches can persist its cursor and return Ok before the
+/// hard `tokio::time::timeout` fires.
+const SOFT_DEADLINE_GRACE_SECS: u64 = 60;
+
+/// Below this budget, the soft-deadline yield is disabled — the hard
+/// `tokio::time::timeout` is the only cap. Avoids the degenerate case
+/// of a 60s job yielding on every batch.
+const MIN_BUDGET_FOR_SOFT_YIELD_SECS: u64 = 300;
+
 /// Per-action overrides to [`DEFAULT_ACTION_TIMEOUT_SECS`]. Tunes the
 /// budget up for long-running scrape / match jobs and (currently) does
 /// not tune anything down — the default is already generous. Operators
@@ -962,5 +1098,178 @@ mod tests {
     fn test_job_error_display_time_error() {
         let err = JobError::TimeError;
         assert_eq!(format!("{err}"), "JobError::TimeError");
+    }
+
+    // Soft-deadline / cooperative yield ─────────────────────────────────
+
+    #[test]
+    fn soft_deadline_reached_false_when_unset() {
+        let app = get_test_app();
+        let job = Job::new(&app);
+        assert!(!job.soft_deadline_reached());
+    }
+
+    #[test]
+    fn soft_deadline_reached_false_when_in_future() {
+        let app = get_test_app();
+        let mut job = Job::new(&app);
+        job.soft_deadline =
+            Some(std::time::Instant::now() + std::time::Duration::from_secs(60));
+        assert!(!job.soft_deadline_reached());
+    }
+
+    #[test]
+    fn soft_deadline_reached_true_when_past() {
+        let app = get_test_app();
+        let mut job = Job::new(&app);
+        job.soft_deadline =
+            Some(std::time::Instant::now() - std::time::Duration::from_secs(1));
+        assert!(job.soft_deadline_reached());
+    }
+
+    /// Grace must be strictly less than the minimum yield-eligible budget,
+    /// otherwise eligible jobs would be born already past the soft deadline.
+    /// Compile-time check via a `const` block — also a unit test so a
+    /// reader scanning the test list can see the invariant exists.
+    #[test]
+    fn soft_deadline_grace_is_below_min_budget() {
+        const { assert!(SOFT_DEADLINE_GRACE_SECS < MIN_BUDGET_FOR_SOFT_YIELD_SECS) };
+    }
+
+    /// Test-only `Jobbable` impl: lets us exercise `should_yield` /
+    /// `mark_yielded` defaults without spinning a full subsystem.
+    struct YieldHarness {
+        job: Option<Job>,
+    }
+
+    #[async_trait]
+    impl Jobbable for YieldHarness {
+        fn set_current_job(&mut self, job: &Job) {
+            self.job = Some(job.clone());
+        }
+        fn get_current_job(&self) -> Option<&Job> {
+            self.job.as_ref()
+        }
+        fn get_current_job_mut(&mut self) -> Option<&mut Job> {
+            self.job.as_mut()
+        }
+    }
+
+    #[tokio::test]
+    async fn should_yield_false_without_current_job() {
+        let h = YieldHarness { job: None };
+        assert!(!h.should_yield());
+    }
+
+    #[tokio::test]
+    async fn should_yield_tracks_jobs_soft_deadline() {
+        let app = get_test_app();
+        let mut job = Job::new(&app);
+        let mut h = YieldHarness { job: None };
+        // Deadline in the future → no yield.
+        job.soft_deadline =
+            Some(std::time::Instant::now() + std::time::Duration::from_secs(60));
+        h.set_current_job(&job);
+        assert!(!h.should_yield());
+        // Deadline in the past → yield.
+        job.soft_deadline =
+            Some(std::time::Instant::now() - std::time::Duration::from_secs(1));
+        h.set_current_job(&job);
+        assert!(h.should_yield());
+    }
+
+    #[tokio::test]
+    async fn mark_yielded_is_noop_without_current_job() {
+        let mut h = YieldHarness { job: None };
+        assert!(h.mark_yielded().await.is_ok());
+    }
+
+    /// End-to-end: a yielded handler must leave the job as TODO (not
+    /// DONE), strip the `yielded` sentinel from `jobs.json`, and
+    /// preserve the resume cursor for the next run.
+    #[tokio::test]
+    async fn run_yielded_requeues_as_todo_and_strips_flag() {
+        let app = test_support::test_app().await;
+        let catalog_id = test_support::unique_catalog_id();
+        let job_id = test_support::seed_job("automatch_by_search", catalog_id)
+            .await
+            .unwrap();
+        // Seed the job-state a yielding strategy would have written: a
+        // resume cursor and a progress payload, plus the `yielded`
+        // sentinel.
+        let yielded_state = serde_json::json!({
+            "offset": 12345,
+            "progress": {"processed": 12345, "total": 100000, "percent": 12.345},
+            "yielded": true
+        });
+        app.storage()
+            .jobs_set_json(job_id, yielded_state.to_string(), &TimeStamp::now())
+            .await
+            .unwrap();
+        let mut job = Job::new(&app);
+        job.set_from_id(job_id).await.unwrap();
+        job.run_yielded(catalog_id, "automatch_by_search")
+            .await
+            .unwrap();
+
+        // Re-read so we observe the persisted state.
+        let row = app.storage().jobs_row_from_id(job_id).await.unwrap();
+        assert_eq!(row.status, JobStatus::Todo);
+        assert!(
+            row.note
+                .as_deref()
+                .unwrap_or("")
+                .contains("yielded near automatch_by_search"),
+            "note should explain the requeue; got {:?}",
+            row.note
+        );
+        let json: serde_json::Value =
+            serde_json::from_str(row.json.as_deref().unwrap_or("null")).unwrap();
+        assert_eq!(json.get("offset"), Some(&serde_json::json!(12345)));
+        assert!(json.get("progress").is_some());
+        assert!(
+            json.get("yielded").is_none(),
+            "yielded flag must be stripped; got {json:?}"
+        );
+    }
+
+    /// `handler_yielded_in_db` is the runner's signal to take the
+    /// yield branch in `run`. It must return true when `jobs.json`
+    /// has the sentinel, false otherwise — including the empty-json
+    /// (natural completion) case.
+    #[tokio::test]
+    async fn handler_yielded_in_db_reflects_sentinel_presence() {
+        let app = test_support::test_app().await;
+        let catalog_id = test_support::unique_catalog_id();
+        let job_id = test_support::seed_job("automatch_by_search", catalog_id)
+            .await
+            .unwrap();
+        let mut job = Job::new(&app);
+        job.set_from_id(job_id).await.unwrap();
+
+        // No JSON → no yield.
+        assert!(!job.handler_yielded_in_db().await);
+
+        // Yielded sentinel present → yield detected.
+        app.storage()
+            .jobs_set_json(
+                job_id,
+                serde_json::json!({"offset": 1, "yielded": true}).to_string(),
+                &TimeStamp::now(),
+            )
+            .await
+            .unwrap();
+        assert!(job.handler_yielded_in_db().await);
+
+        // Sentinel cleared → no yield.
+        app.storage()
+            .jobs_set_json(
+                job_id,
+                serde_json::json!({"offset": 1}).to_string(),
+                &TimeStamp::now(),
+            )
+            .await
+            .unwrap();
+        assert!(!job.handler_yielded_in_db().await);
     }
 }
