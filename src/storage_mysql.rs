@@ -56,7 +56,7 @@ use wikimisc::{timestamp::TimeStamp, wikibase::LocaleString};
 const AUTOMATCH_BIRTH_YEAR_BATCH_SIZE: usize = 1000;
 
 use resilience::{
-    ESCALATION_LADDER_SECS, fetch_with_adaptive_batch, process_slice_adaptive,
+    ESCALATION_LADDER_SECS, OnIrreducible, fetch_with_adaptive_batch, process_slice_adaptive,
     with_escalating_timeout,
 };
 
@@ -402,8 +402,12 @@ impl StorageMySQL {
     /// `AUTOMATCH_BIRTH_YEAR_BATCH_SIZE = 1000` keyset batch the
     /// prior fix put in place. The shared
     /// [`process_slice_adaptive`] helper handles the split-and-retry
-    /// loop; it bottoms out at slice length 1 and propagates the
-    /// error there.
+    /// loop; on a single-source-id slice that still times out we
+    /// pick [`OnIrreducible::Skip`]: that one row is pathological
+    /// (e.g. "John Smith" born 1850) and "no candidate found for it"
+    /// is the same shape the rest of the pipeline already handles
+    /// for genuine no-match rows. Skipping keeps the job advancing
+    /// instead of failing the whole catalog.
     async fn birth_year_match_find_matches(
         &self,
         source_ids: &[usize],
@@ -412,6 +416,7 @@ impl StorageMySQL {
         process_slice_adaptive(
             source_ids,
             "birth_year_match_find_matches",
+            OnIrreducible::Skip,
             |slice| async move { self.birth_year_match_find_matches_attempt(slice).await }.boxed(),
         )
         .await

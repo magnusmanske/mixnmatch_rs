@@ -64,6 +64,25 @@ pub(crate) fn split_for_retry(n: usize) -> Option<(usize, usize)> {
     Some((left, n - left))
 }
 
+/// Recovery policy for [`process_slice_adaptive`] when the split-and-retry
+/// loop bottoms out at slice length 1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OnIrreducible {
+    /// Propagate the 1969 as the function's error. Right when the
+    /// caller cannot tolerate missing rows (each input element MUST
+    /// be processed for the result to be correct). No current caller
+    /// uses this — they're all best-effort matchers — but the variant
+    /// is the API-explicit "strict" choice for future call sites.
+    #[allow(dead_code)]
+    Propagate,
+    /// Log a warning naming the offending element index and continue.
+    /// The element contributes nothing to the output. Use when the
+    /// caller's result is intrinsically best-effort — e.g. a candidate
+    /// finder where "no matches found for this row" is an acceptable
+    /// outcome that the rest of the pipeline already handles.
+    Skip,
+}
+
 /// Iteratively process `slice` by repeatedly invoking `process` on
 /// sub-slices, splitting any sub-slice in half on MariaDB error 1969.
 ///
@@ -74,8 +93,9 @@ pub(crate) fn split_for_retry(n: usize) -> Option<(usize, usize)> {
 /// half first so the left half is popped (and processed) before it,
 /// preserving the output order for tracing.
 ///
-/// Bottom-out: a single-element sub-slice has nowhere smaller to go,
-/// so a 1969 there propagates as the function's error.
+/// Bottom-out at length 1: behaviour is controlled by
+/// [`OnIrreducible`] — propagate the error or skip the single element
+/// and continue.
 ///
 /// `process` returns a [`BoxFuture`] rather than using `AsyncFnMut`
 /// to give the compiler an explicit per-call `Send` bound; the latter
@@ -84,10 +104,11 @@ pub(crate) fn split_for_retry(n: usize) -> Option<(usize, usize)> {
 pub(crate) async fn process_slice_adaptive<'a, T, R, F>(
     slice: &'a [T],
     context: &str,
+    on_irreducible: OnIrreducible,
     mut process: F,
 ) -> Result<Vec<R>>
 where
-    T: Sync + 'a,
+    T: Sync + std::fmt::Debug + 'a,
     F: FnMut(&'a [T]) -> BoxFuture<'a, Result<Vec<R>>> + Send,
 {
     let mut out: Vec<R> = Vec::new();
@@ -100,7 +121,17 @@ where
             Ok(rows) => out.extend(rows),
             Err(e) if is_max_statement_time_err(&e) => {
                 let Some((left_len, _)) = split_for_retry(chunk.len()) else {
-                    return Err(e);
+                    match on_irreducible {
+                        OnIrreducible::Propagate => return Err(e),
+                        OnIrreducible::Skip => {
+                            log::warn!(
+                                "{context}: 1969 max_statement_time at irreducible single \
+                                 element {:?}; skipping (best-effort policy)",
+                                chunk
+                            );
+                            continue;
+                        }
+                    }
                 };
                 let (a, b) = chunk.split_at(left_len);
                 log::warn!(
@@ -309,11 +340,12 @@ mod tests {
     #[tokio::test]
     async fn process_slice_adaptive_no_errors_returns_all_rows_in_order() {
         let ids: Vec<usize> = (0..16).collect();
-        let out: Vec<usize> = process_slice_adaptive(&ids, "test", |s| {
-            async move { Ok(s.iter().map(|x| x * 10).collect()) }.boxed()
-        })
-        .await
-        .unwrap();
+        let out: Vec<usize> =
+            process_slice_adaptive(&ids, "test", OnIrreducible::Propagate, |s| {
+                async move { Ok(s.iter().map(|x| x * 10).collect()) }.boxed()
+            })
+            .await
+            .unwrap();
         let expected: Vec<usize> = (0..16).map(|x| x * 10).collect();
         assert_eq!(out, expected);
     }
@@ -325,10 +357,47 @@ mod tests {
         // small enough, then returns all rows in the original order.
         let ids: Vec<usize> = (0..8).collect();
         let calls = AtomicUsize::new(0);
-        let out: Vec<usize> = process_slice_adaptive(&ids, "test", |s| {
-            calls.fetch_add(1, Ordering::SeqCst);
+        let out: Vec<usize> =
+            process_slice_adaptive(&ids, "test", OnIrreducible::Propagate, |s| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    if s.len() > 2 {
+                        Err(make_1969())
+                    } else {
+                        Ok(s.to_vec())
+                    }
+                }
+                .boxed()
+            })
+            .await
+            .unwrap();
+        assert_eq!(out, (0..8).collect::<Vec<_>>());
+        assert!(calls.load(Ordering::SeqCst) > 1);
+    }
+
+    #[tokio::test]
+    async fn process_slice_adaptive_propagates_1969_at_length_one() {
+        let ids = vec![42_usize];
+        let result: Result<Vec<usize>> = process_slice_adaptive(
+            &ids,
+            "test",
+            OnIrreducible::Propagate,
+            |_| async { Err(make_1969()) }.boxed(),
+        )
+        .await;
+        assert!(result.is_err());
+        assert!(is_max_statement_time_err(&result.unwrap_err()));
+    }
+
+    #[tokio::test]
+    async fn process_slice_adaptive_skip_drops_irreducible_and_continues() {
+        // The element 42 always trips 1969 even at length 1; the rest
+        // succeed normally. Skip policy → 42 contributes nothing,
+        // every other id is processed.
+        let ids: Vec<usize> = vec![1, 42, 3, 4];
+        let out: Vec<usize> = process_slice_adaptive(&ids, "test", OnIrreducible::Skip, |s| {
             async move {
-                if s.len() > 2 {
+                if s.contains(&42) {
                     Err(make_1969())
                 } else {
                     Ok(s.to_vec())
@@ -338,25 +407,54 @@ mod tests {
         })
         .await
         .unwrap();
-        assert_eq!(out, (0..8).collect::<Vec<_>>());
-        assert!(calls.load(Ordering::SeqCst) > 1);
+        // Output is best-effort: 42 is dropped, everything else returns.
+        let mut sorted = out;
+        sorted.sort_unstable();
+        assert_eq!(sorted, vec![1, 3, 4]);
     }
 
     #[tokio::test]
-    async fn process_slice_adaptive_propagates_1969_at_length_one() {
-        let ids = vec![42_usize];
-        let result: Result<Vec<usize>> =
-            process_slice_adaptive(&ids, "test", |_| async { Err(make_1969()) }.boxed()).await;
+    async fn process_slice_adaptive_skip_returns_empty_when_all_irreducible() {
+        // Even when every input is pathological, Skip mode returns Ok(vec![])
+        // — the caller's job is to treat "no rows" as the normal no-match case.
+        let ids: Vec<usize> = vec![1, 2, 3];
+        let out: Vec<usize> = process_slice_adaptive(
+            &ids,
+            "test",
+            OnIrreducible::Skip,
+            |_| async { Err(make_1969()) }.boxed(),
+        )
+        .await
+        .unwrap();
+        assert!(out.is_empty());
+    }
+
+    #[tokio::test]
+    async fn process_slice_adaptive_skip_still_propagates_non_1969() {
+        // Skip policy is opt-in for 1969 only — every other error
+        // category must still propagate. (A surprise propagation here
+        // would silently hide bugs.)
+        let ids: Vec<usize> = vec![1, 2, 3];
+        let result: Result<Vec<usize>> = process_slice_adaptive(
+            &ids,
+            "test",
+            OnIrreducible::Skip,
+            |_| async { Err(anyhow::anyhow!("connection lost")) }.boxed(),
+        )
+        .await;
         assert!(result.is_err());
-        assert!(is_max_statement_time_err(&result.unwrap_err()));
+        assert!(result.unwrap_err().to_string().contains("connection lost"));
     }
 
     #[tokio::test]
     async fn process_slice_adaptive_propagates_non_1969_immediately() {
         let ids: Vec<usize> = (0..16).collect();
-        let result: Result<Vec<usize>> = process_slice_adaptive(&ids, "test", |_| {
-            async { Err(anyhow::anyhow!("some other error")) }.boxed()
-        })
+        let result: Result<Vec<usize>> = process_slice_adaptive(
+            &ids,
+            "test",
+            OnIrreducible::Propagate,
+            |_| async { Err(anyhow::anyhow!("some other error")) }.boxed(),
+        )
         .await;
         let err = result.unwrap_err();
         assert!(!is_max_statement_time_err(&err));
