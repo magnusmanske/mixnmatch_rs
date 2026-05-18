@@ -306,6 +306,19 @@ pub struct WdMatchRow {
     pub wd_prop: usize,
 }
 
+/// One row of the `new_catalogs_atom` feed: a freshly-created catalog
+/// (i.e. one carrying the `kv_catalog.created_at` marker), with the
+/// catalog metadata needed to render `<title>` / `<summary>` /
+/// `<updated>`. `created_at` is in MediaWiki `YYYYMMDDHHMMSS` format.
+#[derive(Debug, Clone)]
+pub struct NewCatalogFeedItem {
+    pub id: usize,
+    pub name: String,
+    pub desc: String,
+    pub type_name: String,
+    pub created_at: String,
+}
+
 /// One row of the `description_aux` table — a regex rule that
 /// translates a substring of an entry's description into an
 /// auxiliary `(property, value)` pair (e.g. "born in Berlin" → P19,
@@ -723,6 +736,16 @@ pub trait Storage:
     /// announce a catalog exactly once the first time a job completes
     /// successfully on it. Concurrent callers see only one `true`.
     async fn try_consume_first_fill_pending(&self, catalog_id: usize) -> Result<bool>;
+    /// Newest-first list of catalogs created through the storage layer
+    /// after the announce feature landed. Each row is
+    /// `(id, name, desc, type, created_at)` with `created_at` a
+    /// MediaWiki `YYYYMMDDHHMMSS` string. Pre-existing catalogs (no
+    /// `kv_catalog.created_at` row) are excluded; this is what powers
+    /// the `new_catalogs_atom` feed.
+    async fn api_new_catalogs_atom_feed(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<NewCatalogFeedItem>>;
     // async fn remove_inactive_catalogs_from_overview(&self) -> Result<()>;
     async fn replace_nowd_with_noq(&self) -> Result<()>;
     async fn catalog_refresh_overview_table(&self, catalog_id: usize) -> Result<()>;

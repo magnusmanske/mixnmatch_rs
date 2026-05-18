@@ -666,6 +666,7 @@ const ROUTES: &[(&str, ApiHandler)] = &[
     route!("search_catalogs",              catalog::query_search_catalogs, app_params),
     route!("catalog_type_counts",          catalog::query_catalog_type_counts, app_only),
     route!("latest_catalogs",              catalog::query_latest_catalogs, app_params),
+    route!("new_catalogs_atom",            catalog::query_new_catalogs_atom, app_params),
     route!("catalogs_with_locations",      catalog::query_catalogs_with_locations, app_only),
     route!("catalog_property_groups",      catalog::query_catalog_property_groups, app_only),
     route!("check_wd_prop_usage",          catalog::query_check_wd_prop_usage, app_params),

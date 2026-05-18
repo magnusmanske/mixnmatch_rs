@@ -5,7 +5,7 @@
 use crate::api::common::{self, ApiError, Params, json_resp, ok};
 use crate::app_state::AppState;
 use crate::auth;
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use tower_sessions::Session;
 
 pub async fn query_catalogs(app: &AppState) -> Result<Response, ApiError> {
@@ -329,6 +329,98 @@ pub async fn query_latest_catalogs(app: &AppState, params: &Params) -> Result<Re
     Ok(ok(serde_json::json!(rows)))
 }
 
+/// Default and ceiling for `?limit=` on the new-catalogs feed.
+const NEW_CATALOGS_FEED_DEFAULT_LIMIT: usize = 50;
+const NEW_CATALOGS_FEED_MAX_LIMIT: usize = 200;
+const NEW_CATALOGS_FEED_BASE_URL: &str = "https://mix-n-match.toolforge.org/";
+const NEW_CATALOGS_FEED_SELF_URL: &str =
+    "https://mix-n-match.toolforge.org/api.php?query=new_catalogs_atom";
+
+pub async fn query_new_catalogs_atom(
+    app: &AppState,
+    params: &Params,
+) -> Result<Response, ApiError> {
+    let limit = (common::get_param_int(params, "limit", NEW_CATALOGS_FEED_DEFAULT_LIMIT as i64)
+        as usize)
+        .clamp(1, NEW_CATALOGS_FEED_MAX_LIMIT);
+    let items = app.storage().api_new_catalogs_atom_feed(limit).await?;
+    let xml = build_new_catalogs_atom_feed(&items);
+    Ok((
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "application/atom+xml; charset=UTF-8",
+        )],
+        xml,
+    )
+        .into_response())
+}
+
+fn build_new_catalogs_atom_feed(items: &[crate::storage::NewCatalogFeedItem]) -> String {
+    use atom_syndication::{Entry, Feed, Link, Text};
+    use chrono::{NaiveDateTime, TimeZone, Utc};
+    let now = Utc::now().fixed_offset();
+    let entries: Vec<Entry> = items
+        .iter()
+        .map(|it| {
+            let updated = NaiveDateTime::parse_from_str(&it.created_at, "%Y%m%d%H%M%S")
+                .ok()
+                .map(|naive| Utc.from_utc_datetime(&naive).fixed_offset())
+                .unwrap_or(now);
+            let mut entry = Entry {
+                // Stable per-catalog GUID so RSS/Atom readers dedupe across
+                // polls — a fresh UUID per render would re-announce every
+                // catalog on every fetch.
+                id: format!("urn:mnm-catalog:{}", it.id),
+                title: Text::plain(if it.name.is_empty() {
+                    format!("Catalog #{}", it.id)
+                } else {
+                    it.name.clone()
+                }),
+                updated,
+                ..Default::default()
+            };
+            if !it.desc.is_empty() || !it.type_name.is_empty() {
+                let summary = if it.type_name.is_empty() {
+                    it.desc.clone()
+                } else if it.desc.is_empty() {
+                    format!("Type: {}", it.type_name)
+                } else {
+                    format!("{} (type: {})", it.desc, it.type_name)
+                };
+                entry.summary = Some(Text::plain(summary));
+            }
+            entry.links = vec![Link {
+                href: format!("{NEW_CATALOGS_FEED_BASE_URL}#/catalog/{}", it.id),
+                rel: "alternate".to_string(),
+                ..Default::default()
+            }];
+            entry
+        })
+        .collect();
+
+    let feed = Feed {
+        // Stable feed-level GUID — same reasoning as per-entry IDs.
+        id: NEW_CATALOGS_FEED_SELF_URL.to_string(),
+        title: Text::plain("Mix'n'match: new catalogs"),
+        subtitle: Some(Text::plain("Catalogs added to Mix'n'match")),
+        updated: entries.first().map_or(now, |e| e.updated),
+        links: vec![
+            Link {
+                href: NEW_CATALOGS_FEED_SELF_URL.to_string(),
+                rel: "self".to_string(),
+                ..Default::default()
+            },
+            Link {
+                href: NEW_CATALOGS_FEED_BASE_URL.to_string(),
+                ..Default::default()
+            },
+        ],
+        entries,
+        ..Default::default()
+    };
+    feed.to_string()
+}
+
 pub async fn query_catalogs_with_locations(app: &AppState) -> Result<Response, ApiError> {
     let rows = app.storage().api_catalogs_with_locations().await?;
     Ok(ok(serde_json::json!(rows)))
@@ -618,4 +710,111 @@ mod kv_tests {
         assert!(!kv_value_means_delete(&json!("0")));
         assert!(!kv_value_means_delete(&json!("1")));
     }
+}
+
+#[cfg(test)]
+mod new_catalogs_atom_tests {
+    use super::build_new_catalogs_atom_feed;
+    use crate::storage::NewCatalogFeedItem;
+
+    fn item(id: usize, name: &str, desc: &str, type_name: &str, created_at: &str) -> NewCatalogFeedItem {
+        NewCatalogFeedItem {
+            id,
+            name: name.to_string(),
+            desc: desc.to_string(),
+            type_name: type_name.to_string(),
+            created_at: created_at.to_string(),
+        }
+    }
+
+    #[test]
+    fn empty_input_still_produces_valid_atom_skeleton() {
+        let xml = build_new_catalogs_atom_feed(&[]);
+        assert!(xml.contains(r#"xmlns="http://www.w3.org/2005/Atom""#));
+        // Self-link is required by Atom for paged/named feeds.
+        assert!(xml.contains(
+            r#"href="https://mix-n-match.toolforge.org/api.php?query=new_catalogs_atom""#
+        ));
+        // Feed title is present (apostrophe gets entity-encoded by quick-xml).
+        assert!(xml.contains("new catalogs"));
+        // No <entry> elements for an empty feed.
+        assert!(!xml.contains("<entry"));
+    }
+
+    #[test]
+    fn item_renders_title_link_and_updated() {
+        let items = vec![item(
+            7421,
+            "Hauk Aabel Archive",
+            "Norwegian theatre archive",
+            "person",
+            "20260515103000",
+        )];
+        let xml = build_new_catalogs_atom_feed(&items);
+        assert!(xml.contains("Hauk Aabel Archive"));
+        // Stable per-catalog GUID — critical for RSS reader dedup.
+        assert!(xml.contains("urn:mnm-catalog:7421"));
+        // Alternate link uses the SPA hash-route to the catalog page.
+        assert!(xml.contains(r#"href="https://mix-n-match.toolforge.org/#/catalog/7421""#));
+        // Parsed MW timestamp shows up as an RFC 3339 instant.
+        assert!(xml.contains("2026-05-15T10:30:00"));
+        // Summary combines desc and type.
+        assert!(xml.contains("Norwegian theatre archive"));
+        assert!(xml.contains("person"));
+    }
+
+    #[test]
+    fn entry_id_is_stable_per_catalog_id() {
+        // Two renders of the same catalog must produce the same <id>. This
+        // is what makes the feed idempotent for RSS readers: the dedup is
+        // keyed on the entry GUID. A fresh UUID per render (the bug in the
+        // old hand-rolled rc_atom) would re-announce every catalog on every
+        // poll.
+        let items = vec![item(123, "Catalog A", "", "", "20260101000000")];
+        let xml1 = build_new_catalogs_atom_feed(&items);
+        let xml2 = build_new_catalogs_atom_feed(&items);
+        // Pull out the <id> line of the entry (not the feed-level id, which
+        // is also stable but distinct).
+        assert!(xml1.contains("urn:mnm-catalog:123"));
+        assert!(xml2.contains("urn:mnm-catalog:123"));
+    }
+
+    #[test]
+    fn dangerous_xml_chars_in_name_and_desc_are_escaped() {
+        // Catalog names are user-supplied (some come from import wizards).
+        // Atom_syndication entity-escapes via quick-xml; the hand-rolled
+        // format! version of rc_atom got this wrong before the rewrite.
+        let items = vec![item(
+            1,
+            "Smith & <Sons> Archive",
+            "Items with \"quotes\" & ampersands",
+            "person",
+            "20260101000000",
+        )];
+        let xml = build_new_catalogs_atom_feed(&items);
+        assert!(!xml.contains("Smith & <Sons>"));
+        assert!(xml.contains("Smith &amp; &lt;Sons&gt;"));
+        assert!(xml.contains("&amp; ampersands"));
+    }
+
+    #[test]
+    fn malformed_timestamp_falls_back_without_panicking() {
+        // Production data is written by `TimeStamp::now()` so this is
+        // belt-and-braces — but the parse uses `.ok().map(...).unwrap_or(now)`
+        // so a corrupted kv_catalog row must not break the whole feed.
+        let items = vec![item(99, "Catalog", "", "person", "not-a-timestamp")];
+        let xml = build_new_catalogs_atom_feed(&items);
+        assert!(xml.contains("Catalog"));
+        assert!(xml.contains("urn:mnm-catalog:99"));
+    }
+
+    #[test]
+    fn missing_name_falls_back_to_catalog_id() {
+        // Pre-feature data can have empty `name` (NULL coerced to ""); the
+        // feed must still surface a usable title.
+        let items = vec![item(42, "", "", "", "20260101000000")];
+        let xml = build_new_catalogs_atom_feed(&items);
+        assert!(xml.contains("Catalog #42"));
+    }
+
 }

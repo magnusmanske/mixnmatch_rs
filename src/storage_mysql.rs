@@ -1550,6 +1550,39 @@ impl Storage for StorageMySQL {
         Ok(conn.affected_rows() == 1)
     }
 
+    async fn api_new_catalogs_atom_feed(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<crate::storage::NewCatalogFeedItem>> {
+        // `kv.kv_value` holds the MediaWiki `YYYYMMDDHHMMSS` timestamp written
+        // by `mark_first_fill_pending`. Lexicographic ordering on that format
+        // matches chronological ordering, so `ORDER BY kv.kv_value DESC` gives
+        // us newest-first without a CAST. The INNER JOIN on `kv_key='created_at'`
+        // is exactly the post-feature filter: catalogs without the marker
+        // (everything created before the feature landed) are excluded.
+        let sql = "SELECT c.id, c.name, c.`desc`, c.type, kv.kv_value \
+                   FROM `catalog` c \
+                   INNER JOIN `kv_catalog` kv \
+                     ON kv.catalog_id = c.id AND kv.kv_key = 'created_at' \
+                   WHERE c.active = 1 \
+                   ORDER BY kv.kv_value DESC LIMIT :limit";
+        let rows: Vec<(usize, Option<String>, String, String, String)> = self
+            .query_ro(sql, params! { limit })
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|(id, name, desc, type_name, created_at)| {
+                crate::storage::NewCatalogFeedItem {
+                    id,
+                    name: name.unwrap_or_default(),
+                    desc,
+                    type_name,
+                    created_at,
+                }
+            })
+            .collect())
+    }
+
     async fn maintenance_automatch_people_via_year_born(&self) -> Result<()> {
         let mut conn = self.get_conn().await?;
 
@@ -6506,14 +6539,18 @@ impl crate::storage::MetaEntryQueries for StorageMySQL {
 // Inherent helpers that are not part of the Storage trait.
 impl StorageMySQL {
     /// Tag a freshly-inserted catalog with the `announce_first_fill = pending`
-    /// marker. The job runner consumes it via [`Storage::try_consume_first_fill_pending`]
-    /// the first time a job completes on the catalog with entries present.
-    /// Only fresh inserts call this — existing catalogs (pre-feature, or the
-    /// "found by name" branch in `create_catalog_from_meta`) must not be
-    /// marked, since the announcement is meant for new catalogs only.
+    /// marker plus a `created_at` timestamp. The marker drives the one-shot
+    /// announcement via [`Storage::try_consume_first_fill_pending`]; the
+    /// timestamp powers the `new_catalogs_atom` feed (sort order +
+    /// per-entry `<updated>`). Only fresh inserts call this — existing
+    /// catalogs (pre-feature, or the "found by name" branch in
+    /// `create_catalog_from_meta`) must not be tagged, since both the
+    /// announcement and the feed are meant for new catalogs only.
     async fn mark_first_fill_pending(&self, catalog_id: usize) -> Result<()> {
-        use crate::announce::{KV_KEY_ANNOUNCE_FIRST_FILL, KV_VALUE_PENDING};
+        use crate::announce::{KV_KEY_ANNOUNCE_FIRST_FILL, KV_KEY_CREATED_AT, KV_VALUE_PENDING};
         self.set_catalog_kv(catalog_id, KV_KEY_ANNOUNCE_FIRST_FILL, KV_VALUE_PENDING)
+            .await?;
+        self.set_catalog_kv(catalog_id, KV_KEY_CREATED_AT, &TimeStamp::now())
             .await
     }
 
@@ -7939,6 +7976,118 @@ mod tests {
                 .try_consume_first_fill_pending(catalog_id)
                 .await
                 .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn api_new_catalogs_atom_feed_excludes_unmarked_and_sorts_desc() {
+        let app = test_support::test_app().await;
+
+        // Unmarked catalog — must NOT appear in the feed (pre-feature semantics).
+        let (unmarked_id, _) = test_support::seed_minimal_entry(&app).await.unwrap();
+
+        // Two "post-feature" catalogs with explicit created_at timestamps —
+        // the older one should sort below the newer one.
+        let (older_id, _) = test_support::seed_minimal_entry(&app).await.unwrap();
+        let (newer_id, _) = test_support::seed_minimal_entry(&app).await.unwrap();
+        app.storage()
+            .set_catalog_kv(older_id, "created_at", "20260101000000")
+            .await
+            .unwrap();
+        app.storage()
+            .set_catalog_kv(newer_id, "created_at", "20260301000000")
+            .await
+            .unwrap();
+
+        // High limit so any post-feature catalog seeded by other tests in
+        // this process also surfaces — we only assert ordering and presence
+        // of the two we just seeded, not exact length.
+        let items = app
+            .storage()
+            .api_new_catalogs_atom_feed(1000)
+            .await
+            .unwrap();
+
+        let ids: Vec<usize> = items.iter().map(|i| i.id).collect();
+        assert!(
+            !ids.contains(&unmarked_id),
+            "unmarked catalog {unmarked_id} must be absent from the feed"
+        );
+        let pos_older = ids
+            .iter()
+            .position(|&id| id == older_id)
+            .expect("older marked catalog must be in the feed");
+        let pos_newer = ids
+            .iter()
+            .position(|&id| id == newer_id)
+            .expect("newer marked catalog must be in the feed");
+        assert!(
+            pos_newer < pos_older,
+            "newer catalog (created 2026-03) must precede older (2026-01) in the feed: \
+             pos_newer={pos_newer}, pos_older={pos_older}"
+        );
+
+        // Sanity-check the row shape: created_at + non-empty name.
+        let newer = items.iter().find(|i| i.id == newer_id).unwrap();
+        assert_eq!(newer.created_at, "20260301000000");
+        assert!(!newer.name.is_empty());
+    }
+
+    #[tokio::test]
+    async fn api_new_catalogs_atom_feed_respects_limit() {
+        let app = test_support::test_app().await;
+        // Seed 3 marked catalogs; ask for only 2.
+        for ts in ["20260601000000", "20260602000000", "20260603000000"] {
+            let (id, _) = test_support::seed_minimal_entry(&app).await.unwrap();
+            app.storage()
+                .set_catalog_kv(id, "created_at", ts)
+                .await
+                .unwrap();
+        }
+        let items = app.storage().api_new_catalogs_atom_feed(2).await.unwrap();
+        assert_eq!(
+            items.len(),
+            2,
+            "limit must cap result size; got {} items",
+            items.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn api_new_catalogs_atom_feed_excludes_inactive_catalogs() {
+        let app = test_support::test_app().await;
+        // Insert an *inactive* catalog with a created_at marker — must not
+        // surface in the public feed (matches the convention used by every
+        // other public catalog query).
+        let (pool, mut conn) = test_support::raw_conn().await.unwrap();
+        let catalog_id = test_support::unique_catalog_id();
+        use mysql_async::prelude::*;
+        conn.exec_drop(
+            "INSERT INTO catalog \
+             (id, name, url, `desc`, type, search_wp, active, owner, note, has_person_date, taxon_run) \
+             VALUES (:id, :name, '', '', 'person', 'en', 0, 0, '', '', 0)",
+            mysql_async::params! {
+                "id"   => catalog_id,
+                "name" => format!("inactive_feed_{catalog_id}"),
+            },
+        )
+        .await
+        .unwrap();
+        drop(conn);
+        pool.disconnect().await.ok();
+        app.storage()
+            .set_catalog_kv(catalog_id, "created_at", "20260701000000")
+            .await
+            .unwrap();
+
+        let items = app
+            .storage()
+            .api_new_catalogs_atom_feed(1000)
+            .await
+            .unwrap();
+        assert!(
+            !items.iter().any(|i| i.id == catalog_id),
+            "inactive catalog {catalog_id} must be filtered out of the feed"
         );
     }
 

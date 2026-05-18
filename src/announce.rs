@@ -16,6 +16,12 @@ use log::info;
 
 pub const KV_KEY_ANNOUNCE_FIRST_FILL: &str = "announce_first_fill";
 pub const KV_VALUE_PENDING: &str = "pending";
+/// Catalog creation timestamp (MediaWiki `YYYYMMDDHHMMSS` format), set
+/// alongside [`KV_KEY_ANNOUNCE_FIRST_FILL`] when a catalog is created
+/// through the storage layer. Powers the `new_catalogs_atom` feed by
+/// supplying both the post-feature filter and the per-entry `<updated>`.
+/// Pre-existing catalogs have no row here and so are absent from the feed.
+pub const KV_KEY_CREATED_AT: &str = "created_at";
 
 pub async fn announce_first_fill(
     app: &dyn ExternalServicesContext,
