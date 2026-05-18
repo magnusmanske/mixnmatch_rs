@@ -219,6 +219,22 @@ pub async fn run_bespoke_scraper(catalog_id: usize, app: Arc<dyn AppContext>) ->
 /// Number of buffered entries that triggers an intermediate `process_cache` flush.
 const CACHE_FLUSH_THRESHOLD: usize = 100;
 
+/// Canonical form for matching ext_ids against MariaDB's
+/// `latin1_swedish_ci` collation in Rust. PAD-SPACE → strip trailing
+/// spaces; case-insensitive (ASCII) → lowercase. Used by
+/// `process_cache` to route a scraped `"God"` to the existing
+/// stored `"God "` rather than fall through to a colliding INSERT.
+///
+/// Caveats deliberately out of scope: non-ASCII case folding is
+/// approximate (Rust `to_lowercase` is Unicode-aware,
+/// `latin1_swedish_ci` is not); leading whitespace is *not* trimmed
+/// because the collation doesn't ignore it. Both shortfalls would
+/// only matter for ext_ids that genuinely differ in those positions,
+/// which production data has not surfaced.
+fn normalize_ext_id_for_match(s: &str) -> String {
+    s.trim_end_matches(' ').to_lowercase()
+}
+
 #[async_trait]
 pub trait BespokeScraper {
     fn new(app: Arc<dyn AppContext>) -> Self;
@@ -305,6 +321,15 @@ pub trait BespokeScraper {
         let catalog_id = self.catalog_id();
         let batch_size = entry_cache.len();
         let ext_ids: Vec<String> = entry_cache.iter().map(|e| e.entry.ext_id.clone()).collect();
+        // The SQL lookup uses MariaDB's `latin1_swedish_ci` (PAD-SPACE,
+        // case-insensitive) collation: `"God"` in the IN-clause matches
+        // a stored `"God "`. The returned HashMap key, however, is the
+        // *stored* form (`"God "`) — a byte-exact `HashMap::get` on the
+        // scraper's `"God"` then misses, routing the row to
+        // `create_in_storage` where the unique-key collision raises
+        // `entry_insert_as_new: row not inserted`. Normalise both sides
+        // to a canonical form so the routing decision matches what the
+        // DB would do.
         let ext_id2id: HashMap<String, usize> = self
             .app()
             .storage()
@@ -314,6 +339,7 @@ pub trait BespokeScraper {
                 "process_cache: get_entry_ids_for_ext_ids failed (catalog={catalog_id}, batch={batch_size})"
             ))?
             .into_iter()
+            .map(|(stored_ext_id, id)| (normalize_ext_id_for_match(&stored_ext_id), id))
             .collect();
         let entry_ids: Vec<usize> = ext_id2id.values().copied().collect();
         let existing_entries = Entry::multiple_from_ids(&entry_ids, self.app())
@@ -324,8 +350,9 @@ pub trait BespokeScraper {
             ))?;
         for meta in entry_cache {
             let ext_id = meta.entry.ext_id.clone();
+            let lookup_key = normalize_ext_id_for_match(&ext_id);
             let existing_entry = ext_id2id
-                .get(&ext_id)
+                .get(&lookup_key)
                 .map_or_else(|| None, |id| existing_entries.get(id).cloned());
             match existing_entry {
                 Some(mut entry) => {
@@ -374,6 +401,46 @@ mod tests {
             let (b, _) = window[1];
             assert!(a < b, "scraper registry not ascending: {a} >= {b}");
         }
+    }
+
+    /// Trailing-space-only difference must map both forms to the same
+    /// key — this is the exact `"God"` vs `"God "` collision that
+    /// failed bespoke_scraper job 89497 on catalog 3862.
+    #[test]
+    fn normalize_ext_id_collapses_trailing_spaces() {
+        assert_eq!(normalize_ext_id_for_match("God"), "god");
+        assert_eq!(normalize_ext_id_for_match("God "), "god");
+        assert_eq!(normalize_ext_id_for_match("God   "), "god");
+        assert_eq!(
+            normalize_ext_id_for_match("God"),
+            normalize_ext_id_for_match("God ")
+        );
+    }
+
+    /// ASCII case difference must also fold to the same key — matches
+    /// MariaDB's `_ci` collation.
+    #[test]
+    fn normalize_ext_id_folds_ascii_case() {
+        assert_eq!(
+            normalize_ext_id_for_match("FooBar"),
+            normalize_ext_id_for_match("foobar")
+        );
+        assert_eq!(
+            normalize_ext_id_for_match("FOOBAR "),
+            normalize_ext_id_for_match("foobar")
+        );
+    }
+
+    /// Leading whitespace is deliberately preserved — PAD-SPACE only
+    /// ignores trailing spaces. If a future production failure surfaces
+    /// a leading-whitespace collision this assertion will need to
+    /// change, but blindly trimming would mask data-quality bugs.
+    #[test]
+    fn normalize_ext_id_preserves_leading_whitespace() {
+        assert_ne!(
+            normalize_ext_id_for_match(" foo"),
+            normalize_ext_id_for_match("foo")
+        );
     }
 
     #[test]
